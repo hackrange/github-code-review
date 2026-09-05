@@ -62,6 +62,23 @@ repo_clone() {
 # is a separate thing on purpose: gitleaks and trufflehog report the same
 # private key with a different trailing newline, and those two hits are one
 # finding.  That is the comparison the merge used to do on the raw value.
+# Claim names that make a token a disclosure on its own, whether or not
+# anybody can still use it.  An expired token carrying an employee's address
+# is a dead credential and a live privacy problem, and those are two different
+# findings that the same value produces.
+JWT_IDENTITY_CLAIMS='["email","emails","mail","upn","unique_name",
+  "preferred_username","username","name","given_name","family_name",
+  "middle_name","nickname","phone","phone_number","address","birthdate",
+  "gender","ssn","employee_id","employeeid","employeenumber","oid","puid",
+  "national_id","dob"]'
+
+# Claim names that say what the holder could do.  These raise what a token is
+# worth to somebody who finds it: "read one report" and "administer the fleet"
+# are the same leak with very different consequences.
+JWT_PRIVILEGE_CLAIMS='["roles","role","scope","scp","scopes","permissions",
+  "perms","groups","grp","authorities","entitlements","admin","is_admin",
+  "isadmin","tenant","tid","act","azp","client_id","appid"]'
+
 derive_secret_facts() {
   local dir="${1:-}"
   local pre suf maxmask pp
@@ -97,7 +114,76 @@ derive_secret_facts() {
 
     printf '%s' "$line" | jq -c \
       --arg fp "$fp" --arg merge "$merge" --arg redacted "$redacted" \
-      --argjson slen "$slen" --argjson pp "$pp" --argjson live "$live" '
+      --argjson slen "$slen" --argjson pp "$pp" --argjson live "$live" \
+      --argjson now "$(date -u +%s)" --argjson idc "$JWT_IDENTITY_CLAIMS" \
+      --argjson prc "$JWT_PRIVILEGE_CLAIMS" '
+      # A JSON web token is not opaque.  Two of its three parts are base64 of
+      # plain JSON and anybody holding the token can read them without the
+      # key, which is the whole reason a leaked one matters more than a
+      # random high entropy string: the value says who it is for, what it
+      # lets its holder do, and when it stopped working.
+      #
+      # Reading it is the difference between "a long string that looks like a
+      # credential" and a fact.  A value the detector called a token that does
+      # not decode is not a token, and an expiry in the past is the rare piece
+      # of positive evidence that a finding is less dangerous than it looks
+      # rather than merely unproven.
+      #
+      # Only the parts that are not themselves identifying come out of here.
+      # The issuer, the audience, the algorithm and the two timestamps get
+      # kept because they say which system this belongs to; the claim values
+      # do not, because a token carrying one
+      # of those must not be answered by writing that value into a second
+      # system.  The
+      # names of the claims are enough to say what was in it.
+      def b64pad: . + ("=" * ((4 - (length % 4)) % 4));
+      def unurl: gsub("-"; "+") | gsub("_"; "/");
+      def jpart($i):
+        (split(".")) as $p
+        | if ($p | length) < 3 then null
+          else (try ($p[$i] | unurl | b64pad | @base64d | fromjson) catch null)
+          end;
+      def isoish($t):
+        if ($t | type) == "number" then ($t | todate) else null end;
+      def jwt_facts:
+        . as $s
+        | ($s | jpart(0)) as $h
+        | ($s | jpart(1)) as $b
+        | if ($h | type) != "object" or ($b | type) != "object"
+             or ($h | has("alg") | not)
+          then {jwt: false}
+          else
+            ($b | keys) as $names
+            | {
+                jwt: true,
+                jwt_alg: ($h.alg // "" | tostring),
+                jwt_issuer: ($b.iss // "" | tostring),
+                jwt_audience:
+                  (if ($b.aud | type) == "array" then ($b.aud | map(tostring) | join(", "))
+                   else ($b.aud // "" | tostring) end),
+                jwt_issued_at: isoish($b.iat),
+                jwt_expires_at: isoish($b.exp),
+                # Null rather than false where there is no expiry, because a
+                # token that never expires is not the same as one that has not
+                # expired yet, and it is the more alarming of the two.
+                jwt_expired:
+                  (if ($b.exp | type) == "number" then ($b.exp < $now) else null end),
+                jwt_claims: $names,
+                # A claim is identifying either because of what it is called or
+                # because its value is plainly an address, whatever it is
+                # called.  Both happen.
+                jwt_identity_claims:
+                  ([ $names[]
+                     | select((. | ascii_downcase) as $n
+                              | any($idc[]?; . == $n)
+                                or (($b[$n] | tostring) | test("[^@[:space:]]+@[^@[:space:]]+\\.")))
+                   ] | unique),
+                jwt_privilege_claims:
+                  ([ $names[]
+                     | select((. | ascii_downcase) as $n | any($prc[]?; . == $n))
+                   ] | unique)
+              }
+          end;
       def shannon:
         (explode) as $c
         | ($c | length) as $n
@@ -124,6 +210,7 @@ derive_secret_facts() {
           low_character_diversity:
             (($s | explode | unique | length) <= 4 and ($s | length) >= 8)
         }
+      + ($s | jwt_facts)
       | del(._secret)'
   done
 }

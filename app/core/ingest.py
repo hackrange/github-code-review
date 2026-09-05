@@ -397,6 +397,33 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         finding.author_login = row.get("author_login") or ""
         finding.committed_at = _when(row.get("committed_at"))
 
+        # What the token said about itself, when the value was one.  The
+        # scanner reads it while it still holds the value and sends on the
+        # claim names only; nothing here can recover the token.
+        if row.get("jwt"):
+            finding.token_kind = "jwt"
+            finding.token_alg = (row.get("jwt_alg") or "")[:32]
+            finding.token_issuer = (row.get("jwt_issuer") or "")[:500]
+            finding.token_audience = (row.get("jwt_audience") or "")[:500]
+            finding.token_expires_at = _when(row.get("jwt_expires_at"))
+            finding.token_issued_at = _when(row.get("jwt_issued_at"))
+            expired = row.get("jwt_expired")
+            finding.token_expired = None if expired is None else bool(expired)
+            finding.token_claims = _names(row.get("jwt_claims"))[:1000]
+            finding.token_identity_claims = _names(row.get("jwt_identity_claims"))[:500]
+            finding.token_privilege_claims = _names(row.get("jwt_privilege_claims"))[:500]
+        else:
+            # Said so explicitly rather than left blank, because "the detector
+            # called this a token and it is not one" is the finding.
+            finding.token_kind = ""
+            finding.token_expired = None
+
+    def _names(value) -> str:
+        """A claim name list as text.  Names only; values never come here."""
+        if isinstance(value, (list, tuple)):
+            return ", ".join(str(v) for v in value if str(v).strip())
+        return str(value or "")
+
     def _grade(value) -> str:
         """low / medium / high, or empty when the rule says nothing."""
         text = str(value or "").strip().lower()

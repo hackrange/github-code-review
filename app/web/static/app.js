@@ -36,6 +36,55 @@
     });
   }
 
+  /* A closed panel must not be able to block a submit.
+   *
+   * Several panels put their fields in somebody else's form with the form
+   * attribute, deliberately, so that one list of ticked rows is shared rather
+   * than kept twice in two lists that would eventually disagree.  The cost is
+   * that a field in a closed panel is still part of that form, and a required
+   * one that nobody has filled in still fails validation when the form is
+   * submitted from a different panel.
+   *
+   * The browser then refuses to submit and says nothing, because the control
+   * it wants to complain about is inside a hidden element and cannot be shown
+   * or focused.  The button appears dead.  There is no error, in the page or
+   * in the console for most of them, and nothing reaches the server, which is
+   * about the worst way for a form to fail.
+   *
+   * A disabled control is skipped by validation and is not submitted, so
+   * closed panels have their fields disabled and opening one gives them back.
+   * That also settles a second problem underneath this one: two panels on the
+   * same form both had a field called reason, and whichever way the browser
+   * broke the tie, one of the two would have been sending the other panel's
+   * text.  Only the open panel submits anything now.
+   *
+   * Marked so that a field the template disabled on purpose stays that way.
+   */
+  var PARKED = "data-parked";
+  function park(panel) {
+    panel.querySelectorAll("input, textarea, select, button").forEach(function (f) {
+      if (f.disabled) { return; }
+      f.disabled = true;
+      f.setAttribute(PARKED, "");
+    });
+  }
+  function unpark(panel) {
+    panel.querySelectorAll("[" + PARKED + "]").forEach(function (f) {
+      f.disabled = false;
+      f.removeAttribute(PARKED);
+    });
+  }
+
+  /* Watched rather than done at the point of opening, because panels are
+   * opened from several places: the generic trigger below, and the page
+   * scripts that open one directly after filling it in. */
+  document.querySelectorAll(".modal-backdrop").forEach(function (node) {
+    if (node.hidden) { park(node); }
+    new MutationObserver(function () {
+      if (node.hidden) { park(node); } else { unpark(node); }
+    }).observe(node, {attributes: true, attributeFilter: ["hidden"]});
+  });
+
   /* Modals.  Anything with data-modal opens the panel with that id. */
   function closeModals() {
     document.querySelectorAll(".modal-backdrop").forEach(function (node) {
@@ -48,6 +97,10 @@
       var panel = document.getElementById(trigger.getAttribute("data-modal"));
       if (!panel) { return; }
       panel.hidden = false;
+      /* Synchronously as well as through the observer above, which does not
+       * run until the current task finishes: the prefill and the focus below
+       * both happen before that, and neither works on a disabled field. */
+      unpark(panel);
       /* Carry the row this came from into the form. */
       Object.keys(trigger.dataset).forEach(function (name) {
         if (name === "modal" || name === "post" || name === "confirm" ||

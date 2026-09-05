@@ -2804,7 +2804,11 @@ async def regrade_many(request: Request, user: User = Depends(current_user)):
     except ValueError:
         raise HTTPException(status_code=400, detail="That is not a severity.")
 
-    reason = clean_text(form.get("reason"), "Reason", limit=2000)
+    # regrade_reason rather than reason, for the same reason new_severity is
+    # not severity: the waive panel shares this form and has a reason of its
+    # own, and one key holding two panels' text is a wrong value that looks
+    # like a right one.
+    reason = clean_text(form.get("regrade_reason"), "Reason", limit=2000)
     if len(reason) < 20:
         raise HTTPException(
             status_code=400,

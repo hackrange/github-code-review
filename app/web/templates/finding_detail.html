@@ -318,6 +318,66 @@
         {% if f.cwe %}<tr><th>CWE</th><td>{{ f.cwe }}</td></tr>{% endif %}
         {% if f.owasp %}<tr><th>OWASP</th><td>{{ f.owasp }}</td></tr>{% endif %}
         {% if f.secret_preview %}<tr><th>Value</th><td class="mono">{{ f.secret_preview }}</td></tr>{% endif %}
+        {# What the token said about itself.
+           Two of the three parts of a JSON web token are base64 of plain JSON,
+           so the scanner read them while it still held the value and sent on
+           what they said.  The claim names are here and the claim values are
+           not, on purpose: reporting that a token carries somebody's address
+           by printing that address would make a second copy of the thing
+           being reported. #}
+        {% if f.token_kind == 'jwt' %}
+        <tr><th>Token</th><td>
+          <span class="badge ok">decoded</span>
+          {% if f.token_expired is none %}
+            <span class="badge critical">no expiry</span>
+          {% elif f.token_expired %}
+            <span class="badge info">expired</span>
+          {% else %}
+            <span class="badge critical">still valid</span>
+          {% endif %}
+          {% if f.token_alg %}<span class="faint small">{{ f.token_alg }}</span>{% endif %}
+          <div class="faint small">
+            {% if f.token_expired is none %}
+              Nothing in this token ever stops it working, so it stays usable
+              until somebody withdraws it at the issuer.
+            {% elif f.token_expired %}
+              It stopped working on {{ f.token_expires_at | dt('%Y-%m-%d') }},
+              so it will not let anybody in. What it disclosed is unaffected.
+            {% else %}
+              Inside its own window until {{ f.token_expires_at | dt('%Y-%m-%d') }},
+              so it works unless the issuer has withdrawn it.
+            {% endif %}
+          </div>
+        </td></tr>
+        {% if f.token_issuer %}<tr><th>Issued by</th><td class="mono small">{{ f.token_issuer }}</td></tr>{% endif %}
+        {% if f.token_audience %}<tr><th>Issued for</th><td class="mono small">{{ f.token_audience }}</td></tr>{% endif %}
+        {% if f.token_identity_claims %}
+        <tr><th>Carries</th><td>
+          <span class="mono small">{{ f.token_identity_claims }}</span>
+          <div class="faint small">Personal claims, readable by anybody holding
+            the token. This is a disclosure whether or not the token still
+            works. The names are recorded here; the values deliberately are
+            not.</div>
+        </td></tr>
+        {% endif %}
+        {% if f.token_privilege_claims %}
+        <tr><th>Grants</th><td>
+          <span class="mono small">{{ f.token_privilege_claims }}</span>
+          <div class="faint small">Claims describing what the holder could
+            do.</div>
+        </td></tr>
+        {% endif %}
+        {% if f.token_claims %}
+        <tr><th>All claims</th><td class="mono small faint">{{ f.token_claims }}</td></tr>
+        {% endif %}
+        {% elif f.kind.value == 'credential' and f.rule in ('jwt', 'jwt-token') %}
+        <tr><th>Token</th><td>
+          <span class="badge unknown">not a token</span>
+          <div class="faint small">The detector matched this as a JSON web
+            token and it does not decode as one, so the grade above rests on
+            the pattern alone.</div>
+        </td></tr>
+        {% endif %}
         {% if f.exposure %}<tr><th>Exposure</th><td>{{ f.exposure }}</td></tr>{% endif %}
         {% if f.author_name %}<tr><th>Committed by</th><td>{{ f.author_name }}
           {% if f.author_login %}<span class="faint">({{ f.author_login }})</span>{% endif %}</td></tr>{% endif %}

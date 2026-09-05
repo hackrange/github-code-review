@@ -166,6 +166,35 @@ def impact_of(finding, context: dict = None) -> tuple:
             grade = _step(grade, IMPACT_ORDER, 1)
         reasons.append("it is a credential in a repository anybody can read")
 
+    # A token that says what it carries.
+    #
+    # Most credentials are opaque and the only honest thing to say about one
+    # is that somebody could use it.  A JSON web token is different: it names
+    # its own claims in the clear, so for once the question "what would this
+    # actually give away" has an answer that was read rather than assumed.
+    #
+    # Identity claims raise this because the token is a disclosure whether or
+    # not it still works: an expired token carrying an employee address has
+    # stopped being a way in and has not stopped being personal data in a
+    # repository.  Privilege claims raise it because they say what the holder
+    # could reach.  Neither touches likelihood, which is answered separately
+    # by whether the thing still works at all.
+    identity = str(getattr(finding, "token_identity_claims", "") or "").strip()
+    privilege = str(getattr(finding, "token_privilege_claims", "") or "").strip()
+    if identity or privilege:
+        if grade != HIGH:
+            grade = _step(grade, IMPACT_ORDER, 1)
+        if identity and privilege:
+            reasons.append(f"the token carries personal claims ({identity}) "
+                           f"and says what its holder could do ({privilege})")
+        elif identity:
+            reasons.append("the token carries personal claims in the clear "
+                           f"({identity}), which is a disclosure whether or "
+                           "not it still works")
+        else:
+            reasons.append("the token says what its holder could do "
+                           f"({privilege})")
+
     if not reasons:
         reasons.append("nobody has said what this system holds, so this is "
                        + ("what the rule claims" if started_from == "the rule"
@@ -175,6 +204,14 @@ def impact_of(finding, context: dict = None) -> tuple:
 
 
 # --- whether anybody can -----------------------------------------------------
+
+def _day(value) -> str:
+    """A date somebody can read, or an honest shrug."""
+    try:
+        return value.strftime("%Y-%m-%d")
+    except Exception:
+        return "a date it did not state clearly"
+
 
 def likelihood_of(finding) -> tuple:
     """-> (word, why).  What the evidence already says about exploitation.
@@ -195,6 +232,49 @@ def likelihood_of(finding) -> tuple:
     if getattr(finding, "verified", False):
         return HAPPENING, ("the provider was asked and said this credential "
                            "still works")
+
+    # What the token says about its own lifetime.
+    #
+    # This sits under the provider check and over everything else, and both
+    # placements are deliberate.  Under, because asking the issuer whether a
+    # credential still works beats reading what the credential claims about
+    # itself; a token inside its window can still have been revoked, and the
+    # provider is the only thing that knows.  Over, because it is a fact read
+    # from the value rather than a statistic about a population, and it is
+    # exact where the base image argument is only probable: every correct
+    # validator in the world rejects a token past its expiry, and no judgement
+    # is involved in comparing two numbers.
+    #
+    # This is the rare finding that gets *less* dangerous on evidence.  Most
+    # of what a scanner learns can only confirm a worry.  An expiry in the
+    # past is positive proof that this particular credential will not let
+    # anybody in, which is the thing that lets a queue of ten thousand tokens
+    # out of a load test become a list of the few that still work.
+    #
+    # It does not make the finding go away.  Impact still counts what the
+    # token disclosed, because an expired token carrying somebody's details
+    # is a dead credential and live personal data, and those are two findings
+    # from one value.
+    # Only the downgrade is decided this high up, and the split is the point.
+    #
+    # An expiry in the past contradicts every other reason a finding might be
+    # thought live, so it can come from anywhere and win.  A token that has
+    # not expired contradicts almost nothing: it says the value is a
+    # well formed token inside its window, which is equally true of the test
+    # fixture somebody generated on purpose.  It is not evidence against a
+    # triage that already said this is not what the rule was hunting, so the
+    # raise waits until below those and is applied there.
+    #
+    # Downgrade on contrary evidence, raise only on evidence that actually
+    # contradicts the reason for the downgrade.  Getting this backwards would
+    # have promoted a few thousand tokens sitting in load test logs, which is
+    # the noise this was meant to remove.
+    if ((getattr(finding, "token_kind", "") or "") == "jwt"
+            and getattr(finding, "token_expired", None) is True):
+        return UNLIKELY, ("the token says it expired on "
+                          + _day(getattr(finding, "token_expires_at", None))
+                          + ", so it will not authenticate anybody now, "
+                          "though what it disclosed is unaffected")
 
     # A fact about the build, read out of the Dockerfile.
     #
@@ -254,6 +334,21 @@ def likelihood_of(finding) -> tuple:
 
     # Two engines matching the same line is the strongest thing either of them
     # says.  It is not an observation, so it does not reach the top of the list.
+    # A token that still works, where nothing above has said this finding is
+    # something other than what it looks like.
+    if (getattr(finding, "token_kind", "") or "") == "jwt":
+        expired = getattr(finding, "token_expired", None)
+        if expired is False:
+            return LIKELY, ("the token is inside its own validity window until "
+                            + _day(getattr(finding, "token_expires_at", None))
+                            + ", so it works unless the issuer has withdrawn it")
+        if expired is None:
+            # Decoded and carrying no expiry at all, which is worse than either
+            # of the other two rather than a gap between them.
+            return LIKELY, ("the token carries no expiry at all, so it never "
+                            "stops working on its own and stays usable until "
+                            "somebody withdraws it at the issuer")
+
     if getattr(finding, "corroborated", False):
         return LIKELY, "more than one engine matched the same line"
 
@@ -353,6 +448,15 @@ def evidence_of(finding) -> tuple:
     if getattr(finding, "verified", False):
         return OBSERVED, ("the provider was asked and said this credential "
                           "still works")
+    # Reading a token is an observation, not a guess.  Nobody probed anything
+    # and nobody asked the issuer, but the value itself was decoded and it
+    # stated its own lifetime: that is a fact about this finding rather than a
+    # statistic about findings like it, which is the line this pair of words
+    # draws.
+    if (getattr(finding, "token_kind", "") or "") == "jwt":
+        return OBSERVED, ("the token was decoded and read; what it says about "
+                          "itself is on the record below")
+
     if getattr(finding, "known_exploited", False):
         return INFERRED, ("on the CISA exploited list, which says this "
                           "vulnerability is being used somewhere and nothing "

@@ -381,9 +381,15 @@
           {% endfor %}
         </select>
       </label>
+      {# Named apart from the waive panel's reason on purpose.  Both panels
+         put their fields in bulk-form, so two of them called reason would be
+         two values under one key and the server would take whichever the
+         browser happened to send first.  Parking the closed panel already
+         stops that, but a name collision that is only safe while a script
+         runs is not safe. #}
       <label>Why
-        <textarea name="reason" rows="4" required minlength="20" maxlength="2000"
-                  form="bulk-form"
+        <textarea name="regrade_reason" rows="4" required minlength="20"
+                  maxlength="2000" form="bulk-form"
                   placeholder="What makes this grade the right one for all of them."></textarea>
         <span class="faint small">The same reason goes on every one of them and
           is what somebody reviewing this later will read, so it has to hold for

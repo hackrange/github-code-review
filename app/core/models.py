@@ -519,6 +519,38 @@ class Finding(Base):
     engines = Column(String(120), default="")
     corroborated = Column(Boolean, default=False, nullable=False)
 
+    # What a leaked token turned out to say about itself.
+    #
+    # Two of the three parts of a JSON web token are base64 of plain JSON, so
+    # anybody holding one can read them without the signing key.  A scanner
+    # that reports a token as an unidentified high entropy string is throwing
+    # away the only evidence available about how much it matters, and a rule
+    # firing ten thousand times is unusable while every long string with a dot
+    # in it is still in the count.
+    #
+    # These are what the value said, not what anybody concluded from it.  The
+    # conclusion is impact and likelihood, worked out from these in risk.py.
+    #
+    # Blank token_kind means it did not decode, which is the useful half: the
+    # detector called it a token and it is not one.
+    token_kind = Column(String(16), default="", index=True)
+    token_alg = Column(String(32), default="")
+    token_issuer = Column(String(500), default="")
+    token_audience = Column(String(500), default="")
+    token_expires_at = Column(DateTime, nullable=True)
+    token_issued_at = Column(DateTime, nullable=True)
+    # Deliberately nullable, and the nullability is the point.  A token with
+    # no expiry at all is not an unexpired token: it is the worse case, one
+    # that never stops working, and collapsing that into False would file the
+    # most dangerous kind under the same heading as the safest.
+    token_expired = Column(Boolean, nullable=True, index=True)
+    # Claim names, never claim values.  Answering "this token carries an
+    # employee address" by writing that address into this table would make a
+    # second copy of the disclosure being reported.
+    token_claims = Column(String(1000), default="")
+    token_identity_claims = Column(String(500), default="", index=True)
+    token_privilege_claims = Column(String(500), default="")
+
     malicious = Column(Boolean, default=False, nullable=False, index=True)
     malicious_signal = Column(String(32), default="")
     malicious_reason = Column(String(500), default="")
