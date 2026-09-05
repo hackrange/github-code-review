@@ -1217,12 +1217,14 @@ async def flush_connection_data(request: Request,
                        "without the decisions recorded on it.")
 
         removed = connection_data.flush(db, name, actor=user.username)
-        audit(db, user, "connection.flushed", name,
-              "%d row(s): %d finding(s), %d repositor(y/ies), %d component(s), "
-              "%d trend point(s)"
-              % (removed["total"], removed.get("findings", 0),
-                 removed.get("repositories", 0), removed.get("components", 0),
-                 removed.get("trend_points", 0)))
+        record(db, "connection.flushed", actor=user.username, target=name,
+               detail="%d row(s): %d finding(s), %d repositor(y/ies), "
+                      "%d component(s), %d trend point(s)"
+                      % (removed["total"], removed.get("findings", 0),
+                         removed.get("repositories", 0),
+                         removed.get("components", 0),
+                         removed.get("trend_points", 0)),
+               source_ip=client_ip(request))
 
     return redirect("/connections?msg=" + quote(
         "Removed %d row(s) left by %s. The scan history is kept."
