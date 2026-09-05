@@ -228,7 +228,23 @@
            it means: a base image bump, not a version in a lock file. #}
         <tr><th>Image</th><td class="mono small">{{ f.image_ref }}
           <div class="faint small">found in the base image, so the fix is a
-            newer base rather than a change in this repository</div></td></tr>
+            newer base rather than a change in this repository</div>
+          {% if f.base_upgraded %}
+          {# The scanner reads the image the registry publishes, because it
+             builds nothing.  Where the Dockerfile patches that image
+             afterwards, what ships is not what was read, and saying so here is
+             the difference between a reader trusting this row and learning to
+             scroll past a hundred like it. #}
+          <div class="faint small" style="margin-top:.25rem">
+            <span class="badge ok">the build upgrades this</span>
+            The Dockerfile runs a package upgrade after pulling this image, so
+            the version that ships is probably not the one above. It is only as
+            current as the day the image was last built, so what keeps it true
+            is rebuilding on a routine schedule rather than anything in the
+            repository.
+          </div>
+          {% endif %}
+        </td></tr>
         {% endif %}
         {% if f.vulnerability_id %}<tr><th>Advisory</th><td>{{ f.vulnerability_id }}</td></tr>{% endif %}
         {% if f.cvss_score %}<tr><th>CVSS</th><td>{{ f.cvss_score }}</td></tr>{% endif %}

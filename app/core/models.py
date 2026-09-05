@@ -516,6 +516,15 @@ class Finding(Base):
     # Which container image this came out of, when it did not come out of a
     # manifest.  Blank for everything found in a checkout.
     image_ref = Column(String(500), default="")
+    # Whether the build patches that image after pulling it.
+    #
+    # A base image is scanned as its registry publishes it, because nothing
+    # here builds anything, so a Dockerfile that upgrades three lines below its
+    # FROM produces findings about packages the shipped image does not have.
+    # This does not remove them: the advisory is true of the image that was
+    # read, and an upgrade only moves packages as far as the archive had got on
+    # the day of the build.  It moves the finding down the queue and says why.
+    base_upgraded = Column(Boolean, default=False, nullable=False)
 
     reachability = Column(String(16), default="", index=True)
     reachability_reason = Column(String(500), default="")

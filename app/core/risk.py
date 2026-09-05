@@ -205,6 +205,24 @@ def likelihood_of(finding) -> tuple:
             return POSSIBLE, f"EPSS puts exploitation in the next 30 days at {percent}%"
         return UNLIKELY, f"EPSS puts exploitation in the next 30 days at {percent}%"
 
+    # A fact about the build, read out of the Dockerfile.
+    #
+    # The advisory is true of the image in the registry.  It is probably not
+    # true of the image that ships, because the build upgrades its packages
+    # after pulling it, and the scanner never sees that image because nothing
+    # here builds anything.
+    #
+    # Probably, not certainly, and the difference is the whole reason this is a
+    # likelihood rather than a suppression.  An upgrade takes packages as far
+    # as the archive had got on the day of the build and no further, so an
+    # image built in March carries March, and an advisory published since is
+    # still sitting in it.  The finding stays where it is and says this.
+    if getattr(finding, "base_upgraded", False):
+        return UNLIKELY, ("the build upgrades this base image after pulling it, "
+                          "so the version that ships is probably not the one "
+                          "reported here, though only as far as the day the "
+                          "image was last built")
+
     # A fact about the tree, established with the checkout on disk.
     if getattr(finding, "reachability", "") == "unlikely":
         return UNLIKELY, (getattr(finding, "reachability_reason", "")

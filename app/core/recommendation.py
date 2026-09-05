@@ -108,7 +108,29 @@ def for_finding(finding, context: dict = None):
     suggestion = None
     sentence = ""
 
-    if triage == "not_applicable":
+    if getattr(finding, "base_upgraded", False):
+        # Low rather than one step down, and deliberately.
+        #
+        # These arrive in bulk: one unpatched base produced eighty six of them
+        # on a single repository, most of them medium, and a step down leaves
+        # eighty six lows sitting exactly where they were in the middle of the
+        # queue.  What makes them different from an ordinary medium is not
+        # degree, it is that the build already fixed them, so they belong at
+        # the bottom together.
+        #
+        # Not info, and not gone.  The upgrade only reaches as far as the
+        # archive had got on the day of the build, so what settles this is not
+        # the Dockerfile but how recently anybody ran it.
+        suggestion = Severity.LOW
+        sentence = ("The Dockerfile upgrades its packages after pulling this "
+                    "base image, so what ships is probably not the version "
+                    "reported here. The image in the registry really does "
+                    "carry this, which is why it is graded down rather than "
+                    "set aside. An upgrade is only as current as the day the "
+                    "image was built, so the thing that keeps this true is "
+                    "rebuilding the image on a routine schedule rather than "
+                    "anything in the repository.")
+    elif triage == "not_applicable":
         suggestion = Severity.INFO
         sentence = ("The fidelity pass found this is not what its rule was "
                     "looking for" + (f": {reason}" if reason else "."))

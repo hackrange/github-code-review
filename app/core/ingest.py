@@ -467,6 +467,7 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         finding.vulnerability_id = row.get("id") or ""
         finding.fixed_in = row.get("fixed_in") or ""
         finding.known_exploited = bool(row.get("known_exploited"))
+        finding.base_upgraded = bool(row.get("base_upgraded"))
         try:
             finding.cvss_score = float(row["cvss_score"]) if row.get("cvss_score") else None
         except (TypeError, ValueError):
