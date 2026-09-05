@@ -549,8 +549,8 @@ class Finding(Base):
     # detector called it a token and it is not one.
     token_kind = Column(String(16), default="", index=True)
     token_alg = Column(String(32), default="")
-    token_issuer = Column(String(500), default="")
-    token_audience = Column(String(500), default="")
+    token_issuer = Column(Text, default="")
+    token_audience = Column(Text, default="")
     token_expires_at = Column(DateTime, nullable=True)
     token_issued_at = Column(DateTime, nullable=True)
     # Deliberately nullable, and the nullability is the point.  A token with
@@ -561,14 +561,27 @@ class Finding(Base):
     # Claim names, never claim values.  Answering "this token carries an
     # employee address" by writing that address into this table would make a
     # second copy of the disclosure being reported.
-    token_claims = Column(String(1000), default="")
+    # Free text that is only ever read by a person.
+    #
+    # These are explanations rather than values: nothing sorts, filters,
+    # groups or indexes on them, which is the only thing a fixed width column
+    # buys.  Declared as varchars they each reserved their full length on
+    # every row of a table that had reached the ceiling MariaDB puts on a row,
+    # and the column that would not fit after them took the findings list and
+    # the dashboard down.
+    #
+    # As TEXT the contents live away from the row and cost about twenty bytes
+    # here instead of two thousand.  The sentences themselves are unchanged
+    # and are no longer clipped at five hundred characters, which several of
+    # them were quietly hitting.
+    token_claims = Column(Text, default="")
     token_identity_claims = Column(String(500), default="", index=True)
-    token_privilege_claims = Column(String(500), default="")
+    token_privilege_claims = Column(Text, default="")
 
     malicious = Column(Boolean, default=False, nullable=False, index=True)
     malicious_signal = Column(String(32), default="")
-    malicious_reason = Column(String(500), default="")
-    malicious_evidence = Column(String(500), default="")
+    malicious_reason = Column(Text, default="")
+    malicious_evidence = Column(Text, default="")
 
     # Which container image this came out of, when it did not come out of a
     # manifest.  Blank for everything found in a checkout.
@@ -584,7 +597,7 @@ class Finding(Base):
     base_upgraded = Column(Boolean, default=False, nullable=False)
 
     reachability = Column(String(16), default="", index=True)
-    reachability_reason = Column(String(500), default="")
+    reachability_reason = Column(Text, default="")
     # Asked for by name in a manifest, or pulled in by something else.
     dependency_direct = Column(String(16), default="")
     # Whether it ships.  A test framework is a real vulnerability in nothing.
@@ -604,7 +617,7 @@ class Finding(Base):
     engine_severity = Column(String(16), default="")
 
     triage = Column(String(16), default="", index=True)
-    triage_reason = Column(String(500), default="")
+    triage_reason = Column(Text, default="")
 
     confidence = Column(String(16), default="", index=True)
 
@@ -624,8 +637,8 @@ class Finding(Base):
     # Why each reads the way it does.  A grade with nothing behind it asks to
     # be trusted and offers nothing to check, which is the failure this file
     # already avoids everywhere else.
-    impact_reason = Column(String(500), default="")
-    likelihood_reason = Column(String(500), default="")
+    impact_reason = Column(Text, default="")
+    likelihood_reason = Column(Text, default="")
 
     # What the engine said about its own rule, kept the way `engine_severity`
     # keeps the grade.  semgrep publishes an impact and a likelihood per rule;
@@ -654,9 +667,22 @@ class Finding(Base):
     cwe = Column(String(255), default="")
     owasp = Column(String(255), default="")
 
-    url = Column(String(2048), default="")
+    # Text rather than a long varchar, and the reason is the table rather
+    # than the column.
+    #
+    # MariaDB caps a row at 65,535 bytes counting every varchar in full, and
+    # this table had grown to within a thousand of it.  The next column added
+    # failed with a message about row size that says nothing about which
+    # columns are to blame.  A TEXT is stored away from the row and counts
+    # about twenty bytes toward that ceiling instead of eight thousand, so
+    # moving the two link columns reclaims most of the headroom.
+    #
+    # These two are the right ones to move: they are read to put a link on a
+    # page and are never grouped, filtered or indexed, which is what a varchar
+    # would buy.
+    url = Column(Text, default="")
     commit_sha = Column(String(64), default="")
-    commit_url = Column(String(2048), default="")
+    commit_url = Column(Text, default="")
     author_name = Column(String(255), default="")
     author_email = Column(String(255), default="")
     author_login = Column(String(255), default="")

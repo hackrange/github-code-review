@@ -60,6 +60,18 @@ def _digest(*parts) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
+# How much free text is kept on a finding.
+#
+# These fields are explanations meant for a person and they are TEXT columns
+# now, so this is not a column width: it is a sanity limit, so that an engine
+# emitting something enormous produces a long sentence rather than a row that
+# is slow to load and impossible to read.
+#
+# It was five hundred, which was the old column width doing double duty as an
+# editorial decision, and several reasons were being cut mid sentence by it.
+LONG_TEXT = 4000
+
+
 def _as_list(value) -> list:
     """One of these, or several, or none.
 
@@ -379,8 +391,8 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                                                           reach))
             finding.impact = assessed["impact"][:16]
             finding.likelihood = assessed["likelihood"][:16]
-            finding.impact_reason = assessed["impact_reason"][:500]
-            finding.likelihood_reason = assessed["likelihood_reason"][:500]
+            finding.impact_reason = assessed["impact_reason"][:LONG_TEXT]
+            finding.likelihood_reason = assessed["likelihood_reason"][:LONG_TEXT]
             finding.risk_score = assessed["score"]
             finding.risk_evidence = assessed["evidence"][:16]
             session.flush()
@@ -403,15 +415,15 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         if row.get("jwt"):
             finding.token_kind = "jwt"
             finding.token_alg = (row.get("jwt_alg") or "")[:32]
-            finding.token_issuer = (row.get("jwt_issuer") or "")[:500]
-            finding.token_audience = (row.get("jwt_audience") or "")[:500]
+            finding.token_issuer = (row.get("jwt_issuer") or "")[:LONG_TEXT]
+            finding.token_audience = (row.get("jwt_audience") or "")[:LONG_TEXT]
             finding.token_expires_at = _when(row.get("jwt_expires_at"))
             finding.token_issued_at = _when(row.get("jwt_issued_at"))
             expired = row.get("jwt_expired")
             finding.token_expired = None if expired is None else bool(expired)
-            finding.token_claims = _names(row.get("jwt_claims"))[:1000]
+            finding.token_claims = _names(row.get("jwt_claims"))[:LONG_TEXT]
             finding.token_identity_claims = _names(row.get("jwt_identity_claims"))[:500]
-            finding.token_privilege_claims = _names(row.get("jwt_privilege_claims"))[:500]
+            finding.token_privilege_claims = _names(row.get("jwt_privilege_claims"))[:LONG_TEXT]
         else:
             # Said so explicitly rather than left blank, because "the detector
             # called this a token and it is not one" is the finding.
@@ -459,7 +471,7 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         # The verdict from the fidelity pass, and why.  Kept so the work list
         # can be a work list without anything being thrown away.
         finding.triage = str(row.get("triage") or "")[:16]
-        finding.triage_reason = str(row.get("triage_reason") or "")[:500]
+        finding.triage_reason = str(row.get("triage_reason") or "")[:LONG_TEXT]
         engines = row.get("engines") or ([row["source"]] if row.get("source") else [])
         finding.engines = ", ".join(str(name) for name in engines)[:120]
         finding.corroborated = bool(row.get("corroborated"))
@@ -487,7 +499,7 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             detail = f"{detail}\n\nTo fix: {fix}".strip()
         finding.description = detail[:4000]
         finding.triage = str(row.get("triage") or "")[:16]
-        finding.triage_reason = str(row.get("triage_reason") or "")[:500]
+        finding.triage_reason = str(row.get("triage_reason") or "")[:LONG_TEXT]
         finding.confidence = _grade(row.get("confidence"))
 
     def fill_dependency(finding: Finding, row: dict) -> None:
@@ -532,11 +544,11 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         bad = row.get("malicious") or {}
         finding.malicious = bool(bad)
         finding.malicious_signal = (bad.get("signal") or "")[:32]
-        finding.malicious_reason = (bad.get("reason") or "")[:500]
-        finding.malicious_evidence = (bad.get("evidence") or "")[:500]
+        finding.malicious_reason = (bad.get("reason") or "")[:LONG_TEXT]
+        finding.malicious_evidence = (bad.get("evidence") or "")[:LONG_TEXT]
         reach = row.get("reachability") or {}
         finding.reachability = (reach.get("verdict") or "")[:16]
-        finding.reachability_reason = (reach.get("reason") or "")[:500]
+        finding.reachability_reason = (reach.get("reason") or "")[:LONG_TEXT]
         finding.dependency_direct = (reach.get("direct") or "")[:16]
         finding.dependency_scope = (reach.get("scope") or "")[:16]
 

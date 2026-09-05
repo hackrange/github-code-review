@@ -146,12 +146,24 @@ def init_db() -> None:
         made = {t.name for t in Base.metadata.sorted_tables} - existing
         if made:
             log.info("added table(s): %s", ", ".join(sorted(made)))
-        added = _add_missing_columns()
-        if added:
-            log.info("added %d new column(s) to the existing database", added)
+        # Widen first, then add.  The order is not arbitrary.
+        #
+        # MariaDB caps a row at 65,535 bytes counting every varchar in full,
+        # and a wide table can reach it.  When it does, adding a column fails
+        # with a message about row size that names no column, while the change
+        # that makes room, moving a long varchar to TEXT, is a widening.  With
+        # the add running first, a release that does both would fail its add,
+        # succeed its widen, and then need a second restart before the column
+        # appeared: an upgrade that half works and looks finished.
+        #
+        # Nothing is lost by going the other way round.  A column that does
+        # not exist yet cannot need widening.
         widened = _widen_columns()
         if widened:
             log.info("gave %d column(s) more room", widened)
+        added = _add_missing_columns()
+        if added:
+            log.info("added %d new column(s) to the existing database", added)
         extended = _extend_enums()
         if extended:
             log.info("taught %d column(s) a new value", extended)
