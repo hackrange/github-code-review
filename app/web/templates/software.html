@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}Software &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Software</h1>
+    <div class="faint small">Every package in the estate, and where it sits.
+      Not only the ones with an advisory against them: a release announced as
+      compromised on a Tuesday has no advisory until Thursday, and the only
+      question worth asking on Tuesday is whether that exact version is
+      anywhere in the code.</div></div>
+  <div class="page-actions">
+    {% if can_export %}
+    <a class="btn" href="{{ base }}/blast-radius/software/export?format=csv{% if query_string %}&{{ query_string }}{% endif %}">CSV</a>
+    <a class="btn" href="{{ base }}/blast-radius/software/export?format=json{% if query_string %}&{{ query_string }}{% endif %}">JSON</a>
+    <a class="btn" href="{{ base }}/blast-radius/software/export?format=cdx{% if query_string %}&{{ query_string }}{% endif %}"
+       title="A CycloneDX bill of materials of exactly what this search matched, with the dependency graph in it">SBOM</a>
+    {% endif %}
+  </div>
+</div>
+
+{% include "_blast_tabs.html" %}
+
+<div class="stats">
+  <div class="stat"><div class="n">{{ '{:,}'.format(totals.packages) }}</div><div class="l">Packages</div></div>
+  <div class="stat"><div class="n">{{ '{:,}'.format(totals.versions) }}</div><div class="l">Package versions</div></div>
+  <div class="stat"><div class="n">{{ '{:,}'.format(totals.places) }}</div><div class="l">Places they appear</div></div>
+  <div class="stat"><div class="n">{{ '{:,}'.format(totals.repositories) }}</div><div class="l">Repositories</div></div>
+  <a class="stat warn" href="?unlicensed=1"><div class="n">{{ '{:,}'.format(totals.unlicensed) }}</div>
+    <div class="l">With no license</div></a>
+</div>
+
+{% if totals.ecosystems %}
+<div class="card">
+  <div class="card-head">What the estate is written in</div>
+  <div class="small faint" style="padding:.9rem 1rem 0">
+    Counted over distinct packages rather than over every place one appears.
+    Counting places would say more about which repositories were scanned than
+    about what the code is built from: one repository with a large lockfile
+    would drown out everything else.
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Ecosystem</th><th>Packages</th><th>Share</th><th></th></tr></thead>
+      <tbody>
+      {% for eco in totals.ecosystems %}
+        <tr>
+          <td><a href="?ecosystem={{ eco.ecosystem | urlencode }}">{{ eco.name }}</a>
+            {% if eco.name != eco.ecosystem and eco.ecosystem %}<span class="sub mono small">{{ eco.ecosystem }}</span>{% endif %}</td>
+          <td>{{ '{:,}'.format(eco.packages) }}</td>
+          <td>{{ eco.share }}%</td>
+          <td style="width:40%">
+            <div style="background:var(--border);border-radius:3px;height:8px;max-width:340px">
+              <div style="background:var(--accent, #2563eb);border-radius:3px;height:8px;width:{{ eco.share }}%"></div>
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<form method="get" action="{{ base }}/blast-radius/software" class="filters">
+  <div class="field" style="min-width:280px">
+    <label for="q">Package or purl</label>
+    <input type="text" id="q" name="q" value="{{ q }}" autocomplete="off"
+           placeholder="name, or pkg:npm/...">
+  </div>
+  <div class="field">
+    <label for="ecosystem">Ecosystem</label>
+    <select id="ecosystem" name="ecosystem">
+      <option value="">Any</option>
+      {% for eco in choices.ecosystems %}
+      <option value="{{ eco.value }}" {{ 'selected' if ecosystem == eco.value }}>{{ eco.name }} ({{ eco.count }})</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="organization">Organization</label>
+    <select id="organization" name="organization">
+      <option value="">Any</option>
+      {% for org in choices.organizations %}
+      <option value="{{ org }}" {{ 'selected' if organization == org }}>{{ org }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="license">License</label>
+    <select id="license" name="license">
+      <option value="">Any</option>
+      {% for name, count in choices.licenses %}
+      <option value="{{ name }}" {{ 'selected' if license == name }}>{{ name }} ({{ count }})</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="repository">Repository</label>
+    <input type="text" id="repository" name="repository" value="{{ repository }}"
+           autocomplete="off" placeholder="org/name">
+  </div>
+  <div class="field">
+    <label for="branch">Branch</label>
+    <input type="text" id="branch" name="branch" value="{{ branch }}"
+           autocomplete="off" placeholder="main">
+  </div>
+  <div class="field">
+    <label for="vulnerable">Advisories</label>
+    <select id="vulnerable" name="vulnerable">
+      <option value="">Everything</option>
+      <option value="1" {{ 'selected' if vulnerable }}>Only what has one</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="unlicensed">License known</label>
+    <select id="unlicensed" name="unlicensed">
+      <option value="">Either</option>
+      <option value="1" {{ 'selected' if unlicensed }}>Only where none is stated</option>
+    </select>
+  </div>
+  <button class="btn primary" type="submit">Search</button>
+  <a class="btn" href="{{ base }}/blast-radius/software">Clear</a>
+</form>
+
+<div class="card">
+  <div class="card-head">
+    {{ '{:,}'.format(total) }} package version{{ '' if total == 1 else 's' }}
+    {% if q or ecosystem or organization or repository or branch or license or unlicensed or vulnerable %}matching{% endif %}
+  </div>
+  {% if rows %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th>Package</th><th>Version</th><th>Ecosystem</th><th>License</th>
+        <th>Repos</th><th>Places</th><th>Advisories</th>
+      </tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td class="stack">
+            <a href="{{ base }}/blast-radius/software/where?name={{ row.name | urlencode }}&version={{ row.version | urlencode }}&ecosystem={{ row.ecosystem | urlencode }}">{{ row.name }}</a>
+            {% if row.purl %}<span class="sub mono small">{{ row.purl }}</span>{% endif %}
+          </td>
+          <td class="mono small">{{ row.version or '&mdash;' | safe }}</td>
+          <td class="small">{{ row.ecosystem_name }}</td>
+          <td class="small">{% if row.licenses %}{{ row.licenses }}
+              {% else %}<span class="faint">not stated</span>{% endif %}</td>
+          <td><a href="{{ base }}/blast-radius/software/where?name={{ row.name | urlencode }}&version={{ row.version | urlencode }}&ecosystem={{ row.ecosystem | urlencode }}">{{ row.repositories }}</a></td>
+          <td class="small">{{ row.places }}</td>
+          <td class="small">
+            {% if row.malicious %}<span class="badge critical">compromised package</span>{% endif %}
+            {% if row.known_exploited %}<span class="badge critical">exploited in the wild</span>{% endif %}
+            {% if row.vulnerable %}
+              <span class="badge {{ row.worst }}">{{ row.worst }}</span>
+              <span class="sub mono small">{{ row.advisories | join(', ') }}</span>
+            {% elif not row.malicious %}<span class="faint">none</span>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <div class="flex" style="justify-content:space-between;padding:.75rem 1rem;align-items:center">
+    <span class="small faint">Page {{ page_no }} of {{ pages }}</span>
+    <span class="flex" style="gap:.4rem">
+      {% if page_no > 1 %}
+      <a class="btn sm" href="?{% if query_string %}{{ query_string }}&{% endif %}page_no={{ page_no - 1 }}">Back</a>
+      {% endif %}
+      {% if page_no < pages %}
+      <a class="btn sm" href="?{% if query_string %}{{ query_string }}&{% endif %}page_no={{ page_no + 1 }}">Next</a>
+      {% endif %}
+    </span>
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="card-body">
+    {% if totals.places %}
+    <p>Nothing matches that.</p>
+    {% else %}
+    <p>No inventory yet.  It is built from the SBOM a scan writes, so turn
+      <strong>Build SBOMs</strong> on under Dependencies and licenses in
+      Settings, then run a scan.  Set <strong>SBOM branches</strong> to every
+      branch if you want release branches listed as well as the default one.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

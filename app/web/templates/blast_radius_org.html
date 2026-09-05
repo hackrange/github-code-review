@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block title %}{{ organization }} blast radius &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>{{ organization }}</h1>
+    <div class="faint small">
+      {% if owner.application %}{{ owner.application }}.{% endif %}
+      {% if owner.application_owner %} Owned by {{ owner.application_owner }}.{% endif %}
+      {% if owner.technical_owner %} {{ owner.technical_owner }} is the technical owner.{% endif %}
+      {% if not owner.application_owner and not owner.technical_owner %}
+        The owner of this account is unknown; nothing is set on its connection.{% endif %}
+      {% if owner.holds %} It holds {{ owner.holds }}.{% endif %}
+    </div></div>
+  <div class="page-actions">
+    <a class="btn" href="{{ base }}/blast-radius/{{ export_scope | urlencode }}/export?format=csv">CSV</a>
+    <a class="btn" href="{{ base }}/blast-radius/{{ export_scope | urlencode }}/export?format=json">JSON</a>
+    <a class="btn" href="{{ base }}/blast-radius">All organizations</a>
+  </div>
+</div>
+
+{% include "_blast_tabs.html" %}
+
+<nav class="section-nav" aria-label="Views">
+  {% for key, label, n in [('people','Everybody',counts.people), ('admins','Admins',counts.admins),
+                           ('outside','Outside collaborators',counts.outside),
+                           ('machines','Machine accounts',counts.machines),
+                           ('repos','By repository',None), ('unprotected','Unprotected and writable',None)] %}
+  <a href="{{ base }}/blast-radius/{{ export_scope | urlencode }}?view={{ key }}"
+     {% if view == key %}style="color:var(--text);border-color:var(--border-strong)"{% endif %}>
+    {{ label }}{% if n is not none %} ({{ n }}){% endif %}</a>
+  {% endfor %}
+</nav>
+
+{% if view in ['repos', 'unprotected'] %}
+<div class="card">
+  <div class="card-head">{{ 'Repositories somebody can push to whose default branch is not protected' if view == 'unprotected' else 'By repository' }}</div>
+  {% if view == 'unprotected' %}
+  <div class="small faint" style="padding:.9rem 1rem 0">
+    An unprotected branch on its own is a policy question.  With the list of
+    people who can push to it, it is the answer to who can put code in front of
+    customers without anybody else seeing it first.
+  </div>
+  {% endif %}
+    <div class="field" style="max-width:420px;margin-bottom:.75rem">
+      <label for="repo-reach-table-search">Search</label>
+      <input type="text" id="repo-reach-table-search" data-filter="repo-reach-table" autocomplete="off"
+             placeholder="repository or who can reach it">
+      <div class="small faint" data-filter-count="repo-reach-table"></div>
+    </div>
+    <div class="empty" data-filter-empty="repo-reach-table" hidden>Nothing matches that.</div>
+  <div class="table-scroll">
+      <table id="repo-reach-table">
+      <thead><tr><th>Repository</th><th>Default branch</th><th>Who can reach it</th></tr></thead>
+      <tbody>
+      {% for repo, folk in by_repo.items() %}
+        {% set d = detail.get(repo) %}
+        <tr class="audit-row" data-repo-row="{{ loop.index0 }}" tabindex="0" role="button"
+            aria-expanded="false" aria-controls="repo-more-{{ loop.index0 }}"
+            title="Open this repository">
+          <td class="stack"><span class="mono small">{{ repo }}</span>
+            <span class="sub">{{ folk|length }} {{ 'person' if folk|length == 1 else 'people' }}
+              {%- if d and d.sensitivity.value %} &middot;
+              <span class="badge medium">{{ d.sensitivity.value }}</span>{% endif %}
+              {%- if d and d.note %} &middot; described{% endif %}</span></td>
+          <td>{% if repo in unprotected %}<span class="badge critical">not protected</span>
+              {% else %}<span class="badge ok">protected</span>{% endif %}</td>
+          <td class="small">
+            {% for p in folk[:12] %}<span class="badge {{ 'critical' if p.permission == 'admin' else ('medium' if p.permission in ['write','maintain'] else '') }}"
+              title="{{ p.permission }}">{{ p.login }}</span> {% endfor %}
+            {% if folk|length > 12 %}<span class="faint">and {{ folk|length - 12 }} more</span>{% endif %}
+          </td>
+        </tr>
+        <tr class="audit-more" id="repo-more-{{ loop.index0 }}" hidden>
+          <td colspan="3">
+            {% if d %}
+            <table class="audit-detail">
+              <tbody>
+                {# Every one of these says where the answer came from.  "Nobody
+                   has said" and "somebody said, for the whole account" are
+                   different states, and reading them as the same is how a
+                   brochure site gets treated like a payment system. #}
+                {% for label, field in [('What it holds', 'sensitivity'),
+                                        ('Application', 'application_name'),
+                                        ('Business owner', 'application_owner'),
+                                        ('Technical owner', 'technical_owner')] %}
+                <tr><th>{{ label }}</th><td>
+                  {% if d[field].value %}{{ d[field].value }}
+                    <span class="faint small">{{ 'set on this repository' if d[field]['from'] == 'repository' else 'from the connection' }}</span>
+                  {% else %}<span class="faint">nobody has said</span>{% endif %}
+                </td></tr>
+                {% endfor %}
+                <tr><th>Visibility</th><td>{{ d.visibility or 'not recorded' }}{% if d.archived %} &middot; archived{% endif %}</td></tr>
+                <tr><th>Last scanned</th><td>{{ d.last_scanned_at | dt('%Y-%m-%d %H:%M') if d.last_scanned_at else 'never' }}</td></tr>
+                <tr><th>Description</th><td>
+                  {% if d.note %}<div class="audit-detail-text">{{ d.note }}</div>
+                    <span class="faint small">{{ d.note_by }}{% if d.note_at %}, {{ d.note_at | dt('%Y-%m-%d') }}{% endif %}</span>
+                  {% else %}<span class="faint">none yet</span>{% endif %}
+                </td></tr>
+              </tbody>
+            </table>
+            {% if can_describe %}
+            <form method="post" action="{{ base }}/blast-radius/repo/{{ d.id }}/describe"
+                  style="margin-top:.75rem;max-width:70ch">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="back" value="{{ request.url.path }}?view={{ view }}">
+              <label>Describe this repository
+                <textarea name="note" rows="3"
+                          placeholder="What it is, who relies on it, anything somebody reading a finding here needs to know.">{{ d.note }}</textarea>
+                <span class="faint small">Read by a person, never matched on.
+                  The fields above answer fixed questions; this is for the
+                  sentence that decides what to do and fits none of them.</span>
+              </label>
+              <button class="btn sm" type="submit">Save</button>
+            </form>
+            {% endif %}
+            {% else %}
+            <span class="faint small">This repository has not been seen by a
+              scan yet, so there is nothing recorded about it.</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<script src="{{ base }}/static/blast-radius.js?v={{ asset_v('blast-radius.js') }}"></script>
+{% else %}
+<div class="card">
+  <div class="card-head">{{ people|length }}
+    {{ 'account' if people|length == 1 else 'accounts' }}</div>
+    <div class="field" style="max-width:420px;margin-bottom:.75rem">
+      <label for="people-table-search">Search</label>
+      <input type="text" id="people-table-search" data-filter="people-table" autocomplete="off"
+             placeholder="account, repository, or permission">
+      <div class="small faint" data-filter-count="people-table"></div>
+    </div>
+    <div class="empty" data-filter-empty="people-table" hidden>Nothing matches that.</div>
+  <div class="table-scroll">
+      <table id="people-table">
+      <thead><tr>
+        <th>Account</th><th>Highest</th><th>Repos</th><th>Can push to</th>
+        <th>What that lets them do</th>
+      </tr></thead>
+      <tbody>
+      {% for p in people %}
+        <tr>
+          <td class="stack">
+            <span>{{ p.login }}</span>
+            <span class="sub">
+              {% if p.outside %}<span class="badge medium">outside collaborator</span>{% endif %}
+              {% if p.machine %}<span class="badge">machine account</span>{% endif %}
+              {% if p.site_admin %}<span class="badge critical">site admin</span>{% endif %}
+              {{ p.affiliations | join(', ') }}
+            </span>
+          </td>
+          <td><span class="badge {{ 'critical' if p.highest == 'admin' else ('medium' if p.highest in ['write','maintain'] else '') }}">{{ p.highest }}</span></td>
+            {# A number on its own only ever prompts the same next question,
+               which is which ones. The answer is already on the page, so it
+               opens here rather than costing a round trip. #}
+            <td class="stack nowrap">
+              {% if p.repositories %}
+              <details><summary>{{ p.repo_count }}</summary>
+                <div class="sub mono small">
+                  {% for r in p.repositories|sort(attribute='repository') %}
+                    <div>{{ r.repository }} <span class="faint">{{ r.permission }}</span></div>
+                  {% endfor %}
+                </div>
+              </details>
+              {% else %}<span>{{ p.repo_count }}</span>{% endif %}
+              {% if p.admin_of %}<span class="sub">admin on {{ p.admin_of|length }}</span>{% endif %}
+            </td>
+            <td class="nowrap">
+              {% set pushable = p.repositories|selectattr('permission','in',['admin','maintain','write'])|list %}
+              {% if pushable %}
+              <details><summary>{{ p.can_push }}</summary>
+                <div class="sub mono small">
+                  {% for r in pushable|sort(attribute='repository') %}
+                    <div>{{ r.repository }} <span class="faint">{{ r.permission }}</span></div>
+                  {% endfor %}
+                </div>
+              </details>
+              {% else %}{{ p.can_push }}{% endif %}
+            </td>
+          <td class="small">{{ p.capabilities | join(', ') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-body small faint">
+    <p><strong>What this cannot see.</strong>  Enterprise owners can reach every
+      repository in the enterprise and never appear as collaborators on any of
+      them, so they are not in this list.  Neither is anybody who reaches the
+      code some other way, through a mirror, a fork taken earlier or a copy on
+      somebody's laptop.</p>
+    <p>Permissions here are the effective ones, which is the highest of what the
+      organization grants everybody, what a team grants, and anything granted by
+      name.  The route is shown as direct or inherited.</p>
+  </div>
+</div>
+<script src="{{ base }}/static/tablefilter.js?v={{ asset_v('tablefilter.js') }}"></script>
+{% endblock %}

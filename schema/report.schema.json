@@ -1,0 +1,919 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ghscan/report.schema.json",
+  "title": "ghscan report",
+  "description": "Output of `ghscan scan` (ghscan-report.json). The -secrets.json and -sbom.json side files are projections of this document.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "tool",
+    "scan",
+    "summary",
+    "secrets",
+    "vulnerabilities",
+    "repositories"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "tool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "engine_versions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Exact version of every scanner present at run time."
+        },
+        "engines": {
+          "type": "object",
+          "properties": {
+            "secrets": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "gitleaks",
+                  "trufflehog",
+                  "github_secret_scanning"
+                ]
+              }
+            },
+            "sbom": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "syft",
+                  "github_dependency_graph"
+                ]
+              }
+            },
+            "vulnerabilities": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "grype",
+                  "github_dependabot",
+                  "github_code_scanning"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "scan": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "duration_sec": {
+          "type": "integer"
+        },
+        "config_file": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "live_verification_enabled": {
+          "type": "boolean",
+          "description": "Whether candidate credentials were sent to their issuing provider to prove they are live."
+        },
+        "branch_policy": {
+          "type": "object"
+        },
+        "sso_results_truncated": {
+          "type": "boolean",
+          "description": "True when GitHub returned an X-GitHub-SSO partial-results header. The report is INCOMPLETE when this is true."
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "api_url": {
+          "type": "string"
+        },
+        "orgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "auth_method": {
+          "enum": [
+            "app",
+            "pat",
+            "gh_cli"
+          ]
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "repositories": {
+          "type": "object"
+        },
+        "branches": {
+          "type": "object"
+        },
+        "secrets": {
+          "type": "object",
+          "properties": {
+            "reported": {
+              "type": "integer"
+            },
+            "confirmed_live": {
+              "type": "integer",
+              "description": "Credentials an engine proved are currently valid."
+            },
+            "unverified_probable": {
+              "type": "integer"
+            },
+            "still_in_branch_heads": {
+              "type": "integer"
+            },
+            "history_only": {
+              "type": "integer"
+            },
+            "placeholders_filtered": {
+              "type": "integer"
+            },
+            "allowlist_suppressed": {
+              "type": "integer"
+            },
+            "by_severity": {
+              "type": "object"
+            },
+            "by_confidence": {
+              "type": "object"
+            },
+            "by_detector": {
+              "type": "object"
+            },
+            "by_engine": {
+              "type": "object"
+            },
+            "top_repositories": {
+              "type": "array"
+            }
+          }
+        },
+        "sbom": {
+          "type": "object"
+        },
+        "vulnerabilities": {
+          "type": "object"
+        }
+      }
+    },
+    "secrets": {
+      "type": "array",
+      "description": "Flat, cross-repository list of reported secrets, most severe first. This is the repository / branch / URL list.",
+      "items": {
+        "$ref": "#/$defs/secretFinding"
+      }
+    },
+    "vulnerabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/vulnerability"
+      }
+    },
+    "placeholders_filtered": {
+      "type": "array",
+      "description": "Candidates discarded as placeholders, kept for auditability. Each records which rule discarded it.",
+      "items": {
+        "type": "object"
+      }
+    },
+    "allowlist_suppressed": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "sbom_by_branch": {
+      "type": "array",
+      "description": "Present per repository when scan.sbom.scan_branches is \"all\": one SBOM per non-default branch.",
+      "items": {
+        "type": "object"
+      }
+    },
+    "repositories": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "organizations": {
+      "type": "array",
+      "description": "Every organization in scope, with its members, 2FA status and default repository permission.",
+      "items": {
+        "type": "object"
+      }
+    },
+    "access": {
+      "type": "object",
+      "description": "Who can reach what. Users are deduplicated across repositories.",
+      "properties": {
+        "organizations": {
+          "type": "array"
+        },
+        "users": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/accessUser"
+          }
+        },
+        "teams": {
+          "type": "array"
+        },
+        "pending_invitations": {
+          "type": "array"
+        },
+        "deploy_keys": {
+          "type": "array"
+        },
+        "unreadable_repositories": {
+          "type": "array",
+          "description": "Repositories where the token lacked push access, so collaborators could not be listed."
+        }
+      }
+    },
+    "pull_history": {
+      "type": "object",
+      "description": "Pull request activity. GitHub cannot attribute git fetch or clone to a user outside Enterprise audit logs, so this counts pull requests. clone_traffic is repo-level with no usernames.",
+      "properties": {
+        "by_user_branch": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pullRow"
+          }
+        },
+        "by_user": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "clone_traffic": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "secretFinding": {
+      "type": "object",
+      "required": [
+        "repository",
+        "branches",
+        "url",
+        "detector",
+        "severity",
+        "secret_redacted",
+        "secret_fingerprint"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "description": "owner/name"
+        },
+        "repository_url": {
+          "type": "string"
+        },
+        "branches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every branch whose history contains the offending commit."
+        },
+        "primary_branch": {
+          "type": "string"
+        },
+        "branch_count": {
+          "type": "integer"
+        },
+        "branch_urls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "branch": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "url": {
+          "type": "string",
+          "description": "Commit-pinned permalink to the exact line."
+        },
+        "permalink": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commit": {
+          "type": "string"
+        },
+        "commit_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "file": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer"
+        },
+        "end_line": {
+          "type": "integer"
+        },
+        "detector": {
+          "type": "string"
+        },
+        "detectors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "engines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rule_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "occurrences": {
+          "type": "integer"
+        },
+        "secret_redacted": {
+          "type": "string",
+          "description": "Masked preview, e.g. sk_l************xYz. Cleartext never appears in this document."
+        },
+        "secret_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$",
+          "description": "First 16 hex chars of SHA-256(secret). Stable across repos and runs; use it to correlate and to allowlist."
+        },
+        "secret_length": {
+          "type": "integer"
+        },
+        "entropy": {
+          "type": "number",
+          "description": "Shannon entropy, bits per character."
+        },
+        "verified": {
+          "type": "boolean",
+          "description": "True only when an engine authenticated against the issuing provider and the credential worked."
+        },
+        "verification_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "classification": {
+          "enum": [
+            "verified_live_credential",
+            "unverified_probable_secret",
+            "probable_test_fixture",
+            "placeholder_or_test_value"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "confirmed",
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low"
+          ],
+          "description": "A credential that survives triage is reported critical. Hits under a test or fixture path keep the lower rating from scan.secrets.severity."
+        },
+        "exposure": {
+          "enum": [
+            "current_and_history",
+            "git_history_only"
+          ],
+          "description": "git_history_only means the value is gone from every branch head but still reachable in history - it still needs rotation AND history rewriting."
+        },
+        "still_live_in_working_tree": {
+          "type": "boolean"
+        },
+        "live_in_branch_heads": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "author_name": {
+          "type": "string"
+        },
+        "author_email": {
+          "type": "string"
+        },
+        "committed_at": {
+          "type": "string"
+        },
+        "suppressed": {
+          "type": "boolean"
+        },
+        "suppression_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "triage": {
+          "type": "object",
+          "description": "Why this candidate survived (or did not survive) placeholder filtering.",
+          "properties": {
+            "verdict": {
+              "enum": [
+                "confirmed",
+                "probable",
+                "low",
+                "placeholder"
+              ]
+            },
+            "placeholder_pattern_match": {
+              "type": "boolean"
+            },
+            "below_min_length": {
+              "type": "boolean"
+            },
+            "below_min_entropy": {
+              "type": "boolean"
+            },
+            "low_character_diversity": {
+              "type": "boolean"
+            },
+            "non_production_path": {
+              "type": "boolean"
+            }
+          }
+        },
+        "category": {
+          "const": "credential",
+          "description": "Secrets are always categorized as credentials."
+        },
+        "finding_type": {
+          "const": "exposed_credential"
+        },
+        "severity_reason": {
+          "type": "string"
+        },
+        "authored_at": {
+          "type": "string",
+          "description": "When the author wrote the commit."
+        },
+        "committer_name": {
+          "type": "string"
+        },
+        "committer_email": {
+          "type": "string"
+        },
+        "author_login": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "GitHub account behind the commit, resolved through the commits API. Git metadata alone can say anything."
+        },
+        "author_html_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "committer_login": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commit_verified": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Whether the commit signature verified."
+        },
+        "first_committed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_committed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "vulnerability": {
+      "type": "object",
+      "required": [
+        "id",
+        "severity",
+        "package",
+        "organization",
+        "repository"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "CVE or GHSA identifier."
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "moderate",
+            "low",
+            "negligible",
+            "note",
+            "unknown"
+          ]
+        },
+        "cvss_score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "purl": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "locations": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "vulnerable_range": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fixed_in": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fix_state": {
+          "type": "string"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "grype",
+              "github_dependabot",
+              "github_code_scanning"
+            ]
+          }
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "state": {
+          "type": "string"
+        },
+        "organization": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Branch the SBOM or alert relates to."
+        },
+        "cvss_vector": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwe": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "published_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reachability": {
+          "type": "object",
+          "description": "Whether the application can actually reach this package. A verdict and the reason for it; nothing is removed on the strength of it.",
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "reachable",
+                "unlikely",
+                "unknown"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            },
+            "ecosystem": {
+              "type": "string"
+            },
+            "direct": {
+              "type": "string",
+              "enum": [
+                "direct",
+                "transitive",
+                "unknown"
+              ]
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "runtime",
+                "development",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "verdict",
+            "reason"
+          ]
+        }
+      }
+    },
+    "accessUser": {
+      "type": "object",
+      "required": [
+        "login",
+        "repositories"
+      ],
+      "properties": {
+        "login": {
+          "type": "string"
+        },
+        "id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "type": {
+          "enum": [
+            "User",
+            "Bot",
+            "Organization"
+          ]
+        },
+        "site_admin": {
+          "type": "boolean"
+        },
+        "outside_collaborator": {
+          "type": "boolean"
+        },
+        "repository_count": {
+          "type": "integer"
+        },
+        "highest_permission": {
+          "enum": [
+            "admin",
+            "maintain",
+            "write",
+            "push",
+            "triage",
+            "read",
+            "pull",
+            "unknown"
+          ]
+        },
+        "admin_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "repositories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "repository": {
+                "type": "string"
+              },
+              "permission": {
+                "type": "string"
+              },
+              "affiliation": {
+                "enum": [
+                  "direct",
+                  "inherited"
+                ]
+              },
+              "outside_collaborator": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "html_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "pullRow": {
+      "type": "object",
+      "required": [
+        "username",
+        "organization",
+        "repository",
+        "branch",
+        "count",
+        "last_pull_at"
+      ],
+      "properties": {
+        "username": {
+          "type": "string"
+        },
+        "user_type": {
+          "enum": [
+            "User",
+            "Bot",
+            "Organization"
+          ]
+        },
+        "organization": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Target branch of the pull request."
+        },
+        "count": {
+          "type": "integer"
+        },
+        "merged_count": {
+          "type": "integer"
+        },
+        "open_count": {
+          "type": "integer"
+        },
+        "closed_count": {
+          "type": "integer"
+        },
+        "draft_count": {
+          "type": "integer"
+        },
+        "first_pull_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_pull_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_pull_number": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

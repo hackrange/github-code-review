@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}Notifications &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Notifications</h1>
+    <div class="faint small">A scan runs overnight and the results sit here
+      until somebody visits.  This tells them instead.  Nothing sent from here
+      is a write to a repository: every call this tool makes to a provider is
+      still a GET.</div></div>
+</div>
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% endif %}
+
+<form method="post" action="{{ base }}/notifications/save">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <div class="card">
+    <div class="card-head">What gets sent</div>
+    <div class="card-body">
+      <label class="check">
+        <input type="checkbox" name="notify.enabled" value="1"
+               {{ 'checked' if values['notify.enabled'] }}> Send a message when a scan finds something new
+      </label>
+      <p class="faint small">Only what is new.  A finding that was here
+        yesterday is not sent again, because a nightly message about the
+        standing backlog is how people learn to filter the sender.</p>
+
+      <label>The floor for the digest
+        <select name="notify.min_severity">
+          {% for level in ['critical', 'high', 'medium', 'low', 'info'] %}
+          <option value="{{ level }}" {{ 'selected' if values['notify.min_severity'] == level }}>{{ level }}</option>
+          {% endfor %}
+        </select>
+        <span class="faint small">Three things ignore this and go out on their
+          own the moment they are found: a credential the provider confirmed
+          still works, a vulnerability on the CISA exploited list, and a
+          package that is itself the attack.  Those are the ones somebody
+          should stop what they are doing for.</span>
+      </label>
+
+      <label>Where this installation is reachable
+        {# An address is long: a host, a path prefix and sometimes a port.  A
+           box that shows twenty characters of it makes checking one a
+           scrolling exercise.  size is a floor rather than a cap, so a longer
+           address still fits and still types. #}
+        <input type="url" name="notify.base_url" size="75"
+               style="min-width:min(75ch, 100%)"
+               value="{{ values['notify.base_url'] }}"
+               placeholder="https://codereview.example.com">
+        <span class="faint small">So a message can link to the finding.  Without
+          it the message still goes, with nowhere to click.</span>
+      </label>
+      <p class="faint small">A message never carries the credential itself.  It
+        carries the same redacted preview the report files do, because a
+        message lands somewhere with a different set of readers than this page
+        has.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">Chat</div>
+    <div class="card-body">
+      <label>Slack incoming webhook
+        <input type="password" name="notify.slack_webhook" autocomplete="new-password"
+               placeholder="{{ 'stored, leave empty to keep it' if values['notify.slack_webhook'] else 'https://hooks.slack.com/services/...' }}">
+      </label>
+      <label>Teams incoming webhook
+        <input type="password" name="notify.teams_webhook" autocomplete="new-password"
+               placeholder="{{ 'stored, leave empty to keep it' if values['notify.teams_webhook'] else 'https://outlook.office.com/webhook/...' }}">
+      </label>
+      <label>Any other endpoint
+        <input type="password" name="notify.webhook_url" autocomplete="new-password"
+               placeholder="{{ 'stored, leave empty to keep it' if values['notify.webhook_url'] else 'https://example.com/hooks/findings' }}">
+        <span class="faint small">Sent JSON, for whatever is not Slack or Teams.
+          A webhook URL is a credential, so all three are stored encrypted and
+          never shown back.</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">Mail</div>
+    <div class="card-body">
+      <label>How mail is sent
+        <select name="notify.mail_transport" id="mail-transport">
+          <option value="smtp" {{ 'selected' if values['notify.mail_transport'] != 'graph' }}>SMTP</option>
+          <option value="graph" {{ 'selected' if values['notify.mail_transport'] == 'graph' }}>Microsoft 365 (Graph API)</option>
+        </select>
+        <span class="faint small">A tenant with basic authentication switched
+          off has no SMTP to offer, and an app registration is the supported
+          way in.</span>
+      </label>
+
+      <label>To
+        <input type="text" name="notify.email_to" value="{{ values['notify.email_to'] }}"
+               placeholder="security@example.com, oncall@example.com">
+        <span class="faint small">Several, separated by commas.  Used by both.</span>
+      </label>
+
+      <div data-mail="smtp">
+        <label>From
+          <input type="text" name="notify.email_from" value="{{ values['notify.email_from'] }}"
+                 placeholder="git-code-review@example.com">
+        </label>
+        <label>Server
+          <input type="text" name="notify.smtp_host" value="{{ values['notify.smtp_host'] }}"
+                 placeholder="smtp.example.com">
+        </label>
+        <label>Port
+          <input type="number" name="notify.smtp_port" min="1" max="65535"
+                 value="{{ values['notify.smtp_port'] }}">
+        </label>
+        <label>Security
+          <select name="notify.smtp_security">
+            {% for mode in ['starttls', 'ssl', 'none'] %}
+            <option value="{{ mode }}" {{ 'selected' if values['notify.smtp_security'] == mode }}>{{ mode }}</option>
+            {% endfor %}
+          </select>
+          <span class="faint small">starttls on 587, ssl on 465.  none only
+            makes sense for a relay inside your own network.</span>
+        </label>
+        <label>Username
+          <input type="text" name="notify.smtp_user" value="{{ values['notify.smtp_user'] }}"
+                 autocomplete="off" placeholder="leave empty for a relay that does not ask">
+        </label>
+        <label>Password
+          <input type="password" name="notify.smtp_password" autocomplete="new-password"
+                 placeholder="{{ 'stored, leave empty to keep it' if values['notify.smtp_password'] else 'leave empty for a relay that does not ask' }}">
+          <span class="faint small">Both of these can be empty.  An internal
+            relay that accepts mail from this host by address does not want a
+            credential, and inventing one to fill the box would stop it
+            working.</span>
+        </label>
+      </div>
+
+      <div data-mail="graph" hidden>
+        <label>Directory (tenant) ID
+          <input type="text" name="notify.graph_tenant" value="{{ values['notify.graph_tenant'] }}"
+                 placeholder="00000000-0000-0000-0000-000000000000">
+        </label>
+        <label>Application (client) ID
+          <input type="text" name="notify.graph_client_id" value="{{ values['notify.graph_client_id'] }}"
+                 placeholder="00000000-0000-0000-0000-000000000000">
+        </label>
+        <label>Client secret
+          <input type="password" name="notify.graph_secret" autocomplete="new-password"
+                 placeholder="{{ 'stored, leave empty to keep it' if values['notify.graph_secret'] else 'the secret Value, not the Secret ID' }}">
+          <span class="faint small">Azure shows the Value once, when you create
+            it.  The Secret ID beside it is not the secret and will not
+            work.</span>
+        </label>
+        <label>Sender email address
+          <input type="text" name="notify.graph_sender" value="{{ values['notify.graph_sender'] }}"
+                 placeholder="git-code-review@example.com">
+          <span class="faint small">The mailbox the message is sent as.  It has
+            to exist in the tenant, and the app registration needs Mail.Send
+            for it.</span>
+        </label>
+
+        <div class="notice info">
+          <div>
+            <strong>Azure setup</strong>
+            <ol class="small">
+              <li>Azure Portal, then App Registrations, then New Registration.</li>
+              <li>Name it, for example Git Code Review Email, and register it.</li>
+              <li>Copy the Application (client) ID and the Directory (tenant) ID.</li>
+              <li>Certificates &amp; Secrets, then New Client Secret, and copy
+                  the <strong>Value</strong>.</li>
+              <li>API Permissions, then Add a permission, then Microsoft Graph,
+                  then <strong>Application permissions</strong>.</li>
+              <li>Add <strong>Mail.Send</strong>, then Grant admin consent.</li>
+            </ol>
+            <span class="faint small">Application permissions rather than
+              delegated: nobody is signing in, so there is no user to delegate
+              from.  Without the admin consent step the permission is listed
+              and does nothing.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-actions">
+    <button class="btn primary" type="submit">Save</button>
+  </div>
+</form>
+<script src="{{ base }}/static/notifications.js?v={{ asset_v('notifications.js') }}"></script>
+
+<div class="card">
+  <div class="card-head">Prove it works</div>
+  <div class="card-body">
+    <p class="faint small">Sends one message to everything configured above,
+      with no findings in it.  Better to find out here than the first time
+      something is actually wrong.</p>
+    <form method="post" action="{{ base }}/notifications/test">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit">Send a test message</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

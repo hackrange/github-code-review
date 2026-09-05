@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Backup and restore &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Backup and restore</h1>
+    <div class="faint small">One encrypted file holding this whole
+      installation.  {{ total_rows }} rows across {{ counts|length }} tables.
+      The findings could be found again by scanning; the decisions people made
+      about them could not, and those are what this is for.</div></div>
+</div>
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% endif %}
+
+<div class="settings">
+<div class="card" id="take">
+  <div class="card-head"><span class="head-text">Take a backup</span></div>
+  <form method="post" action="{{ base }}/backup/create">
+    <div class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Password
+        <input type="password" name="password" required
+               minlength="{{ min_password }}" autocomplete="new-password">
+        <span class="faint small">At least {{ min_password }} characters.  This
+          is the only thing standing between the file and every credential the
+          installation holds.</span>
+      </label>
+      <label>Password again
+        <input type="password" name="password_confirm" required
+               minlength="{{ min_password }}" autocomplete="new-password">
+        <span class="faint small">Nothing here records it.  Lose it and the
+          file is scrap; there is no way back into it.</span>
+      </label>
+      <div class="wide">
+        <button class="btn primary" type="submit">Download the backup</button>
+      </div>
+    </div>
+  </form>
+  <div class="small faint">
+    <p>The file is a zip holding three things: an encrypted copy of the data, a
+      manifest saying when it was made and how much is in it, and a note on how
+      to put it back.  The data is encrypted with AES-256-GCM under a key
+      stretched from your password with scrypt, and the manifest is signed
+      along with it, so an edited file fails to open rather than opening wrong.</p>
+    <p>Credentials travel in the clear <em>inside</em> that encryption, not
+      under this installation's own key.  That is what lets the file open on a
+      machine which has never seen this one, and it is why the password matters
+      as much as it does.</p>
+  </div>
+</div>
+
+<div class="card" id="whats-in-it">
+  <div class="card-head"><span class="head-text">What goes in</span></div>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Table</th><th>Rows</th></tr></thead>
+      <tbody>
+        {% for name, n in counts.items() %}
+        <tr><td class="mono small">{{ name }}</td><td>{{ n }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="small faint">
+    Sessions are left out on purpose.  They last hours, and carrying somebody's
+    signed in browser onto another machine is not something anybody wants.
+  </div>
+</div>
+
+<div class="card" id="put-one-back">
+  <div class="card-head"><span class="head-text">Put one back</span></div>
+  <div class="notice warn">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+    <div><strong>This replaces everything.</strong>  Every finding, every
+      exception, every account and every credential here goes first, including
+      the account you are signed in with.  You will be signed out and will need
+      an account from the backup to get back in.</div>
+  </div>
+  <form method="post" action="{{ base }}/backup/restore"
+        enctype="multipart/form-data">
+    <div class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label class="wide">The backup file
+        <input type="file" name="file" accept=".zip,application/zip" required>
+      </label>
+      <label>Password
+        <input type="password" name="password" required autocomplete="off">
+        <span class="faint small">The one used when it was made.</span>
+      </label>
+      <label>Type REPLACE to confirm
+        <input type="text" name="confirm" required placeholder="REPLACE"
+               autocomplete="off">
+        <span class="faint small">Deliberately awkward.  This is not a button
+          anybody should be able to press by accident.</span>
+      </label>
+      <div class="wide">
+        <button class="btn danger" type="submit">Restore from this file</button>
+      </div>
+    </div>
+  </form>
+</div>
+</div>
+{% endblock %}

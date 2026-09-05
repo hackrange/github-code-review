@@ -1,0 +1,395 @@
+{% extends "base.html" %}
+{% block title %}Finding &middot; Git Code Review{% endblock %}
+{% block content %}
+{% if f.triage and f.triage != 'review' %}
+<div class="notice info">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+  <div><strong>Set aside as {{ f.triage.replace('_', ' ') }}.</strong>
+    {{ f.triage_reason }}
+    <div class="small" style="margin-top:.25rem">It is kept and still counted;
+      it is out of the work list, not gone. If this looks wrong, that is worth
+      saying &mdash; the rule that decided it can be fixed.</div></div>
+</div>
+{% endif %}
+
+{% if flash %}
+<div class="notice {{ 'bad' if flash_kind == 'error' else ('warn' if flash_kind == 'warn' else 'ok') }}">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+  <div>{{ flash }}</div>
+</div>
+{% endif %}
+
+<div class="page-head">
+  <div>
+    <h1><span class="badge {{ f.severity.value }}">{{ f.severity.value }}</span>
+      {% if f.confidence %}<span class="badge {{ 'ok' if f.confidence == 'high' else ('medium' if f.confidence == 'low' else '') }}"
+        title="How sure the engine was about its own rule.">{{ f.confidence }} confidence</span>{% endif %}
+      {{ f.rule or f.vulnerability_id or 'Finding' }}</h1>
+    <div class="faint small"><span class="mono">#{{ f.id }}</span>
+      &middot; <span class="mono">{{ f.vuln_id }}</span>
+      &middot; {{ f.repository }}{% if f.branch %} on {{ f.branch }}{% endif %}</div>
+    {% if f.confidence == 'low' %}
+    <div class="faint small">A low confidence rule is usually an audit rule: it
+      asks a person to look, rather than asserting a bug. Worth reading before
+      writing an exception for it.</div>
+    {% endif %}
+  </div>
+  <div class="page-actions">
+    {% if f.url %}<a class="btn" href="{{ f.url }}" rel="noopener noreferrer"
+                     target="_blank">{% if host_name %}Open on {{ host_name }}
+                     {%- else %}Open the file{% endif %}</a>{% endif %}
+    {% if f.kind.value in ['credential', 'code'] and f.file_path %}
+      {# Read only, and it does not take the scan lock, so it works while a
+         scan is running.  It cannot change the finding: see the note it
+         prints. #}
+      <form method="post" action="{{ base }}/findings/{{ f.id }}/recheck"
+            style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn" type="submit"
+                title="Fetch this branch and look at the file again. Nothing is saved.">Check again</button>
+      </form>
+    {% endif %}
+    {% if can_waive and f.state.value == 'open' %}
+      <button class="btn primary" type="button" data-modal="waive-modal">Waive</button>
+    {% endif %}
+  </div>
+</div>
+
+{% if recommendation %}
+{# Derived from what is already on the finding, never a second opinion formed
+   here.  It sits until somebody accepts it: a recommendation is not a
+   decision, and the grade only moves when a person says so. #}
+<div class="card">
+  <div class="card-head">{% if recommendation.direction == 'up'
+    %}This looks worse than a {{ f.severity.value }}{%
+    else %}This is probably not a {{ f.severity.value }}{% endif %}</div>
+  <div class="card-body">
+    <p>
+      <span class="badge {{ f.severity.value }}">{{ f.severity.value }}</span>
+      <span class="faint">&rarr;</span>
+      <span class="badge {{ recommendation.severity.value }}">{{ recommendation.severity.value }}</span>
+    </p>
+    <p>{{ recommendation.sentence }}</p>
+    {# Both halves, always, and never the grade on its own.  A number somebody
+       cannot take apart is a number they have to either accept or ignore. #}
+    <p class="small">Exploitation looks <strong>{{ recommendation.likelihood }}</strong>{%
+      if recommendation.likelihood_reason %}: {{ recommendation.likelihood_reason }}{% endif %}.</p>
+    {% if recommendation.impact %}
+    <p class="small">Impact reads <strong>{{ recommendation.impact }}</strong>{%
+      if recommendation.impact_reason %}: {{ recommendation.impact_reason }}{% endif %}.</p>
+    {% endif %}
+    {% if can_regrade %}
+    <form method="post" action="{{ base }}/findings/{{ f.id }}/regrade">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="severity" value="{{ recommendation.severity.value }}">
+      <input type="hidden" name="reason"
+             value="{{ recommendation.sentence }} Accepted from the recommendation on this finding.">
+      <button class="btn primary" type="submit">Grade it {{ recommendation.severity.value }} here</button>
+      <span class="faint small">This finding only.  The engine's grade stays on
+        the record, and the change is in the audit log.</span>
+    </form>
+    {% else %}
+    <p class="faint small">An administrator can accept this.</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% if assessment %}
+{# The two questions a severity folds into one, and where this sits in the
+   queue.  Shown whether or not there is anything to recommend: a grade says
+   how loud to be and these say why, and where they agree with the grade that
+   agreement is worth seeing rather than assuming.
+
+   The number is never on its own.  It is a sort key, and a sort key presented
+   as a verdict is the thing this whole card exists to avoid. #}
+<div class="card">
+  <div class="card-head">What this is worth here</div>
+  <div class="card-body">
+    <p>
+      <span class="badge {{ assessment.band.value }}">{{ assessment.score }}</span>
+      <strong>{{ assessment.band.value }}</strong>
+      <span class="faint">of {{ assessment.band_range[0] }} to {{ assessment.band_range[1] }}</span>
+      {# Proved or worked out.  Beside the number rather than inside it: two
+         findings can deserve the same place in the queue while one has been
+         demonstrated and the other has been reasoned about. #}
+      <span class="badge {{ 'ok' if assessment.evidence == 'observed' else '' }}">{{ assessment.evidence }}</span>
+    </p>
+    <p class="faint small">{{ assessment.evidence_reason }}.</p>
+    <p class="small">Exploitation looks <strong>{{ assessment.likelihood }}</strong>{%
+      if assessment.likelihood_reason %}: {{ assessment.likelihood_reason }}{% endif %}.</p>
+    <p class="small">Impact reads <strong>{{ assessment.impact }}</strong>{%
+      if assessment.impact_reason %}: {{ assessment.impact_reason }}{% endif %}.</p>
+    {% if assessment.direction == 'same' and not recommendation %}
+    <p class="faint small">Which comes to {{ assessment.severity.value }}, the
+      grade it already carries.</p>
+    {% endif %}
+
+    {# The arithmetic, because a score nobody can take apart is one people
+       either obey or ignore.  The band is the judgement above; these only move
+       it within the band. #}
+    <details>
+      <summary class="small">How the {{ assessment.score }} was arrived at</summary>
+      <table class="small">
+        <tbody>
+          <tr><th>Band</th><td>{{ assessment.band.value }}, which is what the two
+            answers above come to, so this is {{ assessment.band_range[0] }} to
+            {{ assessment.band_range[1] }}</td></tr>
+          {% if assessment.factors %}
+          {% for factor in assessment.factors %}
+          <tr><th>{{ factor.name }}</th><td>{{ factor.detail }}
+            <span class="faint">({{ '+' if factor.shifts >= 0 else '' }}{{ factor.shifts }})</span></td></tr>
+          {% endfor %}
+          {% else %}
+          <tr><th>Position</th><td>Nothing quantitative is known about this one,
+            so it sits in the middle of its band at {{ assessment.midpoint }}
+            rather than at the bottom of it.  Not having looked at something is
+            not a reason to sort it last.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </details>
+  </div>
+</div>
+{% endif %}
+
+{% if f.title %}<div class="card"><div class="card-body">{{ f.title }}</div></div>{% endif %}
+
+<div class="card">
+  <div class="card-head">Details</div>
+  <div class="card-body">
+    <table>
+      <tbody>
+        {# The rule that fired, by name, because that is what somebody types
+           into Custom severity when they disagree with its grade. #}
+        <tr><th>What</th><td>
+          <span class="mono">{{ f.rule or f.vulnerability_id or '&mdash;' }}</span>
+          {% if f.title %}<div class="faint small">{{ f.title }}</div>{% endif %}
+        </td></tr>
+        <tr><th>Kind</th><td>{{ f.kind.value }}</td></tr>
+        {% if f.engine_severity and f.engine_severity != f.severity.value %}
+        <tr><th>Severity here</th><td>
+          <span class="badge {{ f.severity.value }}">{{ f.severity.value }}</span>
+          {% if f.custom_severity %}
+          {# A grade somebody set on this one finding, which is a different
+             decision from a rule level override and has a name against it. #}
+          <span class="faint small">set by {{ f.custom_severity_by }}
+            {%- if f.custom_severity_at %} on {{ f.custom_severity_at | dt('%Y-%m-%d') }}{% endif %};
+            the engine called it {{ f.engine_severity }}</span>
+          {% if f.custom_severity_reason %}
+          <div class="faint small">{{ f.custom_severity_reason }}</div>
+          {% endif %}
+          {% if can_regrade %}
+          <form method="post" action="{{ base }}/findings/{{ f.id }}/regrade/clear"
+                style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn sm" type="submit">Put it back</button>
+          </form>
+          {% endif %}
+          {% else %}
+          <span class="faint small">set by your organization; the engine called it
+            {{ f.engine_severity }}</span>
+          {% endif %}
+        </td></tr>
+        {% endif %}
+        {% if f.engines %}
+        {# Which engines produced this.  Two pointing at the same line is the
+           strongest signal either of them makes, so it is said out loud
+           rather than folded into the confidence and lost. #}
+        <tr><th>Found by</th><td>{{ f.engines }}
+          {% if f.corroborated %}<span class="badge ok">more than one engine agreed</span>{% endif %}
+        </td></tr>
+        {% endif %}
+        {% if f.confidence %}
+        <tr><th>Confidence</th><td>{{ f.confidence }}
+          <span class="faint small">how sure the engine was about its own rule</span></td></tr>
+        {% endif %}
+        <tr><th>State</th><td>{{ f.state.value }}</td></tr>
+        <tr><th>Organization</th><td>{{ f.organization }}</td></tr>
+        <tr><th>Repository</th><td>{{ f.repository }}</td></tr>
+        {% if f.file_path %}<tr><th>File</th><td class="mono">{{ f.file_path }}{% if f.line %}:{{ f.line }}{% endif %}</td></tr>{% endif %}
+        {% if f.package_name %}<tr><th>Package</th><td>{{ f.package_name }} {{ f.package_version }}</td></tr>{% endif %}
+        {% if f.malicious %}
+        {# Not a vulnerability in a package.  The package is the attack, and
+           upgrading it does nothing, so the finding has to read differently
+           from every other dependency row. #}
+        <tr><th>Supply chain</th><td>
+          <span class="badge critical">{{ f.malicious_signal }}</span>
+          <div class="faint small">{{ f.malicious_reason }}</div>
+          {% if f.malicious_evidence %}
+          <pre class="mono small">{{ f.malicious_evidence }}</pre>
+          {% endif %}
+          <div class="faint small">Upgrading does not fix this.  Remove the
+            dependency, or establish that it is the package you meant.</div>
+        </td></tr>
+        {% endif %}
+        {% if f.image_ref %}
+        {# Found in a layer rather than a manifest, which changes what fixing
+           it means: a base image bump, not a version in a lock file. #}
+        <tr><th>Image</th><td class="mono small">{{ f.image_ref }}
+          <div class="faint small">found in the base image, so the fix is a
+            newer base rather than a change in this repository</div></td></tr>
+        {% endif %}
+        {% if f.vulnerability_id %}<tr><th>Advisory</th><td>{{ f.vulnerability_id }}</td></tr>{% endif %}
+        {% if f.cvss_score %}<tr><th>CVSS</th><td>{{ f.cvss_score }}</td></tr>{% endif %}
+        {% if f.known_exploited %}<tr><th>Exploited</th><td><span class="badge critical">on the CISA list</span></td></tr>{% endif %}
+        {% if f.epss_score %}<tr><th>EPSS</th><td>{{ (f.epss_score * 100)|round(2) }}%</td></tr>{% endif %}
+        {% if f.reachability %}
+        {# The verdict and the reason for it, never the verdict on its own.
+           Somebody has to be able to disagree with the reasoning, which means
+           being able to read it. #}
+        <tr><th>Reachable</th><td>
+          <span class="badge {{ 'ok' if f.reachability == 'reachable' else ('medium' if f.reachability == 'unlikely' else '') }}">
+            {{ 'the code imports it' if f.reachability == 'reachable'
+               else ('not reached' if f.reachability == 'unlikely' else 'could not tell') }}</span>
+          {% if f.reachability_reason %}<div class="faint small">{{ f.reachability_reason }}</div>{% endif %}
+          {% if f.dependency_direct and f.dependency_direct != 'unknown' %}
+          <div class="faint small">{{ f.dependency_direct }} dependency{%
+            if f.dependency_scope and f.dependency_scope != 'unknown' %}, {{ f.dependency_scope }}{% endif %}</div>
+          {% endif %}
+        </td></tr>
+        {% endif %}
+        {% if f.cwe %}<tr><th>CWE</th><td>{{ f.cwe }}</td></tr>{% endif %}
+        {% if f.owasp %}<tr><th>OWASP</th><td>{{ f.owasp }}</td></tr>{% endif %}
+        {% if f.secret_preview %}<tr><th>Value</th><td class="mono">{{ f.secret_preview }}</td></tr>{% endif %}
+        {% if f.exposure %}<tr><th>Exposure</th><td>{{ f.exposure }}</td></tr>{% endif %}
+        {% if f.author_name %}<tr><th>Committed by</th><td>{{ f.author_name }}
+          {% if f.author_login %}<span class="faint">({{ f.author_login }})</span>{% endif %}</td></tr>{% endif %}
+        {% if f.committed_at %}<tr><th>Committed</th><td>{{ f.committed_at | dt('%Y-%m-%d') }}</td></tr>{% endif %}
+        <tr><th>First found</th><td>{{ f.first_found_at | dt('%Y-%m-%d %H:%M') if f.first_found_at }}</td></tr>
+        <tr><th>Last found</th><td>{{ f.last_found_at | dt('%Y-%m-%d %H:%M') if f.last_found_at }}</td></tr>
+        <tr><th>Fingerprint</th><td class="mono small">{{ f.fingerprint }}
+          {% if can_exclude %}
+          {# The value, not this row.  An exclusion written against it covers
+             the same secret in every repository it was ever committed to. #}
+          <a class="small" href="{{ base }}/exclusions?exclude={{ f.fingerprint | urlencode }}"
+             title="Write an exclusion against this value wherever it appears">Exclude this value</a>
+          {% endif %}
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if repo_info %}
+{# What this repository is, next to the finding rather than two clicks away.
+   The same finding is an incident in one system and a chore in another, and
+   nothing on this page said which this was. #}
+<div class="card">
+  <div class="card-head">About {{ repo_info.full_name }}</div>
+  <div class="card-body">
+    <table>
+      <tbody>
+        {% for label, field in [('What it holds', 'sensitivity'),
+                                ('Application', 'application_name'),
+                                ('Business owner', 'application_owner'),
+                                ('Technical owner', 'technical_owner')] %}
+        <tr><th>{{ label }}</th><td>
+          {% if repo_info[field].value %}
+            {% if field == 'sensitivity' %}
+              {% for one in repo_info[field].value.split(',') %}
+              <span class="badge medium">{{ one.strip() }}</span>
+              {% endfor %}
+            {% else %}{{ repo_info[field].value }}{% endif %}
+            <span class="faint small">{{ 'set on this repository' if repo_info[field]['from'] == 'repository' else 'from the connection' }}</span>
+          {% else %}
+            <span class="faint">nobody has said</span>
+          {% endif %}
+        </td></tr>
+        {% endfor %}
+
+        <tr><th>Visibility</th><td>{{ repo_info.visibility or 'not recorded' }}
+          {%- if repo_info.archived %} &middot; archived{% endif %}
+          {%- if repo_info.default_branch %} &middot; default branch
+            {{ repo_info.default_branch }}
+            {% if repo_info.protected %}<span class="badge ok">protected</span>
+            {% else %}<span class="badge critical">not protected</span>{% endif %}
+          {%- endif %}</td></tr>
+
+        {% if repo_info.people_total %}
+        <tr><th>Who can reach it</th><td>
+          <div class="faint small">{{ repo_info.people_total }} with access
+            &middot; {{ repo_info.admins }} admin
+            {%- if repo_info.outside %} &middot; {{ repo_info.outside }} outside
+              the organization{% endif %}</div>
+          <div class="small" style="margin-top:.35rem">
+            {% for p in repo_info.people %}
+            <span class="badge {{ 'critical' if p.permission == 'admin' else ('medium' if p.permission in ['write','maintain'] else '') }}"
+                  title="{{ p.permission }}{{ ', outside the organization' if p.outside }}{{ ', a machine account' if p.machine }}">{{ p.login }}</span>
+            {% endfor %}
+            {% if repo_info.people_total > repo_info.people|length %}
+            <span class="faint">and {{ repo_info.people_total - repo_info.people|length }} more</span>
+            {% endif %}
+          </div>
+          <div class="faint small" style="margin-top:.35rem">
+            <a href="{{ base }}/blast-radius/{{ repo_info.organization }}?view=repos">See the whole picture</a>
+          </div>
+        </td></tr>
+        {% endif %}
+
+        <tr><th>Description</th><td>
+          {% if repo_info.note %}
+            <div class="audit-detail-text">{{ repo_info.note }}</div>
+            <span class="faint small">{{ repo_info.note_by }}{% if repo_info.note_at %}, {{ repo_info.note_at | dt('%Y-%m-%d') }}{% endif %}</span>
+          {% else %}<span class="faint">none yet</span>{% endif %}
+        </td></tr>
+      </tbody>
+    </table>
+
+    {% if can_describe %}
+    <form method="post" action="{{ base }}/blast-radius/repo/{{ repo_info.id }}/describe"
+          style="margin-top:.75rem;max-width:70ch">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="back" value="/findings/{{ f.id }}">
+      <label>Describe this repository
+        <textarea name="note" rows="3"
+                  placeholder="What it is, who relies on it, anything somebody reading a finding here needs to know.">{{ repo_info.note }}</textarea>
+      </label>
+      <button class="btn sm" type="submit">Save</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% if waiver %}
+<div class="card">
+  <div class="card-head">Exception</div>
+  <div class="card-body">
+    <p><span class="badge {{ 'pending' if waiver.status.value == 'requested' else 'ok' }}">{{ waiver.status.value }}</span></p>
+    <p>{{ waiver.reason }}</p>
+    <p class="small faint">Asked for by {{ waiver.requested_by }},
+      expires {{ waiver.expires_at | dt('%Y-%m-%d') if waiver.expires_at }}
+      {% if waiver.decided_by %}, decided by {{ waiver.decided_by }}{% endif %}</p>
+  </div>
+</div>
+{% endif %}
+
+<div class="modal-backdrop" id="waive-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/findings/{{ f.id }}/waive">
+      <div class="modal-head">Request an exception
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="field">
+          <label for="reason">Why is this acceptable</label>
+          <textarea id="reason" name="reason" required minlength="20" maxlength="2000"></textarea>
+        </div>
+        <div class="field">
+          <label for="expires">Expires</label>
+          <input type="date" id="expires" name="expires" required value="{{ default_expiry }}">
+        </div>
+        <div class="field">
+          <label for="ticket">Ticket</label>
+          <input type="text" id="ticket" name="ticket" maxlength="120">
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Submit</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

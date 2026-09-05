@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Repositories &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Repositories</h1>
+  <div class="faint small">{{ rows|length }} you can see</div></div></div>
+<div class="card">
+  {% if rows %}
+  <div class="field" style="max-width:420px;margin-bottom:.75rem">
+    <label for="repo-search">Search</label>
+    <input type="text" id="repo-search" data-filter="repo-table" autocomplete="off"
+           placeholder="organization or repository">
+    <div class="small faint" data-filter-count="repo-table"></div>
+  </div>
+  <div class="empty" data-filter-empty="repo-table" hidden>Nothing matches that.</div>
+  <div class="table-scroll">
+    <table id="repo-table">
+      <thead><tr><th>Organization</th><th>Repository</th><th>Visibility</th>
+        <th>Default branch</th><th>Open findings</th><th class="nowrap">Last scanned</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        {% set c = counts.get(r.full_name, {}) %}
+        <tr>
+          <td class="small">{{ r.organization }}</td>
+          <td class="small"><a href="{{ base }}/findings?q={{ r.name }}">{{ r.name }}</a>
+            {% if r.archived %}<span class="badge waived">archived</span>{% endif %}</td>
+          <td class="small faint">{{ r.visibility }}</td>
+          <td class="small faint">{{ r.default_branch }}</td>
+          <td class="nowrap">
+            {% for level in ['critical','high','medium','low'] %}
+              {% if c.get(level) %}<span class="badge {{ level }}">{{ c[level] }}</span>{% endif %}
+            {% endfor %}
+            {% if not c %}<span class="faint small">none</span>{% endif %}
+          </td>
+          <td class="small faint nowrap">{{ r.last_scanned_at | dt('%Y-%m-%d') if r.last_scanned_at else 'never' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<div class="empty">No repositories yet. Run a scan.</div>{% endif %}
+</div>
+<script src="{{ base }}/static/tablefilter.js?v={{ asset_v('tablefilter.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,192 @@
+# ghscan additional gitleaks rules.
+#
+# The upstream gitleaks ruleset is excellent at provider-issued tokens (AWS,
+# Slack, Stripe, ...) but thin on the plain "username / password" material this
+# scan is also asked to find: credentials baked into connection strings, HTTP
+# basic-auth headers, and hardcoded password assignments.
+#
+# Each rule carries an entropy floor and an inline allowlist so the obvious
+# placeholder forms never become candidates in the first place. Anything that
+# does slip through is still subject to ghscan's own triage stage.
+#
+# Enable with:  "scan": { "secrets": { "gitleaks": { "config_path": "config/gitleaks-extra.toml" } } }
+
+title = "ghscan extra credential rules"
+
+[extend]
+useDefault = true
+
+# --- values that are public by the design of the thing that issued them -------
+#
+# A reCAPTCHA site key is rendered into the page for every visitor.  Publishing
+# it costs nothing, because publishing it is what it is for.  Reporting one as a
+# critical credential is worse than reporting nothing: it teaches people that
+# the word critical does not mean anything.
+#
+# This is matched on the position rather than on the value, and that is the
+# whole point.  A reCAPTCHA site key and a reCAPTCHA secret key are both 40
+# characters starting with 6L, and nothing about the string tells them apart.
+# Allowing the shape would hide the one that matters.  Allowing the attribute
+# does not: data-sitekey is where the public half goes, and the secret half is
+# never written there.
+[[allowlists]]
+description = "site keys, which are served to browsers on purpose"
+regexTarget = "line"
+regexes = [
+  '''(?i)\bdata-sitekey\s*=''',
+  '''(?i)\bsite[-_]?key\s*[:=]''',
+  '''(?i)\bpublishable[-_]?key\s*[:=]''',
+]
+
+# --- credentials embedded in a URL: scheme://user:password@host -------------
+[[rules]]
+id = "ghscan-url-basic-auth"
+description = "Credentials embedded in a URL (scheme://user:password@host)"
+regex = '''(?i)\b[a-z][a-z0-9+.\-]{1,25}://[A-Za-z0-9._%+\-]{2,64}:([^\s/@"'`<>{}\\]{6,128})@[A-Za-z0-9._\-]+'''
+secretGroup = 1
+entropy = 2.5
+keywords = ["://"]
+
+  [[rules.allowlists]]
+  regexTarget = "secret"
+  regexes = [
+    '''(?i)^(password|passwd|pass|secret|token|apikey|api_key|changeme|change_me|placeholder|example|sample|dummy|test|admin|root|user|username|pwd|hunter2|letmein|123456+)$''',
+    '''^[\$%<{\[].*''',
+    '''(?i)^x{3,}$|^\*{3,}$|^\.{3,}$|^0{3,}$''',
+    '''(?i)(your|my)[-_]?(password|pass|secret)''',
+  ]
+
+# --- JDBC / ODBC / .NET style connection strings -----------------------------
+[[rules]]
+id = "ghscan-connection-string-password"
+description = "Password inside a database connection string"
+# A pipe is excluded from the capture on purpose.  Without it the capture ran
+# greedily off the end of a sed expression - s|^X_PASSWORD=.*|X_PASSWORD=${VAR}|
+# was reported as a critical credential, with the whole replacement as the
+# "secret".  No connection string password contains an unescaped pipe.
+regex = '''(?i)(?:password|pwd)\s*=\s*([^;"'\s,)|]{6,128})\s*(?:;|"|'|$)'''
+secretGroup = 1
+entropy = 2.5
+keywords = ["jdbc:", "password=", "pwd=", "Data Source", "Server=", "Initial Catalog", "mongodb", "postgres"]
+
+  [[rules.allowlists]]
+  regexTarget = "secret"
+  regexes = [
+    '''(?i)^(password|passwd|pass|secret|changeme|change_me|placeholder|example|sample|dummy|test|admin|root|pwd|null|none|empty)$''',
+    '''^[\$%<{\[].*''',
+    '''(?i)^x{3,}$|^\*{3,}$|^0{3,}$''',
+    # Interpolation anywhere, not only where it starts the capture: a shell,
+    # template or environment reference is the name of a secret, not one.
+    '''\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%|\{\{[^}]*\}\}''',
+    # A regex or glob fragment is a pattern somebody wrote, not a credential.
+    '''\.\*|\[\^|\\[dwsn]''',
+  ]
+
+# --- hardcoded password assignment in source ---------------------------------
+[[rules]]
+id = "ghscan-hardcoded-password"
+description = "Hardcoded password assigned to a variable"
+# The key is often quoted and often has something in front of it, which is
+# what appsettings.json looks like: "ApiPassword": "...".  Without the optional
+# quote the pattern stopped at the quote that closes the key, and without the
+# leading letters it only ever matched a key called exactly password.
+regex = '''(?i)\b[a-z_]*(?:pass(?:word|wd)?|pwd|secret|passphrase)["']?\s*(?::=|=>|[:=])\s*["']([^"'\n]{8,128})["']'''
+secretGroup = 1
+# Lowered from 3.0, which was measured to be filtering the wrong things.  A
+# password a person chose is low entropy by nature: "Passw0rd!" scores 2.95 and
+# "Summer2024" 2.92, while the placeholder "your_password_here" scores 3.46.
+# Judging a named password by the shape of its value drops the real ones and
+# keeps the fake ones.  What separates them is the word list and the path, and
+# both run after this.  Kept above zero only to skip pure repetition.
+entropy = 2.0
+# pwd is here because .NET config writes "Pwd": "...", and the keyword list is
+# not documentation: gitleaks uses it to decide which lines to look at, so a
+# word missing from here means the regex never sees the line at all.
+keywords = ["password", "passwd", "pwd", "passphrase", "secret"]
+
+  [[rules.allowlists]]
+  regexTarget = "secret"
+  regexes = [
+    '''(?i)(example|placeholder|redacted|dummy|sample|changeme|change[-_]?me|replace[-_]?me|your[-_]?|insert[-_]?|<[^>]*>|\{\{.*\}\}|\$\{.*\}|%[a-z_]+%)''',
+    '''(?i)^(password|passwd|secret|token|admin|root|test|testing|foo|bar|hunter2|letmein|qwerty|123456+|abc123)$''',
+    '''(?i)^x{4,}$|^\*{4,}$|^\.{4,}$|^0{4,}$|^a{4,}$''',
+    '''^(os\.|process\.|System\.|config\.|settings\.|env\[|ENV\[|getenv|Deno\.env)''',
+    # A shell reading the value from somewhere else is naming a secret, not
+    # holding one.  ${VAR} was already here; $(command) and a bare $VAR were
+    # not, so every DB_PASSWORD="$(read_it)" in a setup script was reported.
+    '''\$\(|`|^\$[A-Za-z_][A-Za-z0-9_]*$|^%[A-Za-z_][A-Za-z0-9_]*%$''',
+    # A value glued together out of two string literals is not a value.
+    #
+    #     $message .= ' (Password: ' . $password . ')';
+    #
+    # The regex cannot tell that the quote after "Password: " is closing a
+    # literal rather than opening one, so it reads the concatenation between
+    # the two literals as the secret and reports a log message as a critical
+    # credential.  The same shape turns up with + in JavaScript and Java, &
+    # in VB, and #{} in Ruby.
+    #
+    # Anchored on purpose.  A password that merely contains a dot or a plus is
+    # still a password, so this only lets go of a value that starts or ends
+    # with an operator standing on its own, which is what glue looks like and
+    # what a credential never does.
+    '''^\s*[.+&,]\s|\s[.+&,]\s*$|#\{''',
+  ]
+
+# --- HTTP basic auth header ---------------------------------------------------
+[[rules]]
+id = "ghscan-http-basic-auth-header"
+description = "Base64 basic-auth credential in an Authorization header"
+regex = '''(?i)authorization\s*[:=]\s*["']?\s*basic\s+([A-Za-z0-9+/]{16,}={0,2})'''
+secretGroup = 1
+entropy = 3.0
+keywords = ["authorization", "basic "]
+
+  [[rules.allowlists]]
+  regexTarget = "secret"
+  regexes = ['''(?i)^(dXNlcjpwYXNz|YWRtaW46YWRtaW4|dGVzdDp0ZXN0|Zm9vOmJhcg)''']
+
+# --- htpasswd entries ---------------------------------------------------------
+[[rules]]
+id = "ghscan-htpasswd-hash"
+description = "Password hash in an htpasswd-style file"
+regex = '''(?m)^[A-Za-z0-9._\-]{1,64}:(\$(?:apr1|1|2[aby]|5|6)\$[A-Za-z0-9./$]{12,})$'''
+secretGroup = 1
+keywords = ["$apr1$", "$2a$", "$2b$", "$2y$", "$6$"]
+
+# --- generic bearer / api token assignment -----------------------------------
+[[rules]]
+id = "ghscan-generic-bearer-token"
+description = "Long opaque bearer or API token assigned in source"
+regex = '''(?i)\b(?:bearer|api[_\-]?key|api[_\-]?token|auth[_\-]?token|access[_\-]?token|client[_\-]?secret)\b\s*(?::=|=>|[:=]|\s)\s*["']?([A-Za-z0-9_\-\.=]{24,256})["']?'''
+secretGroup = 1
+entropy = 3.6
+keywords = ["bearer", "api_key", "apikey", "api-key", "access_token", "auth_token", "client_secret"]
+
+  [[rules.allowlists]]
+  regexTarget = "secret"
+  regexes = [
+    '''(?i)(example|placeholder|redacted|dummy|sample|changeme|your[-_]?|insert[-_]?|xxxx|0000|1111|aaaa)''',
+    '''^(os\.|process\.|System\.|config\.|settings\.|env\[|ENV\[|getenv)''',
+  ]
+
+# --- repository-wide allowlist: never look inside these ----------------------
+[[allowlists]]
+description = "Vendored code, lockfiles and binary assets"
+paths = [
+  '''(^|/)(vendor|node_modules|third_party|\.venv|venv|site-packages|bower_components|\.terraform)(/|$)''',
+  '''(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Gemfile\.lock|poetry\.lock|Cargo\.lock|go\.sum|composer\.lock)$''',
+  '''\.(min\.js|map|png|jpe?g|gif|svg|ico|pdf|zip|tar|gz|bz2|xz|7z|jar|war|class|so|dylib|dll|exe|woff2?|ttf|eot|mp4|mov)$''',
+]
+
+# --- this tool's own documentation and test fixtures -------------------------
+# Both are full of things shaped like credentials on purpose.  The docs show
+# what a leaked one looks like, and the fixtures exist so the tests can prove a
+# real looking value gets reported.  Scanning them says nothing useful and
+# teaches whoever clones this to ignore the first page of output.
+[[allowlists]]
+description = "Our own docs and fixtures, which carry examples by design"
+paths = [
+  '''(^|/)(README|CHANGELOG)\.md$''',
+  '''(^|/)documentation/''',
+  '''(^|/)tests/''',
+]

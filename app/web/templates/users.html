@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+{% block title %}Users and access &middot; Git Code Review<script src="{{ base }}/static/users.js?v={{ asset_v('users.js') }}"></script>
+{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Users and access</h1>
+    <div class="faint small">A developer only sees what is listed against them.
+      Admins and readers see the whole estate.</div></div>
+  {% if can_write %}
+  <div class="page-actions">
+    {% if tab == 'groups' %}
+    <button class="btn primary" type="button" data-modal="group-modal"
+            data-group_id="" data-name="" data-description=""
+            data-entries="">Add a group</button>
+    {% else %}
+    <button class="btn primary" type="button" data-modal="user-modal"
+            data-user_id="" data-username="" data-role="reader"
+            data-display_name="" data-email="" data-scopes=""
+            data-groups="">Add an account</button>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="filters" style="gap:.4rem">
+  <a class="btn {{ 'primary' if tab == 'accounts' }}" href="{{ base }}/users">Accounts
+    <span class="faint">{{ rows|length }}</span></a>
+  <a class="btn {{ 'primary' if tab == 'groups' }}" href="{{ base }}/users?tab=groups">Scanning groups
+    <span class="faint">{{ groups|length }}</span></a>
+</div>
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% endif %}
+
+{% if tab == 'accounts' %}
+<div class="card">
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Username</th><th>Role</th><th>Source</th><th>Two step</th>
+        <th>Scope</th><th>Last signed in</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+      {% for u in rows %}
+        <tr>
+          <td class="small">{{ u.username }}
+            {% if u.display_name %}<div class="faint">{{ u.display_name }}</div>{% endif %}</td>
+          <td><span class="badge {{ 'critical' if u.role.value == 'admin' else 'low' }}">{{ u.role.value }}</span></td>
+          <td class="small faint">{{ u.source.value }}</td>
+          <td>{% if u.source.value == 'oidc' %}<span class="faint small">at the provider</span>
+              {% elif u.totp_confirmed %}<span class="badge ok">on</span>
+              {% else %}<span class="badge medium">not set up</span>{% endif %}</td>
+          <td class="small">
+            {% if u.role.value == 'admin' or u.role.value == 'reader' %}
+              <span class="faint">everything</span>
+            {% else %}
+              {% for g in u.groups %}<span class="badge ok">{{ g.name }}</span> {% endfor %}
+              {% for s in u.scopes %}{{ s.organization }}{% if s.repository %}/{{ s.repository }}{% endif %}<br>{% endfor %}
+              {# Access on the host counts as well.  A developer with a login
+                 and no assignment still sees their own work, and a login that
+                 resolves to nothing is worth saying out loud rather than
+                 leaving somebody to wonder why their portal is empty. #}
+              {% if u.github_login %}
+                {% set n = reach.get(u.id, 0) %}
+                {% if n %}<span class="badge ok" title="{{ u.github_login }}">{{ n }} repo{{ '' if n == 1 else 's' }} on the host</span>
+                {% else %}<span class="badge medium" title="{{ u.github_login }}">login reaches nothing yet</span>{% endif %}
+              {% endif %}
+              {% if not u.groups and not u.scopes and not u.github_login %}
+                <span class="badge medium">nothing assigned</span>
+              {% endif %}
+            {% endif %}
+          </td>
+          <td class="small faint nowrap">{{ u.last_login_at | dt('%Y-%m-%d') if u.last_login_at else 'never' }}</td>
+          <td>{% if u.disabled %}<span class="badge waived">off</span>
+              {% elif u.locked_until %}<span class="badge critical">locked</span>
+              {% else %}<span class="badge ok">active</span>{% endif %}</td>
+          <td class="nowrap">
+            {% if can_write %}
+              <button class="btn sm" type="button" data-modal="user-modal"
+                      data-user_id="{{ u.id }}" data-username="{{ u.username }}"
+                      data-role="{{ u.role.value }}"
+                      data-display_name="{{ u.display_name }}"
+                      data-email="{{ u.email }}"
+                      data-github_login="{{ u.github_login or '' }}"
+                      data-role_pinned="{{ '1' if u.role_pinned else '' }}"
+                      data-groups="{% for g in u.groups %}{{ g.id }}{{ ',' if not loop.last }}{% endfor %}"
+                      data-scopes="{% for s in u.scopes %}{{ s.organization }}{% if s.repository %}/{{ s.repository }}{% endif %}{{ '\n' if not loop.last }}{% endfor %}">Edit</button>
+              {% if can_impersonate and not u.disabled and u.id != user.id %}
+              {# Seeing what somebody sees is the only way to answer "why is
+                 this repository not on their findings page".  Read only, and
+                 both ends of it are in the audit log. #}
+              <form method="post" action="{{ base }}/users/{{ u.id }}/impersonate"
+                    style="display:inline"
+                    onsubmit="return confirm('Look at this as {{ u.username }}? Every page will answer as they see it, and nothing can be changed until you stop.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm" type="submit">View as</button>
+              </form>
+              {% endif %}
+              {# A password and a code are only worth resetting if somebody
+                 can sign in with them.  With the provider on its own these
+                 do nothing, and they come back if local is turned back on. #}
+              {% if u.source.value == 'local' and auth.local_enabled %}
+              <form method="post" action="{{ base }}/users/{{ u.id }}/password"
+                    style="display:inline"
+                    onsubmit="return confirm('Give {{ u.username }} a new password? Their sessions end and the new one is shown once.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm" type="submit">New password</button>
+              </form>
+              <form method="post" action="{{ base }}/users/{{ u.id }}/totp"
+                    style="display:inline"
+                    onsubmit="return confirm('Clear two step for {{ u.username }}? They enroll again at the next sign in.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm" type="submit">Reset two step</button>
+              </form>
+              {% endif %}
+              {% if u.locked_until %}
+              <form method="post" action="{{ base }}/users/{{ u.id }}/unlock" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm" type="submit">Unlock</button>
+              </form>
+              {% endif %}
+              {% if u.id != user.id %}
+              <form method="post" action="{{ base }}/users/{{ u.id }}/toggle" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm" type="submit">{{ 'Turn on' if u.disabled else 'Turn off' }}</button>
+              </form>
+              <form method="post" action="{{ base }}/users/{{ u.id }}/delete"
+                    style="display:inline"
+                    onsubmit="return confirm('Delete {{ u.username }} for good? The audit log keeps what they did.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm danger" type="submit">Delete</button>
+              </form>
+              {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endif %}
+
+{% if tab == 'groups' %}
+<div class="card">
+  <div class="small faint" style="margin-bottom:.8rem">
+    A group is a list of repositories with a name on it.  Give somebody the
+    group rather than pasting the list onto their account, and when the project
+    picks up another repository everybody in the group gets it at once.
+  </div>
+  {% if groups %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Group</th><th>What it covers</th><th>People</th><th></th></tr></thead>
+      <tbody>
+      {% for g in groups %}
+        <tr>
+          <td class="small">{{ g.name }}
+            {% if g.description %}<div class="faint">{{ g.description }}</div>{% endif %}</td>
+          <td class="small mono">
+            {% for org, repo in g.pairs() %}{{ org }}{% if repo %}/{{ repo }}{% endif %}<br>{% endfor %}
+          </td>
+          <td class="small">
+            {% for member in g.members %}<span class="badge">{{ member.username }}</span> {% endfor %}
+            {% if not g.members %}<span class="faint">nobody yet</span>{% endif %}
+          </td>
+          <td class="nowrap">
+            {% if can_write %}
+            <button class="btn sm" type="button" data-modal="group-modal"
+                    data-group_id="{{ g.id }}" data-name="{{ g.name }}"
+                    data-description="{{ g.description }}"
+                    data-entries="{{ g.entries }}">Edit</button>
+            <form method="post" action="{{ base }}/groups/{{ g.id }}/delete"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete {{ g.name }}? Anybody in it loses what it gave them.')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm danger" type="submit">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">No groups yet.  Make one for each project, list its
+    repositories, then hand it to whoever works on it.</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if can_write %}
+<div class="modal-backdrop" id="group-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/groups/save" id="group-form">
+      <div class="modal-head">Scanning group
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="group_id">
+        <label>Name
+          <input type="text" name="name" required placeholder="project abc">
+        </label>
+        <label>What it is
+          <input type="text" name="description"
+                 placeholder="The payments platform and its services">
+        </label>
+        <label>Repositories
+          <textarea name="entries" rows="8" required
+                    placeholder="acme/api-service&#10;acme/web&#10;acme"></textarea>
+          <span class="faint small">One per line.  An organization on its own
+            covers everything under it; organization/repository covers one.</span>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="user-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/users/add" id="user-form">
+      <div class="modal-head">Account
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="user_id">
+        <label>Username
+          <input type="text" name="username" required
+                 placeholder="a.person">
+          <span class="faint small">Letters, numbers, dot, dash and underscore.
+            It cannot be changed later.</span>
+        </label>
+        <label>Name
+          <input type="text" name="display_name" placeholder="A Person">
+        </label>
+        <label>Email
+          <input type="text" name="email" placeholder="a.person@example.com">
+        </label>
+        <label>Login on the host
+          <input type="text" name="github_login" placeholder="A-Person_acme">
+          <span class="faint small">Their username on GitHub, GitLab or
+            Bitbucket.  Set it and this account sees the findings for whatever
+            that login can reach, worked out from the last scan.  Leave it
+            empty and they see only what is assigned below.</span>
+        </label>
+        <label>Role
+          <select name="role">
+            {% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+          </select>
+          <span class="faint small">admin runs the place.  developer sees only
+            what is listed below.  reader sees everything and changes nothing.</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" name="role_pinned" value="1" data-role-pin>
+          Keep this role when they sign in
+          <span class="faint small">The provider normally decides the role on
+            every sign in, and whatever is set here is replaced.  Tick this to
+            hold it where you put it.  Only for a named person, and only while
+            the provider is not sending groups: it does not stop the provider
+            taking their access away.</span>
+        </label>
+        <label data-new-only>Signs in with
+          <select name="source">
+            <option value="local">A password and two step here</option>
+            <option value="oidc">The identity provider</option>
+          </select>
+          <span class="faint small">A local account gets a starting password,
+            shown once on the next page.</span>
+        </label>
+        {% if groups %}
+        <label>Scanning groups
+          <span class="faint small">Tick the projects this person works on.
+            Better than pasting a list: when the project grows a repository,
+            everybody in the group gets it.</span>
+          <div class="check-grid">
+            {% for g in groups %}
+            <label class="check">
+              <input type="checkbox" name="groups" value="{{ g.id }}"
+                     data-group-pick="{{ g.id }}">
+              {{ g.name }}
+              {% if g.description %}<span class="faint small">{{ g.description }}</span>{% endif %}
+            </label>
+            {% endfor %}
+          </div>
+        </label>
+        {% endif %}
+        <label>Anything else this person can see
+          <textarea name="scopes" rows="3"
+                    placeholder="acme&#10;acme/api-service"></textarea>
+          <span class="faint small">One per line, on top of the groups above.
+            An organization on its own covers all of it.  Leave it empty for
+            admins and readers, who see everything anyway.</span>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+<script src="{{ base }}/static/users.js?v={{ asset_v('users.js') }}"></script>
+{% endblock %}

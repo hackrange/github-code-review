@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}Triage rules &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Triage rules</h1>
+    <div class="faint small">What the scanner treats as an example rather than
+      a credential.  A candidate that matches one of these never reaches the
+      report.  {{ shipped_count }} shipped, {{ custom_count }} of your own,
+      {% if off_count %}{{ off_count }} turned off{% else %}none turned off{% endif %}.</div></div>
+  {% if can_write %}
+  <div class="page-actions">
+    <button class="btn" type="button" data-modal="restore-modal">Restore defaults</button>
+    <button class="btn primary" type="button" data-modal="triage-modal"
+            data-target="value" data-pattern="" data-reason="">Add a rule</button>
+  </div>
+  {% endif %}
+</div>
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head">Try a sample</div>
+  <div class="card-body">
+    {# The only preview there is for a value rule.  Cleartext is stripped in
+       the scan before anything is written, so the database holds a hash and a
+       redacted preview and there is nothing here to run a pattern against. #}
+    <p class="faint small">Paste a value or a path and see which rules would
+      catch it.  A value cannot be checked against the findings you already
+      have: the secret itself never leaves the scan, so what is stored is a
+      hash.  A path can.</p>
+    <form method="get" action="{{ base }}/triage" class="filters">
+      <div class="field">
+        <label for="target">Match against</label>
+        <select id="target" name="target">
+          <option value="value" {{ 'selected' if sample_target == 'value' }}>the value</option>
+          <option value="path" {{ 'selected' if sample_target == 'path' }}>the path</option>
+        </select>
+      </div>
+      <div class="field" style="flex:1;min-width:260px">
+        <label for="sample">Sample</label>
+        <input type="text" id="sample" name="sample" value="{{ sample }}"
+               placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... or docs/api/auth.md">
+      </div>
+      <button class="btn" type="submit">Try it</button>
+    </form>
+
+    {% if sample %}
+      {% if sample_hits %}
+      <p class="small"><span class="badge ok">caught</span>
+        This would not be reported.  {{ sample_hits|length }} rule{{ '' if sample_hits|length == 1 else 's' }} match:</p>
+      <ul class="small mono">
+        {% for hit in sample_hits %}<li>{{ hit }}</li>{% endfor %}
+      </ul>
+      {% if sample_target == 'path' and sample_findings %}
+      <p class="faint small">{{ sample_findings }} credential finding{{ '' if sample_findings == 1 else 's' }}
+        currently sit at exactly that path.</p>
+      {% endif %}
+      {% else %}
+      <p class="small"><span class="badge">reported</span>
+        Nothing matches that, so it would be reported as a credential.</p>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">Before any pattern is looked at</div>
+  <div class="card-body">
+    <form method="post" action="{{ base }}/triage/thresholds" class="filters">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="min_entropy">Entropy floor</label>
+        <input type="number" id="min_entropy" name="secrets.min_entropy"
+               step="0.1" min="0" max="8" value="{{ min_entropy }}"
+               {{ 'disabled' if not can_write }}>
+      </div>
+      <div class="field">
+        <label for="min_length">Shortest value</label>
+        <input type="number" id="min_length" name="secrets.min_length"
+               min="0" max="512" value="{{ min_length }}"
+               {{ 'disabled' if not can_write }}>
+      </div>
+      <div class="field">
+        <label class="check">
+          <input type="checkbox" name="secrets.drop_below_entropy" value="1"
+                 {{ 'checked' if drop_below_entropy }}
+                 {{ 'disabled' if not can_write }}>
+          Low entropy alone is enough
+        </label>
+      </div>
+      {% if can_write %}
+      <button class="btn" type="submit">Save</button>
+      {% endif %}
+    </form>
+    <p class="faint small">Bits per character, and length in characters.  With
+      the box unticked a low entropy value is only set aside when one of the
+      patterns catches it too, which reports more and hides less.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">The rules</div>
+  <div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th>Matches</th><th>Pattern</th><th>Why</th><th>Where it came from</th>
+        {% if can_write %}<th></th>{% endif %}
+      </tr></thead>
+      <tbody>
+      {% for r in rules %}
+        <tr {% if not r.enabled %}class="faint"{% endif %}>
+          <td class="nowrap">
+            <span class="badge">{{ 'the value' if r.target == 'value' else 'the path' }}</span>
+          </td>
+          <td class="mono small">{{ r.pattern }}</td>
+          <td class="small">{{ r.reason }}</td>
+          <td class="stack nowrap">
+            <span class="sub">{{ 'shipped with the tool' if r.source == 'shipped' else 'added here' }}</span>
+            {% if r.created_by %}<span class="sub">{{ r.created_by }}</span>{% endif %}
+            {% if not r.enabled %}<span class="badge medium">off</span>{% endif %}
+          </td>
+          {% if can_write %}
+          <td class="nowrap">
+            <form method="post" action="{{ base }}/triage/toggle" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="target" value="{{ r.target }}">
+              <input type="hidden" name="pattern" value="{{ r.pattern }}">
+              <input type="hidden" name="on" value="{{ '0' if r.enabled else '1' }}">
+              <button class="btn sm" type="submit">{{ 'Turn off' if r.enabled else 'Turn on' }}</button>
+            </form>
+            {% if r.source == 'custom' %}
+            <form method="post" action="{{ base }}/triage/{{ r.id }}/delete"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete this rule? Anything it was hiding is reported again from the next scan.')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm danger" type="submit">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+          {% endif %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if can_write %}
+<div class="modal-backdrop" id="triage-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/triage/add">
+      <div class="modal-head">Add a triage rule
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Match against
+          <select name="target">
+            <option value="value">the value</option>
+            <option value="path">the path</option>
+          </select>
+          <span class="faint small">The credential itself, or the file it sits
+            in.  A path rule is the gentler of the two: it marks a finding as a
+            test fixture rather than deciding it is not a credential at all.</span>
+        </label>
+        <label>Pattern
+          <input type="text" name="pattern" required
+                 placeholder="^6L[0-9A-Za-z_-]{38}$">
+          <span class="faint small">A regular expression, read by the scanner.
+            Start it with (?i) to ignore case.  It is checked before it is
+            saved, so a pattern the scanner cannot read is refused here rather
+            than breaking a scan at two in the morning.</span>
+        </label>
+        <label>Why
+          <textarea name="reason" rows="3"
+                    placeholder="What this matches, and how you know it is not a credential."></textarea>
+          <span class="faint small">This hides findings from everybody, with no
+            expiry.  Somebody reading the list in a year has to be able to tell
+            whether it still holds.</span>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Add it</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="restore-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/triage/restore">
+      <div class="modal-head">Restore the defaults
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <p>This removes the {{ custom_count }} rule{{ '' if custom_count == 1 else 's' }}
+          added here and turns the {{ off_count }} shipped
+          rule{{ '' if off_count == 1 else 's' }} that {{ 'is' if off_count == 1 else 'are' }}
+          off back on.</p>
+        <p class="faint small">Anything those rules were hiding is reported
+          again from the next scan.  The audit log keeps the record of what was
+          removed.</p>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn danger">Restore them</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

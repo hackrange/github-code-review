@@ -1,0 +1,46 @@
+# Git Code Review, the web app.
+#
+# Versions are pinned so a rebuild six months from now gives you the same app
+# you tested.  Bump them on purpose, then run the tests.
+#
+# The scanner tools live in requirements-scanner.txt and get their own venv.
+# semgrep drags in a large pin set of its own, and letting it near the web
+# framework means one of them always loses.
+#
+#     Last reviewed: 28 August 2026
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+jinja2==3.1.6
+python-multipart==0.0.32
+
+# starlette arrives under fastapi, but it is pinned here on purpose.  Its
+# defaults have moved between releases, and leaving it to float makes the pin
+# above a promise the build cannot keep.
+starlette==1.6.0
+
+# Storage.  MariaDB is what this runs on, SQLite is there for a single file
+# install and for the tests.  PyMySQL is a pure python driver, so there is no
+# compiler and no libmariadb in the image.
+SQLAlchemy==2.0.52
+PyMySQL==1.1.1
+
+# Passwords and TOTP.  argon2 is the hash, pyotp does the six digit codes,
+# segno draws the enrollment QR as an inline SVG so nothing is fetched.
+argon2-cffi==25.1.0
+pyotp==2.10.0
+segno==1.6.6
+
+# OIDC.  PyJWT checks the id_token signature against the provider's published
+# keys, httpx fetches the discovery document and swaps the code for tokens.
+PyJWT[crypto]==2.13.0
+httpx==0.28.1
+cryptography==50.0.1
+
+# Scheduling.  Cron expressions for scans and for refreshing the vulnerability
+# feeds.  Runs in process, so there is no second daemon to babysit.  APScheduler
+# reads the cron strings itself, so nothing else is needed for that.
+apscheduler==3.11.3
+
+# Checking a report against schema/report.schema.json.
+jsonschema==4.26.0

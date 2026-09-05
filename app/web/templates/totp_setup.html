@@ -1,0 +1,46 @@
+{# First run for a local account.  Nothing is saved until they read a code back. #}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up two step &middot; Git Code Review</title>
+<link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_v('app.css') }}">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-box">
+    <div class="brand">Git Code Review</div>
+    <div class="sub">Set up two step for {{ username }}</div>
+
+    {% if error %}
+      <div class="notice bad">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5z"/></svg>
+        <div>{{ error }}</div>
+      </div>
+    {% endif %}
+
+    <div class="qr">{{ qr_svg|safe }}</div>
+
+    <div class="small faint mb">
+      Scan that with your authenticator app. If you cannot scan it, type this in
+      by hand:
+      <div class="mono mt" style="word-break:break-all">{{ secret }}</div>
+    </div>
+
+    <form method="post" action="{{ base }}/auth/totp-setup">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="code">Enter the code it shows you</label>
+        <input type="text" id="code" name="code" inputmode="numeric"
+               autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6"
+               required autofocus>
+      </div>
+      <button type="submit" class="btn primary" style="width:100%">
+        Turn on two step
+      </button>
+    </form>
+  </div>
+</div>
+</body>
+</html>

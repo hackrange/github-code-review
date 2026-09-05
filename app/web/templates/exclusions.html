@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+{% block title %}Exclusions &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Exclusions</h1>
+    <div class="faint small">Findings somebody reviewed and accepted.
+      {{ exclusions|length }} shown{% if exclusions|length != total %} of {{ total }}{% endif %},
+      {{ live_count }} in force.  An excluded finding still appears in the scan
+      output with the reason and who signed it off, it just leaves the report
+      files.</div></div>
+  {% if can_write %}
+  <div class="page-actions">
+    {% if expired_count %}
+    <form method="post" action="{{ base }}/exclusions/purge-expired"
+          style="display:inline"
+          onsubmit="return confirm('Delete {{ expired_count }} expired rule(s)? They already do nothing, and the audit log keeps the record.')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit">Delete {{ expired_count }} expired</button>
+    </form>
+    {% endif %}
+    {% if exclusions %}
+    {% set query = 'q=' ~ filters.q|urlencode ~ '&type=' ~ filters.type ~ '&status=' ~ filters.status %}
+    <a class="btn" href="{{ base }}/exclusions/export?{{ query }}&format=csv">Export CSV</a>
+    <a class="btn" href="{{ base }}/exclusions/export?{{ query }}&format=json">Export JSON</a>
+    {% endif %}
+    <button class="btn" type="button" data-modal="import-modal">Import a list</button>
+    <button class="btn primary" type="button" data-modal="exclusion-modal"
+            {% if prefill_fingerprint %}data-autoopen="1"{% endif %}
+            data-exclusion_id="" data-kind="{{ prefill_kind or 'any' }}"
+            data-vuln_id=""
+            data-organization="" data-repository="" data-path="" data-rule=""
+            data-fingerprint="{{ prefill_fingerprint or '' }}"
+            data-reason="" data-ticket=""
+            data-expires="">Add one</button>
+  </div>
+  {% endif %}
+</div>
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% endif %}
+
+<form method="get" action="{{ base }}/exclusions" class="filters">
+  <div class="field" style="flex:1;min-width:220px">
+    <label for="q">Search</label>
+    <input type="text" id="q" name="q" value="{{ filters.q }}"
+           placeholder="repository, path, rule, reason, ticket or id">
+  </div>
+  <div class="field">
+    <label for="type">Type</label>
+    <select id="type" name="type" data-autosubmit>
+      <option value="">Any</option>
+      {% for k in kinds %}
+      <option value="{{ k }}" {{ 'selected' if filters.type == k }}>{{ k }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="status">Status</label>
+    <select id="status" name="status" data-autosubmit>
+      <option value="">Any</option>
+      <option value="live" {{ 'selected' if filters.status == 'live' }}>In force</option>
+      <option value="expired" {{ 'selected' if filters.status == 'expired' }}>Expired</option>
+    </select>
+  </div>
+  <button type="submit" class="btn">Search</button>
+  {% if filters.q or filters.type or filters.status %}
+  <a class="btn sm" href="{{ base }}/exclusions">Clear</a>
+  {% endif %}
+</form>
+
+{% if can_write and exclusions %}
+<div class="card" id="bulk-bar" hidden>
+  <div class="flex-between">
+    <div class="small"><strong><span data-slot="bulk-n">0</span></strong>
+      selected</div>
+    <div class="page-actions">
+      <button type="button" class="btn sm" id="bulk-clear">Clear</button>
+      <button type="button" class="btn sm danger" data-modal="remove-modal">Remove the selected</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  {% if exclusions %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr>
+        {% if can_write %}
+        <th class="nowrap"><input type="checkbox" id="bulk-select-page"
+            title="Everything on this page"></th>
+        {% endif %}
+        <th>What is excluded</th><th>Why</th><th>Reviewed</th><th></th></tr></thead>
+      <tbody>
+      {% for e in exclusions %}
+        <tr {% if not e.live() %}class="faint"{% endif %}>
+          {% if can_write %}
+          <td><input type="checkbox" class="bulk-pick" value="{{ e.id }}"></td>
+          {% endif %}
+          {# Repository first, because that is what somebody scans for.  The
+             path, the rule and the id sit under it rather than each claiming a
+             column of their own and squeezing the sentence next door. #}
+          <td class="stack">
+            {# A rule written against a value is not about a place, and showing
+               it as */* reads like it covers everything.  Lead with the value. #}
+            {% if e.fingerprint %}
+            <span class="mono" title="{{ e.fingerprint }}">{{ e.fingerprint }}</span>
+            <span class="sub">this value{% if e.organization == '*' and e.repository == '*' %},
+              wherever it is{% else %} in
+              <span class="mono">{{ e.organization }}/{{ e.repository }}</span>{% endif %}</span>
+            {% else %}
+            <span class="mono">{{ e.organization }}/{{ e.repository }}</span>
+            {% if e.path %}<span class="sub mono" title="{{ e.path }}">{{ e.path }}</span>{% endif %}
+            {% endif %}
+            <span class="sub">
+              <span class="badge">{{ e.kind }}</span>
+              {% if e.rule and e.rule != '*' %}<span class="mono">{{ e.rule }}</span>{% endif %}
+              {% if e.vuln_id %}<span class="mono faint">{{ e.vuln_id }}</span>{% endif %}
+            </span>
+          </td>
+          <td class="stack reason">
+            <span>{{ e.reason }}</span>
+            {% if e.ticket %}<span class="sub"><span class="badge">{{ e.ticket }}</span></span>{% endif %}
+          </td>
+          <td class="stack nowrap">
+            <span>{{ e.reviewed_by }}</span>
+            {% if e.reviewed_date %}
+            <span class="sub">{{ e.reviewed_date | dt('%Y-%m-%d') }}</span>
+            {% endif %}
+            <span class="sub">
+              {% if e.expires_at %}expires {{ e.expires_at | dt('%Y-%m-%d') }}
+              {% else %}no end date{% endif %}
+              {% if not e.live() %}<span class="badge medium">expired</span>{% endif %}
+            </span>
+          </td>
+          <td class="nowrap">
+            {% if can_write %}
+            <button class="btn sm" type="button" data-modal="exclusion-modal"
+                    data-exclusion_id="{{ e.id }}" data-kind="{{ e.kind }}"
+                    data-vuln_id="{{ e.vuln_id or '' }}"
+                    data-organization="{{ e.organization }}"
+                    data-repository="{{ e.repository }}"
+                    data-path="{{ e.path }}" data-rule="{{ e.rule }}"
+                    data-fingerprint="{{ e.fingerprint or '' }}"
+                    data-reason="{{ e.reason }}" data-ticket="{{ e.ticket }}"
+                    data-expires="{{ e.expires_at | dt('%Y-%m-%d') if e.expires_at else '' }}">Edit</button>
+            <form method="post" action="{{ base }}/exclusions/{{ e.id }}/delete"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete this exclusion? Anything it covers comes back into both report files.')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm danger" type="submit">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif filters.q or filters.type or filters.status %}
+  <div class="empty">Nothing matches that search.</div>
+  {% else %}
+  <div class="empty">No exclusions.  Everything the scanner finds gets reported.</div>
+  {% endif %}
+</div>
+
+{% if can_write %}
+<div class="modal-backdrop" id="exclusion-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/exclusions/add" id="exclusion-form">
+      <div class="modal-head">Exclusion
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="exclusion_id">
+        <label data-new-only>Finding ID
+          <input type="text" name="vuln_id" placeholder="GCR-1A2B3C4D5E6F">
+          <span class="faint small">The quickest way.  Paste the id off the
+            finding and the rest is filled in from it, and it covers that one
+            finding and nothing else.  Leave it empty to write a rule instead.</span>
+        </label>
+        <label class="check" data-new-only>
+          <input type="checkbox" name="by_value" value="1">
+          Cover the value, not the place it was found
+          <span class="faint small">With a finding id above, take that finding's
+            value and write the rule against the value on its own.  For a
+            credential this is usually what you mean: the same key committed to
+            another repository is the same key.</span>
+        </label>
+        <label>Type
+          <select name="kind">
+            {% for k in kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}
+          </select>
+          <span class="faint small">secret, code, vuln, or any for all three.</span>
+        </label>
+        <label>Organization
+          <input type="text" name="organization" placeholder="acme">
+          <span class="faint small">A star covers every organization, which is a
+            decision about the whole estate.</span>
+        </label>
+        <label>Repository
+          <input type="text" name="repository" placeholder="api-service or acme/api-service">
+          <span class="faint small">Globs work.  A star covers all of them.</span>
+        </label>
+        <label>Path
+          <input type="text" name="path" placeholder="*/vendor/legacy-client.php">
+          <span class="faint small">Matched against the file path in the finding.</span>
+        </label>
+        <label>Rule
+          <input type="text" name="rule" placeholder="* for every rule at that path">
+          <span class="faint small">The rule or detector name, or a star.</span>
+        </label>
+        <label>Fingerprint
+          <input type="text" name="fingerprint" placeholder="cred:f960f486dcc3fe6d">
+          <span class="faint small">The value itself, as a hash.  It is at the
+            bottom of the finding page, and you can paste it with or without the
+            cred: in front.  A rule with one covers that exact value and only
+            that value, so leave organization, repository and path empty and it
+            covers the value wherever it turns up.  The same secret in another
+            repository is the same fingerprint; a different token, even one that
+            looks the same, is a different one.</span>
+        </label>
+        <label>Reason
+          <textarea name="reason" rows="4" required minlength="20"
+                    placeholder="What you tested, what you found, and why it does not apply here."></textarea>
+          <span class="faint small">At least a sentence.  Somebody reads this in
+            a year and has to be able to tell whether it still holds.</span>
+        </label>
+        <label>Ticket
+          <input type="text" name="ticket" placeholder="SEC-1234">
+        </label>
+        <label>Expires
+          <input type="date" name="expires" value="{{ default_expiry }}">
+          <span class="faint small">Empty means no end date.  Past the date the
+            rule stops and the finding comes back.</span>
+        </label>
+        <label>This exclusion will not be applied on
+          <div class="check-grid">
+            {% for label in sensitivity_labels %}
+            <label class="check">
+              <input type="checkbox" name="unless:{{ label }}" value="1">
+              {{ label }}
+            </label>
+            {% endfor %}
+          </div>
+          <span class="faint small">Tick what this decision was not made for.
+            On a connection carrying any of them the finding comes back, with
+            the reason it was let through elsewhere still on the record.  An
+            exception can be broad without being blind.</span>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+<div class="modal-backdrop" id="import-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/exclusions/import"
+          enctype="multipart/form-data">
+      <div class="modal-head">Import a list
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="notice info">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+          <div>Filter the Findings page down to what you have reviewed, export
+            it, and hand the file back here.  Rows are matched by their
+            <span class="mono">GCR-</span> id, so one rule is written per
+            finding and nothing else is touched.  An exclusions file exported
+            from another installation works too.</div>
+        </div>
+        <label>The file
+          <input type="file" name="file" accept=".csv,text/csv" required>
+          <span class="faint small">vulnerabilities.csv, or a filtered copy of
+            it.  Up to 10MB.</span>
+        </label>
+        <label>Why are these acceptable
+          <textarea name="reason" rows="4" required minlength="20"
+                    placeholder="What was reviewed, and what makes this whole set safe to set aside."></textarea>
+          <span class="faint small">This one reason goes on every rule the file
+            creates, so it has to hold for all of them.  Import in batches if
+            they need different reasons.</span>
+        </label>
+        <label>Ticket
+          <input type="text" name="ticket" placeholder="SEC-1234">
+        </label>
+        <label>Expires
+          <input type="date" name="expires" value="{{ default_expiry }}">
+          <span class="faint small">Empty means no end date.  A date is better:
+            a whole batch set aside forever is a decision nobody revisits.</span>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Import</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if can_write %}
+<form method="post" id="bulk-form" action="{{ base }}/exclusions/delete-bulk">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="exclusion_ids" id="bulk-ids" value="">
+</form>
+
+<div class="modal-backdrop" id="remove-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Remove what is selected
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <div class="notice warn">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+        <div><strong><span data-slot="bulk-n">0</span></strong> rules go, and
+          anything they were covering comes back into both report files unless
+          an exception still holds it.</div>
+      </div>
+      <p class="small faint">The rows go; what they did does not. The audit log
+        keeps who added each one and who removed it, which is the part an
+        auditor asks about.</p>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Cancel</button>
+      <button type="submit" class="btn danger" form="bulk-form">Remove them</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<script src="{{ base }}/static/exclusions.js?v={{ asset_v('exclusions.js') }}"></script>
+<script src="{{ base }}/static/bulk.js?v={{ asset_v('bulk.js') }}"></script>
+{% endblock %}

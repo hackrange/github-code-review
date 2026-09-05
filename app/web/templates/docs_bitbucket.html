@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Connecting Bitbucket &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Connecting Bitbucket Cloud</h1>
+  <div class="faint small">Access tokens, workspaces, and what changed in 2026.</div></div>
+  <div class="page-actions"><a class="btn" href="{{ base }}/connections">Back to connections</a></div>
+</div>
+
+<div class="notice warn">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+  <div><strong>App passwords are gone.</strong> Atlassian stopped new ones on
+    9 September 2025, ran brownouts from 9 June 2026, and removed them entirely
+    on <strong>28 July 2026</strong>. Anything still using one has already
+    stopped working. Use an access token or an API token.</div>
+</div>
+
+<div class="card"><div class="card-body">
+  <h2>Which token</h2>
+  <table>
+    <thead><tr><th>Kind</th><th>Reaches</th><th>Use it when</th></tr></thead>
+    <tbody>
+      <tr><td class="small"><strong>Workspace</strong> access token</td>
+        <td class="small">Every repository in the workspace, and can list the workspace itself</td>
+        <td class="small">The normal choice. One connection per workspace.</td></tr>
+      <tr><td class="small">Project access token</td><td class="small">One project's repositories</td>
+        <td class="small">Scanning part of a workspace.</td></tr>
+      <tr><td class="small">Repository access token</td><td class="small">One repository</td>
+        <td class="small">A single repository.</td></tr>
+      <tr><td class="small">API token</td><td class="small">Whatever the account can see</td>
+        <td class="small">Tied to a person rather than a workspace.</td></tr>
+    </tbody>
+  </table>
+  <p class="small">Scope: <span class="mono">repository:read</span>. Nothing needs write.
+    Workspace settings &rarr; Access tokens, or Repository settings &rarr; Access tokens.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Filling in the connection</h2>
+  <ul class="small">
+    <li><strong>Addresses</strong> &mdash; leave them. Bitbucket Cloud is
+      <span class="mono">https://api.bitbucket.org/2.0</span> for everybody, and
+      they are filled in for you.</li>
+    <li><strong>Workspace</strong> &mdash; the slug out of the URL
+      (<span class="mono">bitbucket.org/<strong>acme</strong>/repo</span>).
+      A project or repository token cannot list workspaces, so name it here for
+      those. A workspace token finds its own, and you can leave it empty.</li>
+    <li><strong>Token</strong> &mdash; the access token itself. Encrypted here,
+      never written to a file.</li>
+  </ul>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>What is not available</h2>
+  <p class="small">Bitbucket has no equivalent of Dependabot alerts, code
+    scanning or secret scanning alerts, and no API for two step status, so those
+    are skipped rather than called and read as empty. Pull request history is
+    not wired up yet either.</p>
+  <p class="small">What runs, which is nearly all of it: secrets across the full
+    history, code analysis, SBOM and dependency vulnerabilities, triage,
+    exceptions and both report files.</p>
+  <p class="small faint">Bitbucket <strong>Data Center</strong> is a different
+    API from Bitbucket Cloud and is not supported here.</p>
+</div></div>
+{% endblock %}

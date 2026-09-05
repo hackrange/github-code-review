@@ -1,0 +1,945 @@
+#!/usr/bin/env bash
+# ghscan: finds secrets, builds SBOMs and lists vulnerabilities across a
+# GitHub org. See `ghscan --help` or the README.
+
+set -Eeuo pipefail
+
+GHSCAN_VERSION="1.0.1"
+GHSCAN_HOME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+export GHSCAN_HOME
+
+# shellcheck source=../lib/common.sh
+source "$GHSCAN_HOME/lib/common.sh"
+source "$GHSCAN_HOME/lib/config.sh"
+source "$GHSCAN_HOME/lib/detectors.sh"
+source "$GHSCAN_HOME/lib/provider.sh"
+source "$GHSCAN_HOME/lib/provider_github.sh"
+source "$GHSCAN_HOME/lib/provider_gitlab.sh"
+source "$GHSCAN_HOME/lib/provider_bitbucket.sh"
+source "$GHSCAN_HOME/lib/provider_azure.sh"
+source "$GHSCAN_HOME/lib/provider_assembla.sh"
+source "$GHSCAN_HOME/lib/provider_beanstalk.sh"
+source "$GHSCAN_HOME/lib/provider_codecommit.sh"
+source "$GHSCAN_HOME/lib/provider_gcsr.sh"
+source "$GHSCAN_HOME/lib/provider_subversion.sh"
+source "$GHSCAN_HOME/lib/provider_perforce.sh"
+source "$GHSCAN_HOME/lib/auth.sh"
+source "$GHSCAN_HOME/lib/api.sh"
+source "$GHSCAN_HOME/lib/inventory.sh"
+source "$GHSCAN_HOME/lib/secrets.sh"
+source "$GHSCAN_HOME/lib/triage.sh"
+source "$GHSCAN_HOME/lib/sbom.sh"
+source "$GHSCAN_HOME/lib/vulns.sh"
+. "$GHSCAN_HOME/lib/images.sh"
+source "$GHSCAN_HOME/lib/access.sh"
+source "$GHSCAN_HOME/lib/pulls.sh"
+source "$GHSCAN_HOME/lib/probe.sh"
+source "$GHSCAN_HOME/lib/coverage.sh"
+source "$GHSCAN_HOME/lib/code_analysis.sh"
+source "$GHSCAN_HOME/lib/iac.sh"
+source "$GHSCAN_HOME/lib/workflows.sh"
+source "$GHSCAN_HOME/lib/threat_intel.sh"
+source "$GHSCAN_HOME/lib/exclusions.sh"
+source "$GHSCAN_HOME/lib/scan.sh"
+source "$GHSCAN_HOME/lib/review.sh"
+source "$GHSCAN_HOME/lib/report.sh"
+source "$GHSCAN_HOME/lib/sarif.sh"
+source "$GHSCAN_HOME/lib/csv.sh"
+
+# Test hook. tests/cli-test.sh points this at a file of function overrides so
+# the CLI can run without GitHub.
+if [[ -n "${GHSCAN_STUB:-}" ]]; then
+  [[ -r "$GHSCAN_STUB" ]] || { echo "GHSCAN_STUB is set but not readable: $GHSCAN_STUB" >&2; exit 2; }
+  # shellcheck disable=SC1090
+  source "$GHSCAN_STUB"
+fi
+
+# The web app writes a config into a temp directory when a scan starts, then
+# passes it with -c.  There is no config file in the source tree any more.
+CONFIG_PATH="${GHSCAN_CONFIG:-}"
+OUT_DIR=""
+ONLY=""
+FAIL_ON="none"
+DRY_RUN=0
+PROBE=0
+REPO_OVERRIDE=()
+ORG_OVERRIDE=()
+COMMAND="scan"
+DIFF_BASE=""
+REVIEW_PATH=""
+OUT_FORMAT="json"
+
+usage() {
+  cat <<'__HELP__'
+ghscan - find secrets, build SBOMs and surface vulnerabilities across every
+         repository and branch of a GitHub (SaaS) organization.
+
+USAGE
+  ghscan [COMMAND] [OPTIONS]
+
+COMMANDS
+  scan          Full run: secrets + SBOM/licenses + vulnerabilities   (default)
+  review PATH   Look at a directory already on this machine.  No GitHub, no
+                clone, no token.  Credentials and code, as JSON on stdout.
+                This is the one a pre-commit hook or an editor wants.
+  check         Validate config, credentials and installed engines, then exit
+  inventory     List the repositories in scope as JSON and exit
+  orgs          List the organizations the token can see, as JSON, and exit
+  coverage      Count organizations, repositories and branches. No cloning.
+  validate FILE Check a report against schema/report.schema.json
+  version       Print the version
+
+OPTIONS
+  -c, --config PATH     Config file. Required, or set GHSCAN_CONFIG
+  -o, --out DIR         Output directory (overrides output.dir)
+      --repo OWNER/NAME Scan only this repo (repeatable; overrides config scope)
+      --org NAME        Scan only this org (repeatable; overrides config scope)
+      --only WHAT       Comma list of: secrets,code,sbom,vulns,access,pulls
+      --no-verify       Disable live credential verification (no outbound calls)
+      --verify          Force live credential verification on
+      --fail-on WHAT    Exit 3 when findings exist:
+                          none | secrets | verified-secrets | critical | high | license
+  -j, --jobs N          Parallel repositories (overrides scan.parallel_repos)
+      --keep-clones     Do not delete the working clones
+      --dry-run         Resolve scope and print the plan; scan nothing
+      --probe           With `check`: call every endpoint and report what the
+                        token can reach and which permission each one needs
+      --diff REF        With `review`: only files changed against REF, so an
+                        editor shows what somebody wrote rather than the
+                        repository's whole backlog
+      --format WHAT     With `review`: json (default) or sarif.  SARIF is what
+                        a Security tab, a code host and most vulnerability
+                        managers already read
+  -v, --verbose         Log level debug     (-vv for trace)
+  -q, --quiet           Log level warn
+  -h, --help            This help
+
+EXAMPLES
+  ghscan check -c /run/gcr/scanner-config.json
+  ghscan scan  -c /run/gcr/scanner-config.json -o ./out
+  ghscan scan  --repo acme/payments --only secrets --fail-on verified-secrets
+  ghscan inventory --org acme | jq -r '.[].full_name'
+  ghscan review .                       # everything in this directory
+  ghscan review . --diff origin/main    # only what this branch changed
+  ghscan review . --only secrets --fail-on secrets
+  ghscan review . --format sarif --repo acme/payments > review.sarif
+
+EXIT CODES
+  0  completed, nothing above the --fail-on threshold
+  1  fatal error
+  2  invalid configuration or arguments
+  3  completed, findings met the --fail-on threshold
+__HELP__
+}
+
+parse_args() {
+  local jobs="" keep=0 verify=""
+  while (( $# > 0 )); do
+    case "$1" in
+      scan|review|check|inventory|orgs|coverage|validate|version) COMMAND="$1"; shift ;;
+      -c|--config) CONFIG_PATH="$2"; shift 2 ;;
+      -o|--out)    OUT_DIR="$2"; shift 2 ;;
+      --repo)      REPO_OVERRIDE+=("$2"); shift 2 ;;
+      --org)       ORG_OVERRIDE+=("$2"); shift 2 ;;
+      --only)      ONLY="$2"; shift 2 ;;
+      --diff)      DIFF_BASE="$2"; shift 2 ;;
+      --format)
+        case "$2" in
+          json|sarif) OUT_FORMAT="$2" ;;
+          # Caught here rather than after the review has run.  A typo
+          # should cost somebody a second, not a full pass over a tree.
+          *) log_error "unknown --format: $2 (json or sarif)"; exit 2 ;;
+        esac
+        shift 2 ;;
+      --no-verify) verify=false; shift ;;
+      --verify)    verify=true; shift ;;
+      --fail-on)   FAIL_ON="$2"; shift 2 ;;
+      -j|--jobs)   jobs="$2"; shift 2 ;;
+      --keep-clones) keep=1; shift ;;
+      --dry-run)   DRY_RUN=1; shift ;;
+      --probe)     PROBE=1; shift ;;
+      -v)          GHSCAN_LOG_LEVEL=debug; shift ;;
+      -vv)         GHSCAN_LOG_LEVEL=trace; shift ;;
+      --verbose)   GHSCAN_LOG_LEVEL=debug; shift ;;
+      -q|--quiet)  GHSCAN_LOG_LEVEL=warn; shift ;;
+      -h|--help)   usage; exit 0 ;;
+      --) shift; break ;;
+      *)
+        if [[ "$COMMAND" == "validate" && -z "${VALIDATE_FILE:-}" ]]; then
+          VALIDATE_FILE="$1"; shift
+        elif [[ "$COMMAND" == "review" && -z "$REVIEW_PATH" ]]; then
+          REVIEW_PATH="$1"; shift
+        else
+          log_error "unknown argument: $1"; usage >&2; exit 2
+        fi
+        ;;
+    esac
+  done
+  GHSCAN_ARG_JOBS="$jobs"; GHSCAN_ARG_KEEP="$keep"; GHSCAN_ARG_VERIFY="$verify"
+}
+
+# Fold CLI overrides into the in-memory config so everything downstream reads
+# from one place.
+apply_overrides() {
+  local patch='{}'
+  if (( ${#REPO_OVERRIDE[@]} > 0 )); then
+    # --repo means exactly those repos: no org listing, no /user/repos sweep.
+    patch=$(printf '%s' "$patch" | jq -c --argjson r "$(printf '%s\n' "${REPO_OVERRIDE[@]}" | jq -R . | jq -sc .)" \
+      '.github.scope.include_repos = $r
+       | .github.scope.orgs = [] | .github.scope.users = []
+       | .github.scope.auto_discover_orgs = false
+       | .github.scope.include_collaborator_repos = false')
+  fi
+  if (( ${#ORG_OVERRIDE[@]} > 0 )); then
+    patch=$(printf '%s' "$patch" | jq -c --argjson o "$(printf '%s\n' "${ORG_OVERRIDE[@]}" | jq -R . | jq -sc .)" \
+      '.github.scope.orgs = $o')
+  fi
+  [[ -n "$OUT_DIR" ]] && patch=$(printf '%s' "$patch" | jq -c --arg d "$OUT_DIR" '.output.dir = $d')
+  [[ -n "${GHSCAN_ARG_JOBS:-}" ]] && patch=$(printf '%s' "$patch" | jq -c --argjson j "$GHSCAN_ARG_JOBS" '.scan.parallel_repos = $j')
+  [[ "${GHSCAN_ARG_KEEP:-0}" == "1" ]] && patch=$(printf '%s' "$patch" | jq -c '.clone.keep_clones = true')
+  [[ -n "${GHSCAN_ARG_VERIFY:-}" ]] && patch=$(printf '%s' "$patch" | jq -c --argjson v "$GHSCAN_ARG_VERIFY" '.scan.secrets.trufflehog.verify = $v')
+
+  if [[ -n "$ONLY" ]]; then
+    local want_s=false want_b=false want_v=false want_a=false want_p=false want_c=false
+    local want_i=false want_w=false
+    IFS=',' read -r -a parts <<< "$ONLY"
+    for p in "${parts[@]}"; do
+      case "${p// /}" in
+        secrets) want_s=true ;;
+        sbom|licenses|license) want_b=true ;;
+        vulns|vulnerabilities) want_v=true ;;
+        access|users|collaborators) want_a=true ;;
+        code|sast|code_analysis) want_c=true ;;
+        iac|config|misconfig|misconfiguration) want_i=true ;;
+        workflows|actions|pipeline) want_w=true ;;
+        pulls|pull_history|prs) want_p=true ;;
+        *) die "--only: unknown component '$p' (use secrets,sbom,vulns,code,iac,workflows,access,pulls)" ;;
+      esac
+    done
+    patch=$(printf '%s' "$patch" | jq -c \
+      --argjson s "$want_s" --argjson b "$want_b" --argjson v "$want_v" \
+      --argjson a "$want_a" --argjson p "$want_p" --argjson c "$want_c" \
+      --argjson i "$want_i" --argjson w "$want_w" \
+      '.scan.secrets.enabled = $s | .scan.sbom.enabled = $b
+       | .scan.vulnerabilities.enabled = $v | .scan.access.enabled = $a
+       | .scan.pull_history.enabled = $p | .scan.code_analysis.enabled = $c
+       | .scan.iac.enabled = $i | .scan.workflows.enabled = $w')
+  fi
+
+  GHSCAN_CFG_JSON=$(printf '%s' "$GHSCAN_CFG_JSON" | jq -c --argjson p "$patch" '. * $p')
+  export GHSCAN_CFG_JSON
+}
+
+# Dependency report
+check_engines() {
+  local -a required=(git jq curl)
+  local -a optional=(gitleaks trufflehog semgrep trivy zizmor syft grype osv-scanner openssl flock)
+  local missing_req=()
+  echo
+  printf '  %-14s %-10s %s\n' "TOOL" "STATUS" "PURPOSE"
+  printf '  %-14s %-10s %s\n' "----" "------" "-------"
+  local t
+  for t in "${required[@]}"; do
+    if have_cmd "$t"; then printf '  %-14s %-10s %s\n' "$t" "ok" "required"
+    else printf '  %-14s %-10s %s\n' "$t" "MISSING" "required"; missing_req+=("$t"); fi
+  done
+  local purpose
+  for t in "${optional[@]}"; do
+    case "$t" in
+      gitleaks)   purpose="secret detection across full git history" ;;
+      trufflehog) purpose="secret detection + LIVE credential verification" ;;
+      semgrep)    purpose="code analysis: injection, unsafe calls, OWASP rules" ;;
+      osv-scanner) purpose="vulnerability matching straight from manifests" ;;
+      trivy)      purpose="infrastructure as code: terraform, kubernetes, dockerfiles" ;;
+      zizmor)     purpose="github actions workflows: injection, dangerous triggers" ;;
+      syft)       purpose="SBOM generation and license extraction" ;;
+      grype)      purpose="vulnerability matching against the SBOM" ;;
+      openssl)    purpose="GitHub App JWT signing (auth.method=app)" ;;
+      flock)      purpose="safe token refresh across parallel workers" ;;
+    esac
+    if have_cmd "$t"; then printf '  %-14s %-10s %s\n' "$t" "ok" "$purpose"
+    else printf '  %-14s %-10s %s\n' "$t" "absent" "$purpose"; fi
+  done
+  echo
+  (( ${#missing_req[@]} > 0 )) && die "missing required tools: ${missing_req[*]}"
+  have_cmd gitleaks || have_cmd trufflehog || log_warn "neither gitleaks nor trufflehog is installed - secret scanning will find nothing. Run ./install-deps.sh"
+  have_cmd syft  || log_warn "syft absent - SBOMs will fall back to GitHub's dependency graph only"
+  have_cmd grype || log_warn "grype absent - vulnerabilities will come from GitHub alerts only"
+  if cfg_bool '.scan.code_analysis.enabled' true && ! have_cmd semgrep; then
+    log_warn "semgrep absent - code analysis is on in the settings but will find nothing"
+  fi
+  if have_cmd trufflehog && cfg_bool '.scan.secrets.trufflehog.verify' true; then
+    log_warn "live verification is ON: candidate credentials will be sent to their issuing providers (AWS, Slack, Stripe, ...) to prove they are real. Use --no-verify to disable."
+  fi
+  return 0
+}
+
+# Hidden supervisor entrypoint: run one worker, under a deadline that means it.
+#
+# timeout(1) only ever signals the process it was given.  A worker is a shell
+# whose real work happens inside git, gitleaks and trufflehog, and those are
+# what carry on when the shell is signalled.  On an account with thousands of
+# branches, seven workers outlived their own limit by twenty minutes: their
+# wrappers were gone, they had been reparented to init, and they were still
+# burning the machine on results nobody was left to collect, while holding the
+# run open on output pipes the web app was still waiting to reach the end of.
+# A limit that stops the bookkeeping and not the work is not a limit.
+#
+# So the deadline takes down the tree rather than its root.  The descendants
+# are listed before anything is signalled, because once the root dies its
+# children are reparented to init and there is no way left to find them.
+#
+# The worker stays in this process group on purpose.  Stopping a scan from the
+# web app kills the group, and a worker in a group of its own would survive
+# that, which is the same bug facing the other way.
+if [[ "${1:-}" == "__supervise" ]]; then
+  shift
+  _deadline="${1:-0}"; shift
+
+  _children() {
+    if have_cmd pgrep; then
+      pgrep -P "$1" 2>/dev/null
+    else
+      ps -eo pid,ppid --no-headers 2>/dev/null | awk -v p="$1" '$2==p{print $1}'
+    fi
+  }
+
+  # Depth first: children are printed before the parent that owns them, so
+  # signalling the list in order never orphans anything still on it.
+  _tree_of() {
+    local kid
+    for kid in $(_children "$1"); do _tree_of "$kid"; done
+    printf '%s\n' "$1"
+  }
+
+  "${GHSCAN_BIN:-$0}" __worker "$@" &
+  _worker_pid=$!
+
+  _watchdog_pid=""
+  # Says whether the watchdog got as far as signalling anything.  Without it
+  # this shell cancels the watchdog the moment the worker dies, which is the
+  # moment the escalation to KILL is still pending: anything that ignored the
+  # first signal then outlives both of them.
+  _fired=$(mktemp 2>/dev/null || printf '%s' "/tmp/ghscan-deadline-$$")
+  if [[ "$_deadline" =~ ^[0-9]+$ ]] && (( _deadline > 0 )); then
+    (
+      sleep "$_deadline"
+      # Gone already, and this is a late waker: say nothing and touch nothing.
+      # The pid may belong to somebody else by now.
+      kill -0 "$_worker_pid" 2>/dev/null || exit 0
+      # Take the census while the root is still alive to hang it from.
+      _doomed=$(_tree_of "$_worker_pid")
+      printf '1' > "$_fired" 2>/dev/null || true
+      printf '%s\n' "worker ran past its ${_deadline}s limit; stopping it and everything it started" >&2
+      for _p in $_doomed; do kill -TERM "$_p" 2>/dev/null || true; done
+      sleep 20
+      # Whatever ignored that is now reparented, and the census is the only
+      # record of it.
+      for _p in $_doomed; do kill -KILL "$_p" 2>/dev/null || true; done
+    ) &
+    _watchdog_pid=$!
+  fi
+
+  # Never let this fail on the worker's exit status.  Under set -e a worker
+  # that the watchdog just terminated would take this shell down with it at
+  # 143, before the line below runs, and the watchdog would be left alive with
+  # a deadline still to serve against a pid the kernel has since handed to
+  # somebody else.
+  _rc=0
+  wait "$_worker_pid" 2>/dev/null || _rc=$?
+  if [[ -n "$_watchdog_pid" ]]; then
+    if [[ -s "$_fired" ]]; then
+      # It is mid clean up.  Let it finish: the point of the limit is that the
+      # machine is free afterwards, and it is not free until the escalation has
+      # run over whatever ignored the first signal.
+      wait "$_watchdog_pid" 2>/dev/null || true
+    else
+      # Finished on its own.  Take the watchdog and the sleep it sits in, then
+      # reap it here: left to notice on its own time, the shell announces the
+      # killed job on stderr, and that lands in the scan log once per
+      # repository looking like something went wrong.
+      { for _p in $(_tree_of "$_watchdog_pid"); do kill -KILL "$_p" 2>/dev/null || true; done
+        wait "$_watchdog_pid" 2>/dev/null || true; } 2>/dev/null
+    fi
+  fi
+  rm -f "$_fired" 2>/dev/null || true
+  # Always zero: the parent decides what a missing result means, and a worker
+  # that failed has already written one saying so.
+  exit 0
+fi
+
+# Hidden worker entrypoint used by xargs
+if [[ "${1:-}" == "__worker" ]]; then
+  shift
+  CONFIG_PATH="$1"; RESULTS_DIR="$2"; WORK_ROOT="$3"; REPO_B64="$4"
+  GHSCAN_LOG_LEVEL="${GHSCAN_LOG_LEVEL:-info}"
+  tmp_init
+  # The parent hands over the fully resolved config, so there is no need to read
+  # the file again. It also means -c <(jq ...) works: the fd is long gone here.
+  if [[ -n "${GHSCAN_CFG_OVERRIDE:-}" ]]; then
+    GHSCAN_CFG_JSON="$GHSCAN_CFG_OVERRIDE"
+    GHSCAN_CFG_PATH="$CONFIG_PATH"
+  else
+    config_load "$CONFIG_PATH"
+  fi
+  GHSCAN_AUTH_METHOD="${GHSCAN_AUTH_METHOD:-pat}"
+  repo_json=$(printf '%s' "$REPO_B64" | base64 -d)
+  if ! scan_one_repo "$repo_json" "$RESULTS_DIR" "$WORK_ROOT"; then
+    slug=$(slugify "$(printf '%s' "$repo_json" | jq -r '.full_name')")
+    jq -cn --argjson repo "$repo_json" '{repository:$repo,status:"failed",error:"worker aborted",
+      branches_scanned:[],branch_count:0,
+      secrets:{reported:[],filtered:[],suppressed:[]},sbom:null,license:null,license_policy:null,
+      vulnerabilities:[],timing:{duration_sec:0}}' > "$RESULTS_DIR/${slug}.json"
+  fi
+  exit 0
+fi
+
+# Main
+main() {
+  parse_args "$@"
+
+  if [[ "$COMMAND" == "version" ]]; then echo "ghscan $GHSCAN_VERSION"; exit 0; fi
+
+  # The temp root has to belong to this process rather than to whichever
+  # subshell happens to want a file first.  A review builds its document inside
+  # a command substitution, and bash does not run an EXIT trap that was set
+  # inside one of those, so the root that subshell created was never removed:
+  # every review left a directory of cleartext credentials behind.  Making it
+  # here puts it on the process that actually exits, and every subshell below
+  # inherits it instead of starting another one.
+  tmp_init
+
+  if [[ "$COMMAND" == "review" ]]; then
+    local target="${REVIEW_PATH:-.}"
+    [[ -d "$target" ]] || { log_error "not a directory: $target"; exit 2; }
+    # No config, no token, no network.  A review reads what is already here.
+    local out; out=$(review_run "$target" "$DIFF_BASE" "${ONLY:-secrets,code,iac,workflows}")
+
+    # The counts below are read off the review document either way.  Only what
+    # gets printed changes, so a pipeline that switches format keeps the same
+    # exit codes it already gates on.
+    case "$OUT_FORMAT" in
+      json) printf '%s\n' "$out" ;;
+      sarif)
+        if ! sarif_available; then
+          log_error "SARIF needs python, and there is none on the path"
+          exit 1
+        fi
+        # --repo names the repository being reviewed here, rather than picking
+        # one to scan.  Passing it lines the fingerprints up with the ones a
+        # scan of the same repository produces.
+        sarif_review "$out" "${REPO_OVERRIDE[0]:-}" || {
+          log_error "the SARIF writer failed"; exit 1; }
+        ;;
+    esac
+
+    # Same exit codes as a scan, so a hook or a pipeline can act on it without
+    # learning a second set.
+    local n_secret n_all
+    n_secret=$(printf '%s' "$out" | jq -r '.counts.credential // 0')
+    n_all=$(printf '%s' "$out" | jq -r '.counts.total // 0')
+    case "$FAIL_ON" in
+      none) exit 0 ;;
+      secrets|verified-secrets) (( n_secret > 0 )) && exit 3 || exit 0 ;;
+      *) (( n_all > 0 )) && exit 3 || exit 0 ;;
+    esac
+  fi
+
+  if [[ "$COMMAND" == "validate" ]]; then
+    local target="${VALIDATE_FILE:-}"
+    [[ -z "$target" ]] && die "usage: ghscan validate <report.json>"
+    [[ -r "$target" ]] || die "cannot read $target"
+    local py; py=$(ghscan_python)
+    [[ -n "$py" ]] || die "no python found. Run ./install-deps.sh"
+    "$py" "$GHSCAN_HOME/lib/validate_report.py" "$target" "$GHSCAN_HOME/schema/report.schema.json"
+    exit $?
+  fi
+
+  require_jq; need_cmd curl; need_cmd git
+  tmp_init
+  config_load "$CONFIG_PATH"
+  apply_overrides
+
+  local scan_id started_epoch started_iso
+  scan_id=$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  started_epoch=$(date +%s); started_iso=$(now_iso)
+
+  log_info "ghscan $GHSCAN_VERSION - scan $scan_id"
+  log_info "config: $CONFIG_PATH"
+
+  if [[ "$COMMAND" == "check" ]]; then
+    check_engines
+    auth_init
+    auth_whoami >/dev/null
+    local rl; rl=$(api_rate_limit_status)
+    log_info "rate limit: $(printf '%s' "$rl" | jq -c '.core')"
+
+    if (( PROBE )); then
+      local probe_org probe_repo
+      probe_org=$( (( ${#ORG_OVERRIDE[@]} )) && printf '%s' "${ORG_OVERRIDE[0]}" || cfg_arr '.github.scope.orgs' | head -1)
+      probe_repo=$( (( ${#REPO_OVERRIDE[@]} )) && printf '%s' "${REPO_OVERRIDE[0]}" || cfg_arr '.github.scope.include_repos' | head -1)
+      probe_run "$probe_repo" "$probe_org"
+    fi
+    log_ok "configuration, credentials and engines look usable"
+    exit 0
+  fi
+
+  auth_init
+  auth_whoami >/dev/null
+
+  log_info "resolving organizations"
+  local orgs; orgs=$(inventory_orgs)
+  export GHSCAN_ORGS="$orgs"
+
+  if [[ "$COMMAND" == "orgs" ]]; then
+    # This command is for discovery, so always add whatever the SSO challenge
+    # header names on top of what is configured.
+    log_info "checking configured organizations and anything the SSO header names"
+    local f_orgs_a f_orgs_b
+    f_orgs_a=$(json_file "$orgs" orgs)
+    f_orgs_b=$(json_file "$(orgs_from_sso_header)" ssoorgs)
+    orgs=$(jq -cn --slurpfile a "$f_orgs_a" --slurpfile b "$f_orgs_b" \
+             '($a[0] + $b[0]) | unique')
+    local detail='[]' o st
+    while IFS= read -r o; do
+      [[ -z "$o" ]] && continue
+      st=$(org_access_status "$o")
+      detail=$(printf '%s' "$detail" | jq -c --argjson s "$st" --argjson p "$(access_org_profile "$o")" \
+        '. + [ $s + (if $p == null then {} else {name: $p.name, id: $p.id, html_url: $p.html_url} end) ]')
+    done < <(printf '%s' "$orgs" | jq -r '.[]?')
+
+    local n_ok n_all
+    n_ok=$(printf '%s' "$detail" | jq '[.[] | select(.accessible)] | length')
+    n_all=$(printf '%s' "$detail" | jq 'length')
+    printf '%s' "$detail" | jq 'sort_by([(.accessible | not), .organization])'
+    log_info "$n_ok of $n_all organization(s) are readable with this credential"
+    if (( n_ok < n_all )); then
+      log_warn "the rest need the credential authorized for them. A fine-grained PAT only ever covers one organization. A classic PAT covers every organization you authorize it for under Configure SSO, which is the way to reach several in one scan today. A GitHub App is installed per organization and this scans one installation per run, so an App needs one scan per organization for now."
+    fi
+    exit 0
+  fi
+
+  log_info "resolving repository scope"
+  local repos; repos=$(inventory_repos)
+  local n_repos; n_repos=$(printf '%s' "$repos" | jq 'length')
+  log_ok "$n_repos repositor$([[ "$n_repos" == "1" ]] && echo y || echo ies) in scope"
+
+  if [[ "$COMMAND" == "coverage" ]]; then
+    # Count every org we can learn about, not just the configured ones, so the
+    # total reflects the estate rather than the current scope.
+    local f_cov_a f_cov_b
+    f_cov_a=$(json_file "$orgs" orgs)
+    f_cov_b=$(json_file "$(orgs_from_sso_header)" ssoorgs)
+    orgs=$(jq -cn --slurpfile a "$f_cov_a" --slurpfile b "$f_cov_b" '($a[0] + $b[0]) | unique')
+    log_info "counting branches (one API call per repository)"
+    local orgs_detail='[]' o
+    while IFS= read -r o; do
+      [[ -z "$o" ]] && continue
+      orgs_detail=$(printf '%s' "$orgs_detail" | jq -c --argjson s "$(org_access_status "$o")" '. + [$s]')
+    done < <(printf '%s' "$orgs" | jq -r '.[]?')
+
+    local cov; cov=$(coverage_build "$orgs_detail" "$repos")
+    local out_dir; out_dir=$(cfg '.output.dir' './out')
+    [[ -n "$OUT_DIR" ]] && out_dir="$OUT_DIR"
+    local base; base=$(cfg '.output.report_name' 'ghscan-report')
+    local path; path=$(report_write "$cov" "$out_dir/${base}-coverage.json")
+    log_ok "coverage report written: $path"
+    coverage_console "$cov"
+    exit 0
+  fi
+
+  if [[ "$COMMAND" == "inventory" ]]; then
+    printf '%s' "$repos" | jq '.'
+    exit 0
+  fi
+
+  (( n_repos == 0 )) && die "nothing in scope - check github.scope in $CONFIG_PATH"
+
+  rate_limit_preflight "$n_repos" "$(printf '%s' "$orgs" | jq 'length')"
+
+  if (( DRY_RUN )); then
+    printf '%s' "$repos" | jq -r '.[] | "  \(.full_name)  [\(.visibility), default=\(.default_branch), \(.size_kb) KB]"'
+    log_info "dry run: $n_repos repositories would be scanned; nothing was cloned"
+    exit 0
+  fi
+
+  if cfg_bool '.scan.threat_intel.enabled' true && cfg_bool '.scan.vulnerabilities.enabled' true; then
+    threat_intel_refresh || log_warn "threat intel unavailable; findings will not carry exploitation data"
+  fi
+
+  # Org level facts fetched once, then handed to every worker.
+  local org_members='[]' org_2fa='{}' outside_map='{}' org_profiles='[]'
+  if cfg_bool '.scan.access.enabled' true; then
+    local asrc; asrc=$(cfg_json '.scan.access.sources // []')
+    local o
+    while IFS= read -r o; do
+      [[ -z "$o" ]] && continue
+      org_profiles=$(printf '%s' "$org_profiles" | jq -c --argjson p "$(access_org_profile "$o")" --arg o "$o" \
+        '. + [ ($p // {login: $o}) ]')
+      if printf '%s' "$asrc" | jq -e 'index("outside_collaborators")' >/dev/null; then
+        local f_out; f_out=$(json_file "$(access_org_outside_collaborators "$o")" outside)
+        outside_map=$(printf '%s' "$outside_map" | jq -c --arg o "$o" \
+          --slurpfile l_in "$f_out" '.[$o] = $l_in[0]')
+      fi
+      if printf '%s' "$asrc" | jq -e 'index("org_members")' >/dev/null; then
+        log_info "listing members of $o"
+        local f_mem; f_mem=$(json_file "$(access_org_members "$o")" members)
+        org_members=$(printf '%s' "$org_members" | jq -c \
+          --slurpfile m_in "$f_mem" '. + $m_in[0]')
+      fi
+      if cfg_bool '.scan.access.collect_2fa_status' true; then
+        local nf; nf=$(access_org_2fa_disabled "$o")
+        if [[ "$nf" != "null" ]]; then
+          local f_nf; f_nf=$(json_file "$nf" no2fa)
+          org_2fa=$(printf '%s' "$org_2fa" | jq -c --arg o "$o" \
+            --slurpfile l_in "$f_nf" '.[$o] = $l_in[0]')
+        fi
+      fi
+    done < <(printf '%s' "$orgs" | jq -r '.[]?')
+    export GHSCAN_OUTSIDE_COLLABORATORS="$outside_map"
+  fi
+
+  local out_dir work_root results_dir
+  out_dir=$(cfg '.output.dir' './out')
+  work_root=$(cfg '.clone.workdir' '/var/tmp/ghscan-work')
+  # Hand it to the exit traps straight away, so a run that is killed between
+  # here and the sweep at the end does not leave its clones behind.
+  cfg_bool '.clone.keep_clones' false || workroot_track "$work_root"
+
+  # Anything still here belongs to a run that did not get to clean up after
+  # itself.  Clearing it now rather than adding to it: on a space capped work
+  # area, yesterday's orphans are what makes today's scan fail.
+  if [[ -d "$work_root" ]] && ! cfg_bool '.clone.keep_clones' false; then
+    local orphans; orphans=$(find "$work_root" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
+    if (( orphans > 0 )); then
+      log_warn "clearing $orphans leftover clone(s) from a previous run"
+      rm -rf -- "${work_root:?}"/* 2>/dev/null || true
+    fi
+  fi
+  mkdir -p "$out_dir" "$work_root"
+  # Per repository results, written as each one finishes.  Somewhere the caller
+  # names when it wants them to outlive this process: a scan that is killed has
+  # already done the work, and everything it found is in here.  Without that it
+  # goes in the temp root and disappears with everything else.
+  if [[ -n "${GHSCAN_RESULTS_DIR:-}" ]]; then
+    results_dir="$GHSCAN_RESULTS_DIR"
+    mkdir -p "$results_dir"
+  else
+    results_dir=$(tmp_dir results)
+  fi
+
+  local jobs; jobs=$(cfg_num '.scan.parallel_repos' 4)
+  log_info "scanning with $jobs parallel worker(s); clones under $work_root"
+
+  # Hand each worker the overridden config so CLI flags survive the re-exec.
+  export GHSCAN_CFG_OVERRIDE
+  GHSCAN_CFG_OVERRIDE=$(printf '%s' "$GHSCAN_CFG_JSON" | jq -c '.')
+  # One budget file for every worker.  Whatever set this already gets to keep
+  # its answer: the web app points it at a file named for the credential, so
+  # two scans of the same account watch one budget instead of each tracking
+  # half of it and both walking into a limit neither one was counting.  This
+  # used to overwrite that with a path inside the run's own temp directory,
+  # which put the sharing back to one run and threw the count away at the end
+  # of it.
+  : "${GHSCAN_RL_STATE:=$GHSCAN_TMPROOT/ratelimit.json}"
+  export GHSCAN_RL_STATE
+  export GHSCAN_KEV_JSON GHSCAN_EPSS_JSON GHSCAN_TI_CACHE
+  export GHSCAN_LOG_LEVEL GHSCAN_AUTH_METHOD GHSCAN_TOKEN_FILE GHSCAN_TOKEN_META GHSCAN_COLOR
+
+  local timeout_sec; timeout_sec=$(cfg_num '.scan.timeout_per_repo_sec' 3600)
+
+  export GHSCAN_BIN="$GHSCAN_HOME/bin/ghscan"
+  export GHSCAN_TIMEOUT_SEC="$timeout_sec"
+
+  # The deadline is enforced by __supervise rather than by timeout(1), which
+  # only ever signals the one process it started and leaves everything that
+  # process spawned running.  See the comment on that entrypoint.
+  printf '%s' "$repos" | jq -r '.[] | @base64' \
+    | xargs -r -P "$jobs" -I{} bash -c '
+        "$GHSCAN_BIN" __supervise "${GHSCAN_TIMEOUT_SEC:-0}" "$1" "$2" "$3" "$4"
+        exit 0' _ "$CONFIG_PATH" "$results_dir" "$work_root" {} \
+    || log_warn "one or more workers reported an error"
+
+  # A worker killed by the timeout writes no result file; account for it rather
+  # than letting the repository disappear from the report.
+  local rj slug_missing
+  while IFS= read -r rj; do
+    slug_missing=$(slugify "$(printf '%s' "$rj" | jq -r '.full_name')")
+    [[ -f "$results_dir/${slug_missing}.json" ]] && continue
+    log_warn "no result for $(printf '%s' "$rj" | jq -r '.full_name') - worker timed out or crashed"
+    jq -cn --argjson repo "$rj" --argjson t "$timeout_sec" '{
+      repository: $repo, status: "failed",
+      error: ("worker produced no result (timed out after \($t)s, or crashed)"),
+      branches_scanned: [], branch_count: 0,
+      secrets: {reported: [], filtered: [], suppressed: []},
+      sbom: null, license: null, license_policy: null,
+      vulnerabilities: [], timing: {duration_sec: $t}
+    }' > "$results_dir/${slug_missing}.json"
+  done < <(printf '%s' "$repos" | jq -c '.[]')
+
+  log_info "aggregating results"
+  # Across a large estate these four hold every organization profile, member
+  # and 2FA record there is.  Files, not argv.
+  local f_orgs f_org_profiles f_org_members f_org_2fa
+  f_orgs=$(json_file "$orgs" orgs)
+  f_org_profiles=$(json_file "$org_profiles" orgprofiles)
+  f_org_members=$(json_file "$org_members" orgmembers)
+  f_org_2fa=$(json_file "$org_2fa" org2fa)
+  local meta
+  meta=$(jq -cn \
+    --arg ver "$GHSCAN_VERSION" \
+    --arg id "$scan_id" \
+    --arg start "$started_iso" \
+    --arg finished "$(now_iso)" \
+    --argjson dur "$(( $(date +%s) - started_epoch ))" \
+    --arg cfg "$CONFIG_PATH" \
+    --arg host "$(hostname 2>/dev/null || echo unknown)" \
+    --arg api "$(cfg '.github.api_url')" \
+    --slurpfile orgs_in "$f_orgs" \
+    --slurpfile org_profiles_in "$f_org_profiles" \
+    --slurpfile org_members_in "$f_org_members" \
+    --slurpfile org_2fa_in "$f_org_2fa" \
+    --arg authm "$(cfg '.github.auth.method')" \
+    --argjson verify "$(cfg_bool '.scan.secrets.trufflehog.verify' true && echo true || echo false)" \
+    --argjson bmode "$(cfg_json '.github.branches')" \
+    --argjson engines "$(cfg_json '.scan.secrets.engines // []')" \
+    --argjson sbom_sources "$(cfg_json '.scan.sbom.sources // []')" \
+    --argjson vuln_sources "$(cfg_json '.scan.vulnerabilities.sources // []')" \
+    --argjson tools "$(engine_versions)" \
+    --argjson sso "$GHSCAN_SSO_TRUNCATED" '
+    ($orgs_in[0]) as $orgs
+    | ($org_profiles_in[0]) as $org_profiles
+    | ($org_members_in[0]) as $org_members
+    | ($org_2fa_in[0]) as $org_2fa
+    | {
+      tool: {name: "ghscan", version: $ver,
+             engine_versions: $tools,
+             engines: {secrets: $engines,
+                       sbom: $sbom_sources,
+                       vulnerabilities: $vuln_sources}},
+      scan: {id: $id, started_at: $start, finished_at: $finished, duration_sec: $dur,
+             config_file: $cfg, host: $host,
+             live_verification_enabled: $verify,
+             branch_policy: $bmode,
+             sso_results_truncated: ($sso == 1)},
+      target: {api_url: $api, orgs: $orgs, auth_method: $authm},
+      organizations: [ $org_profiles[] | . as $o | $o + {
+        members: [ $org_members[] | select((.organization // "") == $o.login) ],
+        members_without_2fa: ($org_2fa[$o.login] // null)
+      } ]
+    }')
+
+  local doc; doc=$(report_build "$results_dir" "$meta")
+
+  if cfg_bool '.scan.exclusions.enabled' true; then
+    local excl_file; excl_file=$(cfg '.scan.exclusions.file' '')
+    local rules; rules=$(exclusions_load "$excl_file")
+    local n_rules; n_rules=$(printf '%s' "$rules" | jq 'length')
+    if (( n_rules > 0 )); then
+      log_info "applying $n_rules exclusion rule(s) from $excl_file"
+      exclusions_report_expired "$rules" >/dev/null
+
+      local sec code vul mis
+      sec=$(exclusions_partition "$(printf '%s' "$doc" | jq -c '.secrets')" "$rules")
+      code=$(exclusions_partition "$(printf '%s' "$doc" | jq -c '.code_findings')" "$rules")
+      vul=$(exclusions_partition "$(printf '%s' "$doc" | jq -c '.vulnerabilities')" "$rules")
+      mis=$(exclusions_partition "$(printf '%s' "$doc" | jq -c '.misconfigurations')" "$rules")
+
+      # These carry every finding in the repository, so they reach jq through
+      # files.  Handing them over on argv is what took runs 14 and 15 down, at
+      # the last step, after half an hour of work.
+      local f_sec f_code f_vul f_mis f_erules
+      f_sec=$(json_file "$sec" sec)
+      f_code=$(json_file "$code" code)
+      f_vul=$(json_file "$vul" vul)
+      f_mis=$(json_file "$mis" mis)
+      f_erules=$(json_file "$rules" erules)
+      doc=$(printf '%s' "$doc" | jq -c \
+        --slurpfile s_in "$f_sec" --slurpfile c_in "$f_code" --slurpfile v_in "$f_vul" \
+        --slurpfile m_in "$f_mis" --slurpfile rules_in "$f_erules" '
+        ($s_in[0]) as $s
+        | ($c_in[0]) as $c
+        | ($v_in[0]) as $v
+        | ($m_in[0]) as $m
+        | ($rules_in[0]) as $rules
+        | .secrets = $s.kept
+        | .code_findings = $c.kept
+        | .vulnerabilities = $v.kept
+        | .misconfigurations = $m.kept
+        | .excluded = {
+            rules_loaded: ($rules | length),
+            secrets: $s.excluded,
+            code_findings: $c.excluded,
+            vulnerabilities: $v.excluded,
+            misconfigurations: $m.excluded,
+            total: (($s.excluded | length) + ($c.excluded | length)
+                    + ($v.excluded | length) + ($m.excluded | length))
+          }
+        | .summary.secrets.reported        = ($s.kept | length)
+        | .summary.secrets.excluded        = ($s.excluded | length)
+        | .summary.code_findings.total     = ($c.kept | length)
+        | .summary.code_findings.excluded  = ($c.excluded | length)
+        | .summary.vulnerabilities.total   = ($v.kept | length)
+        | .summary.vulnerabilities.excluded = ($v.excluded | length)
+        | .summary.misconfigurations.total    = ($m.kept | length)
+        | .summary.misconfigurations.excluded = ($m.excluded | length)
+        | .summary.misconfigurations.needs_review =
+            ([ $m.kept[] | select(.triage == "review") ] | length)')
+
+      local n_ex; n_ex=$(printf '%s' "$doc" | jq '.excluded.total')
+      (( n_ex > 0 )) && log_info "$n_ex finding(s) excluded by review"
+    fi
+  fi
+
+  local base; base=$(cfg '.output.report_name' 'ghscan-report')
+  local main_path; main_path=$(report_write "$doc" "$out_dir/${base}.json")
+  log_ok "report written: $main_path"
+
+  # The same findings in the format everything else reads.  Off is a setting
+  # rather than a rebuild, because an air-gapped install with no python in the
+  # scanner venv should still finish a scan.
+  if cfg_bool '.output.sarif' true; then
+    if sarif_available; then
+      local sarif_path
+      if sarif_path=$(sarif_write "$doc" "$out_dir/${base}.sarif"); then
+        log_ok "SARIF written: $sarif_path"
+      fi
+    else
+      log_warn "no python for the SARIF writer, so no SARIF file was produced"
+    fi
+  fi
+
+  local sbom_bundle sbom_path
+  sbom_bundle=$(GHSCAN_NOW="$(now_iso)" report_sbom_bundle "$results_dir")
+  sbom_path=$(report_write "$sbom_bundle" "$out_dir/${base}-sbom.json")
+  log_ok "SBOM bundle written: $sbom_path"
+
+  # Standalone, ready-to-hand-off list of repo / branch / URL.
+  local secrets_doc secrets_path
+  secrets_doc=$(printf '%s' "$doc" | jq -c '{
+      schema_version, scan: .scan, generated_at: .scan.finished_at,
+      count: (.secrets | length),
+      secrets: [ .secrets[] | {
+        organization, repository, repository_name, branches, primary_branch,
+        url, permalink, commit, commit_url, blame_url, file_history_url, branch_urls,
+        file, start_line, detector, engines, severity, confidence, classification,
+        verified, exposure, secret_redacted, secret_fingerprint, entropy,
+        author_name, author_email, author_login, committed_at, first_committed_at
+      } ]
+    }')
+  secrets_path=$(report_write "$secrets_doc" "$out_dir/${base}-secrets.json")
+  log_ok "secrets list written: $secrets_path"
+
+  if cfg_bool '.scan.sbom.enabled' true && cfg_bool '.scan.sbom.write_combined_files' true; then
+    local sdir="$out_dir/sbom" merged
+    if merged=$(sbom_merge_cyclonedx "$sdir" "$GHSCAN_VERSION") && [[ -n "$merged" ]]; then
+      report_write "$merged" "$out_dir/${base}-sbom.cdx.json" >/dev/null
+      log_ok "combined CycloneDX SBOM: $out_dir/${base}-sbom.cdx.json"
+    fi
+    if merged=$(sbom_merge_spdx "$sdir" "$GHSCAN_VERSION") && [[ -n "$merged" ]]; then
+      report_write "$merged" "$out_dir/${base}-sbom.spdx.json" >/dev/null
+      log_ok "combined SPDX SBOM: $out_dir/${base}-sbom.spdx.json"
+    fi
+    [[ -d "$sdir" ]] && log_info "per-repository SBOMs (both formats): $sdir"
+  fi
+
+  if cfg_bool '.scan.access.enabled' true; then
+    local access_doc access_path
+    access_doc=$(printf '%s' "$doc" | jq -c '{
+        schema_version, scan: .scan, generated_at: .scan.finished_at,
+        organizations: .organizations,
+        summary: .summary.access,
+        users: .access.users,
+        teams: .access.teams,
+        pending_invitations: .access.pending_invitations,
+        deploy_keys: .access.deploy_keys,
+        unreadable_repositories: .access.unreadable_repositories,
+        repositories: [ .repositories[] | {repository: .repository.full_name,
+                                           visibility: .repository.visibility,
+                                           access: .access} ]
+      }')
+    access_path=$(report_write "$access_doc" "$out_dir/${base}-access.json")
+    log_ok "access inventory written: $access_path"
+  fi
+
+  if cfg_bool '.scan.pull_history.enabled' true; then
+    local pulls_doc pulls_path
+    pulls_doc=$(printf '%s' "$doc" | jq -c '{
+        schema_version, scan: .scan, generated_at: .scan.finished_at,
+        summary: .summary.pull_history,
+        by_user_branch: .pull_history.by_user_branch,
+        by_user: .pull_history.by_user,
+        clone_traffic: .pull_history.clone_traffic
+      }')
+    pulls_path=$(report_write "$pulls_doc" "$out_dir/${base}-pulls.json")
+    log_ok "pull history written: $pulls_path"
+  fi
+
+  if cfg_bool '.output.csv.enabled' true; then
+    local p
+    p=$(csv_write "$(csv_vulnerabilities "$doc")" "$out_dir/${base}-vulnerabilities.csv")
+    log_ok "vulnerability CSV: $p"
+    p=$(csv_write "$(csv_secrets "$doc")" "$out_dir/${base}-secrets.csv")
+    log_ok "secrets CSV: $p"
+    if cfg_bool '.scan.code_analysis.enabled' true; then
+      p=$(csv_write "$(csv_code_findings "$doc")" "$out_dir/${base}-code-findings.csv")
+      log_ok "code findings CSV: $p"
+    fi
+    if cfg_bool '.scan.iac.enabled' true; then
+      p=$(csv_write "$(csv_misconfigurations "$doc")" "$out_dir/${base}-misconfigurations.csv")
+      log_ok "misconfiguration CSV: $p"
+    fi
+    if cfg_bool '.scan.pull_history.enabled' true; then
+      p=$(csv_write "$(csv_pulls "$doc")" "$out_dir/${base}-pulls.csv")
+      log_ok "pull history CSV: $p"
+    fi
+    if cfg_bool '.scan.access.enabled' true; then
+      p=$(csv_write "$(csv_access "$doc")" "$out_dir/${base}-access.csv")
+      log_ok "access CSV: $p"
+      p=$(csv_write "$(csv_access_nonuser "$doc")" "$out_dir/${base}-access-teams-keys.csv")
+      log_ok "teams/keys CSV: $p"
+    fi
+  fi
+
+  if cfg_bool '.output.per_repo_files' true; then
+    local pr="$out_dir/repos"; mkdir -p "$pr"
+    cp -f "$results_dir"/*.json "$pr"/ 2>/dev/null || true
+    log_info "per-repository results: $pr"
+  fi
+
+  cfg_bool '.clone.keep_clones' false || rm -rf -- "$work_root" 2>/dev/null || true
+
+  report_console_summary "$doc"
+
+  if (( GHSCAN_SSO_TRUNCATED == 1 )); then
+    log_warn "at least one API response was truncated by SAML SSO - this report may be INCOMPLETE. See the auth guidance above."
+  fi
+
+  # --- exit code ------------------------------------------------------------
+  local n
+  case "$FAIL_ON" in
+    none) ;;
+    secrets)
+      n=$(printf '%s' "$doc" | jq '.summary.secrets.reported')
+      (( n > 0 )) && { log_error "$n secret finding(s) - failing per --fail-on secrets"; exit 3; } ;;
+    verified-secrets)
+      n=$(printf '%s' "$doc" | jq '.summary.secrets.confirmed_live')
+      (( n > 0 )) && { log_error "$n VERIFIED LIVE credential(s) - failing per --fail-on verified-secrets"; exit 3; } ;;
+    critical|high|medium|low)
+      n=$(printf '%s' "$doc" | jq --arg s "$FAIL_ON" '
+        def rank: if . == "critical" then 5 elif . == "high" then 4
+                  elif . == "medium" or . == "moderate" then 3 elif . == "low" then 2 else 0 end;
+        ($s | rank) as $t
+        | ([ .secrets[]? | select((.severity | rank) >= $t) ] | length)
+        + ([ .vulnerabilities[]? | select((.severity | rank) >= $t) ] | length)')
+      (( n > 0 )) && { log_error "$n finding(s) at or above '$FAIL_ON' - failing per --fail-on"; exit 3; } ;;
+    license)
+      local st; st=$(printf '%s' "$doc" | jq -r '.summary.sbom.license_policy.status')
+      [[ "$st" == "fail" ]] && { log_error "license policy status=fail - failing per --fail-on license"; exit 3; } ;;
+    *) die "--fail-on: unknown value '$FAIL_ON'" ;;
+  esac
+
+  exit 0
+}
+
+main "$@"

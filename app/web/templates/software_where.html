@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1 class="mono">{{ name }}{% if version %}@{{ version }}{% endif %}</h1>
+    <div class="faint small">
+      {% if places %}
+        In {{ places | length }} place{{ '' if places | length == 1 else 's' }},
+        across {{ repositories }} repositor{{ 'y' if repositories == 1 else 'ies' }}
+        {% if organizations > 1 %}in {{ organizations }} organizations{% endif %}.
+        A branch is a place of its own: a release branch routinely pins a
+        version the default branch has already moved past.
+      {% else %}
+        Not anywhere this account can see.
+      {% endif %}
+    </div></div>
+  <div class="page-actions">
+    {% if can_export and places %}
+    <a class="btn" href="{{ base }}/blast-radius/software/export?format=csv&name={{ name | urlencode }}&version={{ version | urlencode }}&ecosystem={{ ecosystem | urlencode }}">CSV</a>
+    <a class="btn" href="{{ base }}/blast-radius/software/export?format=json&name={{ name | urlencode }}&version={{ version | urlencode }}&ecosystem={{ ecosystem | urlencode }}">JSON</a>
+    <a class="btn" href="{{ base }}/blast-radius/software/export?format=cdx&name={{ name | urlencode }}&version={{ version | urlencode }}&ecosystem={{ ecosystem | urlencode }}"
+       title="A CycloneDX bill of materials of this package and every place it sits">SBOM</a>
+    {% endif %}
+    <a class="btn" href="{{ base }}/blast-radius/software">All software</a>
+  </div>
+</div>
+
+{% include "_blast_tabs.html" %}
+
+{% if versions | length > 1 %}
+<div class="card">
+  <div class="card-head">Versions in the estate</div>
+  <div class="small faint" style="padding:.9rem 1rem 0">
+    Which versions are here comes before whether it matters.  An advisory
+    naming one version says nothing about the others, and "we upgraded that"
+    is only ever true of the branch somebody checked.
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Version</th><th>Repositories</th><th>Branches</th><th>Advisories</th><th></th></tr></thead>
+      <tbody>
+      {% for number, seen in versions.items() %}
+        <tr>
+          <td class="mono small">{{ number }}</td>
+          <td>{{ seen.repositories }}</td>
+          <td>{{ seen.branches }}</td>
+          <td>{% if seen.vulnerable %}<span class="badge {{ seen.worst }}">{{ seen.worst }}</span>
+              {% else %}<span class="faint">none</span>{% endif %}</td>
+          <td class="nowrap"><a class="btn sm"
+             href="{{ base }}/blast-radius/software/where?name={{ name | urlencode }}&version={{ number | urlencode }}&ecosystem={{ ecosystem | urlencode }}">Only this one</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head">Where it is</div>
+  {% if places %}
+  <div class="field" style="max-width:420px;margin:.9rem 1rem">
+    <label for="place-search">Search</label>
+    <input type="text" id="place-search" data-filter="place-table" autocomplete="off"
+           placeholder="organization, repository or branch">
+    <div class="small faint" data-filter-count="place-table"></div>
+  </div>
+  <div class="empty" data-filter-empty="place-table" hidden>Nothing matches that.</div>
+  <div class="table-scroll">
+    <table id="place-table">
+      <thead><tr>
+        <th>Organization</th><th>Repository</th><th>Branch</th><th>Version</th>
+        <th>License</th><th>Advisories</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for place in places %}
+        <tr>
+          <td class="small">{{ place.organization or '&mdash;' | safe }}</td>
+          <td class="stack">
+            <a href="{{ base }}/blast-radius/{{ place.organization | urlencode }}?view=repos">{{ place.repository }}</a>
+            {% if place.connection %}<span class="sub">{{ place.connection }}</span>{% endif %}
+          </td>
+          <td class="mono small">{{ place.branch or 'default' }}</td>
+          <td class="mono small">{{ place.version or '&mdash;' | safe }}</td>
+          <td class="small">{% if place.licenses %}{{ place.licenses }}
+              {% else %}<span class="faint">not stated</span>{% endif %}</td>
+          <td class="small">
+            {% if place.malicious %}<span class="badge critical">compromised package</span>{% endif %}
+            {% if place.known_exploited %}<span class="badge critical">exploited in the wild</span>{% endif %}
+            {% if place.vulnerable %}
+              <span class="badge {{ place.worst }}">{{ place.worst }}</span>
+              <span class="sub mono small">{{ place.advisories | join(', ') }}</span>
+            {% elif not place.malicious %}<span class="faint">none</span>{% endif %}
+          </td>
+          <td class="nowrap">
+            {# The findings page searches on the package name, so this lands on
+               whatever advisories name it inside that organization. #}
+            <a class="btn sm" href="{{ base }}/findings?q={{ place.name | urlencode }}&org={{ place.organization | urlencode }}">Findings</a>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body">
+    <p>Nothing by that name is in the inventory.  Either it is genuinely not
+      here, or the repositories that hold it have not been scanned with SBOMs
+      turned on since it arrived.  The Software page says how much has been
+      collected.</p>
+  </div>
+  {% endif %}
+</div>
+
+<script src="{{ base }}/static/tablefilter.js?v={{ asset_v('tablefilter.js') }}"></script>
+{% endblock %}

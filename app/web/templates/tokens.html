@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% block title %}IDE tokens &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>IDE tokens</h1>
+    <div class="faint small">For an editor plugin or a pipeline, which cannot
+      sign in the way a browser does.  A token is you with less of you: it
+      reaches the repositories you were given, it can ask for a review and read
+      the rules, and it can do nothing else.  Make your own; there is no reason
+      to share one.</div></div>
+</div>
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% endif %}
+
+{% if fresh %}
+{# The only time this is ever readable.  Nothing stores it, so a reload loses
+   it, which is the whole point of storing only the hash. #}
+<div class="card">
+  <div class="card-head">Your new token</div>
+  <div class="card-body">
+    <p class="mono" style="word-break:break-all;font-size:1rem;padding:.7rem;
+       background:var(--bg-soft);border:1px solid var(--border-strong);
+       border-radius:var(--radius)">{{ fresh }}</p>
+    <p class="small"><strong>Copy it now.</strong>  Only its hash is kept, so
+      nobody can show it to you again, including whoever runs this.  Lose it and
+      make another.</p>
+    <p class="faint small">Point your editor at
+      <span class="mono">{{ api_url }}</span> and send it as
+      <span class="mono">Authorization: Bearer &lt;token&gt;</span>.  There are
+      settings for the common editors below.</p>
+  </div>
+</div>
+{% endif %}
+
+<div class="settings">
+<div class="card">
+  <div class="card-head">Make one</div>
+  <form method="post" action="{{ base }}/tokens/create">
+    <div class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>What is it for
+        <input type="text" name="name" required maxlength="120"
+               placeholder="my editor, or the build">
+        <span class="faint small">So you can tell later which one to revoke.</span>
+      </label>
+      <label>Expires after
+        <input type="number" name="days" min="1" max="{{ max_days }}"
+               value="{{ default_days }}">
+        <span class="faint small">Days, up to {{ max_days }}.  Short is better;
+          making another takes a moment.</span>
+      </label>
+      <label class="wide">What it may do
+        <div class="check-grid">
+          {% for scope, what in scopes.items() %}
+          <label class="check">
+            <input type="checkbox" name="scope:{{ scope }}" value="1"
+                   {{ 'checked' if scope == 'review' }}>
+            <span><span class="mono">{{ scope }}</span> &mdash; {{ what }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        <span class="faint small">Neither of these can change anything.  A
+          review is worked out and thrown away, and the rules are the ones you
+          can already read.</span>
+      </label>
+      <div class="wide"><button class="btn primary" type="submit">Make the token</button></div>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <span>{{ 'Every IDE token' if sees_all else 'Your IDE tokens' }}</span>
+    {# Revoked and expired ones are hidden, because a page full of dead tokens
+       buries the two that still work, which are the ones somebody came for. #}
+    {% if dead_count %}
+    <a class="btn sm" href="{{ base }}/tokens{{ '' if show_dead else '?dead=1' }}">
+      {{ 'Hide' if show_dead else 'Show' }} {{ dead_count }} revoked or expired</a>
+    {% endif %}
+  </div>
+  {% if not rows %}
+  <div class="card-body faint small">None yet.</div>
+  {% else %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th>Name</th>{% if sees_all %}<th>Whose</th>{% endif %}
+        <th>Starts with</th><th>May</th><th>Expires</th><th>Last used</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for t in rows %}
+        <tr {% if not t.live() %}class="faint"{% endif %}>
+          <td class="stack">
+            <span>{{ t.name }}</span>
+            <span class="sub">made {{ t.created_at | dt('%Y-%m-%d') }}</span>
+          </td>
+          {% if sees_all %}<td class="small">{{ t.created_by }}</td>{% endif %}
+          <td class="mono small">{{ t.prefix }}&hellip;</td>
+          <td class="small">{% for s in t.scopes.split(',') %}<span class="badge">{{ s }}</span> {% endfor %}</td>
+          <td class="stack nowrap small">
+            {% if t.revoked_at %}<span class="badge critical">revoked</span>
+            {% elif not t.live() %}<span class="badge medium">expired</span>
+            {% else %}{{ t.expires_at | dt('%Y-%m-%d') if t.expires_at else 'no end date' }}{% endif %}
+          </td>
+          <td class="stack nowrap small">
+            {% if t.last_used_at %}<span>{{ t.last_used_at | dt('%Y-%m-%d %H:%M') }}</span>
+              <span class="sub">{{ t.uses }} time{{ '' if t.uses == 1 else 's' }}</span>
+            {% else %}<span class="faint">never</span>{% endif %}
+          </td>
+          <td class="nowrap">
+            {% if t.live() %}
+            <form method="post" action="{{ base }}/tokens/{{ t.id }}/revoke"
+                  style="display:inline"
+                  onsubmit="return confirm('Revoke this token? Anything using it stops working straight away.')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm danger" type="submit">Revoke</button>
+            </form>
+            {% else %}
+            <form method="post" action="{{ base }}/tokens/{{ t.id }}/delete"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete this row? It already does not work; this just tidies it away.')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm" type="submit">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+<div class="card" id="setup">
+  <div class="card-head">Pointing an editor at this</div>
+  <div class="card-body small">
+    <p>One language server answers all of them, so the setup is the same three
+      things everywhere: the address, your token, and whether to look at the
+      whole file or only what you changed.</p>
+
+    <p><strong>The address</strong> is <span class="mono">{{ api_url }}</span>.
+      That is what this page was reached on, so if it works in your browser it
+      works from your editor on this network.</p>
+
+    <p><strong>Check it first</strong>, before touching any editor.  If this
+      does not answer, nothing else will:</p>
+    <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">curl -H "Authorization: Bearer &lt;your token&gt;" \
+     {{ api_url }}/ping</pre>
+
+    <h2 style="margin-top:1.2rem">Visual Studio Code</h2>
+    <p>Install the Git Code Review extension, then in
+      <span class="mono">settings.json</span>:</p>
+    <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">"gitCodeReview.server": "{{ api_url }}",
+"gitCodeReview.token": "&lt;your token&gt;",
+"gitCodeReview.reviewOn": "save",
+"gitCodeReview.changedLinesOnly": true</pre>
+    <p class="faint">Keep <span class="mono">changedLinesOnly</span> on.  A
+      repository with two thousand findings in it will show you two thousand
+      findings, and none of them are yours.</p>
+
+    <h2 style="margin-top:1.2rem">JetBrains, IntelliJ and the rest</h2>
+    <p>Settings, then Tools, then Git Code Review.  Same address, same token.
+      The plugin registers itself as an LSP client, so nothing else is needed.</p>
+
+    <h2 style="margin-top:1.2rem">Eclipse</h2>
+    <p>Eclipse speaks LSP through LSP4E rather than a plugin of its own.
+      Install LSP4E from the marketplace, then add a server with the address
+      above and the token as a header.</p>
+
+    <h2 style="margin-top:1.2rem">Neovim, Helix, Sublime and anything else</h2>
+    <p>Any client that speaks the Language Server Protocol works.  Point it at
+      the address, send the token as an
+      <span class="mono">Authorization</span> header, and it will behave like
+      any other language server.</p>
+
+    <h2 style="margin-top:1.2rem">Before a commit, and in a pipeline</h2>
+    <p>An editor is not the only place this is useful, and a hook needs no
+      token at all because it runs where the code already is:</p>
+    <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">ghscan review . --diff HEAD --fail-on secrets</pre>
+    <p class="faint">Exit 3 means it found something.  That is the only place
+      a credential can still be stopped rather than rotated.</p>
+
+    <div class="notice warn" style="margin-top:1rem">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+      <div>A token is you, with less of you.  It goes in your editor's
+        settings, which is a file that ends up in backups and sometimes in a
+        repository.  Give it the shortest expiry you can live with, and delete
+        it here the moment you stop using that machine.</div>
+    </div>
+  </div>
+</div>
+</div>
+{% endblock %}

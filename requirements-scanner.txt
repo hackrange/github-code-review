@@ -1,0 +1,27 @@
+# Git Code Review, the python scanning tools.
+#
+# These go in their own venv at /opt/gcr/scanner-venv.  semgrep pins a lot of
+# things very tightly, and it does not need to agree with the web app about
+# any of them.
+#
+#     Last reviewed: 26 August 2026
+
+# Static analysis.  Command injection, SQL injection, XSS, unsafe calls.
+semgrep==1.175.0
+
+# A second opinion on secrets.  It hashes what it finds rather than handing
+# the value over, so we use it to corroborate rather than to report.
+detect-secrets==1.5.0
+
+# A second engine where semgrep reads one file at a time.  bandit is an AST
+# rule engine rather than taint analysis, so it corroborates rather than adds
+# depth, and the finding says which engine saw it rather than pretending
+# otherwise.  gosec, which does add depth, is a binary and lives in the
+# Dockerfile beside the other Go tools.
+bandit==1.8.6
+
+# njsscan is deliberately not here.  It pins semgrep==1.172.0, and semgrep is
+# the primary engine for every language: dragging it backwards to gain a
+# corroborating opinion on javascript is the wrong way round.  lib/code_analysis.sh
+# still has run_njsscan and skips it when the binary is absent, so this becomes
+# one line if the pin ever catches up.

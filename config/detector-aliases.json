@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "Two engines find the same thing and call it different names. gitleaks",
+    "writes private-key, trufflehog writes PrivateKey, and semgrep writes",
+    "detected-jwt-token for what gitleaks calls jwt. Deduplication is not the",
+    "problem: a credential is keyed on the hash of its value, so the same",
+    "secret found twice is already one finding. The problem is that a rule",
+    "level exclusion or a severity override has to be written twice, and",
+    "whoever writes one believes they are covered.",
+    "",
+    "Most of it needs no table. A name is squashed to letters and digits and",
+    "compared, so PrivateKey and private-key are already the same key and both",
+    "come out as private-key. This file is only for the pairs where the two",
+    "engines genuinely used different words, and for acronyms the camel case",
+    "split gets wrong.",
+    "",
+    "The key is the name with everything but letters and digits removed, in",
+    "lower case. The value is the name to use."
+  ],
+  "aliases": {
+    "slackwebhook": "slack-webhook-url",
+    "detectedjwttoken": "jwt",
+    "detectedgenericapikey": "generic-api-key",
+    "pypi": "pypi",
+    "jdbc": "jdbc",
+    "uri": "uri",
+    "npmtoken": "npm-token",
+    "githubtoken": "github-token",
+    "gitlabtoken": "gitlab-token"
+  }
+}

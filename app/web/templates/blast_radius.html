@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Blast radius &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Blast radius</h1>
+    <div class="faint small">Who can reach what, and what that lets them do.
+      The question is not what a repository allows, it is what somebody's
+      account reaches if it is taken.  Clone and pull are the same permission,
+      so anybody with read can take a full copy of every commit ever made,
+      including the ones somebody later deleted.</div></div>
+  <div class="page-actions">
+    <a class="btn" href="{{ base }}/blast-radius/all/export?format=csv">Export everything, CSV</a>
+    <a class="btn" href="{{ base }}/blast-radius/all/export?format=json">Export everything, JSON</a>
+  </div>
+</div>
+
+{% include "_blast_tabs.html" %}
+
+{# The estate wide numbers open the same views the per organization ones do,
+   across everything rather than one account. #}
+<div class="stats">
+  <div class="stat"><div class="n">{{ totals.organizations }}</div><div class="l">Organizations</div></div>
+  <a class="stat" href="{{ base }}/blast-radius/all?view=repos">
+    <div class="n">{{ totals.repositories }}</div><div class="l">Repositories</div></a>
+  <a class="stat" href="{{ base }}/blast-radius/all?view=people">
+    <div class="n">{{ totals.people }}</div><div class="l">People</div></a>
+  <a class="stat bad" href="{{ base }}/blast-radius/all?view=admins">
+    <div class="n">{{ totals.admins }}</div><div class="l">Admins</div></a>
+  <a class="stat warn" href="{{ base }}/blast-radius/all?view=outside">
+    <div class="n">{{ totals.outside }}</div><div class="l">Outside collaborators</div></a>
+  <a class="stat warn" href="{{ base }}/blast-radius/all?view=unprotected">
+    <div class="n">{{ totals.unprotected }}</div><div class="l">Unprotected, writable</div></a>
+</div>
+
+{% if not orgs %}
+<div class="card"><div class="card-body">
+  <p>Nothing collected yet.  Access is gathered on every scan when
+    <strong>Collect who can reach each repository</strong> is on, under People
+    and history in Settings.  Run a scan and this fills in.</p>
+</div></div>
+{% else %}
+<div class="card">
+  <div class="card-head">By organization</div>
+  <div class="field" style="max-width:420px;margin-bottom:.75rem">
+    <label for="org-search">Search</label>
+    <input type="text" id="org-search" data-filter="org-table" autocomplete="off"
+           placeholder="organization, application, or owner">
+    <div class="small faint" data-filter-count="org-table"></div>
+  </div>
+  <div class="empty" data-filter-empty="org-table" hidden>Nothing matches that.</div>
+  <div class="table-scroll">
+    <table id="org-table">
+      <thead><tr>
+        <th>Organization</th><th>What it is</th><th>Who owns it</th>
+        <th>Repos</th><th>People</th><th>Admins</th>
+        <th>Outside</th><th>Unprotected</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for o in orgs %}
+        <tr>
+          <td class="stack">
+            <a href="{{ base }}/blast-radius/{{ o.organization | urlencode }}">{{ o.organization }}</a>
+            {% if o.holds %}<span class="sub">{% for tag in o.holds.split(',') %}<span class="badge medium">{{ tag.strip() }}</span> {% endfor %}</span>{% endif %}
+          </td>
+          <td class="stack small">
+            <span>{{ o.application or '&mdash;' | safe }}</span>
+            {% if o.connection %}<span class="sub">{{ o.connection }}</span>{% endif %}
+          </td>
+          <td class="stack small">
+            {% if o.application_owner %}<span>{{ o.application_owner }}</span>{% endif %}
+            {% if o.technical_owner %}<span class="sub">{{ o.technical_owner }} (technical)</span>{% endif %}
+            {% if not o.application_owner and not o.technical_owner %}<span class="faint">unknown</span>{% endif %}
+          </td>
+          {# Every number opens the list behind it in a new window, because the
+             number on its own only ever prompts the same next question. #}
+          <td><a target="_blank" rel="noopener"
+                 href="{{ base }}/blast-radius/{{ o.organization | urlencode }}?view=repos">{{ o.repositories }}</a></td>
+          <td><a target="_blank" rel="noopener"
+                 href="{{ base }}/blast-radius/{{ o.organization | urlencode }}?view=people">{{ o.people }}</a></td>
+          <td>{% if o.admins %}<a target="_blank" rel="noopener" class="badge critical"
+                 href="{{ base }}/blast-radius/{{ o.organization | urlencode }}?view=admins">{{ o.admins }}</a>{% else %}0{% endif %}</td>
+          <td>{% if o.outside %}<a target="_blank" rel="noopener" class="badge medium"
+                 href="{{ base }}/blast-radius/{{ o.organization | urlencode }}?view=outside">{{ o.outside }}</a>{% else %}0{% endif %}</td>
+          <td>{% if o.unprotected %}<a target="_blank" rel="noopener" class="badge medium"
+                 href="{{ base }}/blast-radius/{{ o.organization | urlencode }}?view=unprotected">{{ o.unprotected }}</a>{% else %}0{% endif %}</td>
+          <td class="nowrap">
+            <a class="btn sm" href="{{ base }}/blast-radius/{{ o.organization | urlencode }}/export?format=csv">CSV</a>
+            <a class="btn sm" href="{{ base }}/blast-radius/{{ o.organization | urlencode }}/export?format=json">JSON</a>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+<script src="{{ base }}/static/tablefilter.js?v={{ asset_v('tablefilter.js') }}"></script>
+{% endblock %}

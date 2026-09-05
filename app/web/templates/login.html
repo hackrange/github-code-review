@@ -1,0 +1,94 @@
+{# Sign in.  Two stages: password, then the code from the authenticator app. #}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in &middot; Git Code Review</title>
+<link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_v('app.css') }}">
+<link rel="icon" type="image/svg+xml" href="{{ base }}/static/icon.svg?v={{ asset_v('icon.svg') }}">
+</head>
+<body>
+
+<div class="login-wrap">
+  <div class="login-box">
+
+    <div class="brand">
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <rect width="16" height="16" rx="3" fill="currentColor" opacity="0.15"/>
+        <path d="M4.5 3.2a1.3 1.3 0 1 0-1.9 1.15v7.3a1.3 1.3 0 1 0 1.2 0V8.9c.5.4 1.15.6 1.9.6h1.6a2.7 2.7 0 0 0 2.7-2.35 1.3 1.3 0 1 0-1.25-.15A1.5 1.5 0 0 1 7.3 8.3H5.7c-.75 0-1.2-.35-1.2-1V4.35a1.3 1.3 0 0 0 0-1.15z" fill="currentColor"/>
+      </svg>
+      Git Code Review
+    </div>
+    <div class="sub">
+      {% if stage == 'totp' %}Two step check{% else %}Sign in to continue{% endif %}
+    </div>
+
+    {% if error %}
+      <div class="notice bad">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm0 4a.7.7 0 0 0-.7.8l.25 3.2a.45.45 0 0 0 .9 0l.25-3.2A.7.7 0 0 0 8 5.5zm0 5.4a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6z"/></svg>
+        <div>{{ error }}</div>
+      </div>
+    {% endif %}
+
+    {% if stage == 'totp' %}
+      {# The password already checked out.  What carries that forward is a half
+         session cookie, not the password itself. #}
+      <form method="post" action="{{ base }}/auth/totp">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="field">
+          <label for="code">Code for {{ username }}</label>
+          <input type="text" id="code" name="code" inputmode="numeric"
+                 autocomplete="one-time-code" pattern="[0-9A-Za-z\-]{6,12}"
+                 maxlength="12" required autofocus>
+          <div class="help">Six digits from your authenticator app, or one of
+            your recovery codes.</div>
+        </div>
+        <button type="submit" class="btn primary" style="width:100%">Continue</button>
+      </form>
+      <div class="mt small faint" style="text-align:center">
+        <a href="{{ base }}/logout">Start over</a>
+      </div>
+
+    {% else %}
+      {% if auth.local_enabled %}
+        <form method="post" action="{{ base }}/auth/login">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="field">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username"
+                   autocomplete="username" required autofocus maxlength="120">
+          </div>
+          <div class="field">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password"
+                   autocomplete="current-password" required maxlength="200">
+          </div>
+          <button type="submit" class="btn primary" style="width:100%">Sign in</button>
+        </form>
+      {% endif %}
+
+      {% if auth.local_enabled and auth.oidc_enabled %}
+        <div class="login-divider">or</div>
+      {% endif %}
+
+      {% if auth.oidc_enabled %}
+        <a class="btn" style="width:100%;justify-content:center"
+           href="{{ base }}/auth/oidc/start">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5 14 4v4.2c0 3.1-2.5 5.6-6 6.3-3.5-.7-6-3.2-6-6.3V4l6-2.5z"/></svg>
+          Sign in with your identity provider
+        </a>
+      {% endif %}
+
+      {% if not auth.local_enabled and not auth.oidc_enabled %}
+        <div class="notice warn">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5z"/></svg>
+          <div>No sign in method is turned on. Check GCR_AUTH_MODE.</div>
+        </div>
+      {% endif %}
+    {% endif %}
+
+  </div>
+</div>
+</body>
+</html>

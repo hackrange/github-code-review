@@ -1,0 +1,181 @@
+# Git Code Review.
+#
+# Two containers.  The app serves the web interface, runs the scans on a
+# schedule and keeps the two report files up to date.  MariaDB holds everything
+# else: the settings, the findings, the users, the exclusions.
+#
+#     ./install.sh          # asks a few questions, writes .env, starts it
+#
+# Or by hand:
+#
+#     cp .env.example .env  # then edit it
+#     docker compose up -d
+#
+# The volumes are the point.  A compose down leaves the database, the reports
+# and the vulnerability feeds exactly where they were.
+#
+# Using a MariaDB you already run?  Set GCR_DB_HOST in .env to point at it and
+# take COMPOSE_PROFILES out, and the bundled one never starts.
+
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: gcr-mariadb
+    restart: unless-stopped
+    # Only starts when COMPOSE_PROFILES=bundled-db is set, which .env.example
+    # does.  That is what makes pointing at an external server a one line change.
+    profiles: ["bundled-db"]
+
+    environment:
+      MARIADB_DATABASE: ${GCR_DB_NAME:-gcr}
+      MARIADB_USER: ${GCR_DB_USER:-gcr}
+      MARIADB_PASSWORD: ${GCR_DB_PASSWORD:?set GCR_DB_PASSWORD in .env}
+      MARIADB_ROOT_PASSWORD: ${GCR_DB_ROOT_PASSWORD:?set GCR_DB_ROOT_PASSWORD in .env}
+      MARIADB_AUTO_UPGRADE: "1"
+      TZ: ${TZ:-UTC}
+
+    # Encrypted at rest.  The key comes from secrets/mariadb-keyfile, which
+    # install.sh writes from GCR_DB_ENCRYPTION_KEY in .env.  Tables, redo log
+    # and temporary tables are all covered, so the files under the volume are
+    # no use to anybody who copies them.
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --innodb-file-per-table=1
+      --max-connections=200
+      --plugin-load-add=file_key_management
+      --file-key-management-filename=/etc/mysql/encryption/keyfile
+      --file-key-management-encryption-algorithm=aes_cbc
+      --innodb-encrypt-tables=FORCE
+      --innodb-encrypt-log=ON
+      --innodb-encryption-threads=4
+      --aria-encrypt-tables=ON
+      --encrypt-tmp-disk-tables=ON
+
+    volumes:
+      - gcr-mariadb:/var/lib/mysql
+      - ${GCR_DB_KEYFILE:-./secrets/mariadb-keyfile}:/etc/mysql/encryption/keyfile:ro
+
+    # Not published.  The app reaches it over the compose network and nothing
+    # else needs to.
+    expose:
+      - "3306"
+
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  github-code-review:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: github-code-review:${GCR_VERSION:-1.0.1}
+    container_name: github-code-review
+    restart: unless-stopped
+
+    # A ceiling on what a scan can take.
+    #
+    # gitleaks reads a file whole.  Point it at a repository with one enormous
+    # file in it and it will ask for tens of gigabytes, and with no limit here
+    # the kernel picks a victim across the whole host, which can just as easily
+    # be the database as the scan that caused it.
+    #
+    # With a limit the scan is the thing that dies, the runner records the
+    # repository as failed and says why, and everything else keeps running.
+    # Raise it if scans of large estates start failing for memory; the file
+    # size limit on the Settings page is the better first move.
+    mem_limit: ${GCR_MEM_LIMIT:-8g}
+    memswap_limit: ${GCR_MEM_LIMIT:-8g}
+
+    # Scratch space for a scan, in memory rather than on a disk.  Credentials
+    # are in the clear in those files between the engine finding one and the
+    # triage turning it into a mask and a fingerprint, and memory does not keep
+    # a copy of them after the container stops.
+    #
+    # Docker gives a container 64MB of shared memory unless told otherwise,
+    # which is not enough for a large repository, and the scanner checks the
+    # size and quietly falls back to disk when it does not fit.  This is what
+    # keeps it out of that fallback.  It is a ceiling, not a reservation:
+    # nothing is used until a scan runs.
+    shm_size: ${GCR_SHM_SIZE:-1g}
+
+    ports:
+      - "${GCR_BIND_ADDRESS:-127.0.0.1}:${GCR_PORT:-8080}:8080"
+
+    environment:
+      # ---- the database ---------------------------------------------------
+      # Point these at any MariaDB.  Leave GCR_DB_HOST empty and it falls back
+      # to a SQLite file in the data volume, which is fine for one small
+      # install and is what the tests use.
+      GCR_DB_HOST: ${GCR_DB_HOST:-mariadb}
+      GCR_DB_PORT: ${GCR_DB_PORT:-3306}
+      GCR_DB_NAME: ${GCR_DB_NAME:-gcr}
+      GCR_DB_USER: ${GCR_DB_USER:-gcr}
+      GCR_DB_PASSWORD: ${GCR_DB_PASSWORD:-}
+      # Or give the whole thing as one URL and the pieces above are ignored.
+      GCR_DATABASE_URL: ${GCR_DATABASE_URL:-}
+
+      # ---- sessions and encryption ----------------------------------------
+      # This key signs sessions and encrypts the GitHub token and the OIDC
+      # client secret in the database.  install.sh writes one.  Set the same
+      # value on every instance behind a load balancer.
+      GCR_SECRET_KEY: ${GCR_SECRET_KEY:-}
+      GCR_ENCRYPTION_KEY: ${GCR_ENCRYPTION_KEY:-}
+
+      # How people sign in, how long sessions last and which addresses the
+      # load balancer connects from are all set on the Settings page and kept
+      # in the database.  The three below are only a fallback for the very
+      # first boot, before anybody has been able to sign in and change them.
+      GCR_AUTH_MODE: ${GCR_AUTH_MODE:-local}
+      GCR_TRUSTED_PROXIES: ${GCR_TRUSTED_PROXIES:-}
+      GCR_FORCE_HTTPS: ${GCR_FORCE_HTTPS:-true}
+      GCR_BASE_PATH: ${GCR_BASE_PATH:-}
+
+      TZ: ${TZ:-UTC}
+
+    volumes:
+      # The report files.  Bind mounted on purpose so whatever ingests them can
+      # read them straight off the host.
+      - ${GCR_OUT_PATH:-./out}:/out
+
+      # The session key, and the SQLite file if you run without MariaDB.
+      - gcr-data:/data
+
+      # Vulnerability feeds and the grype database.  Losing this only costs a
+      # download, but it is a few hundred MB of one.
+      - gcr-cache:/home/gcr/.cache
+
+      # Where repositories are cloned while they are being scanned.  On disk
+      # rather than in RAM: a full history clone of a large estate wants tens
+      # of gigabytes, and a tmpfs big enough for that is a tmpfs the machine
+      # cannot actually back.  Clones are deleted per repository as the scan
+      # moves on, and the whole tree goes when the run ends, including when it
+      # is killed.
+      - ${GCR_WORK_PATH:-./work}:/var/tmp/gcr-work
+
+    # It clones code it did not write.  Give it nothing it does not need.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  gcr-mariadb:
+    name: gcr-mariadb
+  gcr-data:
+    name: gcr-data
+  gcr-cache:
+    name: gcr-cache

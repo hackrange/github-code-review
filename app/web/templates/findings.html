@@ -1,0 +1,527 @@
+{% extends "base.html" %}
+{% block title %}Findings &middot; Git Code Review{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Findings</h1>
+    <div class="faint small">{{ total }} match{{ '' if total == 1 else 'es' }}{% if filters.exception == 'without' and excepted_total %},
+      and {{ excepted_total }} with an exception, which the report files leave out{% endif %}</div>
+    {# Said on the page, not left to be discovered.  A hole in a package the
+       application never imports is true and not work, but a list that quietly
+       drops half of what a scan found is indistinguishable from a scan that
+       missed it. #}
+    {% if hidden_unreachable %}
+    <div class="faint small">{{ hidden_unreachable }} more in packages the code does not reach,
+      left out of this list.
+      <a href="{{ base }}/findings?{{ page_query }}{% if page_query %}&{% endif %}reach=any">Include them</a></div>
+    {% endif %}
+  </div>
+  {# Delete-all stays reachable even when the filters match nothing, since a
+     filter matching nothing is not a reason to hide the estate-wide action. #}
+  {% if total or (can_delete and all_total) %}
+  <div class="page-actions">
+    {% if total %}
+    <a class="btn" href="{{ base }}/findings/export?{{ page_query }}{% if page_query %}&{% endif %}format=csv">Export {{ total }} as CSV</a>
+    <a class="btn" href="{{ base }}/findings/export?{{ page_query }}{% if page_query %}&{% endif %}format=json">Export as JSON</a>
+    {% endif %}
+    {% if can_delete and all_total %}
+    <button type="button" class="btn danger" data-modal="delete-all-modal">Delete all findings</button>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+<form method="get" action="{{ base }}/findings" class="filters">
+  <div class="field">
+    <label for="severity">Severity</label>
+    <select id="severity" name="severity" data-autosubmit>
+      <option value="">Any</option>
+      {% for s in severities %}
+        <option value="{{ s }}" {{ 'selected' if filters.severity == s }}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="kind">Kind</label>
+    <select id="kind" name="kind" data-autosubmit>
+      <option value="">Any</option>
+      {% for k in kinds %}
+        <option value="{{ k }}" {{ 'selected' if filters.kind == k }}>{{ k }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="state">State</label>
+    <select id="state" name="state" data-autosubmit>
+      {% for s in states %}
+        <option value="{{ s }}" {{ 'selected' if filters.state == s }}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% if connections|length > 1 %}
+  <div class="field">
+    <label for="connection">Account</label>
+    <select id="connection" name="connection" data-autosubmit>
+      <option value="">Any</option>
+      {% for c in connections %}
+      <option value="{{ c }}" {{ 'selected' if filters.connection == c }}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% endif %}
+  <div class="field">
+    <label for="org">Organization</label>
+    <select id="org" name="org" data-autosubmit>
+      <option value="">Any</option>
+      {% for o in orgs %}
+        <option value="{{ o }}" {{ 'selected' if filters.org == o }}>{{ o }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="exception">Exceptions</label>
+    <select id="exception" name="exception" data-autosubmit>
+      <option value="without" {{ 'selected' if filters.exception == 'without' }}>Without an exception</option>
+      <option value="with" {{ 'selected' if filters.exception == 'with' }}>With an exception ({{ excepted_total }})</option>
+      <option value="any" {{ 'selected' if filters.exception == 'any' }}>Both</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="triage">Triage</label>
+    <select id="triage" name="triage" data-autosubmit>
+      <option value="work" {{ 'selected' if filters.triage == 'work' }}>The work list{% if set_aside %} ({{ set_aside }} set aside){% endif %}</option>
+      <option value="any" {{ 'selected' if filters.triage == 'any' }}>Everything</option>
+      <option value="third_party" {{ 'selected' if filters.triage == 'third_party' }}>Third party code</option>
+      <option value="advisory" {{ 'selected' if filters.triage == 'advisory' }}>Advisory rules</option>
+      <option value="not_applicable" {{ 'selected' if filters.triage == 'not_applicable' }}>Set aside as not applicable</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="reach">Reachable</label>
+    <select id="reach" name="reach" data-autosubmit>
+      <option value="" {{ 'selected' if not filters.reach }}>Anything the code may reach</option>
+      <option value="any" {{ 'selected' if filters.reach == 'any' }}>Everything, reached or not</option>
+      <option value="reachable" {{ 'selected' if filters.reach == 'reachable' }}>The code imports it</option>
+      <option value="unlikely" {{ 'selected' if filters.reach == 'unlikely' }}>Does not ship, or unused</option>
+      <option value="unknown" {{ 'selected' if filters.reach == 'unknown' }}>Could not tell</option>
+      <option value="unrated" {{ 'selected' if filters.reach == 'unrated' }}>Not worked out yet</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="baseline">Since</label>
+    <select id="baseline" name="baseline" data-autosubmit>
+      <option value="new" {{ 'selected' if filters.baseline == 'new' }}>The work{% if backlog_total %} ({{ backlog_total }} in the backlog){% endif %}</option>
+      <option value="backlog" {{ 'selected' if filters.baseline == 'backlog' }}>The backlog</option>
+      <option value="any" {{ 'selected' if filters.baseline == 'any' }}>Everything</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="confidence">Confidence</label>
+    <select id="confidence" name="confidence" data-autosubmit>
+      <option value="">Any</option>
+      <option value="high" {{ 'selected' if filters.confidence == 'high' }}>High</option>
+      <option value="medium" {{ 'selected' if filters.confidence == 'medium' }}>Medium</option>
+      <option value="low" {{ 'selected' if filters.confidence == 'low' }}>Low</option>
+      <option value="unrated" {{ 'selected' if filters.confidence == 'unrated' }}>Unrated</option>
+    </select>
+  </div>
+  <div class="field" style="flex:1;min-width:200px">
+    <label for="q">Search</label>
+    <input type="text" id="q" name="q" value="{{ filters.q }}"
+           placeholder="id, repository, branch, file, rule, package, CVE, or who committed it">
+  </div>
+  <button type="submit" class="btn">Filter</button>
+</form>
+
+{# Drawing the line is a per organization decision, so it only appears once
+   one is picked.  Without that it would either apply to everything at once,
+   which nobody means, or need its own page for a control with two fields. #}
+{% if can_set_baseline and filters.org %}
+<div class="card baseline-bar">
+  {% if baseline_dates.get(filters.org) %}
+  <form method="post" action="{{ base }}/baseline/clear" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="organization" value="{{ filters.org }}">
+    <span>Line drawn for <strong>{{ filters.org }}</strong> on
+      {{ baseline_dates[filters.org].strftime('%d %B %Y') }}.  Anything first
+      seen before then is the backlog.</span>
+    <button class="btn" type="submit">Clear it</button>
+  </form>
+  {% else %}
+  <form method="post" action="{{ base }}/baseline/set" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="organization" value="{{ filters.org }}">
+    <span>No line drawn for <strong>{{ filters.org }}</strong>, so all
+      {{ total }} of these count as work.</span>
+    <label class="small">From
+      <input type="date" name="at" value="">
+    </label>
+    <button class="btn" type="submit">Draw the line</button>
+    <span class="faint small">Leave the date blank for today.  Nothing is
+      deleted: the backlog keeps its grades and stays one click away.</span>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if (can_waive or can_delete) and rows %}
+<div class="card" id="bulk-bar" hidden>
+  <div class="flex-between">
+    <div class="small"><strong><span id="bulk-count">0</span></strong> selected
+      {% if total > rows|length %}
+      <span class="faint">&middot;
+        <button type="button" class="btn sm" id="select-all-matching">Select all {{ total }} matching these filters</button>
+      </span>
+      {% endif %}
+      <span class="faint" id="bulk-scope" hidden>&middot; all {{ total }} matching these filters</span>
+    </div>
+    <div class="page-actions">
+      <button type="button" class="btn sm" id="bulk-clear">Clear</button>
+      {% if can_delete %}
+      <button type="button" class="btn sm danger" data-modal="delete-modal">Delete the selected</button>
+      {% endif %}
+      {% if can_waive %}
+      <button type="button" class="btn sm primary" data-modal="bulk-modal">Waive the selected</button>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% macro pager() %}
+<div class="card-body flex-between">
+  <span class="small faint">
+    {% if total %}Showing {{ offset + 1 }} to {{ offset + rows|length }} of {{ total }}
+    {% else %}Nothing to show{% endif %}
+  </span>
+  <span class="flex" style="gap:.4rem;align-items:center">
+    <span class="small faint">Rows</span>
+    {% for size in page_sizes %}
+      <a class="btn sm {{ 'primary' if filters.per_page == size }}"
+         href="?{{ page_query }}{% if page_query %}&{% endif %}per_page={{ size }}">{{ size }}</a>
+    {% endfor %}
+    {% if offset > 0 %}
+      <a class="btn sm" href="?{{ page_query }}{% if page_query %}&{% endif %}offset={{ [offset - limit, 0]|max }}">Back</a>
+    {% endif %}
+    {% if offset + limit < total %}
+      <a class="btn sm" href="?{{ page_query }}{% if page_query %}&{% endif %}offset={{ offset + limit }}">Next</a>
+    {% endif %}
+  </span>
+</div>
+{% endmacro %}
+
+<div class="card">
+  {% if rows %}
+  {{ pager() }}
+  <div class="table-scroll">
+    <table>
+      {# A header that sorts.  Clicking the one already sorted turns it around;
+   clicking a different one starts descending, which is what somebody wants
+   from severity and confidence and does no harm on the rest. #}
+{% if set_aside %}
+<div class="small faint" style="margin:.4rem 0 .6rem">
+  {{ total }} in the work list &middot;
+  <a href="{{ base }}/findings?{{ page_query }}{% if page_query %}&{% endif %}triage=any">{{ set_aside }}
+  set aside by the fidelity pass</a> &mdash; kept, with the reason, not deleted.
+</div>
+{% endif %}
+
+{% macro sortable(key, label) %}
+  {% set flip = 'asc' if (filters.sort == key and filters.dir == 'desc') else 'desc' %}
+  {% set base_q = 'q=' ~ filters.q|urlencode ~ '&severity=' ~ filters.severity
+                  ~ '&kind=' ~ filters.kind ~ '&state=' ~ filters.state
+                  ~ '&org=' ~ filters.org|urlencode ~ '&exception=' ~ filters.exception
+                  ~ '&connection=' ~ filters.connection|urlencode
+                  ~ '&confidence=' ~ filters.confidence
+                  ~ '&per_page=' ~ filters.per_page %}
+  <a href="{{ base }}/findings?{{ base_q }}&sort={{ key }}&dir={{ flip }}"
+     class="sort-link{{ ' on' if filters.sort == key }}">{{ label }}<span
+     class="sort-mark">{% if filters.sort == key %}{{ '&#9660;' if filters.dir == 'desc' else '&#9650;' }}{% endif %}</span></a>
+{% endmacro %}
+
+<thead><tr>
+        {% if can_waive or can_delete %}
+        <th class="nowrap"><input type="checkbox" id="select-page"
+            title="Everything on this page"></th>
+        {% endif %}
+        <th>{{ sortable('id', 'ID') }}</th>
+        <th class="nowrap">{{ sortable('score', 'Risk') }}</th>
+        <th>{{ sortable('severity', 'Severity') }}</th>
+        <th class="nowrap">{{ sortable('confidence', 'Confidence') }}</th>
+        <th>{{ sortable('kind', 'Kind') }}</th>
+        <th>{{ sortable('repository', 'Repository') }}</th>
+        <th>Branch</th>
+        <th>{{ sortable('rule', 'What') }}</th>
+        <th>{{ sortable('file', 'Where') }}</th>
+        <th class="nowrap">{{ sortable('found', 'Last found') }}</th>
+        <th></th>
+      </tr></thead>
+      <tbody>
+      {% for f in rows %}
+        <tr>
+          {% if can_waive or can_delete %}
+          {# Excepted rows cannot be waived again, but they can still be
+             deleted, so the box only locks when waiving is all this person
+             can do with it. #}
+          <td><input type="checkbox" class="pick" name="ids" value="{{ f.id }}"
+                     form="bulk-form"
+                     {{ 'disabled' if f.excepted and not can_delete }}></td>
+          {% endif %}
+          {# Two identifiers, and they are not interchangeable.  The number is
+             the address: it is what /findings/NNNN wants and what somebody
+             reads out loud.  The GCR id is the one that survives a rescan. #}
+          <td class="mono small nowrap"><a href="{{ base }}/findings/{{ f.id }}">{{ f.id }}</a>
+            <div class="faint" style="font-size:.78rem">{{ f.vuln_id }}</div>
+            {% if f.excepted %}<span class="badge waived" title="{{ f.exception_reason }}">exception</span>{% endif %}</td>
+          {# The queue position, and what is behind it.  The number sorts and
+             the marker says whether anybody proved it, which are two different
+             things a reader needs at once.  A score with nothing beside it
+             would be read as a verdict, which it is not. #}
+          <td class="small nowrap">
+            {% if f.risk_score %}{{ f.risk_score }}
+              {% if f.risk_evidence == 'observed' %}<span class="badge ok"
+                title="somebody proved this one, rather than working it out">observed</span>{% endif %}
+            {% else %}<span class="faint">&mdash;</span>{% endif %}
+          </td>
+          <td><span class="badge {{ f.severity.value }}">{{ f.severity.value }}</span></td>
+          {# Severity says how bad if real; this says how sure the engine was.
+             Blank means the rule had no opinion, which is not the same as low. #}
+          <td class="small nowrap">
+            {% if f.confidence %}
+              <span class="badge {{ 'ok' if f.confidence == 'high' else ('medium' if f.confidence == 'low' else '') }}">{{ f.confidence }}</span>
+            {% else %}<span class="faint">&mdash;</span>{% endif %}
+          </td>
+          <td class="faint small">{{ f.kind.value }}</td>
+          <td class="small">{{ f.repository }}</td>
+          <td class="small faint">{{ f.branch }}</td>
+          <td class="small">
+            <a href="{{ base }}/findings/{{ f.id }}">
+              {{ f.rule or f.vulnerability_id or (f.title[:60] if f.title else 'finding') }}</a>
+            {% if f.known_exploited %}<span class="badge critical">exploited</span>{% endif %}
+            {% if f.verified %}<span class="badge critical">live</span>{% endif %}
+            {# Only worth saying when it changes what somebody does with the
+               row.  A badge on every finding is a badge on none. #}
+            {% if f.malicious %}<span class="badge critical"
+              title="{{ f.malicious_reason }}">malicious</span>{% endif %}
+            {% if f.image_ref %}<span class="badge" title="{{ f.image_ref }}">base image</span>{% endif %}
+            {% if f.reachability == 'reachable' %}<span class="badge">imported</span>
+            {% elif f.reachability == 'unlikely' %}<span class="badge medium"
+                title="{{ f.reachability_reason }}">not reached</span>{% endif %}
+            {% if f.state.value == 'waived' %}<span class="badge waived">waived</span>{% endif %}
+          </td>
+          <td class="small mono">{{ f.file_path[-46:] if f.file_path else f.package_name }}{% if f.line %}:{{ f.line }}{% endif %}
+            {% if f.triage and f.triage != 'review' %}
+            <div class="faint" style="font-size:.78rem" title="{{ f.triage_reason }}">
+              set aside: {{ f.triage.replace('_', ' ') }}</div>
+            {% endif %}
+          </td>
+          <td class="small faint nowrap">{{ f.last_found_at | dt('%Y-%m-%d') if f.last_found_at }}</td>
+          <td class="nowrap">
+            {% if can_waive and f.state.value == 'open' %}
+              <button class="btn sm" type="button" data-modal="waive-modal"
+                      data-finding="{{ f.id }}"
+                      data-what="{{ f.repository }} {{ f.file_path or f.package_name }}">
+                Waive
+              </button>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {{ pager() }}
+
+  {% else %}
+    <div class="empty">Nothing matches those filters.</div>
+  {% endif %}
+</div>
+
+{% if can_waive or can_delete %}
+<form method="post" id="bulk-form" action="{{ base }}/findings/waive-bulk">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="all_matching" id="all-matching" value="">
+  <input type="hidden" name="severity" value="{{ filters.severity }}">
+  <input type="hidden" name="kind" value="{{ filters.kind }}">
+  <input type="hidden" name="state" value="{{ filters.state }}">
+  <input type="hidden" name="org" value="{{ filters.org }}">
+  <input type="hidden" name="q" value="{{ filters.q }}">
+  <input type="hidden" name="confidence" value="{{ filters.confidence }}">
+  <input type="hidden" name="triage" value="{{ filters.triage }}">
+  <input type="hidden" name="reach" value="{{ filters.reach }}">
+  <input type="hidden" name="exception" value="{{ filters.exception }}">
+  <input type="hidden" name="connection" value="{{ filters.connection }}">
+</form>
+
+{% if can_waive %}
+<div class="modal-backdrop" id="bulk-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Waive what is selected
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <div class="notice info">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+        <div><strong><span data-slot="bulk-count">0</span></strong> findings.
+          {% if user.role.value == 'admin' %}They leave both report files as soon
+          as you save.{% else %}An admin has to approve this before anything
+          changes on disk.{% endif %}</div>
+      </div>
+      <label>Why are these acceptable
+        <textarea name="reason" rows="4" required minlength="20" maxlength="2000"
+                  form="bulk-form"
+                  placeholder="What you checked, and what makes this whole set safe to set aside."></textarea>
+        <span class="faint small">The same reason goes on every one of them, so
+          it has to hold for all of them.  Do it in batches if it does not.</span>
+      </label>
+      <label>Expires
+        <input type="date" name="expires" required value="{{ default_expiry }}"
+               form="bulk-form">
+        <span class="faint small">They all come back on this date.</span>
+      </label>
+      <label>Ticket
+        <input type="text" name="ticket" maxlength="120" placeholder="SEC-1234"
+               form="bulk-form">
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Cancel</button>
+      <button type="submit" class="btn primary" form="bulk-form">Waive them</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+{% if can_delete %}
+{# Deleting.  Two dialogs, because they are two different sizes of decision:
+   one clears what is ticked, the other clears the estate and asks for a word
+   to be typed before it will. #}
+<form method="post" id="delete-form" action="{{ base }}/findings/delete-bulk">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {# Deliberately not called "ids".  That name belongs to the row checkboxes,
+     and a hidden field wearing it makes every count of them one too many. #}
+  <input type="hidden" name="delete_ids" id="delete-ids" value="">
+  <input type="hidden" name="all_matching" id="delete-all-matching" value="">
+  <input type="hidden" name="severity" value="{{ filters.severity }}">
+  <input type="hidden" name="kind" value="{{ filters.kind }}">
+  <input type="hidden" name="state" value="{{ filters.state }}">
+  <input type="hidden" name="org" value="{{ filters.org }}">
+  <input type="hidden" name="q" value="{{ filters.q }}">
+  <input type="hidden" name="confidence" value="{{ filters.confidence }}">
+  <input type="hidden" name="triage" value="{{ filters.triage }}">
+  <input type="hidden" name="reach" value="{{ filters.reach }}">
+  <input type="hidden" name="exception" value="{{ filters.exception }}">
+  <input type="hidden" name="connection" value="{{ filters.connection }}">
+</form>
+
+<div class="modal-backdrop" id="delete-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Delete what is selected
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <div class="notice warn">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+        <div><strong><span id="delete-count">0</span></strong> findings go, along
+          with any exception recorded against them.  This does not undo.</div>
+      </div>
+      <p class="small faint">Deleting is not the same as waiving.  The next scan
+        files these again if the code still matches, with today as the first
+        time anybody saw them.  To stop a finding coming back, waive it or set
+        the rule aside instead.</p>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Cancel</button>
+      <button type="submit" class="btn danger" form="delete-form">Delete them</button>
+    </div>
+  </div>
+</div>
+
+<form method="post" id="delete-all-form" action="{{ base }}/findings/delete-bulk">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="everything" value="1">
+</form>
+
+<div class="modal-backdrop" id="delete-all-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Delete every finding
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <div class="notice bad">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+        <div>All <strong>{{ all_total }}</strong> findings go, not the
+          {{ total }} on screen, and every exception recorded against them goes
+          with them.  This does not undo.</div>
+      </div>
+      <p class="small faint">The scan history, repositories, exclusions and
+        settings all stay.  The next scan refills this list from the code as it
+        stands today.</p>
+      <label>Type <strong>DELETE</strong> to confirm
+        <input type="text" id="delete-confirm" name="confirm" value=""
+               form="delete-all-form" autocomplete="off" spellcheck="false"
+               placeholder="DELETE">
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Cancel</button>
+      <button type="submit" class="btn danger" id="delete-all-go"
+              form="delete-all-form" disabled>Delete all {{ all_total }}</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# The waive dialog.  One form, the row fills in which finding. #}
+<div class="modal-backdrop" id="waive-modal" hidden>
+  <div class="modal">
+    <form method="post" id="waive-form" action="{{ base }}/findings/0/waive">
+      <div class="modal-head">
+        Request an exception
+        <button type="button" class="modal-close" data-close-modal>&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="finding" id="waive-finding">
+        <div class="small faint mb" data-slot="what"></div>
+
+        {% if user.role.value != 'admin' %}
+          <div class="notice info">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+            <div>An admin has to approve this. Nothing changes in the report
+              files until they do.</div>
+          </div>
+        {% endif %}
+
+        <div class="field">
+          <label for="reason">Why is this acceptable</label>
+          <textarea id="reason" name="reason" required minlength="20"
+                    maxlength="2000" placeholder="What did you check, and what makes it safe"></textarea>
+          <div class="help">Whoever reads this in six months will not remember
+            the context. Write it for them.</div>
+        </div>
+        <div class="field">
+          <label for="expires">Expires</label>
+          <input type="date" id="expires" name="expires" required
+                 value="{{ default_expiry }}">
+          <div class="help">The finding comes back on this date. A year is the
+            most you can set.</div>
+        </div>
+        <div class="field">
+          <label for="ticket">Ticket, if you have one</label>
+          <input type="text" id="ticket" name="ticket" maxlength="120"
+                 placeholder="SEC-1234">
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">
+          {% if user.role.value == 'admin' %}Approve exception{% else %}Request exception{% endif %}
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="{{ base }}/static/waive.js?v={{ asset_v('waive.js') }}"></script>
+{% endblock %}

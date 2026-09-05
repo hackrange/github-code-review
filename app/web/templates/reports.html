@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Report files &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Report files</h1>
+    <div class="faint small">What another tool reads off disk</div></div>
+  <div class="page-actions">
+    <form method="post" action="{{ base }}/reports/rebuild">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit">Write them again</button>
+    </form>
+  </div>
+</div>
+
+<div class="notice info">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+  <div>The findings and the VEX documents are rewritten after every scan and
+    after every exception decision. An approved exception takes the finding out
+    of all of them, not just off this page.</div>
+</div>
+
+<div class="card">
+  <div class="card-head">{{ reports_dir }}</div>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>File</th><th>Status</th><th>Size</th><th>Last written</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="mono small">vulnerabilities.json</td>
+          <td>{% if json_file.exists %}<span class="badge ok">present</span>
+              {% else %}<span class="badge medium">not written yet</span>{% endif %}</td>
+          <td class="small">{{ '{:,}'.format(json_file.size) }} bytes</td>
+          <td class="small faint">{{ json_file.modified }}</td>
+          <td class="nowrap">{% if json_file.exists and can_download %}
+            <a class="btn sm" href="{{ base }}/reports/download/json">Download</a>{% endif %}</td>
+        </tr>
+        <tr>
+          <td class="mono small">vulnerabilities.csv</td>
+          <td>{% if csv_file.exists %}<span class="badge ok">present</span>
+              {% else %}<span class="badge medium">not written yet</span>{% endif %}</td>
+          <td class="small">{{ '{:,}'.format(csv_file.size) }} bytes</td>
+          <td class="small faint">{{ csv_file.modified }}</td>
+          <td class="nowrap">{% if csv_file.exists and can_download %}
+            <a class="btn sm" href="{{ base }}/reports/download/csv">Download</a>{% endif %}</td>
+        </tr>
+        <tr>
+          <td class="mono small">vex.openvex.json<div class="faint small">what this installation says is not affected, and why</div></td>
+          <td>{% if openvex_file.exists %}<span class="badge ok">present</span>
+              {% else %}<span class="badge medium">not written yet</span>{% endif %}</td>
+          <td class="small">{{ '{:,}'.format(openvex_file.size) }} bytes</td>
+          <td class="small faint">{{ openvex_file.modified }}</td>
+          <td class="nowrap">{% if openvex_file.exists and can_download %}
+            <a class="btn sm" href="{{ base }}/reports/download/vex-openvex">Download</a>{% endif %}</td>
+        </tr>
+        <tr>
+          <td class="mono small">vex.cyclonedx.json<div class="faint small">the same statements, for tooling that reads CycloneDX</div></td>
+          <td>{% if cyclonedx_file.exists %}<span class="badge ok">present</span>
+              {% else %}<span class="badge medium">not written yet</span>{% endif %}</td>
+          <td class="small">{{ '{:,}'.format(cyclonedx_file.size) }} bytes</td>
+          <td class="small faint">{{ cyclonedx_file.modified }}</td>
+          <td class="nowrap">{% if cyclonedx_file.exists and can_download %}
+            <a class="btn sm" href="{{ base }}/reports/download/vex-cyclonedx">Download</a>{% endif %}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">Software bill of materials</div>
+  <div class="notice info">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+    <div>These are the only files here that "Write them again" does not touch.
+      The database keeps vulnerable packages, not every component of every
+      repository, so an SBOM can only come from a scan. What is below is
+      whatever the last scan with SBOMs turned on produced.</div>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>File</th><th>Format</th><th>Status</th><th>Size</th><th>Last written</th><th></th></tr></thead>
+      <tbody>
+        {% for row in sbom_rows %}
+        <tr>
+          <td class="mono small">{{ row.name }}<div class="faint small">{{ row.note }}</div></td>
+          <td class="small">{{ row.label }}</td>
+          <td>{% if row.exists %}<span class="badge ok">present</span>
+              {% else %}<span class="badge medium">not written yet</span>{% endif %}</td>
+          <td class="small">{{ '{:,}'.format(row.size) }} bytes</td>
+          <td class="small faint">{{ row.modified }}</td>
+          <td class="nowrap">{% if row.exists and can_download %}
+            <a class="btn sm" href="{{ base }}/reports/download/{{ row.which }}">Download</a>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

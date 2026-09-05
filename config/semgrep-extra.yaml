@@ -1,0 +1,125 @@
+# Rules this product ships itself, for weaknesses the public packs do not cover.
+#
+# Everything here earned its place by being missed on a real estate.  An
+# independent scanner reported eleven DOM based cross site scripting findings in
+# a repository where the packs enabled here reported none, and a plain test
+# confirmed it: 201 community rules ran over `location.hash` flowing into
+# `innerHTML` and said nothing.  The community packs catch `eval` and stop.
+#
+# Kept deliberately narrow.  Each rule is a known source of attacker controlled
+# text reaching a known sink that parses HTML, which is the shape of DOM XSS
+# that gets exploited.  Assignment of a constant is not matched, because a rule
+# that fires on safe code teaches people to ignore it.
+rules:
+- id: gcr-dom-xss-tainted-flow
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  mode: taint
+  message: Text from the URL reaches a sink that parses HTML, by way of a variable. A crafted link runs
+    script in the user's session. Assign with textContent, or sanitize before it reaches here.
+  metadata:
+    cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+    category: security
+    confidence: MEDIUM
+  pattern-sources:
+  - pattern: location.hash
+  - pattern: location.search
+  - pattern: location.href
+  - pattern: window.location.hash
+  - pattern: window.location.search
+  - pattern: window.location.href
+  - pattern: document.URL
+  - pattern: document.referrer
+  pattern-sanitizers:
+  - pattern: DOMPurify.sanitize(...)
+  - pattern: $X.sanitize(...)
+  - pattern: sanitize(...)
+  - pattern: sanitizeHtml(...)
+  - pattern: escapeHtml(...)
+  - pattern: escape(...)
+  - pattern: encodeURIComponent(...)
+  - pattern: $X.encode(...)
+  - pattern: $X.escape(...)
+  pattern-sinks:
+  - pattern: $EL.innerHTML = $X
+  - pattern: $EL.outerHTML = $X
+  - pattern: document.write($X)
+  - pattern: document.writeln($X)
+  - pattern: $EL.insertAdjacentHTML($POS, $X)
+  - pattern: $Z.html($X)
+- id: gcr-open-redirect
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  mode: taint
+  message: A redirect target is taken from the request without being checked. An attacker sends a link
+    to your own domain that lands the user on theirs, which is how a convincing phishing page gets its
+    address bar right. Compare against a list of permitted destinations, or redirect to a path rather
+    than to whatever was supplied.
+  metadata:
+    cwe: 'CWE-601: URL Redirection to Untrusted Site (Open Redirect)'
+    category: security
+    confidence: MEDIUM
+    references:
+    - https://cwe.mitre.org/data/definitions/601.html
+  pattern-sources:
+  - pattern: $REQ.query
+  - pattern: $REQ.query.$P
+  - pattern: $REQ.params.$P
+  - pattern: $REQ.body.$P
+  - pattern: location.search
+  - pattern: location.hash
+  - pattern: window.location.search
+  - pattern: new URLSearchParams(...).get(...)
+  pattern-sanitizers:
+  - pattern: new URL(...)
+  - patterns:
+    - pattern-inside: if (<... $ALLOW.includes($V) ...>) { ... }
+    - pattern: $V
+  - patterns:
+    - pattern-inside: if (<... $ALLOW.indexOf($V) ...>) { ... }
+    - pattern: $V
+  - patterns:
+    - pattern-inside: if (<... $V.startsWith(...) ...>) { ... }
+    - pattern: $V
+  - patterns:
+    - pattern-inside: if (<... $RE.test($V) ...>) { ... }
+    - pattern: $V
+  pattern-sinks:
+  - pattern: $RES.redirect($X)
+  - pattern: $RES.redirect($CODE, $X)
+  - pattern: location.href = $X
+  - pattern: window.location.href = $X
+  - pattern: location.replace($X)
+  - pattern: location.assign($X)
+  - pattern: window.open($X, ...)
+- id: gcr-open-redirect-python
+  languages:
+  - python
+  severity: WARNING
+  mode: taint
+  message: A redirect target comes from the request without being checked. A link to your own domain that
+    lands the user somewhere else is how phishing gets a trustworthy address bar.
+  metadata:
+    cwe: 'CWE-601: URL Redirection to Untrusted Site (Open Redirect)'
+    category: security
+    confidence: MEDIUM
+  pattern-sources:
+  - pattern: request.args.get(...)
+  - pattern: request.args[...]
+  - pattern: request.GET.get(...)
+  - pattern: request.GET[...]
+  - pattern: request.values.get(...)
+  - pattern: request.form.get(...)
+  pattern-sanitizers:
+  - pattern: url_for(...)
+  - pattern: $ALLOW.startswith(...)
+  - pattern: urlparse(...)
+  pattern-sinks:
+  - pattern: redirect($X)
+  - pattern: redirect($X, ...)
+  - pattern: HttpResponseRedirect($X)
+  - pattern: HttpResponseRedirect($X, ...)

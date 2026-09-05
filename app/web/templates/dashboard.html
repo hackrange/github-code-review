@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Dashboard &middot; Git Code Review{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Dashboard</h1>
+    <div class="faint small">{{ total }} open finding{{ '' if total == 1 else 's' }}
+      you can see</div>
+  </div>
+</div>
+
+{# Every number here opens the list behind it.  The links carry the same
+   filters this page counted with, open findings, exceptions and set aside
+   ones included, so the list that opens holds exactly as many rows as the
+   number that was clicked.  A drill down that lands on a different number is
+   worse than no link at all. #}
+{% set same = 'state=open&exception=any&triage=any' %}
+<div class="stats">
+  <a class="stat bad" href="{{ base }}/findings?{{ same }}&severity=critical">
+    <div class="n">{{ counts.critical }}</div><div class="l">Critical</div>
+  </a>
+  <a class="stat bad" href="{{ base }}/findings?{{ same }}&severity=high">
+    <div class="n">{{ counts.high }}</div><div class="l">High</div>
+  </a>
+  <a class="stat warn" href="{{ base }}/findings?{{ same }}&severity=medium">
+    <div class="n">{{ counts.medium }}</div><div class="l">Medium</div>
+  </a>
+  <a class="stat" href="{{ base }}/findings?{{ same }}&severity=low">
+    <div class="n">{{ counts.low }}</div><div class="l">Low</div>
+  </a>
+  <a class="stat bad" href="{{ base }}/findings?{{ same }}&exploited=1">
+    <div class="n">{{ exploited }}</div><div class="l">Known exploited</div>
+  </a>
+  <a class="stat bad" href="{{ base }}/findings?{{ same }}&verified=1">
+    <div class="n">{{ verified }}</div><div class="l">Live credentials</div>
+  </a>
+  <a class="stat bad" href="{{ base }}/findings?{{ same }}&malicious=1">
+    <div class="n">{{ malicious }}</div><div class="l">Malicious packages</div>
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    What kind of problem
+  </div>
+  <div class="card-body">
+    <div class="flex" style="gap:2rem;flex-wrap:wrap">
+      <div><strong>{{ by_kind.get('credential', 0) }}</strong>
+        <span class="faint">credentials</span></div>
+      <div><strong>{{ by_kind.get('code', 0) }}</strong>
+        <span class="faint">code weaknesses</span></div>
+      <div><strong>{{ by_kind.get('dependency', 0) }}</strong>
+        <span class="faint">vulnerable packages</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    Worst first
+    <a class="btn sm" href="{{ base }}/findings">See all</a>
+  </div>
+  {% if worst %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th>Severity</th><th>Kind</th><th>Repository</th><th>What</th>
+        <th>Where</th><th class="nowrap">Last found</th>
+      </tr></thead>
+      <tbody>
+      {% for f in worst %}
+        <tr>
+          <td><span class="badge {{ f.severity.value }}">{{ f.severity.value }}</span></td>
+          <td class="faint small">{{ f.kind.value }}</td>
+          <td class="small">{{ f.repository }}</td>
+          <td class="small">
+            <a href="{{ base }}/findings/{{ f.id }}">
+              {{ f.rule or f.vulnerability_id or f.title[:60] or 'finding' }}</a>
+            {% if f.known_exploited %}
+              <span class="badge critical">exploited</span>
+            {% endif %}
+          </td>
+          <td class="small mono">{{ f.file_path[-48:] if f.file_path else f.package_name }}{% if f.line %}:{{ f.line }}{% endif %}</td>
+          <td class="small faint nowrap">{{ f.last_found_at | dt('%Y-%m-%d') if f.last_found_at }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="empty">Nothing open. Either it is clean or nothing has been
+      scanned yet.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head">Repositories with the most</div>
+  {% if top_repos %}
+  <div class="card-body">
+    {% for repo, count in top_repos %}
+      <div class="flex-between" style="padding:.3rem 0">
+        <span class="small">{{ repo }}</span>
+        <span class="badge {{ 'critical' if count > 10 else 'medium' }}">{{ count }}</span>
+      </div>
+    {% endfor %}
+  </div>
+  {% else %}
+    <div class="empty">No findings yet.</div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head">
+    Recent scans
+    <a class="btn sm" href="{{ base }}/scans">History</a>
+  </div>
+  {% if runs %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Started</th><th>Status</th><th>Repos</th>
+        <th>New</th><th>Resolved</th><th>Trigger</th></tr></thead>
+      <tbody>
+      {% for r in runs %}
+        <tr>
+          <td class="small nowrap">{{ r.started_at | dt('%Y-%m-%d %H:%M') if r.started_at }}</td>
+          <td><span class="badge {{ 'ok' if r.status == 'finished' else 'medium' }}">{{ r.status }}</span></td>
+          <td class="small">{{ r.repositories }}</td>
+          <td class="small">{{ r.findings_new }}</td>
+          <td class="small">{{ r.findings_resolved }}</td>
+          <td class="small faint">{{ r.trigger }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="empty">No scans yet.</div>
+  {% endif %}
+</div>
+
+{% endblock %}

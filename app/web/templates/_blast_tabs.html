@@ -1,0 +1,12 @@
+{# The parts of the blast radius.  Access answers "who can reach what".
+   Software answers "what is in it".  They are the same question about the
+   same estate from two sides, so they live under one heading rather than
+   becoming two unrelated pages in the sidebar. #}
+<nav class="section-nav" aria-label="Blast radius">
+  <a href="{{ base }}/blast-radius"
+     {% if blast_tab != 'software' %}style="color:var(--text);border-color:var(--border-strong)"{% endif %}>
+    Access</a>
+  <a href="{{ base }}/blast-radius/software"
+     {% if blast_tab == 'software' %}style="color:var(--text);border-color:var(--border-strong)"{% endif %}>
+    Software</a>
+</nav>

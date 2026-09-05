@@ -1,0 +1,48 @@
+{# The rows on their own.  The page includes this, and so does the fragment the
+   search box fetches, so there is one definition of what a row looks like.
+
+   Each event is two rows: the summary, and a panel underneath it that opens
+   when the summary is clicked.  The panel is in the markup rather than fetched
+   on demand, because everything in it is already here and a second request per
+   row to show text we are already holding would be slower and no safer. #}
+{% for e in rows %}
+<tr class="audit-row" data-audit="{{ loop.index0 }}" tabindex="0" role="button"
+    aria-expanded="false" aria-controls="audit-more-{{ loop.index0 }}"
+    title="Open this event">
+  <td class="small nowrap">{{ e.at | dt('%Y-%m-%d %H:%M:%S') if e.at }}</td>
+  <td class="small">{{ e.actor }}</td>
+  <td class="small mono">{{ e.action }}</td>
+  <td class="small faint">{{ e.target[:60] }}</td>
+  <td class="small faint">{{ e.detail[:80] }}{% if e.detail and e.detail|length > 80 %}&hellip;{% endif %}</td>
+  <td class="small faint">{{ e.source_ip }}</td>
+  <td>{% if e.outcome == 'ok' %}<span class="badge ok">ok</span>
+      {% else %}<span class="badge critical">{{ e.outcome }}</span>{% endif %}</td>
+</tr>
+<tr class="audit-more" id="audit-more-{{ loop.index0 }}" hidden>
+  <td colspan="7">
+    <table class="audit-detail">
+      <tbody>
+        <tr><th>When</th><td>{{ e.at | dt('%Y-%m-%d %H:%M:%S') if e.at }} {{ tz_label }}</td></tr>
+        <tr><th>Who</th><td>{{ e.actor or 'nobody signed in' }}</td></tr>
+        <tr><th>What</th><td class="mono">{{ e.action }}</td></tr>
+        {% if e.target %}
+        <tr><th>Target</th><td>
+          {% set where = link_for(e) %}
+          {% if where %}<a href="{{ base }}{{ where }}">{{ e.target }}</a>
+          {% else %}{{ e.target }}{% endif %}
+        </td></tr>
+        {% endif %}
+        {% if e.detail %}
+        {# The whole thing, wrapped.  The column above truncates at eighty
+           characters and the interesting part is usually past that. #}
+        <tr><th>Detail</th><td class="audit-detail-text">{{ e.detail }}</td></tr>
+        {% endif %}
+        <tr><th>From</th><td>{{ e.source_ip or 'not recorded' }}</td></tr>
+        <tr><th>Outcome</th><td>{{ e.outcome }}</td></tr>
+      </tbody>
+    </table>
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="7" class="faint small">Nothing matches that.</td></tr>
+{% endfor %}

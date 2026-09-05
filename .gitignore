@@ -1,0 +1,135 @@
+
+config/allowlist.json
+config/config.json
+config/exclusions.csv
+config/*.local.json
+# Credentials
+.DS_Store
+# Editors / OS
+.env
+ghscan-work/
+*.key
+# Local credentials
+# Local credentials.  The .git file here holds the push URL and password.
+out-*/
+out/
+work/
+*.p12
+*.pem
+*.pyc
+__pycache__/
+# Python
+# Real configuration and allowlists - never commit these.
+*-report-*.json
+*-report.json
+reports/
+# Scan output and working clones
+# Scan output, this is live finding data
+.secret
+*.swp
+/var/tmp/ghscan-work/
+.venv/
+
+# Local credentials and machine specific config
+.push-credentials
+
+
+# Scan output and working data
+
+# The database and anything else the app writes at runtime.  The default paths
+# land inside this directory, so without these a real database full of findings
+# would be one git add away from being published.
+db/
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+secret_key
+first-admin.txt
+secrets/
+
+
+# Staging area for what gets pushed to the public repo.
+shipping/
+
+# ---------------------------------------------------------------------------
+# Belt and braces.  Everything below is either live data, a credential, or
+# notes that are mine and not the product's.  Most of it is already covered
+# above; it is repeated here as whole directories so a new file dropped into
+# one of them is ignored the moment it lands, rather than the first time
+# somebody remembers to add a rule for it.
+# ---------------------------------------------------------------------------
+
+# Editor and tool directories.  Working notes and plans live in a local
+# directory that is listed in .git/info/exclude instead of here, because the
+# name of it has no business being in a file that ships.
+.cursor/
+.idea/
+.vscode/
+
+# Anything staged for a push, and the checksums that go with it.
+shipping/
+
+# Scan output, working clones and reports, by directory.
+out/
+outputs/
+work/
+workdir/
+reports/
+scan-output/
+evidence/
+artifacts/
+tmp/
+temp/
+.cache/
+
+# Databases and anything the app writes at runtime.
+data/
+db/
+volumes/
+backups/
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.dump
+*.bak
+
+# Credentials, keys and certificates of every shape.
+secrets/
+.secrets/
+credentials/
+certs/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+id_rsa*
+id_ed25519*
+.netrc
+.npmrc
+secret_key
+first-admin.txt
+
+
+# The ship guard word list, and the link to it.  Site specific, never ships.
+.ship-check.words
+
+# Everything that is about building this rather than running it.
+#
+# Somebody downloading a scanner wants to run it.  They are not writing or
+# debugging it, so the test suites and the fixtures they build are kept out of
+# the release.  They live one directory over and work exactly the same there.
+#
+# The working notes directory is deliberately not named here.  Naming it would
+# publish the one thing this file is trying not to say, so it is excluded per
+# clone instead, in .git/info/exclude.
+tests/

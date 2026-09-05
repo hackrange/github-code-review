@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Your account &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Your account</h1></div>
+  {% if user.source.value == 'local' %}
+  <div class="page-actions">
+    <a class="btn" href="{{ base }}/account/password">Change password</a>
+  </div>
+  {% endif %}
+</div>
+
+{% if flash %}
+<div class="card {{ 'bad' if flash_kind == 'error' else 'ok' }}">
+  <div class="small">{{ flash }}</div>
+</div>
+{% endif %}
+<div class="card">
+  <div class="card-body">
+    <table><tbody>
+      <tr><th>Username</th><td>{{ user.username }}</td></tr>
+      <tr><th>Role</th><td><span class="badge {{ 'critical' if user.role.value == 'admin' else 'low' }}">{{ user.role.value }}</span></td></tr>
+      <tr><th>Signs in with</th><td>{{ user.source.value }}</td></tr>
+      <tr><th>Two step</th><td>{% if user.totp_confirmed %}on{% else %}not set up{% endif %}</td></tr>
+      <tr><th>What you can see</th><td>
+        {% if user.role.value in ['admin','reader'] %}every organization
+        {% elif user.scopes %}{% for s in user.scopes %}{{ s.organization }}{% if s.repository %}/{{ s.repository }}{% endif %}<br>{% endfor %}
+        {% else %}<span class="badge medium">nothing assigned yet</span>{% endif %}
+      </td></tr>
+    </tbody></table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,733 @@
+{% extends "base.html" %}
+{% block title %}Settings &middot; Git Code Review<script src="{{ base }}/static/settings.js?v={{ asset_v('settings.js') }}"></script>
+{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Settings</h1>
+    <div class="faint small">Everything the scanner needs.  It all lives in the
+      database, so nothing here is in a file anybody can clone.</div></div>
+</div>
+
+<nav class="section-nav" aria-label="Sections of this page">
+  {% for section in help_sections %}
+  <a href="#{{ section.id }}">{{ section.nav }}</a>
+  {% endfor %}
+</nav>
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% endif %}
+
+{% if readiness.missing %}
+<div class="card">
+  <div class="card-head">{{ 'Before this can scan' if not readiness.ready else 'Worth knowing' }}</div>
+  <ul class="small" style="margin:0;padding-left:1.2rem">
+    {% for item in readiness.missing %}<li style="margin:.3rem 0">{{ item }}</li>{% endfor %}
+  </ul>
+  <div class="faint small" style="margin-top:.6rem">
+    Fill these in, press Save, then press <strong>Test the connection</strong>.
+    That signs in to GitHub and tells you which account it reached.
+  </div>
+</div>
+{% endif %}
+
+<div class="settings">
+<form method="post" action="{{ base }}/settings/save" id="settings-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+<div class="card" id="accounts">
+  <div class="card-head"><span class="head-text">Accounts and credentials<button type="button" class="help-dot" data-modal="help-accounts" aria-label="What this section is for">?</button></span></div>
+  <div class="small">
+    They live on the <a href="{{ base }}/connections">Connections</a> page, one
+    row per token.  A fine grained token reaches exactly one organization, so an
+    estate spread across several needs one there for each, and every finding
+    records which one it came from.
+  </div>
+  <div class="page-actions" style="margin-top:.8rem">
+    <a class="btn" href="{{ base }}/connections">Open Connections</a>
+  </div>
+</div>
+
+<div class="small faint" style="margin:1.2rem 0 .8rem">
+  Everything below applies to every account: what to look for, where the reports
+  go, how people sign in.  The defaults work as they are.  Every branch, full
+  history, live credential verification on, every detector on, reports in /out.
+</div>
+
+<div class="card" id="scan">
+  <div class="card-head"><span class="head-text">What to scan<button type="button" class="help-dot" data-modal="help-scan" aria-label="What this section is for">?</button></span></div>
+  <div class="form-grid">
+    <div class="small faint wide">Which organizations each account covers is
+      set against that account on the Connections page.  What follows applies
+      to all of them.</div>
+    <label class="wide">Skip these repositories
+      <input type="text" name="scan.exclude_repos"
+             value="{{ values['scan.exclude_repos'] | join(', ') }}"
+             placeholder="acme/archive-dump">
+    </label>
+    <label>Repository limit
+      <input type="number" name="scan.max_repos" min="0" max="100000"
+             value="{{ values['scan.max_repos'] }}">
+      <span class="faint small">0 is no limit.  Set a small number for a first run.</span>
+    </label>
+    <label class="check">
+      <input type="checkbox" name="scan.include_archived" value="1"
+             {{ 'checked' if values['scan.include_archived'] }}> Include archived repositories
+    </label>
+    <label class="check">
+      <input type="checkbox" name="scan.include_forks" value="1"
+             {{ 'checked' if values['scan.include_forks'] }}> Include forks
+    </label>
+  </div>
+</div>
+
+<div class="card" id="branches">
+  <div class="card-head"><span class="head-text">Branches<button type="button" class="help-dot" data-modal="help-branches" aria-label="What this section is for">?</button></span></div>
+  <div class="form-grid">
+    <label>Which branches
+      <select name="branches.mode">
+        <option value="all" {{ 'selected' if values['branches.mode'] == 'all' }}>Every branch</option>
+        <option value="default" {{ 'selected' if values['branches.mode'] == 'default' }}>Default branch only</option>
+        <option value="list" {{ 'selected' if values['branches.mode'] == 'list' }}>Only the ones I list</option>
+      </select>
+    </label>
+    <label>Include
+      <input type="text" name="branches.include"
+             value="{{ values['branches.include'] | join(', ') }}"
+             placeholder="main, release/*">
+    </label>
+    <label class="wide">Skip
+      <input type="text" name="branches.exclude"
+             value="{{ values['branches.exclude'] | join(', ') }}"
+             placeholder="dependabot/*, renovate/*">
+    </label>
+    <label class="check">
+      <input type="checkbox" name="branches.full_history" value="1"
+             {{ 'checked' if values['branches.full_history'] }}> Walk the full history
+      <span class="faint small">Off is faster and misses credentials that were
+        committed and then taken back out, which are the ones that matter.</span>
+    </label>
+    <label>Most branches per repository
+      <input type="number" name="branches.max_per_repo" min="0" max="100000"
+             value="{{ values['branches.max_per_repo'] }}">
+      <span class="faint small">0 is all of them.  Newest first, so a cap keeps
+        the ones people are actually working on.</span>
+    </label>
+    <label>Skip branches older than
+      <input type="number" name="branches.stale_days" min="0" max="3650"
+             value="{{ values['branches.stale_days'] }}">
+      <span class="faint small">Days.  0 keeps every branch however old.  On a
+        big estate this is the setting that makes a scan finish.</span>
+    </label>
+  </div>
+</div>
+
+<div class="card" id="credentials">
+  <div class="card-head"><span class="head-text">Credentials<button type="button" class="help-dot" data-modal="help-credentials" aria-label="What this section is for">?</button></span></div>
+  <div class="form-grid">
+    <label class="check">
+      <input type="checkbox" name="secrets.enabled" value="1"
+             {{ 'checked' if values['secrets.enabled'] }}> Look for credentials
+    </label>
+    <label class="check">
+      <input type="checkbox" name="secrets.verify" value="1"
+             {{ 'checked' if values['secrets.verify'] }}> Check whether they still work
+      <span class="faint small">Sends each candidate to the provider that issued
+        it.  That is how you tell a live key from a placeholder.</span>
+    </label>
+    <label class="check">
+      <input type="checkbox" name="secrets.resolve_authors" value="1"
+             {{ 'checked' if values['secrets.resolve_authors'] }}> Find who committed it
+    </label>
+    <label>Placeholder threshold
+      <input type="number" name="secrets.min_entropy" min="0" max="8" step="0.1"
+             value="{{ values['secrets.min_entropy'] }}">
+      <span class="faint small">Bits per character.  Below this a value is
+        treated as an example.  3.0 is a good place to start.</span>
+    </label>
+  </div>
+</div>
+
+<div class="card" id="code">
+  <div class="card-head"><span class="head-text">Code analysis<button type="button" class="help-dot" data-modal="help-code" aria-label="What this section is for">?</button></span></div>
+  <div class="small faint" style="margin-bottom:.6rem">
+    semgrep packs, fetched anonymously, no account needed.  A language pack only
+    fires on files of that language, so leaving several on costs almost nothing.
+  </div>
+  <label class="wide">Skip these paths
+    <input type="text" name="code.exclude_paths"
+           value="{{ values['code.exclude_paths'] | join(', ') }}"
+           placeholder="reports/, coverage/">
+    <span class="faint small">Generated output rather than source.  A test
+      runner that writes an HTML report on every run turns one low confidence
+      rule into thousands of findings nobody can act on, and the directory it
+      writes to is named by that tool rather than by any convention, so no
+      default covers it.  node_modules and vendor are already skipped without
+      being listed here.</span>
+  </label>
+  <label class="check">
+    <input type="checkbox" name="code.enabled" value="1"
+           {{ 'checked' if values['code.enabled'] }}> Run static analysis
+  </label>
+  <div class="check-grid">
+    {% for name, label, note, caution in rulesets %}
+    <label class="check{{ ' has-caution' if caution }}" title="{{ note }}">
+      <input type="checkbox" name="ruleset:{{ name }}" value="1"
+             {{ 'checked' if name in values['code.rulesets'] }}>
+      {{ label }} <span class="faint small mono">{{ name }}</span>
+      {% if caution %}<span class="badge medium">advisory</span>{% endif %}
+    </label>
+    {% endfor %}
+  </div>
+  {# A pack that reports patterns rather than problems says so here, not after
+     the first scan. #}
+  {% for name, label, note, caution in rulesets %}
+    {% if caution %}
+    <div class="notice warn" style="margin-top:.6rem">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+      <div><strong>{{ label }}</strong> ({{ name }}) &mdash; {{ caution }}</div>
+    </div>
+    {% endif %}
+  {% endfor %}
+  <label class="wide">Other packs
+    <input type="text" name="code.rulesets_extra"
+           value="{{ values['code.rulesets'] | reject('in', ruleset_names) | join(', ') }}"
+           placeholder="p/kubernetes, r/generic.secrets">
+    <span class="faint small">Anything not on the list above.  A pack that is
+      not there any more gets skipped with a warning instead of failing the scan.</span>
+  </label>
+</div>
+
+<div class="card" id="dependencies">
+  <div class="card-head"><span class="head-text">Dependencies and licenses<button type="button" class="help-dot" data-modal="help-dependencies" aria-label="What this section is for">?</button></span></div>
+  <div class="form-grid">
+    <label class="check">
+      <input type="checkbox" name="sbom.enabled" value="1"
+             {{ 'checked' if values['sbom.enabled'] }}> Build SBOMs
+    </label>
+    <label class="check">
+      <input type="checkbox" name="vulns.enabled" value="1"
+             {{ 'checked' if values['vulns.enabled'] }}> Match packages against vulnerability databases
+    </label>
+    <label class="check">
+      <input type="checkbox" name="images.enabled" value="1"
+             {{ 'checked' if values['images.enabled'] }}> Read the base image each Dockerfile names
+    </label>
+    <span class="faint small">The operating system layer under the application,
+      which is where most of a critical count usually lives and the one place
+      nothing else here looks.  Nothing is built: the base image named in the
+      Dockerfile is pulled from its registry and read, so leave this off unless
+      the bandwidth and the disk are yours to spend.</span>
+    <label>Report at or above
+      <select name="vulns.min_severity">
+        {% for level in ['all', 'low', 'medium', 'high', 'critical'] %}
+        <option value="{{ level }}" {{ 'selected' if values['vulns.min_severity'] == level }}>{{ level }}</option>
+        {% endfor %}
+      </select>
+      <span class="faint small">all keeps everything, which is usually what a
+        vulnerability management system wants.</span>
+    </label>
+    <label>SBOM branches
+      <select name="sbom.scan_branches">
+        <option value="default" {{ 'selected' if values['sbom.scan_branches'] == 'default' }}>Default branch only</option>
+        <option value="all" {{ 'selected' if values['sbom.scan_branches'] == 'all' }}>Every branch</option>
+      </select>
+    </label>
+    <label>License lookups
+      <input type="text" name="sbom.enrich" value="{{ values['sbom.enrich'] | join(', ') }}"
+             placeholder="off">
+      <span class="faint small">Type <strong>all</strong> to look declared
+        dependencies up on PyPI, npm, Maven Central and the Go proxy for real
+        license data, or name the ecosystems: golang, java, javascript,
+        python, vcpkg.  Empty means off, and a license is then only there when
+        the package's own manifest carried one, which in most ecosystems is a
+        minority of packages.</span>
+    </label>
+    <label class="wide">Licenses that fail
+      <input type="text" name="sbom.denied_licenses"
+             value="{{ values['sbom.denied_licenses'] | join(', ') }}">
+    </label>
+    <label class="wide">Licenses to flag
+      <input type="text" name="sbom.flagged_licenses"
+             value="{{ values['sbom.flagged_licenses'] | join(', ') }}">
+    </label>
+  </div>
+</div>
+
+<div class="card" id="people">
+  <div class="card-head"><span class="head-text">People and history<button type="button" class="help-dot" data-modal="help-people" aria-label="What this section is for">?</button></span></div>
+  <div class="form-grid">
+    <label class="check">
+      <input type="checkbox" name="access.enabled" value="1"
+             {{ 'checked' if values['access.enabled'] }}> Collect who can reach each repository
+    </label>
+    <label class="check">
+      <input type="checkbox" name="pulls.enabled" value="1"
+             {{ 'checked' if values['pulls.enabled'] }}> Collect pull request history
+    </label>
+    <label class="check">
+      <input type="checkbox" name="exclusions.enabled" value="1"
+             {{ 'checked' if values['exclusions.enabled'] }}> Apply exclusions
+      <span class="faint small">The rules on the Exclusions page.  Turn this off
+        to see everything again without deleting anything.</span>
+    </label>
+  </div>
+</div>
+
+<div class="card" id="intel">
+  <div class="card-head"><span class="head-text">Exploitation data<button type="button" class="help-dot" data-modal="help-intel" aria-label="What this section is for">?</button></span></div>
+  <div class="form-grid">
+    <label class="check">
+      <input type="checkbox" name="intel.enabled" value="1"
+             {{ 'checked' if values['intel.enabled'] }}> Rank findings by exploitation
+      <span class="faint small">The CISA exploited list and daily EPSS scores.
+        Both are free and need no account.</span>
+    </label>
+    <label>Refetch after
+      <input type="number" name="intel.max_age_hours" min="1" max="720"
+             value="{{ values['intel.max_age_hours'] }}">
+      <span class="faint small">Hours.</span>
+    </label>
+    <label class="wide">Exploited list
+      <input type="text" name="intel.kev_url" value="{{ values['intel.kev_url'] }}">
+    </label>
+    <label class="wide">EPSS scores
+      <input type="text" name="intel.epss_url" value="{{ values['intel.epss_url'] }}">
+    </label>
+  </div>
+</div>
+
+<div class="card" id="signin">
+  <div class="card-head"><span class="head-text">How people sign in<button type="button" class="help-dot" data-modal="help-signin" aria-label="What this section is for">?</button></span></div>
+  <div class="small faint" style="margin-bottom:.6rem">
+    Saved here, not in a file.  The client secret is encrypted the same way as
+    the GitHub token.  A provider that cannot answer is refused when you save,
+    so there is no way to lock yourself out from this page.
+  </div>
+  <div class="form-grid">
+    <label>Sign in with
+      <select name="auth.mode">
+        <option value="local" {{ 'selected' if values['auth.mode'] in ['local', ''] }}>Username, password and two step</option>
+        <option value="oidc" {{ 'selected' if values['auth.mode'] == 'oidc' }}>The identity provider only</option>
+        <option value="both" {{ 'selected' if values['auth.mode'] == 'both' }}>Either one</option>
+      </select>
+      <span class="faint small">Either one is what you want while you move
+        people across.</span>
+    </label>
+    <label>Issuer
+      <input type="text" name="oidc.issuer" value="{{ values['oidc.issuer'] }}"
+             placeholder="https://example.okta.com/oauth2/default">
+      <span class="faint small">The address that serves
+        /.well-known/openid-configuration</span>
+    </label>
+    <label>Client id
+      <input type="text" name="oidc.client_id" value="{{ values['oidc.client_id'] }}">
+    </label>
+    <label>Client secret
+      <input type="password" name="oidc.client_secret" autocomplete="new-password"
+             placeholder="{{ 'stored, leave empty to keep it' if values['oidc.client_secret'] else '' }}">
+      <span class="faint small">Encrypted in the database.  Leave it empty to
+        keep the one already stored.</span>
+    </label>
+    <label class="wide">Redirect address
+      <input type="text" name="oidc.redirect_url" value="{{ values['oidc.redirect_url'] }}"
+             placeholder="https://codereview.example.com/auth/callback">
+      <span class="faint small">Has to match what the provider has, character
+        for character.</span>
+    </label>
+    <label class="wide">If they match no group
+      <select name="oidc.default_role">
+        <option value="" {{ 'selected' if not values['oidc.default_role'] }}>Refuse the sign in</option>
+        <option value="reader" {{ 'selected' if values['oidc.default_role'] == 'reader' }}>Give them reader</option>
+        <option value="developer" {{ 'selected' if values['oidc.default_role'] == 'developer' }}>Give them developer</option>
+        <option value="admin" {{ 'selected' if values['oidc.default_role'] == 'admin' }}>Give them admin</option>
+      </select>
+      <span class="faint small">Refusing is the safe way round and is what you
+        want when the provider sends group names.  Anything else hands the
+        decision to whoever the provider lets near this application, so only
+        use it when the application is restricted on the provider's side.</span>
+    </label>
+    <label>Scopes
+      <input type="text" name="oidc.scopes" value="{{ values['oidc.scopes'] }}"
+             placeholder="openid profile email groups">
+    </label>
+    <label>Group claim
+      <input type="text" name="oidc.group_claim" value="{{ values['oidc.group_claim'] }}"
+             placeholder="groups">
+    </label>
+    <label>Admin groups
+      <input type="text" name="oidc.admin_groups"
+             value="{{ values['oidc.admin_groups'] | join(', ') }}"
+             placeholder="security-admins">
+    </label>
+    <label>Developer groups
+      <input type="text" name="oidc.developer_groups"
+             value="{{ values['oidc.developer_groups'] | join(', ') }}">
+      <span class="faint small">Developers only see the repositories they were
+        given on the Users page.</span>
+    </label>
+    <label>Reader groups
+      <input type="text" name="oidc.reader_groups"
+             value="{{ values['oidc.reader_groups'] | join(', ') }}">
+    </label>
+  </div>
+</div>
+
+<div class="card" id="sessions">
+  <div class="card-head"><span class="head-text">Sessions and the network in front<button type="button" class="help-dot" data-modal="help-sessions" aria-label="What this section is for">?</button></span></div>
+  <div class="form-grid">
+    <label>Session length
+      <input type="number" name="session.hours" min="1" max="168"
+             value="{{ values['session.hours'] }}">
+      <span class="faint small">Hours.</span>
+    </label>
+    <label>Sign out after doing nothing for
+      <input type="number" name="session.idle_minutes" min="0" max="1440"
+             value="{{ values['session.idle_minutes'] }}">
+      <span class="faint small">Minutes.  0 never does.</span>
+    </label>
+    <label>Wrong passwords before the account locks
+      <input type="number" name="login.attempt_limit" min="1" max="50"
+             value="{{ values['login.attempt_limit'] }}">
+    </label>
+    <label>How long the lock lasts
+      <input type="number" name="login.lockout_minutes" min="1" max="1440"
+             value="{{ values['login.lockout_minutes'] }}">
+      <span class="faint small">Minutes.</span>
+    </label>
+    <label class="wide">Load balancer addresses
+      <input type="text" name="security.trusted_proxies"
+             value="{{ values['security.trusted_proxies'] | join(', ') }}"
+             placeholder="10.0.0.5, 10.0.0.0/24">
+      <span class="faint small">X-Forwarded-For is believed from these and
+        ignored from anywhere else.  Leave it empty and every request looks like
+        it came from the balancer, so one person getting their password wrong
+        locks out everybody.</span>
+    </label>
+    <label class="check">
+      <input type="checkbox" name="security.force_https" value="1"
+             {{ 'checked' if values['security.force_https'] }}> Behind TLS
+      <span class="faint small">Marks session cookies secure and sends HSTS.
+        Turn it off only if you serve this over plain HTTP on purpose.</span>
+    </label>
+  </div>
+</div>
+
+<div class="card" id="output">
+  <div class="card-head"><span class="head-text">Output<button type="button" class="help-dot" data-modal="help-output" aria-label="What this section is for">?</button></span></div>
+  <div class="form-grid">
+    <label class="wide">Report directory
+      <input type="text" name="output.dir" value="{{ values['output.dir'] }}"
+             placeholder="/out">
+      <span class="faint small">vulnerabilities.json and vulnerabilities.csv are
+        written here after every scan and after every waiver decision.  /out is
+        a volume, so what lands there survives a compose down.</span>
+    </label>
+    <label class="check">
+      <input type="checkbox" name="output.per_repo_files" value="1"
+             {{ 'checked' if values['output.per_repo_files'] }}> Write a file per repository too
+    </label>
+    <label class="check">
+      <input type="checkbox" name="output.include_clean" value="1"
+             {{ 'checked' if values['output.include_clean'] }}> List repositories with nothing wrong in them
+    </label>
+  </div>
+</div>
+
+<div class="card" id="display">
+  <div class="card-head"><span class="head-text">Display<button type="button" class="help-dot" data-modal="help-display" aria-label="What this section is for">?</button></span></div>
+  <div class="small faint" style="margin-bottom:.6rem">
+    Every time on screen is shown in this zone, and a schedule's cron is read
+    in it too &mdash; so <code>0 2 * * *</code> means two in the morning here.
+    Times are still stored as UTC, so changing this never rewrites history.
+    GMT leaves everything on UTC.
+  </div>
+  <div class="form-grid">
+    <label>Time zone
+      <select name="ui.timezone">
+        {% for zone in timezones %}
+        <option value="{{ zone }}" {{ 'selected' if values['ui.timezone'] == zone }}>{{ zone }}</option>
+        {% endfor %}
+      </select>
+      <span class="faint small">
+        Showing times as <strong>{{ tz_label }}</strong> right now.
+      </span>
+    </label>
+  </div>
+</div>
+
+<div class="card" id="fidelity">
+  <div class="card-head"><span class="head-text">Fidelity<button type="button" class="help-dot" data-modal="help-fidelity" aria-label="What this section is for">?</button></span></div>
+  <div class="small faint" style="margin-bottom:.6rem">
+    A scanner that reports things nobody acts on teaches people to stop reading
+    it.  Findings from the rules below are still run and still recorded with
+    their reason &mdash; they are kept out of the work list rather than deleted,
+    and one filter shows them again.
+  </div>
+  {# Muting is asked for, not set: ticking raises a request, and somebody who
+     did not ask for it has to agree.  Unticking takes effect at once. #}
+  {% if mute_requests %}
+  <h2 style="margin-top:.4rem">Proposed advisory rules</h2>
+  <div class="notice warn">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+    <div>
+      <strong>{{ mute_requests|length }} rule(s) proposed, waiting on somebody
+      else to agree.</strong>
+      An exception hides one finding; setting a rule aside hides every finding
+      it will ever produce. Until one of these is agreed, its findings keep
+      arriving.
+      {% if not can_approve_mutes %}
+      <div class="small" style="margin-top:.3rem">You can propose one, but
+        agreeing to it needs somebody with the approval role.</div>
+      {% endif %}
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Rule</th><th>Asked for by</th><th>When</th><th></th></tr></thead>
+      <tbody>
+      {% for req in mute_requests %}
+        <tr>
+          <td class="mono small">{{ req.rule }}</td>
+          <td class="small">{{ req.requested_by }}</td>
+          <td class="small faint nowrap">{{ req.requested_at | dt('%Y-%m-%d %H:%M') }}</td>
+          <td class="nowrap">
+            {% if can_approve_mutes and req.requested_by != me %}
+              <form method="post" action="{{ base }}/rule-mutes/{{ req.id }}/approve" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm primary" type="submit">Agree</button>
+              </form>
+              <form method="post" action="{{ base }}/rule-mutes/{{ req.id }}/reject" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm" type="submit">Turn down</button>
+              </form>
+            {% elif req.requested_by == me %}
+              <span class="faint small">you asked for this one</span>
+            {% else %}
+              <span class="faint small">waiting</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <h2 style="margin-top:.9rem">Rules</h2>
+
+  {# Ticked means asked for or already agreed.  Untick to put a rule back in
+     the work list: a list you have to retype from memory is not reversible. #}
+  {% for rule, why in muted_notes.items() %}
+  {% set shipped = rule in mute_shipped %}
+  <div class="notice {{ 'warn' if mute_live.get(rule) or shipped else 'info' }}"
+       style="margin-top:.6rem">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+    <div>
+      <label class="check" style="margin:0">
+        <input type="checkbox" name="mute:{{ rule }}" value="1"
+               {{ 'checked' if mute_live.get(rule) or shipped }}>
+        <strong>Set <span class="mono">{{ rule }}</span> aside as advisory</strong>
+      </label>
+      <div class="small" style="margin-top:.25rem">{{ why }}</div>
+      <div class="small" style="margin-top:.25rem">
+        {% set live = mute_live.get(rule) %}
+        {% if shipped %}
+          <strong>Set aside by default</strong>, because this tool ships it
+          that way &mdash; nobody here asked for it and nobody signed it off.
+          Its findings are still recorded with a reason.
+          <strong>Untick to put them back</strong>, and that choice sticks:
+          it is written down, so upgrades will not quietly undo it.
+        {% elif live and live.status == 'approved' %}
+          Set aside, agreed by <strong>{{ live.decided_by }}</strong>.
+          Its findings are still recorded with a reason.
+          <strong>Untick to put them back</strong> &mdash; that needs nobody's
+          permission.
+        {% elif live %}
+          <strong>Asked for by {{ live.requested_by }}, waiting on somebody
+          else to agree.</strong> Its findings are still arriving until then.
+        {% else %}
+          <strong>Currently in the work list</strong>, so every match appears
+          alongside real findings. Ticking asks for it to be set aside.
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+  <label class="wide" style="margin-top:.7rem">Other advisory rules
+    <input type="text" name="code.muted_rules_extra"
+           value="{{ values['code.muted_rules'] | reject('in', muted_notes) | join(', ') }}"
+           placeholder="a-rule-name, another-one">
+    <span class="faint small">Anything not listed above, comma separated.
+      Clear this and untick the boxes to put everything back.</span>
+  </label>
+</div>
+
+<div class="card" id="sensitivity">
+  <div class="card-head"><span class="head-text">Sensitivity labels<button type="button" class="help-dot" data-modal="help-sensitivity" aria-label="What this section is for">?</button></span></div>
+  <div class="small faint" style="margin-bottom:.6rem">
+    What the systems you scan hold.  A connection carries these, and an
+    exception can be told not to cover them &mdash; so "a plain HTTP link is
+    low" can be true of a brochure site and still not true of the system
+    holding cardholder data.
+  </div>
+  <label class="wide">Labels
+    <input type="text" name="sensitivity.labels"
+           value="{{ values['sensitivity.labels'] | join(', ') }}"
+           placeholder="PCI, HIPAA, SOX, Customer Data, PII, CUI, Login, Public">
+    <span class="faint small">Comma separated, and yours to choose.  They appear
+      as tick boxes on every connection and on every exception.</span>
+  </label>
+</div>
+
+<div class="card" id="limits">
+  <div class="card-head"><span class="head-text">Limits<button type="button" class="help-dot" data-modal="help-limits" aria-label="What this section is for">?</button></span></div>
+  <div class="small faint" style="margin-bottom:.6rem">
+    A token gets 5000 requests an hour.  These keep a long scan under that
+    instead of failing halfway through.
+  </div>
+  <div class="form-grid">
+    <label>Repositories at once
+      <input type="number" name="github.parallel_repos" min="1" max="64"
+             value="{{ values['github.parallel_repos'] }}">
+      <span class="faint small">Each one clones and runs the engines on its own
+        repository, so this is the setting that uses a big machine.  Roughly one
+        per four cores is a fair starting point; past that they queue on disk
+        and on the rate limit rather than on the processor.</span>
+    </label>
+<label>Scans at once
+      <input type="number" name="scan.max_concurrent" min="1" max="16"
+             value="{{ values['scan.max_concurrent'] }}">
+      <span class="faint small">One keeps the old behavior, where a second
+        start is refused while one is going.  Raising it stops a slow
+        organization holding up the rest of the night.  Scans on the same
+        connection still share one rate limit budget, because the budget
+        belongs to the credential.</span>
+    </label>
+        <label>Give up on a repository after
+      <input type="number" name="scan.timeout_per_repo" min="60" max="86400"
+             value="{{ values['scan.timeout_per_repo'] }}">
+      <span class="faint small">Seconds.</span>
+    </label>
+    <label>Give up on the whole scan after
+      <input type="number" name="scan.max_hours" min="1" max="168"
+             value="{{ values['scan.max_hours'] }}">
+      <span class="faint small">Hours.  A run that hits this keeps everything
+        that finished, and the repositories it never reached are left as they
+        were.  An account with thousands of branches needs more than the six
+        hours this starts at.</span>
+    </label>
+    <label>Processes semgrep may use
+      <input type="number" name="code.jobs" min="1" max="64"
+             value="{{ values['code.jobs'] }}">
+      <span class="faint small">Per repository, on top of the repositories
+        above.  Two is right for a small machine and is what holds up a scan of
+        one large repository on a big one.</span>
+    </label>
+    <label>Threads trufflehog may use
+      <input type="number" name="secrets.concurrency" min="1" max="64"
+             value="{{ values['secrets.concurrency'] }}">
+      <span class="faint small">Per repository.  Live verification spends most
+        of its time waiting on other people's servers, so this one buys more
+        than the core count suggests.</span>
+    </label>
+    <label>History walked per run
+      <input type="number" name="secrets.history_window_days" min="0" max="36500"
+             value="{{ values['secrets.history_window_days'] }}">
+      <span class="faint small">Days, newest first.  0 walks the whole history
+        in one pass, which is right until a repository is too large to finish
+        inside the timeout: then that pass is thrown away and the next run
+        starts from the newest commit again.  With a window, each run continues
+        where the last one stopped until the first commit is reached.</span>
+    </label>
+    <label class="check">
+      <input type="checkbox" name="catchup.enabled" value="1"
+             {{ 'checked' if values['catchup.enabled'] }}> Use idle time to finish unwalked history
+      <span class="faint small">Every twenty minutes, if nothing else is
+        scanning, the repositories furthest from having their history walked
+        get another window.  It refuses itself while any scan is running, and a
+        schedule that fires stops it and keeps what it found.  Needs a history
+        window above.</span>
+    </label>
+    <label>Repositories per catch up pass
+      <input type="number" name="catchup.repos_per_run" min="1" max="100"
+             value="{{ values['catchup.repos_per_run'] }}">
+    </label>
+    <label>Skip repositories bigger than
+      <input type="number" name="clone.max_repo_size_mb" min="0" max="1000000"
+             value="{{ values['clone.max_repo_size_mb'] }}">
+      <span class="faint small">MB.  0 is no limit.  Checked before the clone,
+        so the whole repository is either scanned or skipped.</span>
+    </label>
+    <label>Skip files bigger than
+      <input type="number" name="secrets.max_file_mb" min="0" max="10000"
+             value="{{ values['secrets.max_file_mb'] }}">
+      <span class="faint small">MB.  0 is no limit.  This one is per file,
+        inside a repository that is being scanned.  A repository well under the
+        limit above can still hold one enormous file, and reading it whole is
+        how a scan runs the machine out of memory.  No real credential lives in
+        a file that big.</span>
+    </label>
+    <label>Keep this many requests in reserve
+      <input type="number" name="rate.min_remaining" min="0" max="4000"
+             value="{{ values['rate.min_remaining'] }}">
+    </label>
+    <label>Longest wait for the limit to reset
+      <input type="number" name="rate.max_sleep_sec" min="3700" max="14400"
+             value="{{ values['rate.max_sleep_sec'] }}">
+      <span class="faint small">Seconds.  Under an hour and the wait gets cut
+        short, then the retries burn out against a limit that has not moved.</span>
+    </label>
+    <label>Retries per request
+      <input type="number" name="rate.retries" min="0" max="20"
+             value="{{ values['rate.retries'] }}">
+    </label>
+    <label class="check">
+      <input type="checkbox" name="rate.adaptive_pacing" value="1"
+             {{ 'checked' if values['rate.adaptive_pacing'] }}> Slow down as the budget runs out
+    </label>
+  </div>
+</div>
+
+
+{% if can_write %}
+<div class="page-actions" style="margin-bottom:2rem">
+  <button class="btn primary" type="submit">Save</button>
+</div>
+{% endif %}
+</form>
+
+<form method="post" action="{{ base }}/settings/test" id="test-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+</form>
+</div>
+
+{# One dialog per section.  data-sticky keeps it open when the click lands
+   outside it: this is something somebody is reading, and having it vanish
+   because they clicked to scroll is its own small insult. #}
+{% for section in help_sections %}
+<div class="modal-backdrop" id="help-{{ section.id }}" data-sticky hidden>
+  <div class="modal explain">
+    <div class="modal-head">{{ section.title }}
+      <button type="button" class="modal-close" data-close-modal
+              aria-label="Close">&times;</button></div>
+    <div class="modal-body">
+      {% for paragraph in section.what %}<p>{{ paragraph }}</p>{% endfor %}
+      {% if section.caution %}
+      <div class="explain-caution">
+        <svg viewBox="0 0 16 16" fill="currentColor" width="15" height="15"
+             aria-hidden="true" style="flex:0 0 auto;margin-top:.15rem"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+        <div><div class="label">Worth knowing</div>{{ section.caution }}</div>
+      </div>
+      {% endif %}
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Close</button>
+    </div>
+  </div>
+</div>
+{% endfor %}
+<script src="{{ base }}/static/settings.js?v={{ asset_v('settings.js') }}"></script>
+{% endblock %}

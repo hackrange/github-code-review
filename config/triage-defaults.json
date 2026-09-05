@@ -1,0 +1,43 @@
+{
+  "_comment": [
+    "The triage defaults, in one place.",
+    "",
+    "app/core/scanner_defaults.py is the source of these.  They are written",
+    "out here as well because ghscan review builds its own config with no",
+    "database and no python behind it, and it was carrying empty lists: a",
+    "pipeline got none of this filtering while a scheduled scan got all of",
+    "it, which is the wrong way round for the one that a developer sees.",
+    "",
+    "tests/rules-test.sh fails if this file and scanner_defaults.py drift."
+  ],
+  "min_entropy": 3.0,
+  "min_length": 12,
+  "placeholder_patterns": [
+    "(?i)^(x{4,}|y{4,}|z{4,}|a{4,}|0{4,}|1{4,}|\\*{3,}|\\.{3,})$",
+    "(?i)(?<![A-Za-z0-9])(example|placeholder|redacted|dummy|sample|changeme|change[-_]?me|replace[-_]?me|yourkey|your[-_]?(api|secret|token|key|password))(?![A-Za-z0-9])",
+    "(?i)(insert|enter|add)[-_ ]?(your|the)?[-_ ]?(key|token|secret|password)",
+    "(?i)^(test|testing|foo|bar|baz|qux|abc123|password|passwd|secret|token|admin|root|hunter2|123456|letmein)$",
+    "(?i)(?<![A-Za-z0-9])(not[-_]?a[-_]?real|fake|mock|stub|lorem|ipsum|deadbeef|cafebabe)(?![A-Za-z0-9])",
+    "(?i)^(<|\\{\\{|\\$\\{|%|\\[)",
+    "(?i)(AKIAIOSFODNN7EXAMPLE|wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY)",
+    "(?i)\\b(place|put|insert|enter|fill|paste|type|replace|specify|provide|supply|set)\\b[^\\n]{0,40}\\b(here|below|later|value|this|yours)\\b",
+    "(?i)([-_ ]here|[-_ ]below|[-_ ]later)$",
+    "^\\p{L}[\\p{L}\\p{M}\\s.,:;/&()'!?\\\\-]*\\s[\\p{L}\\p{M}\\s.,:;/&()'!?\\\\-]*$",
+    "(?i)\\bgoes[-_ ]here\\b",
+    "\\.{3,}$|\\x{2026}$",
+    "^[A-Za-z][A-Za-z ]{6,}$",
+    "^[A-Z][A-Z_]{7,}$",
+    "(?i)^(my|your|our|the)[-_ ]",
+    "(?i)^(todo|tbd|fixme|none|null|nil|undefined|unset|n/a|na)\\b"
+  ],
+  "placeholder_paths": [
+    "(?i)(^|/)(test|tests|spec|specs|__tests__|fixtures?|testdata|examples?|samples?|demo|docs?|mock(s|data)?)(/|$)",
+    "(?i)\\.(md|mdx|rst|txt|adoc|po|pot|snap|golden)$",
+    "(?i)(^|/)(vendor|node_modules|third_party|\\.venv|site-packages|bower_components)(/|$)",
+    "(?i)\\.(lock|sum)$|(^|/)(package-lock\\.json|yarn\\.lock|pnpm-lock\\.yaml|Gemfile\\.lock|poetry\\.lock|Cargo\\.lock|go\\.sum)$",
+    "(?i)(^|/)(CHANGELOG|LICENSE|NOTICE|COPYING)",
+    "(?i)(^|/)(i18n|l10n|lang|langs|locale|locales|translations?|messages)(/|$)",
+    "(?i)(^|/)app/template/",
+    "(?i)[.-](min|bundle|pack)\\.(js|css)$"
+  ]
+}

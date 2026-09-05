@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}What is making the noise &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>What is making the noise</h1>
+    <div class="faint small">Rules ordered by how much of the work list they
+      produce. Tuning is a rule level job: ten decisions here usually move
+      more than a hundred findings one at a time.</div></div>
+</div>
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-body">
+    {% if totals.open %}
+    <p class="small">
+      <strong>{{ totals.rules }}</strong> rules are producing
+      <strong>{{ totals.open }}</strong> findings nobody has set aside. The ten
+      at the top of this list produce <strong>{{ totals.top_ten }}</strong> of
+      them, <strong>{{ totals.top_ten_share }}%</strong> of everything.
+    </p>
+    {% else %}
+    <p class="small">Nothing in the work list yet. Run a scan.</p>
+    {% endif %}
+    <form method="get" action="{{ base }}/noise" class="filters">
+      <div class="field">
+        <label for="only">Kind</label>
+        <select id="only" name="only" onchange="this.form.submit()">
+          <option value="">everything</option>
+          {% for k in kinds %}
+          <option value="{{ k }}" {{ 'selected' if only == k }}>{{ k }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <noscript><button class="btn" type="submit">Filter</button></noscript>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">Worst offenders</div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Rule</th>
+          <th>Kind</th>
+          <th class="nowrap">Findings</th>
+          <th class="nowrap">Repositories</th>
+          <th class="nowrap">High or worse</th>
+          <th class="nowrap">Engine unsure</th>
+          <th>What you can do</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>
+            <a href="{{ base }}/findings?q={{ row.rule | urlencode }}">{{ row.rule }}</a>
+            {% if row.shipped %}<span class="badge">set aside by default</span>
+            {% elif row.muted %}<span class="badge">set aside</span>
+            {% elif row.pending %}<span class="badge">waiting for a second administrator</span>
+            {% endif %}
+            {# A mute is applied while a scan runs, so findings already in the
+               database keep the verdict they were ingested with. Saying so
+               stops the row reading as though the mute did not work. #}
+            {% if (row.muted or row.shipped) and row.total %}
+            <div class="faint small">still counted here until the next scan
+              re-reads them</div>
+            {% endif %}
+          </td>
+          <td class="faint small">{{ row.kinds | join(', ') }}</td>
+          <td class="nowrap"><strong>{{ row.total }}</strong></td>
+          <td class="nowrap">{{ row.repositories }}</td>
+          <td class="nowrap">{{ row.loud }}</td>
+          {# A rule the engine itself is unsure about, in volume, is the
+             clearest signal that it is reporting a pattern rather than a
+             problem. #}
+          <td class="nowrap">{{ row.unsure }}</td>
+          <td>
+            {% if can_grade %}
+            <a class="btn sm" href="{{ base }}/severity?rule={{ row.rule | urlencode }}">Regrade</a>
+            {% endif %}
+            {% if can_mute %}
+              {% if row.muted or row.pending %}
+              <form method="post" action="{{ base }}/noise/mute" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="rule" value="{{ row.rule }}">
+                <input type="hidden" name="only" value="{{ only }}">
+                <input type="hidden" name="action" value="unmute">
+                <button class="btn sm" type="submit">Put it back</button>
+              </form>
+              {% else %}
+              <form method="post" action="{{ base }}/noise/mute" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="rule" value="{{ row.rule }}">
+                <input type="hidden" name="only" value="{{ only }}">
+                <button class="btn sm" type="submit">Set aside</button>
+              </form>
+              {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="faint small">
+          No rule is producing more than a couple of findings, which is the
+          shape you want. Nothing to do here.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <p class="faint small">
+      <strong>Regrade</strong> keeps every finding and moves it down the list.
+      <strong>Set aside</strong> takes the rule out of the work list entirely
+      and needs a second administrator to agree, because it hides findings
+      nobody has seen yet. Neither deletes anything: set aside findings stay in
+      the reports with the reason attached, and the
+      <a href="{{ base }}/findings?triage=advisory">Set aside</a> lane on the
+      findings page shows them.
+    </p>
+  </div>
+</div>
+{% endblock %}

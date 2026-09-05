@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Connecting GitHub &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Connecting GitHub</h1>
+  <div class="faint small">What to create, where to create it, and the one thing
+    that catches everybody.</div></div>
+  <div class="page-actions"><a class="btn" href="{{ base }}/connections">Back to connections</a></div>
+</div>
+
+<div class="notice warn">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+  <div><strong>A fine grained token reaches exactly one resource owner.</strong>
+    That owner is chosen when the token is created and cannot be changed
+    afterwards. Create the token <em>under the organization</em>. A token created
+    under your own account authenticates perfectly, reports no error, and sees
+    none of the organization's repositories.</div>
+</div>
+
+<div class="card"><div class="card-body">
+  <h2>A fine grained token, one organization</h2>
+  <p>The usual choice. One connection per organization.</p>
+  <ol class="small">
+    <li>GitHub &rarr; Settings &rarr; Developer settings &rarr;
+      <strong>Personal access tokens</strong> &rarr; Fine-grained tokens.</li>
+    <li><strong>Resource owner: the organization</strong>, not your account.
+      If the Organization permissions section is missing from the form, the
+      resource owner is wrong.</li>
+    <li>Repository access: all repositories.</li>
+    <li>Repository permissions &mdash; Contents: read, Metadata: read.
+      Add Pull requests: read for pull history, Administration: read for teams
+      and deploy keys, and the Dependabot / Secret scanning / Code scanning
+      alert permissions if you want those findings.</li>
+    <li>Organization permissions &mdash; Members: read, for the access inventory.</li>
+    <li>Paste it into a connection whose <strong>Organization</strong> matches.</li>
+  </ol>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>A classic token, several organizations</h2>
+  <p>Worth it when one credential should cover many. Classic tokens start
+    <span class="mono">ghp_</span>; fine grained ones start
+    <span class="mono">github_pat_</span>.</p>
+  <ol class="small">
+    <li>Tokens (classic) &rarr; Generate new token, scopes
+      <span class="mono">repo</span> and <span class="mono">read:org</span>.</li>
+    <li>On the new token's row: <strong>Configure SSO &rarr; Authorize</strong>,
+      once for each organization. An unauthorized organization does not error,
+      it simply vanishes from the results.</li>
+  </ol>
+  <p class="small faint">If your enterprise blocks classic tokens, use a GitHub
+    App instead: installation tokens are exempt from SAML SSO authorization.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>When it does not work</h2>
+  <table>
+    <thead><tr><th>What you see</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td class="small">Signs in, but no repositories</td>
+        <td class="small">Resource owner is your account, not the organization.
+          Not fixable by adding permissions; make a new token.</td></tr>
+      <tr><td class="small"><span class="mono">x-github-sso: partial-results</span></td>
+        <td class="small">A classic token that has not been authorized for that
+          organization. Configure SSO &rarr; Authorize.</td></tr>
+      <tr><td class="small">Fewer repositories than expected</td>
+        <td class="small">Archived repositories are skipped unless you turn them
+          on in Settings.</td></tr>
+    </tbody>
+  </table>
+  <p class="small faint">The <strong>Test</strong> button on a connection reports
+    which of these it is.</p>
+</div></div>
+{% endblock %}

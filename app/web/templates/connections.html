@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+{% block title %}Connections &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Connections</h1>
+    <div class="faint small">One row per credential.  A fine grained token
+      reaches exactly one resource owner, so an estate spread across several
+      organizations needs one of these for each.</div></div>
+  {% if can_write %}
+  <div class="page-actions">
+    <button class="btn primary" type="button" data-modal="connection-modal"
+            data-connection_id="" data-name="" data-provider="github"
+            data-api_url="https://api.github.com"
+            data-web_url="https://github.com" data-auth_method="pat"
+            data-app_id="" data-app_installation=""
+            data-organizations="" data-repositories=""
+            data-branches="">Add a connection</button>
+  </div>
+  {% endif %}
+</div>
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% endif %}
+
+<form method="get" action="{{ base }}/connections" class="filters">
+  <div class="field" style="flex:1;min-width:220px">
+    <label for="q">Search</label>
+    <input type="text" id="q" name="q" value="{{ q }}"
+           placeholder="name, type, organization, owner, or status">
+  </div>
+  <button type="submit" class="btn">Search</button>
+  {% if q %}
+  <a class="btn" href="{{ base }}/connections">Clear</a>
+  {% endif %}
+</form>
+
+{% if q %}
+<div class="small faint" style="margin-bottom:.6rem">
+  Showing <strong>{{ shown }}</strong> of {{ total }} connection(s) matching
+  &ldquo;{{ q }}&rdquo;.
+</div>
+{% endif %}
+
+<div class="card">
+  {% if connections %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Name</th><th>Credential</th><th>Covers</th>
+        <th>Findings</th><th>Last checked</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+      {% for entry in connections %}
+        {% set c = entry.row %}
+        <tr {% if not c.enabled %}class="faint"{% endif %}>
+          <td class="small">{{ c.name }}
+            {% if not c.enabled %}<span class="badge waived">off</span>{% endif %}
+            {% if c.api_url != 'https://api.github.com' %}
+            <div class="faint mono" style="font-size:.75rem">{{ c.api_url }}</div>{% endif %}
+          </td>
+          <td class="small">
+            <span class="badge">{{ c.provider or 'github' }}</span>
+            {% if c.auth_method == 'app' %}App {{ c.app_id }}
+            {% else %}token{% endif %}
+            {% if not entry.configured %}<span class="badge critical">missing</span>{% endif %}
+          </td>
+          <td class="stack">
+            <span class="mono">{{ c.organizations or 'everything it can reach' }}</span>
+            {# Say it on the row.  A narrowed connection finds less by design,
+               and that has to be visible without opening the form. #}
+            {% if c.branches %}
+            <span class="sub">branches: <span class="mono">{{ c.branches.split() | join(', ') }}</span></span>
+            {% endif %}
+            {% if c.application_name %}<span class="sub">{{ c.application_name }}</span>{% endif %}
+            {% if c.sensitivity %}
+            <span class="sub">
+              {% for tag in c.sensitivity.split(',') %}
+              <span class="badge medium">{{ tag.strip() }}</span>
+              {% endfor %}
+            </span>
+            {% endif %}
+          </td>
+          <td class="small">{{ entry.findings }}</td>
+          <td class="small faint nowrap">
+            {{ c.last_checked_at | dt('%Y-%m-%d %H:%M') if c.last_checked_at else 'never' }}</td>
+          <td class="small">
+            {% if c.last_status == 'ok' %}<span class="badge ok">ok</span>
+            {% elif c.last_status == 'error' %}<span class="badge critical" title="{{ c.last_detail }}">error</span>
+            {% endif %}
+            <div class="faint" style="font-size:.75rem">{{ (c.last_detail or '')[:70] }}</div>
+          </td>
+          <td class="nowrap">
+            {% if can_write %}
+            <button class="btn sm" type="button" data-modal="connection-modal"
+                    data-connection_id="{{ c.id }}" data-name="{{ c.name }}"
+                    data-provider="{{ c.provider or 'github' }}"
+                    data-api_url="{{ c.api_url }}" data-web_url="{{ c.web_url }}"
+                    data-auth_method="{{ c.auth_method }}" data-app_id="{{ c.app_id }}"
+                    data-app_installation="{{ c.app_installation }}"
+                    data-organizations="{{ c.organizations }}"
+                    data-application_name="{{ c.application_name or '' }}"
+                    data-application_owner="{{ c.application_owner or '' }}"
+                    data-technical_owner="{{ c.technical_owner or '' }}"
+                    data-sensitivity="{{ c.sensitivity or '' }}"
+                    data-repositories="{{ c.repositories }}"
+                    data-branches="{{ c.branches or '' }}">Edit</button>
+            <form method="post" action="{{ base }}/connections/{{ c.id }}/test" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm" type="submit">Test</button>
+            </form>
+            <form method="post" action="{{ base }}/connections/{{ c.id }}/scan" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm" type="submit">Scan it</button>
+            </form>
+            <form method="post" action="{{ base }}/connections/{{ c.id }}/delete"
+                  style="display:inline"
+                  onsubmit="return confirm('Delete {{ c.name }} and its credential? The {{ entry.findings }} finding(s) it brought in stay, still labeled {{ c.name }}.')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm danger" type="submit">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif q %}
+  <div class="empty">Nothing matches &ldquo;{{ q }}&rdquo;.
+    <a href="{{ base }}/connections">Show all {{ total }}</a>.</div>
+  {% else %}
+  <div class="empty">No connections yet.  Add one for each GitHub account or
+    organization you have a token for.</div>
+  {% endif %}
+</div>
+
+{% if unassigned %}
+<div class="card">
+  <div class="small faint">{{ unassigned }} finding(s) predate connections and
+    are not labeled with one.  The next scan of the account they came from
+    labels them.</div>
+</div>
+{% endif %}
+
+{% if can_write %}
+<div class="modal-backdrop" id="connection-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/connections/save" id="connection-form">
+      <div class="modal-head">Connection
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="connection_id">
+        <label>What is it
+          <select name="provider" id="provider-select">
+            <option value="github">GitHub</option>
+            <option value="gitlab">GitLab</option>
+            <option value="bitbucket">Bitbucket Cloud</option>
+            <option value="azure">Azure Repos</option>
+            <option value="assembla">Assembla</option>
+            <option value="beanstalk">Beanstalk</option>
+            <option value="codecommit">AWS CodeCommit</option>
+            <option value="gcsr">Google Cloud Source Repositories</option>
+            <option value="subversion">Subversion (current revision only)</option>
+            <option value="perforce">Perforce Helix Core (current revision only)</option>
+          </select>
+          {# Said on the form rather than discovered from a thin report.  The
+             most valuable thing this finds is a credential that was committed
+             and later deleted, and that is found by walking git history.
+             Neither of these has any. #}
+          <span class="faint small" data-provider-note hidden>
+            Subversion and Perforce are scanned at their current revision.
+            Credentials that were committed and later removed are not found,
+            because finding those means walking git history and there is none
+            to walk.  Everything else, the code analysis, the dependencies,
+            the licenses and the triage, works exactly as it does elsewhere.
+          </span>
+          <span class="faint small">The rest of this form changes to match.</span>
+        </label>
+
+        <div class="notice info" data-help="github">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+          <div><strong>A fine grained token reaches exactly one resource owner</strong>,
+            fixed when the token is made and not changeable afterwards. Create it
+            <em>under the organization</em>, not under your own account, or it
+            authenticates perfectly and sees nothing. One connection per
+            organization. A classic token (<span class="mono">ghp_</span>) can cover
+            several once authorized for each under Configure SSO.
+            <a href="{{ base }}/docs/connections-github" target="_blank">How to set one up</a>.</div>
+        </div>
+
+        <div class="notice info" data-help="bitbucket" hidden>
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+          <div><strong>App passwords no longer work.</strong> Atlassian removed
+            them on 28 July 2026, so this needs an <em>access token</em> &mdash;
+            workspace, project or repository &mdash; or an API token. A
+            <strong>workspace</strong> access token with
+            <span class="mono">repository:read</span> is the one that behaves
+            like the others here. Bitbucket Cloud only; Data Center is a
+            different API and is not wired up.
+            <a href="{{ base }}/docs/connections-bitbucket" target="_blank">How to set one up</a>.</div>
+        </div>
+
+        <div class="notice info" data-help="gitlab" hidden>
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+          <div>A GitLab token usually reaches <strong>every group the account can
+            see</strong>, so one connection often covers the whole instance. Scopes:
+            <span class="mono">read_api</span> and <span class="mono">read_repository</span>.
+            A <em>project</em> access token belongs to one project and no group, which
+            is fine and expected: it finds its project through membership.
+            Dependency alerts, code scanning and secret scanning are GitHub features
+            and are skipped here rather than reported as empty.
+            <a href="{{ base }}/docs/connections-gitlab" target="_blank">How to set one up</a>.</div>
+        </div>
+
+        <label>Name
+          <input type="text" name="name" required placeholder="acme-webapp01">
+          <span class="faint small">Yours to choose.  It goes on every finding
+            this connection brings in, so keep it short and recognizable.</span>
+        </label>
+        {# One field, not two: two inputs sharing a purpose would both submit
+           and the server would have to guess which one was meant.  The label
+           and the hint change instead. #}
+        <label><span data-label-for="organizations">Organization</span>
+          <input type="text" name="organizations" placeholder="acme">
+          <span class="faint small" data-for="github">On a fine grained token this
+            is the <strong>Resource owner</strong>.  Comma separated if the
+            credential reaches more than one.  Empty means everything it can reach.</span>
+          <span class="faint small" data-for="bitbucket" hidden>The
+            <strong>workspace</strong> slug, as it appears in the URL. A
+            repository or project access token cannot list workspaces, so name
+            it here for those. A workspace token can find its own.</span>
+          <span class="faint small" data-for="gitlab" hidden><strong>Optional, and
+            usually best left empty.</strong> It narrows the scan to one part of
+            the instance: the group's full path, such as
+            <span class="mono">acme/platform</span>, subgroups included. Comma
+            separated for several. Empty scans every group the token can reach,
+            which for a personal or project token is the whole of what it can
+            see anyway.</span>
+        </label>
+        <label>Token
+          <input type="password" name="token" autocomplete="new-password"
+                 placeholder="github_pat_... or ghp_...">
+          <span class="faint small" data-for="github">A fine grained
+            (<span class="mono">github_pat_</span>) or classic
+            (<span class="mono">ghp_</span>) token. Encrypted here, never written
+            to a file. Leave it empty when editing to keep the one already stored.</span>
+          <span class="faint small" data-for="gitlab" hidden>A personal, group or
+            project access token (<span class="mono">glpat-</span>) with
+            <span class="mono">read_api</span> and
+            <span class="mono">read_repository</span>. Encrypted here, never
+            written to a file. Leave it empty when editing to keep the one
+            already stored.</span>
+        </label>
+        <label data-for="github">Signs in with
+          <select name="auth_method">
+            <option value="pat">A personal access token</option>
+            <option value="app">A GitHub App</option>
+          </select>
+        </label>
+        <label><span data-label-for="web_url">Web address</span>
+          <input type="text" name="web_url" placeholder="https://github.com">
+          <span class="faint small" data-for="github">Where finding links point.
+            Change it for GitHub Enterprise Server.</span>
+          <span class="faint small" data-for="gitlab" hidden>Your instance, on its
+            own &mdash; <span class="mono">https://gitlab.com</span> or your own
+            host. The API address below is worked out from it.</span>
+        </label>
+        <label>API address
+          <input type="text" name="api_url" placeholder="https://api.github.com">
+          <span class="faint small" data-for="github">Change it for GitHub Enterprise Server.</span>
+          <span class="faint small" data-for="gitlab" hidden>Filled in from the
+            address above, and the same shape on gitlab.com or your own server.
+            Opening it in a browser shows <span class="mono">404</span> &mdash;
+            that is normal, it is a prefix rather than a page. Only change it if
+            your instance serves the API somewhere other than
+            <span class="mono">/api/v4</span>.</span>
+        </label>
+        <label data-for="github">App id
+          <input type="text" name="app_id" placeholder="123456">
+          <span class="faint small">Only for a GitHub App.</span>
+        </label>
+        <label data-for="github">Installation id
+          <input type="text" name="app_installation" placeholder="leave empty to look it up">
+        </label>
+        <label data-for="github">App private key
+          <textarea name="app_key" rows="3"
+                    placeholder="-----BEGIN RSA PRIVATE KEY-----"></textarea>
+        </label>
+        <label>Application name
+          <input type="text" name="application_name" placeholder="Acme Web Portal">
+          <span class="faint small">What the business calls it, which is rarely
+            what the repository is called.</span>
+        </label>
+        <label>Application owner
+          <input type="email" name="application_owner" placeholder="a.person@example.com">
+          <span class="faint small">Who answers for the risk.</span>
+        </label>
+        <label>Technical owner
+          <input type="email" name="technical_owner" placeholder="a.person@example.com">
+          <span class="faint small">Who fixes it.</span>
+        </label>
+        <label>What it holds
+          <div class="check-grid">
+            {% for label in sensitivity_labels %}
+            <label class="check">
+              <input type="checkbox" name="sensitivity:{{ label }}" value="1">
+              {{ label }}
+            </label>
+            {% endfor %}
+          </div>
+          <span class="faint small">Several can apply.  An exception can be told
+            not to cover these, so a finding keeps its real severity on the
+            systems where it matters.</span>
+        </label>
+        <label>Only these repositories
+          <input type="text" name="repositories" placeholder="acme/api-service">
+          <span class="faint small">Optional.  Narrows this connection to a few
+            repositories rather than everything the organization holds.</span>
+        </label>
+        <label>Only these branches
+          <textarea name="branches" rows="3" placeholder="master&#10;main"></textarea>
+          <span class="faint small">Optional, one per line.  Names or patterns,
+            so <span class="mono">release/*</span> works.  Empty, or a single
+            <span class="mono">*</span>, scans every branch and leaves the
+            <a href="{{ base }}/settings#branches">branch setting</a> in charge.
+            What is named here beats the global skip list, so a branch you ask
+            for is a branch you get.</span>
+          {# A name typed from memory that matches nothing scans no code and
+             says nothing about it, so the names past scans found are one click
+             away rather than something to remember. #}
+          <span class="small" data-branch-picker hidden>
+            <a href="#" data-branch-load>Show the branches past scans found</a>
+            <span class="faint" data-branch-note></span>
+            <input type="search" class="branch-filter" data-branch-filter
+                   placeholder="Filter these names" hidden>
+            <span class="branch-chips" data-branch-list></span>
+          </span>
+        </label>
+        <label class="check">
+          <input type="checkbox" name="enabled" value="1" checked> Include it in scans
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+<script src="{{ base }}/static/connections.js?v={{ asset_v('connections.js') }}"></script>
+{% endblock %}

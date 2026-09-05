@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Scan history &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Scan history</h1></div>
+  {% if can_scan %}
+  <div class="page-actions">
+    {% if not scan_full %}
+    <button class="btn primary" type="button" data-post="/scans/start"
+            data-busy="Starting" data-confirm="Start a scan now?">Scan now</button>
+    {% endif %}
+    {% if running_count %}
+    <span class="faint small">{{ running_count }} of {{ scan_limit }} running.
+      Stop one from its row.</span>
+    {% endif %}
+    {% if rows %}
+    <a class="btn" href="{{ base }}/scans/export?format=csv">Export CSV</a>
+    <a class="btn" href="{{ base }}/scans/export?format=json">Export JSON</a>
+    {% endif %}
+    {% if can_clear and rows %}
+    <form method="post" action="{{ base }}/scans/clear" style="display:inline"
+          onsubmit="return confirm('Remove every finished run from the history? The findings themselves are untouched. Export it first if you need the record.')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn danger" type="submit">Clear the history</button>
+    </form>
+    <form method="post" action="{{ base }}/scans/clear" style="display:inline"
+          onsubmit="return confirm('Remove runs older than 90 days?')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="older_than_days" value="90">
+      <button class="btn" type="submit">Older than 90 days</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% endif %}
+
+{% if scan_running %}
+<div class="notice info">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v4.2l3 1.8-.75 1.25L7.25 9.5v-5h1.5z"/></svg>
+  <div>A scan is running.  Nothing lands in the database until it finishes, so
+    stopping it leaves what you already have exactly as it is.</div>
+</div>
+{% endif %}
+
+<div class="card">
+  {% if rows %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Run</th><th>Status</th><th>Scanned</th><th>Findings</th><th></th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          {# When it ran, with the finish time under it rather than beside it. #}
+          <td class="stack nowrap">
+            <span>{{ r.started_at | dt('%Y-%m-%d %H:%M') if r.started_at }}</span>
+            <span class="sub">
+              {% if r.finished_at %}finished {{ r.finished_at | dt('%H:%M') }}
+              {% else %}still going{% endif %}
+            </span>
+          </td>
+          {# The account and what triggered it qualify the status, so they sit
+             under it instead of each taking a column. #}
+          <td class="stack">
+            <span>{# Empty is neither of the two things a badge usually says.  The credential
+               worked and the account holds nothing, which is worth seeing and is not
+               worth a red row every night. #}
+            <span class="badge {{ 'ok' if r.status == 'finished' else ('critical' if r.status == 'failed' else ('waived' if r.status == 'stopped' else ('info' if r.status == 'empty' else 'medium'))) }}">{{ r.status }}</span></span>
+            {% if r.connection %}<span class="sub">{{ r.connection }}</span>{% endif %}
+            <span class="sub">{{ r.trigger }}{% if r.triggered_by %} by {{ r.triggered_by }}{% endif %}</span>
+            {# Why it failed, in a sentence.  The full output is still one
+               click away; this is so nobody has to open it to find out which
+               account to go and look at. #}
+            {% if reasons.get(r.id) %}
+            <span class="sub reason-why" title="{{ r.log_excerpt.splitlines()[:6] | join(' | ') if r.log_excerpt }}">{{ reasons[r.id] }}</span>
+            {% endif %}
+          </td>
+          <td class="stack nowrap">
+            <span>{{ r.repositories }} repo{{ '' if r.repositories == 1 else 's' }}</span>
+            <span class="sub">{{ r.branches }} branch{{ '' if r.branches == 1 else 'es' }}</span>
+            {% if r.repositories_failed or r.repositories_skipped or r.repositories_partial %}
+            <span class="sub">
+              {% if r.repositories_failed %}<span class="badge critical"
+                title="{{ r.log_excerpt.splitlines()[:3] | join(' | ') if r.log_excerpt }}">{{ r.repositories_failed }} failed</span>{% endif %}
+              {% if r.repositories_skipped %}<span class="badge medium">{{ r.repositories_skipped }} skipped</span>{% endif %}
+              {# Stopped part way with its findings kept.  Says so rather than
+                 counting as either scanned or failed, because it is neither. #}
+              {% if r.repositories_partial %}<span class="badge medium"
+                title="Stopped part way; what each one had already found was kept. The report says which passes finished."
+                >{{ r.repositories_partial }} partial</span>{% endif %}
+            </span>
+            {% endif %}
+          </td>
+          {# Three numbers that only mean anything together. #}
+          <td class="stack nowrap">
+            <span>{{ r.findings_new }} new</span>
+            <span class="sub">{{ r.findings_updated }} updated &middot; {{ r.findings_resolved }} resolved</span>
+          </td>
+          <td class="nowrap">
+            {% if can_scan and r.status == 'running' %}
+            {# On the row rather than in the header.  Once two scans can run,
+               a single button meaning "whichever one happens to be going" is
+               a way to stop the wrong one. #}
+            <form method="post" action="{{ base }}/scans/stop" style="display:inline"
+                  onsubmit="return confirm('Stop this scan? The repositories it has already finished are kept; anything it never reached is unchanged.')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="run_id" value="{{ r.id }}">
+              <button class="btn sm danger" type="submit">Stop</button>
+            </form>
+            {% endif %}
+            {% if can_clear and r.status != 'running' %}
+            <form method="post" action="{{ base }}/scans/{{ r.id }}/delete"
+                  onsubmit="return confirm('Remove this run from the history? The findings it brought in stay.')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm danger" type="submit">Remove</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<div class="empty">No scans yet.</div>{% endif %}
+</div>
+{% endblock %}

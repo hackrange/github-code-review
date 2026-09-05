@@ -1,0 +1,36 @@
+{# Shown once.  We keep hashes, so there is no way to show them again later. #}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recovery codes &middot; Git Code Review</title>
+<link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_v('app.css') }}">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-box" style="max-width:440px">
+    <div class="brand">Git Code Review</div>
+    <div class="sub">Recovery codes for {{ username }}</div>
+
+    <div class="notice warn">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5z"/></svg>
+      <div>This is the only time you will see these. We keep hashes, so we
+        cannot show them to you again.</div>
+    </div>
+
+    <div class="codes">
+      {% for code in codes %}{{ code }}<br>{% endfor %}
+    </div>
+
+    <div class="small faint mb">
+      Each one works once, in place of a code from your app. Keep them
+      somewhere that is not the laptop you just set this up on.
+    </div>
+
+    <a class="btn primary" style="width:100%;justify-content:center"
+       href="{{ base }}/">I have saved them, continue</a>
+  </div>
+</div>
+</body>
+</html>

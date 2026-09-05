@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Custom severity &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Custom severity</h1>
+    <div class="faint small">What a finding is worth here, rather than what the
+      engine guessed.</div></div>
+</div>
+
+{% if flash %}
+<div class="card {{ 'bad' if flash_kind == 'error' else 'ok' }}">
+  <div class="small">{{ flash }}</div>
+</div>
+{% endif %}
+
+<div class="notice info">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+  <div>A scanner grades a rule once, for everybody who will ever run it. That is
+    a reasonable default and a poor answer: a plain HTTP link to an image and a
+    plain HTTP link carrying a session are the same rule and very different
+    risks. Severity is a statement about <em>your</em> risk, so say what it is.
+    <div class="small" style="margin-top:.3rem">A rule name beats a CWE, because
+      it is the more specific statement. The engine's own grade is kept beside
+      the new one on every finding it changes. Changes apply from the next scan.</div>
+  </div>
+</div>
+
+{% if can_write %}
+<div class="card">
+  <div class="card-head">Add one</div>
+  <div class="card-body">
+    <form method="post" action="{{ base }}/severity/add" class="filters">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="match_type">Match on</label>
+        <select id="match_type" name="match_type">
+          <option value="rule">A rule (the What column)</option>
+          <option value="cwe">A CWE</option>
+        </select>
+      </div>
+      <div class="field" style="flex:1;min-width:200px">
+        <label for="pattern">Which one</label>
+        {# Filled in when the page that shows which rule is making the noise
+           hands one over, so the name does not have to be retyped. #}
+        <input type="text" id="pattern" name="pattern" required
+               value="{{ prefill_rule | default('', true) }}"
+               placeholder="plaintext-http-link  or  CWE-319">
+      </div>
+      <div class="field">
+        <label for="severity">Is worth</label>
+        <select id="severity" name="severity">
+          {% for s in severities %}
+          <option value="{{ s }}" {{ 'selected' if s == 'low' }}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field" style="flex:1;min-width:220px">
+        <label for="reason">Because</label>
+        <input type="text" id="reason" name="reason"
+               placeholder="links to images and stylesheets, no session on them">
+      </div>
+      <button class="btn primary" type="submit">Save</button>
+      <div class="field" style="flex-basis:100%">
+        <label>This will not be applied on</label>
+        <div class="check-grid">
+          {% for label in sensitivity_labels %}
+          <label class="check">
+            <input type="checkbox" name="unless:{{ label }}" value="1">
+            {{ label }}
+          </label>
+          {% endfor %}
+        </div>
+        <span class="faint small">Tick what this grade was not meant for.  On a
+          connection carrying any of them the engine's own severity stands.</span>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  {% if rules %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Match</th><th>Is worth</th><th>Because</th><th>Set by</th><th></th></tr></thead>
+      <tbody>
+      {% for r in rules %}
+        <tr>
+          <td class="stack">
+            <span class="mono">{{ r.pattern }}</span>
+            <span class="sub">{{ 'rule' if r.match_type == 'rule' else 'CWE' }}</span>
+          </td>
+          <td><span class="badge {{ r.severity.value }}">{{ r.severity.value }}</span></td>
+          <td class="small">{{ r.reason }}
+            {% if r.unless_sensitivity %}
+            <div class="sub">not applied on:
+              {% for tag in r.unless_sensitivity.split(',') %}
+              <span class="badge medium">{{ tag.strip() }}</span>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </td>
+          <td class="stack nowrap">
+            <span class="small">{{ r.created_by }}</span>
+            <span class="sub">{{ r.created_at | dt('%Y-%m-%d') }}</span>
+          </td>
+          <td class="nowrap">
+            {% if can_write %}
+            <form method="post" action="{{ base }}/severity/{{ r.id }}/delete"
+                  onsubmit="return confirm('Remove this override? The engine grade applies again from the next scan.')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm danger" type="submit">Remove</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">No overrides. Every finding carries the grade its engine gave it.</div>
+  {% endif %}
+</div>
+{% endblock %}

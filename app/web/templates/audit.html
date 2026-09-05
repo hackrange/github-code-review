@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Audit log &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Audit log</h1>
+  <div class="faint small" id="audit-count"
+       data-limit="{{ limit }}">{{ summary }}</div></div></div>
+
+{# A plain GET form, so this works with no javascript at all.  The script
+   below turns it into something that answers as you type; without it the
+   button still submits and the page still filters. #}
+<form method="get" action="{{ base }}/audit" class="filters" id="audit-filters"
+      data-rows="{{ base }}/audit/rows">
+  {# Capped rather than filling the row.  With only two controls here, a box
+     that stretches the whole width leaves the outcome filter and the button
+     stranded at the far edge. #}
+  <div class="field" style="flex:1;min-width:260px;max-width:34rem">
+    <label for="q">Search</label>
+    {# type=text, like every other search box here.  The stylesheet gives its
+       height, padding and border to text, password, email, date, number,
+       select and textarea; a search input is in none of those, so it comes out
+       a different size from everything beside it. #}
+    <input type="text" id="q" name="q" value="{{ filters.q }}"
+           autocomplete="off" spellcheck="false"
+           placeholder="who, what, target, detail or address">
+  </div>
+  <div class="field">
+    <label for="outcome">Outcome</label>
+    <select id="outcome" name="outcome">
+      <option value="">Any</option>
+      {% for o in outcomes %}
+      <option value="{{ o }}" {{ 'selected' if filters.outcome == o }}>{{ o }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn">Search</button>
+  {% if filters.q or filters.outcome %}
+  <a class="btn sm" href="{{ base }}/audit">Clear</a>
+  {% endif %}
+</form>
+
+<div class="card">
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th>
+        <th>Detail</th><th>From</th><th>Outcome</th></tr></thead>
+      <tbody id="audit-rows">
+        {% include "audit_rows.html" %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<script src="{{ base }}/static/audit.js?v={{ asset_v('audit.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Schedules &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Schedules</h1>
+    <div class="faint small">Cron for scans and for refreshing the vulnerability feeds</div></div>
+  {% if can_edit %}
+  <div class="page-actions">
+    <form method="post" action="{{ base }}/schedules/split" style="display:inline"
+          onsubmit="return confirm('Make one nightly schedule per organization, forty minutes apart?')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit">One per organization</button>
+    </form>
+    <button class="btn primary" type="button" data-modal="schedule-modal"
+            data-schedule_id="" data-name="" data-cron="0 2 * * *"
+            data-scope_orgs="">Add one</button>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  {% if rows %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Name</th><th>What it does</th><th>When</th><th>On</th>
+        <th>Last run</th><th>Next run</th><th></th></tr></thead>
+      <tbody>
+      {% for s in rows %}
+        <tr>
+          <td class="small">{{ s.name }}</td>
+          <td class="small faint">
+            {% if s.kind == 'feeds' %}refreshes the CISA and EPSS lists
+            {% else %}runs a scan
+              {%- if s.scope_orgs and s.scope_orgs != '*' %} of {{ s.scope_orgs }}
+              {%- else %} of every organization{% endif %}{% endif %}
+          </td>
+          <td class="mono small">{{ s.cron }}</td>
+          <td>{% if s.enabled %}<span class="badge ok">on</span>
+              {% else %}<span class="badge waived">off</span>{% endif %}</td>
+          <td class="small faint nowrap">
+            {{ s.last_run_at | dt('%Y-%m-%d %H:%M') if s.last_run_at else 'never' }}
+            {% if s.last_status == 'failed' %}<span class="badge critical">failed</span>{% endif %}
+          </td>
+          <td class="small faint nowrap">{{ s.next_run_at | dt('%Y-%m-%d %H:%M') if s.next_run_at else '' }}</td>
+          <td class="nowrap">
+            {% if can_edit %}
+              <button class="btn sm" type="button" data-modal="schedule-modal"
+                      data-schedule_id="{{ s.id }}" data-name="{{ s.name }}"
+                      data-cron="{{ s.cron }}" data-scope_orgs="{{ s.scope_orgs }}">Edit</button>
+              <form method="post" action="{{ base }}/schedules/{{ s.id }}/run" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm" type="submit">Run now</button>
+              </form>
+              <form method="post" action="{{ base }}/schedules/{{ s.id }}/delete"
+                    style="display:inline"
+                    onsubmit="return confirm('Delete this schedule?')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm danger" type="submit">Delete</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<div class="empty">No schedules yet.</div>{% endif %}
+</div>
+
+{% if can_edit %}
+<div class="modal-backdrop" id="schedule-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/schedules/save">
+      <div class="modal-head">Schedule
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="schedule_id">
+        <div class="field">
+          <label for="s-name">Name</label>
+          <input type="text" id="s-name" name="name" required maxlength="120">
+        </div>
+        <div class="field">
+          <label for="s-kind">What it does</label>
+          <select id="s-kind" name="kind">
+            <option value="scan">Run a scan</option>
+            <option value="feeds">Refresh the vulnerability feeds</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="s-cron">When</label>
+          <input type="text" id="s-cron" name="cron" required maxlength="120"
+                 placeholder="17 2 * * *">
+          <div class="help">Five fields: minute, hour, day of month, month, day
+            of week. <span class="mono">17 2 * * *</span> is 02:17 every day,
+            read in the time zone set on the Settings page
+            {% if tz_label %}(currently <strong>{{ tz_label }}</strong>){% endif %}.</div>
+        </div>
+        <div class="field">
+          <label for="s-orgs">Which organizations</label>
+          <input type="text" id="s-orgs" name="scope_orgs" maxlength="1000"
+                 list="known-orgs" placeholder="* for all of them"
+                 autocomplete="off">
+          <datalist id="known-orgs">
+            <option value="*">Every organization</option>
+            {% for o in known_orgs %}<option value="{{ o }}"></option>{% endfor %}
+          </datalist>
+          <div class="help">
+            Start typing, or clear the box, to pick from
+            <strong>{{ known_orgs|length }}</strong> organization(s) taken from
+            your Connections.
+            <span class="mono">*</span> or empty covers every one the credential
+            can reach. List several separated by commas. One job per
+            organization is usually the better way round: use the button at the
+            top of this page. Ignored when it is a feeds job.
+          </div>
+        </div>
+        <div class="field">
+          <label class="flex" style="font-weight:400">
+            <input type="checkbox" name="enabled" value="1" checked
+                   style="width:auto">
+            Turned on
+          </label>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

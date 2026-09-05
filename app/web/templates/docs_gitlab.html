@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Connecting GitLab &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Connecting GitLab</h1>
+  <div class="faint small">Tokens, groups, and what a free instance does not have.</div></div>
+  <div class="page-actions"><a class="btn" href="{{ base }}/connections">Back to connections</a></div>
+</div>
+
+<div class="notice info">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+  <div>GitLab is the easier of the two. A token is not pinned to one group the
+    way a fine grained GitHub token is pinned to one owner, and there is no per
+    group authorization step, so <strong>one connection usually covers the whole
+    instance</strong>.</div>
+</div>
+
+<div class="card"><div class="card-body">
+  <h2>Which token</h2>
+  <table>
+    <thead><tr><th>Kind</th><th>Reaches</th><th>Use it when</th></tr></thead>
+    <tbody>
+      <tr><td class="small">Personal</td><td class="small">Every group and project the account can see</td>
+        <td class="small">Scanning an estate. One connection.</td></tr>
+      <tr><td class="small">Group</td><td class="small">That group and its subgroups</td>
+        <td class="small">Scanning one part of the instance.</td></tr>
+      <tr><td class="small">Project</td><td class="small">One project, and no group at all</td>
+        <td class="small">Scanning a single project.</td></tr>
+    </tbody>
+  </table>
+  <p class="small">Scopes: <span class="mono">read_api</span> and
+    <span class="mono">read_repository</span>. Nothing needs write.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Filling in the connection</h2>
+  <ul class="small">
+    <li><strong>API address</strong> &mdash; <span class="mono">https://gitlab.com/api/v4</span>,
+      or your own host with <span class="mono">/api/v4</span> on the end. Same
+      shape either way: there is nothing different about a self managed
+      instance here.
+      <div class="faint">Opening that address in a browser returns
+        <span class="mono">404</span>. That is expected. It is a prefix, not a
+        page: <span class="mono">/api/v4/projects</span> answers,
+        <span class="mono">/api/v4</span> on its own has nothing behind it. Use
+        the <strong>Test</strong> button rather than a browser to check it.</div></li>
+    <li><strong>Web address</strong> &mdash; the host on its own. Finding links are
+      built from it.</li>
+    <li><strong>Group</strong> &mdash; the full path including any parent groups,
+      for example <span class="mono">acme/platform</span>. Leave it empty to scan
+      every group the token can see; for a personal token that is usually right.
+      Subgroups are always included.</li>
+  </ul>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>What a project token looks like</h2>
+  <p class="small">A project access token belongs to a project and to no group,
+    so the scan reports <em>no groups came back</em>. That is correct, not a
+    permissions problem: the project is still found through membership, and the
+    warning says so.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>What is not available</h2>
+  <p class="small">Dependency alerts, code scanning and secret scanning alerts are
+    GitHub features. GitLab's equivalents are paid tiers and a self managed
+    instance often has none of them, so this asks first and <strong>skips
+    them</strong> rather than calling an endpoint that is not there and reading
+    the empty answer as good news.</p>
+  <p class="small">What still runs, which is the bulk of it: secrets across the
+    full history, code analysis, SBOM and dependency vulnerabilities, triage,
+    exceptions and both report files.</p>
+</div></div>
+{% endblock %}

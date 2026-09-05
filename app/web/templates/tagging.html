@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Tagging &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Tagging</h1>
+    <div class="faint small">What each repository is, who answers for it and
+      what it holds.  The connection says this for a whole account, which stops
+      being true the moment one organization holds a cardholder system and a
+      brochure site.  Anything set here wins for that repository; anything left
+      empty falls back to the connection, so this is only needed where the
+      account level answer is wrong.
+      <strong>{{ untagged }}</strong> of {{ total }} have no technical owner.</div></div>
+  {% if can_write %}
+  <div class="page-actions">
+    <a class="btn" href="{{ base }}/tagging/export{% if filters and filters.org %}?org={{ filters.org }}{% endif %}">Export CSV</a>
+    <button class="btn" type="button" data-modal="tagging-import-modal">Import CSV</button>
+  </div>
+  {% endif %}
+</div>
+
+{% if can_write %}
+<div class="modal-backdrop" id="tagging-import-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/tagging/import"
+          enctype="multipart/form-data">
+      <div class="modal-head">Import tagging
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <p class="faint small">Export first to see the shape.  The repository
+          column is what each row is matched on; the rest are
+          application_name, application_owner, technical_owner, sensitivity and
+          description.</p>
+        <p class="faint small">An empty cell leaves that value alone, so a
+          column you did not fill in cannot quietly wipe what somebody set last
+          month.  A single <strong>-</strong> clears it, which is the same word
+          the form above uses.  A repository this installation has never seen
+          is reported back rather than created.</p>
+        <label>The file
+          <input type="file" name="file" accept=".csv,text/csv" required>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Import</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% endif %}
+
+<form method="get" action="{{ base }}/tagging" class="filters">
+  <div class="field" style="flex:1;min-width:220px">
+    <label for="q">Search</label>
+    <input type="text" id="q" name="q" value="{{ filters.q }}"
+           placeholder="repository, owner, application or label">
+  </div>
+  <div class="field">
+    <label for="org">Organization</label>
+    <select id="org" name="org" data-autosubmit>
+      <option value="">Any</option>
+      {% for o in orgs %}<option value="{{ o }}" {{ 'selected' if filters.org == o }}>{{ o }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="show">Tagged</label>
+    <select id="show" name="show" data-autosubmit>
+      <option value="">Any</option>
+      <option value="untagged" {{ 'selected' if filters.show == 'untagged' }}>Not yet</option>
+      <option value="tagged" {{ 'selected' if filters.show == 'tagged' }}>Already</option>
+    </select>
+  </div>
+  <button type="submit" class="btn">Search</button>
+</form>
+
+{% if can_write %}
+<div class="card">
+  <div class="card-head">Tag what is ticked</div>
+  <form method="post" action="{{ base }}/tagging/apply" id="tag-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="repo_ids" id="tag-ids" value="">
+    <div class="form-grid">
+      <label>Application
+        <input type="text" name="application_name" placeholder="Payments API">
+      </label>
+      <label>Application owner
+        <span class="faint small">An address, so somebody can be asked later.
+          Several are fine, comma separated.  A single dash clears it.</span>
+        <input type="email" name="application_owner" placeholder="a.person@example.com"
+               multiple>
+      </label>
+      <label>Technical owner
+        <input type="email" name="technical_owner" placeholder="a.person@example.com"
+               multiple>
+      </label>
+      <label class="wide">What it holds
+        <div class="check-grid">
+          {% for label in labels %}
+          <label class="check"><input type="checkbox" name="holds:{{ label }}" value="1"> {{ label }}</label>
+          {% endfor %}
+        </div>
+        <span class="faint small">Tick nothing and what is already there is left
+          alone.  A single dash in any box above clears that field instead.</span>
+      </label>
+      <label class="check wide">
+        <input type="checkbox" name="clear_holds" value="1">
+        Clear what these hold, rather than leaving it alone
+      </label>
+      <div class="wide">
+        <button class="btn primary" type="submit">Apply to <span id="tag-count">0</span> selected</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head">{{ shown }} repositor{{ 'y' if shown == 1 else 'ies' }}</div>
+  <div class="table-scroll">
+    <table>
+      <thead><tr>
+        {% if can_write %}<th class="nowrap"><input type="checkbox" id="tag-all"></th>{% endif %}
+        <th>Repository</th><th>Application</th><th>Technical owner</th><th>Holds</th>
+      </tr></thead>
+      <tbody>
+      {% for r in rows %}
+        {% set e = resolved[r.id] %}
+        <tr>
+          {% if can_write %}<td><input type="checkbox" class="tag-pick" value="{{ r.id }}"></td>{% endif %}
+          <td class="stack">
+            <span class="mono small">{{ r.full_name }}</span>
+            {% if r.tagged_by %}<span class="sub">tagged by {{ r.tagged_by }}</span>{% endif %}
+          </td>
+          {# Where an answer came from matters as much as the answer.  Nobody
+             has said, and somebody said for the whole account, are different. #}
+          {% for field in ['application_name', 'technical_owner'] %}
+          <td class="small">
+            {% if e[field].value %}{{ e[field].value }}
+              {% if e[field]['from'] == 'connection' %}<span class="sub faint">from the connection</span>{% endif %}
+            {% else %}<span class="faint">unknown</span>{% endif %}
+          </td>
+          {% endfor %}
+          <td class="small">
+            {% if e.sensitivity.value %}
+              {% for tag in e.sensitivity.value.split(',') %}<span class="badge medium">{{ tag.strip() }}</span> {% endfor %}
+              {% if e.sensitivity['from'] == 'connection' %}<span class="sub faint">from the connection</span>{% endif %}
+            {% else %}<span class="faint">unknown</span>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<script src="{{ base }}/static/tagging.js?v={{ asset_v('tagging.js') }}"></script>
+{% endblock %}

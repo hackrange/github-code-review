@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Exceptions &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Exceptions</h1>
+  <div class="faint small">Requested, approved and expired.
+    {{ total }} in total{% if q or status %}, {{ shown }} shown{% endif %}.</div></div></div>
+
+{% macro pager() %}
+{% if pages > 1 %}
+{% set qs = 'q=' ~ q|urlencode ~ '&status=' ~ status ~ '&per=' ~ per %}
+<div class="flex-between" style="margin:.6rem 0">
+  <div class="small faint">Page {{ page_no }} of {{ pages }}</div>
+  <div class="page-actions">
+    {% if page_no > 1 %}
+    <a class="btn sm" href="{{ base }}/waivers?{{ qs }}&page_no={{ page_no - 1 }}">Back</a>
+    {% endif %}
+    {% if page_no < pages %}
+    <a class="btn sm" href="{{ base }}/waivers?{{ qs }}&page_no={{ page_no + 1 }}">Next</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endmacro %}
+
+<form method="get" action="{{ base }}/waivers" class="filters">
+  <div class="field" style="flex:1;min-width:220px">
+    <label for="q">Search</label>
+    <input type="text" id="q" name="q" value="{{ q }}"
+           placeholder="repository, path, reason, ticket or who asked">
+  </div>
+  <div class="field">
+    <label for="status">Status</label>
+    <select id="status" name="status" data-autosubmit>
+      <option value="">Any</option>
+      {% for opt in ['requested', 'approved', 'rejected', 'revoked', 'expired'] %}
+      <option value="{{ opt }}" {{ 'selected' if status == opt }}>{{ opt }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="per">Rows</label>
+    <select id="per" name="per" data-autosubmit>
+      {% for n in [25, 50, 100, 250, 500] %}
+      <option value="{{ n }}" {{ 'selected' if per == n }}>{{ n }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn">Search</button>
+  {% if q or status %}
+  <a class="btn" href="{{ base }}/waivers">Clear</a>
+  {% endif %}
+</form>
+
+{{ pager() }}
+
+{% if can_revoke and rows %}
+<div class="card" id="bulk-bar" hidden>
+  <div class="flex-between">
+    <div class="small"><strong><span data-slot="bulk-n">0</span></strong>
+      selected</div>
+    <div class="page-actions">
+      <button type="button" class="btn sm" id="bulk-clear">Clear</button>
+      <button type="button" class="btn sm danger" data-modal="revoke-modal">Revoke the selected</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  {% if rows %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr>
+        {% if can_revoke %}
+        <th class="nowrap"><input type="checkbox" id="bulk-select-page"
+            title="Every approved one on this page"></th>
+        {% endif %}
+        <th>Status</th><th>Finding</th><th>Why</th><th>Asked by</th><th></th></tr></thead>
+      <tbody>
+      {% for w in rows %}
+        {% set f = findings.get(w.finding_id) %}
+        <tr>
+          {% if can_revoke %}
+          {# Only an approved exception can be taken back, so the rest of the
+             boxes are dead rather than absent: a column that appears and
+             disappears down the table is harder to read than a locked box. #}
+          <td><input type="checkbox" class="bulk-pick" value="{{ w.id }}"
+                     {{ 'disabled' if w.status.value != 'approved' }}></td>
+          {% endif %}
+          <td class="stack nowrap">
+            {% if w.status.value == 'approved' and w.expires_at and w.expires_at.replace(tzinfo=None) < now.replace(tzinfo=None) %}
+              <span><span class="badge medium">expired</span></span>
+            {% else %}
+              <span><span class="badge {{ 'pending' if w.status.value == 'requested' else ('ok' if w.status.value == 'approved' else 'waived') }}">{{ w.status.value }}</span></span>
+            {% endif %}
+            {% if w.expires_at %}
+            <span class="sub">until {{ w.expires_at | dt('%Y-%m-%d') }}</span>
+            {% endif %}
+          </td>
+          {# Repository first, the path under it: a path is long and has no
+             spaces to wrap at, so beside the repository it squeezes everything
+             else out of the row. #}
+          <td class="stack">
+            {% if f %}
+              <span><a href="{{ base }}/findings/{{ f.id }}">{{ f.repository }}</a></span>
+              <span class="sub mono" title="{{ f.file_path or f.package_name }}">{{ f.file_path or f.package_name }}</span>
+            {% else %}<span class="faint">gone</span>{% endif %}
+          </td>
+          <td class="stack reason">
+            <span>{{ w.reason[:140] }}{% if w.reason|length > 140 %}&hellip;{% endif %}</span>
+            {% if w.ticket %}<span class="sub"><span class="badge">{{ w.ticket }}</span></span>{% endif %}
+          </td>
+          <td class="stack nowrap">
+            <span>{{ w.requested_by }}</span>
+            {% if w.decided_by %}<span class="sub">decided by {{ w.decided_by }}</span>{% endif %}
+          </td>
+          <td class="nowrap">
+            {% if can_approve and w.status.value == 'requested' %}
+              <form method="post" action="{{ base }}/waivers/{{ w.id }}/approve"
+                    style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm primary" type="submit">Approve</button>
+              </form>
+              <form method="post" action="{{ base }}/waivers/{{ w.id }}/reject"
+                    style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm" type="submit">Reject</button>
+              </form>
+            {% elif can_approve and w.status.value == 'approved' %}
+              <form method="post" action="{{ base }}/waivers/{{ w.id }}/revoke"
+                    style="display:inline"
+                    onsubmit="return confirm('The finding comes straight back into both report files. Continue?')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm danger" type="submit">Revoke</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {{ pager() }}
+  {% elif q or status %}
+  <div class="empty">Nothing matches that search.
+    <a href="{{ base }}/waivers">Show all {{ total }}</a>.</div>
+  {% else %}
+  <div class="empty">No exceptions yet.</div>
+  {% endif %}
+</div>
+{% if can_revoke %}
+<form method="post" id="bulk-form" action="{{ base }}/waivers/revoke-bulk">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="waiver_ids" id="bulk-ids" value="">
+</form>
+
+<div class="modal-backdrop" id="revoke-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Revoke what is selected
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <div class="notice warn">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+        <div><strong><span data-slot="bulk-n">0</span></strong> exceptions.
+          Their findings come straight back into both report files, and any
+          exclusion each one created is retired with it.</div>
+      </div>
+      <p class="small faint">The exceptions are not deleted. They stay on the
+        record as revoked, with your name and the date against them.</p>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Cancel</button>
+      <button type="submit" class="btn danger" form="bulk-form">Revoke them</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+<script src="{{ base }}/static/bulk.js?v={{ asset_v('bulk.js') }}"></script>
+{% endblock %}
