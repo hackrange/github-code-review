@@ -636,9 +636,18 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     # Wrapped, because a chart is not worth failing an ingest for.  A missing
     # trend row is a gap somebody notices later; a failed ingest is a scan
     # thrown away.
+    #
+    # Inside a savepoint, and that part is not optional.  Catching the
+    # exception is not enough on its own: a failed flush leaves the session
+    # in a state where every later statement on it fails too, so a swallowed
+    # error here quietly takes down whatever the caller does next.  It did
+    # exactly that the first time, and the thing it took down was the
+    # software inventory being salvaged from an interrupted scan, which is a
+    # much more expensive thing to lose than a point on a graph.
     try:
         from app.core import trends
-        trends.record(session)
+        with session.begin_nested():
+            trends.record(session)
     except Exception:
         log.exception("could not write the trend point, carrying on")
 

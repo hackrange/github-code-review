@@ -83,11 +83,23 @@ def record(session, day: datetime = None) -> int:
                       Finding.branch, Finding.connection, Finding.severity)
             .all())
 
+    # Keyed on the branch, not on the connection.
+    #
+    # A repository can be reachable through more than one connection, and
+    # several here are: the same branch of the same repository arrives twice
+    # with two connection names.  Keyed on both, that is two rows claiming to
+    # describe one branch on one day, which is a duplicate by the definition
+    # this table is built on.  The connection is kept as a label so the filter
+    # box still works, and the first one seen wins, because a branch that two
+    # connections can reach is one branch.
     buckets = {}
+    labels = {}
     for org, repo, branch, conn, severity, total in rows:
-        key = (org or "", repo or "", branch or "", conn or "")
+        key = (org or "", repo or "", branch or "")
+        labels.setdefault(key, conn or "")
         entry = buckets.setdefault(key, {level: 0 for level in LEVELS})
-        entry[getattr(severity, "value", str(severity))] = total
+        name = getattr(severity, "value", str(severity))
+        entry[name] = entry.get(name, 0) + total
 
     # Actions per branch and severity, counted the way the list counts them.
     head, alone = grouping._key_columns()
@@ -108,11 +120,13 @@ def record(session, day: datetime = None) -> int:
 
     actions = {}
     for org, repo, branch, conn, worst, total in action_rows:
-        key = (org or "", repo or "", branch or "", conn or "")
+        key = (org or "", repo or "", branch or "")
+        labels.setdefault(key, conn or "")
         level = grouping.BY_RANK.get(int(worst or 0))
         if level is None:
             continue
-        actions.setdefault(key, {name: 0 for name in LEVELS})[level.value] = total
+        entry = actions.setdefault(key, {name: 0 for name in LEVELS})
+        entry[level.value] = entry.get(level.value, 0) + total
 
     certified = _certification_by_branch(session)
 
@@ -123,12 +137,12 @@ def record(session, day: datetime = None) -> int:
 
     written = 0
     for key in set(buckets) | set(actions):
-        org, repo, branch, conn = key
+        org, repo, branch = key
         found = buckets.get(key, {level: 0 for level in LEVELS})
         acted = actions.get(key, {level: 0 for level in LEVELS})
         session.add(TrendPoint(
             day=day, organization=org, repository=repo, branch=branch,
-            connection=conn, source=SNAPSHOT,
+            connection=labels.get(key, ""), source=SNAPSHOT,
             critical=found["critical"], high=found["high"],
             medium=found["medium"], low=found["low"],
             info=found["info"], unknown=found["unknown"],
@@ -210,10 +224,13 @@ def backfill(session, days: int = 90) -> int:
             continue
 
         buckets = {}
+        labels = {}
         for org, repo, branch, conn, severity, total in rows:
-            key = (org or "", repo or "", branch or "", conn or "")
+            key = (org or "", repo or "", branch or "")
+            labels.setdefault(key, conn or "")
             entry = buckets.setdefault(key, {level: 0 for level in LEVELS})
-            entry[getattr(severity, "value", str(severity))] = total
+            name = getattr(severity, "value", str(severity))
+            entry[name] = entry.get(name, 0) + total
 
         head, alone = grouping._key_columns()
         rank = grouping._rank_column()
@@ -231,23 +248,24 @@ def backfill(session, days: int = 90) -> int:
                 grouped.c.connection, grouped.c.worst, func.count()).group_by(
                 grouped.c.organization, grouped.c.repository, grouped.c.branch,
                 grouped.c.connection, grouped.c.worst).all():
-            key = (org or "", repo or "", branch or "", conn or "")
+            key = (org or "", repo or "", branch or "")
+            labels.setdefault(key, conn or "")
             level = grouping.BY_RANK.get(int(worst or 0))
             if level is not None:
-                actions.setdefault(
-                    key, {n: 0 for n in LEVELS})[level.value] = total
+                entry = actions.setdefault(key, {n: 0 for n in LEVELS})
+                entry[level.value] = entry.get(level.value, 0) + total
 
         (session.query(TrendPoint)
          .filter(TrendPoint.day == day, TrendPoint.source == RECONSTRUCTED)
          .delete(synchronize_session=False))
 
         for key in set(buckets) | set(actions):
-            org, repo, branch, conn = key
+            org, repo, branch = key
             found = buckets.get(key, {n: 0 for n in LEVELS})
             acted = actions.get(key, {n: 0 for n in LEVELS})
             session.add(TrendPoint(
                 day=day, organization=org, repository=repo, branch=branch,
-                connection=conn, source=RECONSTRUCTED,
+                connection=labels.get(key, ""), source=RECONSTRUCTED,
                 critical=found["critical"], high=found["high"],
                 medium=found["medium"], low=found["low"],
                 info=found["info"], unknown=found["unknown"],

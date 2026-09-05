@@ -842,7 +842,13 @@ class TrendPoint(Base):
 
     __tablename__ = "trend_points"
     __table_args__ = (
-        UniqueConstraint("day", "repository", "branch", name="uq_trend_day"),
+        # One row per branch per day per kind of record.  Not per connection:
+        # a repository can be reachable through two of them and is still one
+        # branch.  Source is in the key so a reconstruction and a real record
+        # of the same day can sit side by side while one replaces the other,
+        # rather than the insert failing halfway through.
+        UniqueConstraint("day", "repository", "branch", "source",
+                         name="uq_trend_day"),
         Index("ix_trend_day_org", "day", "organization"),
     )
 
