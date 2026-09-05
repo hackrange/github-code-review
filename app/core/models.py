@@ -333,6 +333,13 @@ class Repository(Base):
     # rather than asking somebody to type a name from memory, and it is also the
     # only record afterwards of what a scan covered.
     branch_names = Column(LONG_JSON, default="[]")
+    # Branch name to the commit it was on at the last scan.
+    #
+    # What lets a security sign off know it is out of date.  Names alone say
+    # a branch still exists; they cannot say whether anybody pushed to it,
+    # and a commit that introduced no finding is still a commit nobody
+    # reviewed.
+    branch_heads = Column(LONG_JSON, default="{}")
 
     # What this particular repository is, who answers for it and what it holds.
     #
@@ -612,6 +619,77 @@ class Finding(Base):
     repo = relationship("Repository", back_populates="findings")
     waiver = relationship("Waiver", back_populates="finding", uselist=False,
                           cascade="all, delete-orphan")
+
+
+class Certification(Base):
+    """A security review of one branch of one repository, and when it lapses.
+
+    Somebody in security reads a codebase, finds nothing they consider unsafe,
+    and says so.  That is a real and useful statement, and until now there was
+    nowhere to put it: the reviewer's conclusion lived in a ticket somewhere
+    and the tool went on showing the same list to the next person.
+
+    It is also the most dangerous thing in this schema, because a green badge
+    is read as "this is fine" by everybody who sees it and almost nobody will
+    check what it was based on.  So it is deliberately narrow.
+
+    It certifies a branch, not a repository.  The same code on main and on a
+    six month old release branch are different code, and a review of one says
+    nothing about the other.
+
+    It certifies a moment, not a state.  The commit that was reviewed is
+    recorded, so a certification can be shown as describing code that has since
+    moved on rather than quietly continuing to vouch for whatever was pushed
+    after it.
+
+    It expires, and the date is required.  A review with no end date is a claim
+    that nothing will ever change, which is not a claim anybody means to make.
+
+    And it is never a filter.  Nothing here removes a finding, changes a grade
+    or keeps anything out of a report: a certified repository that starts
+    producing criticals shows exactly the criticals it produces, next to a
+    badge that says the review is now out of date.  A certification that could
+    hide a finding would be a way of turning one person's confidence into
+    everybody else's blind spot.
+    """
+
+    __tablename__ = "certifications"
+    __table_args__ = (
+        UniqueConstraint("repository", "branch", name="uq_certification"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    repository = Column(String(320), nullable=False, index=True)
+    branch = Column(String(255), nullable=False, default="")
+
+    # What was reviewed and what the reviewer concluded.  Required, because a
+    # badge whose only content is that somebody clicked a button cannot be
+    # argued with by the next person who has to rely on it.
+    note = Column(Text, default="")
+    # The head this was reviewed at.  What makes staleness detectable rather
+    # than assumed.
+    commit_sha = Column(String(64), default="")
+
+    certified_by = Column(String(120), default="")
+    certified_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+
+    # Withdrawing one is not deleting it.  The record that somebody certified
+    # this in March, and that somebody else took it back in June, is the part
+    # an auditor asks about.
+    revoked_at = Column(DateTime(timezone=True))
+    revoked_by = Column(String(120), default="")
+    revoked_reason = Column(Text, default="")
+
+    def live(self, now: datetime = None) -> bool:
+        now = now or utcnow()
+        if self.revoked_at is not None:
+            return False
+        expires = self.expires_at
+        # SQLite returns these naive whatever the column says.
+        if expires is not None and expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        return bool(expires and expires > now)
 
 
 class Waiver(Base):

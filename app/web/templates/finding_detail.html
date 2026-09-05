@@ -12,13 +12,6 @@
 </div>
 {% endif %}
 
-{% if flash %}
-<div class="notice {{ 'bad' if flash_kind == 'error' else ('warn' if flash_kind == 'warn' else 'ok') }}">
-  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
-  <div>{{ flash }}</div>
-</div>
-{% endif %}
-
 <div class="page-head">
   <div>
     <h1><span class="badge {{ f.severity.value }}">{{ f.severity.value }}</span>
@@ -90,6 +83,79 @@
     </form>
     {% else %}
     <p class="faint small">An administrator can accept this.</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% if certification and certification.state != 'none' %}
+{# Green only when somebody reviewed this code and it is still this code.
+   Any push at all turns it amber, because a reviewer read what was there and
+   what is there now is different.  Waiting for a new finding would mean the
+   badge stayed green over any amount of code the engines happened to have
+   nothing to say about, and that is not what a sign off claims. #}
+<div class="notice {{ 'ok' if certification.state == 'active'
+                      else ('warn' if certification.state == 'stale' else 'info') }}">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+  <div>
+    <strong>
+      {%- if certification.state == 'active' %}Certified app
+      {%- elif certification.state == 'stale' %}Certification needs re-evaluating
+      {%- elif certification.state == 'lapsed' %}Certification has lapsed
+      {%- else %}Certification withdrawn{% endif -%}
+    </strong>
+    {{ certification.why }}.
+    <div class="small" style="margin-top:.25rem">
+      {{ certification.certification.repository }}
+      on {{ certification.certification.branch or 'the default branch' }},
+      reviewed by {{ certification.certification.certified_by }}
+      on {{ certification.certification.certified_at | dt('%Y-%m-%d') }},
+      expires {{ certification.certification.expires_at | dt('%Y-%m-%d') }}.
+    </div>
+    {% if certification.certification.note %}
+    <div class="small" style="margin-top:.25rem">{{ certification.certification.note }}</div>
+    {% endif %}
+    <div class="faint small" style="margin-top:.25rem">This changes no finding,
+      no grade and nothing in a report. Everything found here is still shown.</div>
+  </div>
+</div>
+{% endif %}
+
+{% if can_certify %}
+<div class="card">
+  <div class="card-head">
+    {%- if certification and certification.state == 'active' %}This branch is certified
+    {%- else %}Certify this branch{% endif -%}
+  </div>
+  <div class="card-body">
+    <p class="faint small">A record that somebody in security read this code and
+      found nothing they considered unsafe. It covers
+      <strong>{{ f.repository }}</strong> on
+      <strong>{{ f.branch or 'the default branch' }}</strong> and nothing else:
+      the same code on another branch has not been reviewed.</p>
+    <form method="post" action="{{ base }}/findings/{{ f.id }}/certify">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>What you reviewed, and what you concluded
+        <textarea name="note" rows="3" required minlength="20" maxlength="4000"
+                  placeholder="What you read, what you checked for, and why you are satisfied.">{{ certification.certification.note if certification and certification.certification else '' }}</textarea>
+      </label>
+      <label>Expires
+        <input type="date" name="expires" required value="{{ default_expiry }}">
+        <span class="faint small">Required. It also turns amber the moment
+          anybody pushes to this branch, whichever comes first.</span>
+      </label>
+      <button class="btn primary" type="submit">
+        {%- if certification and certification.state in ['active', 'stale'] %}Re-certify
+        {%- else %}Certify this branch{% endif -%}
+      </button>
+    </form>
+    {% if certification and certification.state in ['active', 'stale', 'lapsed'] %}
+    <form method="post" action="{{ base }}/findings/{{ f.id }}/certify/revoke"
+          style="margin-top:.5rem">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="text" name="reason" maxlength="2000" placeholder="Why withdraw it">
+      <button class="btn" type="submit">Withdraw the certification</button>
+    </form>
     {% endif %}
   </div>
 </div>
@@ -207,6 +273,30 @@
         <tr><th>State</th><td>{{ f.state.value }}</td></tr>
         <tr><th>Organization</th><td>{{ f.organization }}</td></tr>
         <tr><th>Repository</th><td>{{ f.repository }}</td></tr>
+        {# Which branch, and whether that is the one that ships.
+           The same finding on the default branch and on a feature branch
+           somebody abandoned in March are different problems, and a reader
+           deciding what to do first needs to be able to tell them apart
+           without opening the repository. #}
+        {% if f.branch or on_branches %}
+        <tr><th>Branch</th><td>
+          {% for b in (on_branches or [f.branch]) %}
+            <span class="mono small">{{ b }}</span>{%
+              if repo_info and repo_info.default_branch == b
+              %} <span class="badge ok">default</span>{% endif %}{%
+              if not loop.last %}<span class="faint">,</span> {% endif %}
+          {% endfor %}
+          {% if on_branches | length > 1 %}
+          <div class="faint small">On {{ on_branches | length }} branches. It is
+            the same finding in each: fixing it on one leaves it on the
+            others.</div>
+          {% elif repo_info and repo_info.default_branch
+                  and repo_info.default_branch not in (on_branches or [f.branch]) %}
+          <div class="faint small">Not on {{ repo_info.default_branch }}, the
+            default branch, so this is not in what ships today.</div>
+          {% endif %}
+        </td></tr>
+        {% endif %}
         {% if f.file_path %}<tr><th>File</th><td class="mono">{{ f.file_path }}{% if f.line %}:{{ f.line }}{% endif %}</td></tr>{% endif %}
         {% if f.package_name %}<tr><th>Package</th><td>{{ f.package_name }} {{ f.package_version }}</td></tr>{% endif %}
         {% if f.malicious %}

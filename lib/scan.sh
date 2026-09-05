@@ -21,6 +21,9 @@ scan_one_repo() {
   # asked, so a report from before this existed and a repository nobody asked
   # about are not made to look like a refusal.
   DAST_JSON='null'
+  # Which commit each branch is on, so a review of this code can be told
+  # apart from a review of what it used to be.
+  BRANCH_HEADS_JSON='{}'
   GHSCAN_SBOM_CDX=""
 
   local result_file="$results_dir/${slug}.json"
@@ -82,12 +85,15 @@ scan_one_repo() {
       --arg passes "$PASSES_DONE" \
       --arg hist_from "${HISTORY_FROM:-}" \
       --argjson hist_done "${HISTORY_COMPLETE:-false}" \
-      --argjson dast "${DAST_JSON:-null}" '
+      --argjson dast "${DAST_JSON:-null}" \
+      --argjson branch_heads "${BRANCH_HEADS_JSON:-{\}}" '
       {
         repository: $repo[0],
         status: $status,
         error: (if $err == "" then null else $err end),
         branches_scanned: $branches[0],
+        # branch name to the commit it was on when this ran.
+        branch_heads: $branch_heads,
         branch_count: ($branches[0] | length),
         secrets: $secrets[0],
         sbom: $sbom[0],
@@ -167,6 +173,23 @@ scan_one_repo() {
     if (( ${#branches[@]} == 0 )); then branches=("$default_branch"); fi
     BRANCHES_JSON=$(printf '%s\n' "${branches[@]}" | jq -R . | jq -sc '.')
     export GHSCAN_BRANCH_SET="$BRANCHES_JSON"
+
+    # Where each branch actually is, as a commit.
+    #
+    # The names alone cannot answer whether anything changed since somebody
+    # last looked at this code, and that is the question a security sign off
+    # depends on: a commit that introduced no finding is still a commit
+    # nobody reviewed.  Recorded here because this is the one moment the
+    # clone is on disk and the answer is free.
+    local heads_json="{}" bh sha
+    for bh in "${branches[@]}"; do
+      sha=$(git -C "$clone_dir" rev-parse --verify --quiet "$bh" 2>/dev/null || echo "")
+      [[ -n "$sha" ]] || continue
+      heads_json=$(printf '%s' "$heads_json" \
+        | jq -c --arg b "$bh" --arg s "$sha" '. + {($b): $s}')
+    done
+    BRANCH_HEADS_JSON="$heads_json"
+
     log_info "[$full_name] ${#branches[@]} branch(es) in scope"
   fi
 

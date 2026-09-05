@@ -1389,11 +1389,187 @@ def judge(rule: str, path: str, matched: str, source: str, line: int = 0,
     return REVIEW, "", ""
 
 
+SKIP_FRAMEWORK_DIRS = {
+    "node_modules", "vendor", "third_party", "bower_components", ".venv",
+    "venv", "site-packages", "dist", "build", "target", "__pycache__",
+    "tests", "test", "fixtures", "testdata", "examples", "example", "docs",
+}
+
+
+# --- rules that belong to a framework nobody here uses ------------------------
+#
+# semgrep namespaces its rules by the thing they are about, so
+# python.django.security.audit.django-no-csrf-token says plainly that it is a
+# Django rule.  Run against an application that does not use Django it fires on
+# every form it can find and reports the absence of a template tag that could
+# not be there, because the framework that defines it is not installed.
+#
+# On this project that was fifty two findings out of a hundred and fifty eight,
+# a third of the whole list, from one Django rule reading a FastAPI codebase.
+# Every one of them was medium, and every one of them was wrong in the same way.
+#
+# So the namespace is read, and where it names a framework this can positively
+# establish is not in use, the finding is set aside as not applicable with the
+# reason.  Nothing is deleted and nothing is hidden: it lands under Set aside
+# like every other verdict, with a sentence somebody can disagree with.
+#
+# The direction of the check is the important part.  A framework is only ever
+# ruled out by finding its manifests and not finding it in them.  A repository
+# whose manifests cannot be read at all decides nothing, because "I could not
+# tell" and "it is not there" are different answers and only one of them is
+# safe to act on.  Guess wrong towards absent and the tool silently stops
+# reporting real findings, which is the failure this whole file exists to
+# avoid.
+
+# framework -> (manifest file names, pattern that names it inside one)
+FRAMEWORK_MARKERS = {
+    "django":  (("requirements.txt", "requirements-dev.txt", "pyproject.toml",
+                 "Pipfile", "setup.py", "setup.cfg", "constraints.txt"),
+                r"(?im)^[^#\n]*\bdjango\b"),
+    "flask":   (("requirements.txt", "requirements-dev.txt", "pyproject.toml",
+                 "Pipfile", "setup.py", "setup.cfg", "constraints.txt"),
+                r"(?im)^[^#\n]*\bflask\b"),
+    "fastapi": (("requirements.txt", "requirements-dev.txt", "pyproject.toml",
+                 "Pipfile", "setup.py", "setup.cfg", "constraints.txt"),
+                r"(?im)^[^#\n]*\bfastapi\b"),
+    "express": (("package.json",), r"(?i)\"express\"\s*:"),
+    "react":   (("package.json",), r"(?i)\"(react|next)\"\s*:"),
+    "vue":     (("package.json",), r"(?i)\"(vue|nuxt)\"\s*:"),
+    "rails":   (("Gemfile", "Gemfile.lock", "*.gemspec"), r"(?im)^[^#\n]*\brails\b"),
+    "laravel": (("composer.json", "composer.lock"), r"(?i)laravel/framework"),
+    "symfony": (("composer.json", "composer.lock"), r"(?i)symfony/"),
+    "spring":  (("pom.xml", "build.gradle", "build.gradle.kts"),
+                r"(?i)springframework|spring-boot"),
+}
+
+# A source import is proof the framework is used even when no manifest names
+# it, which happens in a vendored tree or a monorepo whose manifest is
+# somewhere else.  Only ever used to say present, never to say absent.
+FRAMEWORK_IMPORTS = {
+    "django":  r"(?m)^\s*(from|import)\s+django\b",
+    "flask":   r"(?m)^\s*(from|import)\s+flask\b",
+    "fastapi": r"(?m)^\s*(from|import)\s+fastapi\b",
+    "express": r"""(?m)require\(\s*['"]express['"]|from\s+['"]express['"]""",
+    "react":   r"""(?m)from\s+['"]react['"]|require\(\s*['"]react['"]""",
+    "vue":     r"""(?m)from\s+['"]vue['"]|require\(\s*['"]vue['"]""",
+    "rails":   r"(?m)^\s*require\s+['\"]rails",
+    "laravel": r"(?m)^\s*use\s+Illuminate\\\\",
+    "symfony": r"(?m)^\s*use\s+Symfony\\\\",
+    "spring":  r"(?m)^\s*import\s+org\.springframework\b",
+}
+
+FRAMEWORK_MANIFEST_LIMIT = 400 * 1024
+
+
+def _framework_evidence(repo_root: str) -> tuple:
+    """-> (present, decidable)
+
+    present is every framework this repository can be shown to use.
+    decidable is every framework it is safe to have an opinion about at all,
+    which means one of its manifests was found and read.  A framework missing
+    from decidable is one nobody may rule out.
+    """
+    present, decidable = set(), set()
+    if not repo_root or not os.path.isdir(repo_root):
+        return present, decidable
+
+    # Manifests, at the root and one level down, which is where a monorepo
+    # keeps them.  Deeper than that and a fixture directory starts voting.
+    found: dict = {}
+    for depth_root in (repo_root,) + tuple(
+            os.path.join(repo_root, name) for name in
+            sorted(os.listdir(repo_root))[:80]
+            if os.path.isdir(os.path.join(repo_root, name))
+            and not name.startswith(".") and name not in SKIP_FRAMEWORK_DIRS):
+        try:
+            names = os.listdir(depth_root)
+        except OSError:
+            continue
+        for name in names:
+            path = os.path.join(depth_root, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                if os.path.getsize(path) > FRAMEWORK_MANIFEST_LIMIT:
+                    continue
+                with open(path, encoding="utf-8", errors="replace") as handle:
+                    found.setdefault(name, []).append(handle.read())
+            except OSError:
+                continue
+
+    for framework, (manifests, pattern) in FRAMEWORK_MARKERS.items():
+        texts = []
+        for wanted in manifests:
+            if wanted.startswith("*"):
+                for name, blobs in found.items():
+                    if name.endswith(wanted[1:]):
+                        texts.extend(blobs)
+            else:
+                texts.extend(found.get(wanted, []))
+        if not texts:
+            continue                      # nothing to read, so no opinion
+        decidable.add(framework)
+        if any(re.search(pattern, text) for text in texts):
+            present.add(framework)
+
+    return present, decidable
+
+
+def _framework_in_source(repo_root: str, framework: str, limit: int = 3000) -> bool:
+    """Does anything in the tree import it.  Only ever answers yes usefully."""
+    pattern = FRAMEWORK_IMPORTS.get(framework)
+    if not pattern:
+        return False
+    seen = 0
+    for base, dirs, files in os.walk(repo_root):
+        dirs[:] = [d for d in dirs
+                   if d not in SKIP_FRAMEWORK_DIRS and not d.startswith(".")]
+        for name in files:
+            if not name.endswith((".py", ".js", ".jsx", ".ts", ".tsx", ".rb",
+                                  ".php", ".java", ".kt", ".vue")):
+                continue
+            seen += 1
+            if seen > limit:
+                return False
+            text = _read(os.path.join(base, name))
+            if text and re.search(pattern, text):
+                return True
+    return False
+
+
+def _framework_absent(check_id: str, present: set, decidable: set,
+                      repo_root: str, cache: dict):
+    """-> a reason this rule does not apply here, or None.
+
+    Reads the framework out of the rule's own namespace, so this covers every
+    framework semgrep names without a list of rules to keep up to date.
+    """
+    parts = [p.lower() for p in str(check_id or "").split(".")]
+    for framework in parts:
+        if framework not in FRAMEWORK_MARKERS:
+            continue
+        if framework in present:
+            return None
+        if framework not in decidable:
+            return None               # no manifest was readable: no opinion
+        if framework not in cache:
+            cache[framework] = _framework_in_source(repo_root, framework)
+        if cache[framework]:
+            return None               # the manifest missed it, the source did not
+        return ("a %s rule, and nothing in this repository uses %s: its "
+                "manifests were read and do not name it, and nothing imports "
+                "it" % (framework, framework))
+    return None
+
 def triage(findings: list, repo_root: str, muted=()) -> list:
     """Add a triage verdict to every finding.  Nothing is removed."""
     muted = tuple(m.strip() for m in (muted or ()) if str(m).strip())
     escapers = _repo_escapers(repo_root)
     corpus = _reference_corpus(repo_root)
+    # Worked out once for the repository rather than once per finding: the
+    # manifests do not change between two findings in the same tree.
+    present, decidable = _framework_evidence(repo_root)
+    import_cache: dict = {}
     sources: dict = {}
     for finding in findings:
         path = str(finding.get("path") or "")
@@ -1405,11 +1581,25 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
             sources[full] = _read(full)
         source = sources[full]
 
-        rule = str(finding.get("check_id") or "").split(".")[-1]
+        check_id = str(finding.get("check_id") or "")
+        rule = check_id.split(".")[-1]
         matched = _matched_text(source, finding)
         verdict, reason, decided_by = judge(
             rule, relative, matched, source,
             finding.get("start", {}).get("line", 0), muted, escapers)
+
+        # A rule for a framework this repository does not use is not a finding
+        # about this repository.  Only where nothing stronger has been said:
+        # judge returning anything but review means a fact about the file has
+        # already claimed it, and a fact about the file outranks a fact about
+        # the manifest.
+        if verdict == REVIEW:
+            not_here = _framework_absent(check_id, present, decidable,
+                                         repo_root, import_cache)
+            if not_here:
+                verdict = NOT_APPLICABLE
+                reason = not_here
+                decided_by = "framework-not-used"
         finding["triage"] = {"verdict": verdict, "reason": reason,
                              "rule": decided_by, "matched": matched[:200]}
         promoted = _promotion(rule, relative, matched, source,

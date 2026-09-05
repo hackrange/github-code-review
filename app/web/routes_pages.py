@@ -8,6 +8,7 @@ secret.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -25,7 +26,7 @@ from app.core.models import (
     AuditEvent, Finding, FindingKind, FindingState, Repository, ScanRun,
     Schedule, Severity, User, UserRole, Waiver, WaiverStatus,
 )
-from app.web.render import page, render_partial
+from app.web.render import notice_class, page, render_partial
 from app.web.security import clean_text, current_user
 
 log = logging.getLogger("gcr.pages")
@@ -461,6 +462,7 @@ def findings(request: Request, user: User = Depends(current_user)):
             can_set_baseline=rbac.can(user, "settings.write"),
             can_waive=rbac.can(user, "waiver.request"),
             can_delete=rbac.can(user, "findings.delete"),
+            can_regrade=rbac.can(user, "finding.regrade"),
             # Not the filtered count.  The delete-everything dialog has to
             # say how many rows actually go, which is rarely the number on
             # screen.
@@ -567,6 +569,27 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
         # means one thing in the payment gateway and another in a brochure
         # site, and the person reading this is the one who has to tell them
         # apart.  The impact half of the assessment reads the same two fields.
+        # Every branch this finding is on, not just the one it was filed
+        # against.  A finding on the default branch is in what ships; the same
+        # finding on one stale feature branch is not the same problem, and the
+        # page cannot let somebody tell them apart without saying which.
+        try:
+            on_branches = json.loads(row.branches or "[]") or []
+        except (TypeError, ValueError):
+            on_branches = []
+        if row.branch and row.branch not in on_branches:
+            on_branches.insert(0, row.branch)
+
+        # Has security signed this branch off, and does that still describe
+        # what is there.  head_sha is left empty deliberately: the finding's
+        # own commit is where the finding was found, not where the branch is
+        # now, and using it would report staleness that is not there.  The
+        # signal that does the work is whether findings have arrived since.
+        from app.core import certification as certification_store
+
+        certification = certification_store.status(
+            db, certification_store.for_branch(db, row.repository, row.branch))
+
         about = repo_context.for_repository(db, row.repository)
         risk_context = {"sensitivity": about.get("sensitivity"),
                         "visibility": about.get("visibility"),
@@ -581,6 +604,9 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        can_regrade=rbac.can(user, "finding.regrade"),
                        can_describe=rbac.can(user, "repo.describe"),
                        repo_info=about,
+                       on_branches=on_branches,
+                       certification=certification,
+                       can_certify=rbac.can(user, "repo.certify"),
                        # Both halves of what the grade is standing in for.
                        # Worked out here rather than read off the finding so
                        # that a repository tagged since the last scan reads
@@ -590,7 +616,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                                                                  risk_context),
                        flash=clean_text(msg, "message", limit=300,
                                         required=False),
-                       flash_kind="error" if kind == "error" else "ok",
+                       flash_kind=notice_class(kind),
                        default_expiry=(datetime.now(timezone.utc)
                                        + timedelta(days=90)).strftime("%Y-%m-%d"))
         return page(request, "finding_detail.html", **context)
@@ -1377,7 +1403,7 @@ def severity_page(request: Request, msg: str = "", kind: str = "",
                        sensitivity_labels=severity_labels_for(db),
                        can_write=rbac.can(user, "settings.write"),
                        flash=clean_text(msg, "message", limit=300, required=False),
-                       flash_kind="error" if kind == "error" else "ok")
+                       flash_kind=notice_class(kind))
         return page(request, "severity.html", **context)
 
 

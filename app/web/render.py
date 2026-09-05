@@ -121,6 +121,29 @@ def render_partial(template: str, **context) -> str:
     return env.get_template(template).render(**context)
 
 
+# What a redirect's ?kind= is called in the stylesheet.
+#
+# These are not the same vocabulary and were being used as though they were.
+# A redirect says error, warn or ok; the stylesheet has bad, warn, ok and info.
+# Passed straight through, kind=error produced class="notice error", which
+# matches nothing, so the one banner that most needed to be red rendered with
+# no styling at all.
+#
+# Mapped in one place because it was previously mapped in several, each
+# slightly differently, and the finding page collapsed warn into ok: a recheck
+# reporting that a secret is still there came out green, which is the opposite
+# of what it found.
+NOTICE_CLASSES = {"error": "bad", "bad": "bad",
+                  "warn": "warn", "warning": "warn",
+                  "ok": "ok", "success": "ok",
+                  "info": "info"}
+
+
+def notice_class(kind: str) -> str:
+    """The stylesheet's name for a banner of this kind.  Unknown reads info."""
+    return NOTICE_CLASSES.get((kind or "").strip().lower(), "info")
+
+
 def page(request: Request, template: str, **context) -> HTMLResponse:
     """Render a page with the bits every template expects."""
     from app.web.security import CSRF_COOKIE, issue_csrf, new_csrf_token
@@ -135,7 +158,8 @@ def page(request: Request, template: str, **context) -> HTMLResponse:
     context.setdefault("app_name", APP_NAME)
     context.setdefault("csrf_token", token)
     context.setdefault("flash", request.query_params.get("msg", ""))
-    context.setdefault("flash_kind", request.query_params.get("kind", "info"))
+    context.setdefault("flash_kind",
+                       notice_class(request.query_params.get("kind", "")))
     context.setdefault("tz_label", tz_label())
     # How people sign in decides what half the controls on a page are for.
     # It is cached for a few seconds, so asking here costs nothing and saves

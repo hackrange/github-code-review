@@ -240,6 +240,9 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             continue
         repo = _repo_for(session, meta.get("owner") or meta.get("organization"),
                          full_name, cache, connection=connection)
+        heads = entry.get("branch_heads")
+        if isinstance(heads, dict) and heads:
+            repo.branch_heads = json.dumps(heads)
         repo.visibility = meta.get("visibility") or repo.visibility
         repo.default_branch = meta.get("default_branch") or repo.default_branch
         repo.archived = bool(meta.get("archived", repo.archived))

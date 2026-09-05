@@ -7,11 +7,6 @@
       engine guessed.</div></div>
 </div>
 
-{% if flash %}
-<div class="card {{ 'bad' if flash_kind == 'error' else 'ok' }}">
-  <div class="small">{{ flash }}</div>
-</div>
-{% endif %}
 
 <div class="notice info">
   <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>

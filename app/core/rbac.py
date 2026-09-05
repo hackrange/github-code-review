@@ -30,6 +30,7 @@ PERMISSIONS = {
         # Regrading one finding, which severity_rules cannot do: a rule level
         # override moves every finding that rule ever produced.
         "finding.regrade",
+        "repo.certify",
         # Looking at the product as somebody else, to see what they see.
         # Read only: see the note on Session.impersonating_id.
         "user.impersonate",

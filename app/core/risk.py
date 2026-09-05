@@ -196,15 +196,6 @@ def likelihood_of(finding) -> tuple:
         return HAPPENING, ("the provider was asked and said this credential "
                            "still works")
 
-    epss = getattr(finding, "epss_score", None)
-    if epss is not None:
-        percent = round(epss * 100, 1)
-        if epss >= 0.1:
-            return LIKELY, f"EPSS puts exploitation in the next 30 days at {percent}%"
-        if epss >= 0.01:
-            return POSSIBLE, f"EPSS puts exploitation in the next 30 days at {percent}%"
-        return UNLIKELY, f"EPSS puts exploitation in the next 30 days at {percent}%"
-
     # A fact about the build, read out of the Dockerfile.
     #
     # The advisory is true of the image in the registry.  It is probably not
@@ -217,11 +208,32 @@ def likelihood_of(finding) -> tuple:
     # as the archive had got on the day of the build and no further, so an
     # image built in March carries March, and an advisory published since is
     # still sitting in it.  The finding stays where it is and says this.
+    #
+    # Above EPSS, and below the two above it, and the order is the argument.
+    # Whether the vulnerable version is there at all comes before how often
+    # that vulnerability gets exploited in the world: a one percent chance of
+    # exploiting a package this image probably does not contain is not the
+    # useful sentence.  Five findings read "possible" on an EPSS of 0.011 while
+    # the recommendation beside them said the build had already fixed them.
+    #
+    # But it stays below the exploited list and below a credential somebody
+    # proved live, because "we think we patched it" and "somebody is using this
+    # right now" together is the moment to go and look, not the moment to
+    # relax.
     if getattr(finding, "base_upgraded", False):
         return UNLIKELY, ("the build upgrades this base image after pulling it, "
                           "so the version that ships is probably not the one "
                           "reported here, though only as far as the day the "
                           "image was last built")
+
+    epss = getattr(finding, "epss_score", None)
+    if epss is not None:
+        percent = round(epss * 100, 1)
+        if epss >= 0.1:
+            return LIKELY, f"EPSS puts exploitation in the next 30 days at {percent}%"
+        if epss >= 0.01:
+            return POSSIBLE, f"EPSS puts exploitation in the next 30 days at {percent}%"
+        return UNLIKELY, f"EPSS puts exploitation in the next 30 days at {percent}%"
 
     # A fact about the tree, established with the checkout on disk.
     if getattr(finding, "reachability", "") == "unlikely":

@@ -2681,6 +2681,199 @@ async def regrade_finding(finding_id: int, request: Request,
         "record beside it."))
 
 
+@router.post("/findings/{finding_id}/certify")
+async def certify_from_finding(finding_id: int, request: Request,
+                               user: User = Depends(current_user)):
+    """Sign off the branch this finding is on.
+
+    Done from a finding because that is where somebody is when they finish
+    reading one: they have the repository, the branch and the commit in front
+    of them, and asking them to go and find the same three things on another
+    page is how a review ends up recorded against the wrong branch.
+
+    It changes nothing about any finding.  Not the grade, not the state, not
+    what appears in a report.  It records that a person looked and what they
+    concluded, and every page that shows the badge also shows when it stops
+    being true.
+    """
+    await check_csrf(request)
+    rbac.require(user, "repo.certify")
+
+    from urllib.parse import quote
+
+    from app.core import certification
+
+    form = await request.form()
+    note = clean_text(form.get("note"), "Note", limit=4000)
+    expires_at = _parse_expiry(str(form.get("expires", "")))
+
+    with session_scope() as db:
+        finding = (rbac.visible_findings(db, user)
+                   .filter(Finding.id == finding_id).one_or_none())
+        if finding is None:
+            raise HTTPException(status_code=404, detail="No such finding.")
+
+        # The branch head, not this finding's commit.  The finding's commit is
+        # where the finding was found, which may be years behind the branch;
+        # certifying against it would report the review as out of date the
+        # instant it was written.
+        head = certification.head_of(db, finding.repository, finding.branch)
+        row, problem = certification.certify(
+            db, finding.repository, finding.branch, note, expires_at,
+            user.username, head)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+
+        record(db, "repo.certified", actor=user.username,
+               target=f"{finding.repository}@{finding.branch or 'default'}",
+               detail=f"until {row.expires_at:%Y-%m-%d}: {note[:150]}",
+               source_ip=client_ip(request))
+        where = f"{finding.repository} on {finding.branch or 'the default branch'}"
+
+    return redirect(f"/findings/{finding_id}?msg=" + quote(
+        f"Certified {where}.  It lapses on the date you set, and reads as out "
+        "of date the moment a new finding arrives.") + "&kind=ok")
+
+
+@router.post("/findings/{finding_id}/certify/revoke")
+async def revoke_certification(finding_id: int, request: Request,
+                               user: User = Depends(current_user)):
+    """Take a sign off back.  Kept on the record, not deleted."""
+    await check_csrf(request)
+    rbac.require(user, "repo.certify")
+
+    from urllib.parse import quote
+
+    from app.core import certification
+
+    form = await request.form()
+    reason = clean_text(form.get("reason"), "Reason", limit=2000, required=False)
+
+    with session_scope() as db:
+        finding = (rbac.visible_findings(db, user)
+                   .filter(Finding.id == finding_id).one_or_none())
+        if finding is None:
+            raise HTTPException(status_code=404, detail="No such finding.")
+        _row, problem = certification.revoke(
+            db, finding.repository, finding.branch, user.username, reason)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        record(db, "repo.certification_revoked", actor=user.username,
+               target=f"{finding.repository}@{finding.branch or 'default'}",
+               detail=reason[:200], source_ip=client_ip(request))
+
+    return redirect(f"/findings/{finding_id}?msg=" + quote(
+        "The certification is withdrawn.  The record that it was given, and "
+        "taken back, stays.") + "&kind=warn")
+
+
+@router.post("/findings/regrade-bulk")
+async def regrade_many(request: Request, user: User = Depends(current_user)):
+    """What a set of findings is worth here, decided once.
+
+    The single regrade covers one line, which is right when the argument is
+    about that line.  It is the wrong instrument for the shape this keeps
+    arriving in: one unpatched base image produced eighty six findings on a
+    single repository, one Django rule on a codebase that does not use Django
+    produced fifty two, and every one of them is the same decision made over
+    and over.  Made one at a time that is not review, it is data entry, and
+    data entry is where people stop reading what they are agreeing to.
+
+    So the same reason goes on every one of them, and it is required, because
+    the whole value of doing this in bulk is that somebody had one thought
+    about a set rather than no thought about each.
+
+    Not a severity rule, and the difference is worth keeping straight.  A rule
+    level override moves every finding that rule will ever produce, anywhere.
+    This moves the ones that were ticked, and a later scan finding a new one
+    leaves it at whatever the engine says, which is the safe way round.
+    """
+    await check_csrf(request)
+    rbac.require(user, "finding.regrade")
+
+    from urllib.parse import quote
+
+    form = await request.form()
+    # new_severity rather than severity, because the bulk form already carries
+    # severity as the filter that chose these findings.  One name for two
+    # meanings would have graded everything to whatever the list was filtered
+    # by, which is a silent and very wrong outcome.
+    wanted_severity = str(form.get("new_severity", "")).strip().lower()
+    try:
+        severity = Severity(wanted_severity)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="That is not a severity.")
+
+    reason = clean_text(form.get("reason"), "Reason", limit=2000)
+    if len(reason) < 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Say why in a sentence or two.  The same reason goes on "
+                   "every one of these, and a grade nobody explained is a "
+                   "grade nobody can review.")
+
+    wanted = []
+    for raw in form.getlist("ids"):
+        for piece in str(raw).split(","):
+            piece = piece.strip()
+            if piece.isdigit():
+                wanted.append(int(piece))
+
+    everything = str(form.get("all_matching", "")).lower() in {"1", "on", "true"}
+    if not wanted and not everything:
+        raise HTTPException(status_code=400, detail="Nothing was selected.")
+
+    counts = {"changed": 0, "already": 0}
+
+    with session_scope() as db:
+        # Always through the scope filter, so a list of ids from somewhere else
+        # matches nothing rather than regrading somebody else's findings.
+        query = rbac.visible_findings(db, user)
+        if everything:
+            query = _apply_finding_filters(query, form)
+        else:
+            query = query.filter(Finding.id.in_(wanted))
+
+        findings = query.limit(MAX_BULK_WAIVE + 1).all()
+        if len(findings) > MAX_BULK_WAIVE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"That is more than {MAX_BULK_WAIVE} findings. Narrow "
+                       "the filters and do it in batches.")
+
+        for finding in findings:
+            if finding.custom_severity == severity:
+                counts["already"] += 1
+                continue
+            was = finding.severity
+            # Keep whatever the engine said, once.  Regrading twice must not
+            # record the first override as though the engine had said it.
+            finding.engine_severity = finding.engine_severity or was.value
+            finding.custom_severity = severity
+            finding.custom_severity_reason = reason
+            finding.custom_severity_by = user.username
+            finding.custom_severity_at = utcnow()
+            finding.severity = severity
+            counts["changed"] += 1
+        db.flush()
+
+        if counts["changed"]:
+            write_reports(db)
+        # One audit line for one decision.  The findings carry who and why,
+        # so a line each would say the same sentence a hundred times and bury
+        # everything around it.
+        record(db, "finding.regraded", actor=user.username,
+               target=f"{counts['changed']} findings",
+               detail=f"bulk to {severity.value}: {reason[:150]}",
+               source_ip=client_ip(request))
+
+    parts = [f"{counts['changed']} finding(s) graded {severity.value} here"]
+    if counts["already"]:
+        parts.append(f"{counts['already']} already were")
+    parts.append("the engine's grades are still on the record beside them")
+    return redirect(f"/findings?msg={quote('. '.join(parts) + '.')}&kind=ok")
+
+
 @router.post("/findings/{finding_id}/regrade/clear")
 async def clear_regrade(finding_id: int, request: Request,
                         user: User = Depends(current_user)):

@@ -181,6 +181,9 @@
       {% if can_delete %}
       <button type="button" class="btn sm danger" data-modal="delete-modal">Delete the selected</button>
       {% endif %}
+      {% if can_regrade %}
+      <button type="button" class="btn sm" data-modal="regrade-modal">Change the severity</button>
+      {% endif %}
       {% if can_waive %}
       <button type="button" class="btn sm primary" data-modal="bulk-modal">Waive the selected</button>
       {% endif %}
@@ -339,7 +342,7 @@
   {% endif %}
 </div>
 
-{% if can_waive or can_delete %}
+{% if can_waive or can_delete or can_regrade %}
 <form method="post" id="bulk-form" action="{{ base }}/findings/waive-bulk">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="all_matching" id="all-matching" value="">
@@ -354,6 +357,47 @@
   <input type="hidden" name="exception" value="{{ filters.exception }}">
   <input type="hidden" name="connection" value="{{ filters.connection }}">
 </form>
+
+{% if can_regrade %}
+{# The same ticked findings, sent somewhere else.
+   formaction overrides the form's own action, so the selection and the filter
+   fields are shared with the waive path rather than duplicated: two lists of
+   checkboxes that had to agree with each other would eventually not. #}
+<div class="modal-backdrop" id="regrade-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Change the severity of what is selected
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <div class="notice info">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+        <div><strong><span data-slot="bulk-count">0</span></strong> findings.
+          What the engine graded them stays on the record beside the new grade,
+          and a later scan finding a new one leaves it where the engine put it.</div>
+      </div>
+      <label>Grade them
+        <select name="new_severity" required form="bulk-form">
+          {% for level in ['critical', 'high', 'medium', 'low', 'info'] %}
+          <option value="{{ level }}">{{ level }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Why
+        <textarea name="reason" rows="4" required minlength="20" maxlength="2000"
+                  form="bulk-form"
+                  placeholder="What makes this grade the right one for all of them."></textarea>
+        <span class="faint small">The same reason goes on every one of them and
+          is what somebody reviewing this later will read, so it has to hold for
+          all of them.  Do it in batches if it does not.</span>
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Cancel</button>
+      <button type="submit" class="btn primary" form="bulk-form"
+              formaction="{{ base }}/findings/regrade-bulk">Change the severity</button>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 {% if can_waive %}
 <div class="modal-backdrop" id="bulk-modal" hidden>

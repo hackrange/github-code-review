@@ -10,11 +10,6 @@
   {% endif %}
 </div>
 
-{% if flash %}
-<div class="card {{ 'bad' if flash_kind == 'error' else 'ok' }}">
-  <div class="small">{{ flash }}</div>
-</div>
-{% endif %}
 <div class="card">
   <div class="card-body">
     <table><tbody>
