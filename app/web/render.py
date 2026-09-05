@@ -107,8 +107,29 @@ def tz_label() -> str:
         return "GMT"
 
 
+def web_url(value) -> str:
+    """A link the page will follow, or nothing.
+
+    These come out of advisory data rather than out of a person, so this is
+    not the place a hostile URL was expected to arrive from.  It is one line
+    to make that structural rather than a matter of trust: a href beginning
+    javascript: runs when somebody clicks it, and every one of these is
+    rendered into an anchor a reader is being invited to click.
+
+    Scheme only.  Nothing here tries to decide whether a host is reputable,
+    because the useful advisory sources are many and change, and a list of
+    approved ones would go stale into a page that silently stops linking.
+    """
+    text = str(value or "").strip()
+    lowered = text.lower()
+    if lowered.startswith("https://") or lowered.startswith("http://"):
+        return text
+    return ""
+
+
 env.filters["local_dt"] = local_dt
 env.filters["dt"] = fmt_dt
+env.filters["web_url"] = web_url
 
 
 def render_partial(template: str, **context) -> str:

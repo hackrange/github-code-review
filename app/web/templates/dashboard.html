@@ -5,7 +5,8 @@
 <div class="page-head">
   <div>
     <h1>Dashboard</h1>
-    <div class="faint small">{{ total }} open finding{{ '' if total == 1 else 's' }}
+    <div class="faint small">{{ total }} thing{{ '' if total == 1 else 's' }} to do,
+      across {{ advisory_total }} open finding{{ '' if advisory_total == 1 else 's' }}
       you can see</div>
   </div>
 </div>
@@ -15,19 +16,44 @@
    ones included, so the list that opens holds exactly as many rows as the
    number that was clicked.  A drill down that lands on a different number is
    worse than no link at all. #}
-{% set same = 'state=open&exception=any&triage=any' %}
+{# group=action is not decoration here.  These numbers count one row per
+   upgrade, and the page they open defaults to the same fold, but relying on a
+   default to keep two numbers equal is how they come apart later when the
+   default changes.  It is written down instead. #}
+{% set same = 'state=open&exception=any&triage=any&group=action' %}
+
+{# Each tile carries both: the count of things to do, and underneath, the
+   advisories folded into them.  One answers "how much work is there" and the
+   other answers "are we affected by this CVE", both get asked, and showing
+   one without the other is what makes people distrust the number.
+
+   They do not add up between rows, on purpose: a group takes the worst
+   severity in it, so a group counted critical can hold six mediums and
+   neither table is a subset of the other. #}
 <div class="stats">
   <a class="stat bad" href="{{ base }}/findings?{{ same }}&severity=critical">
     <div class="n">{{ counts.critical }}</div><div class="l">Critical</div>
+    {% if advisory_counts.critical != counts.critical %}
+    <div class="l faint" style="font-size:.72rem">{{ advisory_counts.critical }} advisories</div>
+    {% endif %}
   </a>
   <a class="stat bad" href="{{ base }}/findings?{{ same }}&severity=high">
     <div class="n">{{ counts.high }}</div><div class="l">High</div>
+    {% if advisory_counts.high != counts.high %}
+    <div class="l faint" style="font-size:.72rem">{{ advisory_counts.high }} advisories</div>
+    {% endif %}
   </a>
   <a class="stat warn" href="{{ base }}/findings?{{ same }}&severity=medium">
     <div class="n">{{ counts.medium }}</div><div class="l">Medium</div>
+    {% if advisory_counts.medium != counts.medium %}
+    <div class="l faint" style="font-size:.72rem">{{ advisory_counts.medium }} advisories</div>
+    {% endif %}
   </a>
   <a class="stat" href="{{ base }}/findings?{{ same }}&severity=low">
     <div class="n">{{ counts.low }}</div><div class="l">Low</div>
+    {% if advisory_counts.low != counts.low %}
+    <div class="l faint" style="font-size:.72rem">{{ advisory_counts.low }} advisories</div>
+    {% endif %}
   </a>
   <a class="stat bad" href="{{ base }}/findings?{{ same }}&exploited=1">
     <div class="n">{{ exploited }}</div><div class="l">Known exploited</div>

@@ -301,11 +301,21 @@ def dashboard(request: Request, user: User = Depends(current_user)):
         query = rbac.visible_findings(db, user).filter(
             Finding.state == FindingState.OPEN)
 
-        counts = {s: 0 for s in SEVERITIES}
-        for severity, total in (query.with_entities(
-                Finding.severity, func.count(Finding.id))
-                .group_by(Finding.severity).all()):
-            counts[getattr(severity, "value", str(severity))] = total
+        # Two counts, and the headline is the one somebody can act on.
+        #
+        # The list groups by the upgrade that fixes a set of advisories, and a
+        # dashboard that kept counting advisories would disagree with the page
+        # it links to.  A number that contradicts the screen behind it does not
+        # get explained by a tooltip, it gets distrusted, and then so does the
+        # other one.
+        #
+        # Both are kept because both questions are real.  "How much work is
+        # there" is answered in actions; "are we affected by this advisory" is
+        # answered in advisories, and an auditor asking the second will not
+        # take a group as an answer.
+        from app.core import grouping
+
+        counts, advisory_counts = grouping.counts_by_severity(query)
 
         by_kind = {}
         for kind, total in (query.with_entities(
@@ -337,6 +347,8 @@ def dashboard(request: Request, user: User = Depends(current_user)):
                        exploited=exploited, verified=verified, worst=worst,
                        malicious=malicious,
                        top_repos=top_repos, runs=runs,
+                       advisory_counts=advisory_counts,
+                       advisory_total=sum(advisory_counts.values()),
                        total=sum(counts.values()))
         return page(request, "dashboard.html", **context)
 
@@ -372,6 +384,19 @@ def findings(request: Request, user: User = Depends(current_user)):
     sort = (params.get("sort", "") or "").strip().lower()
     if sort not in SORTABLE:
         sort = "priority"
+    # One row per thing somebody would do, rather than one per advisory.
+    #
+    # On by default because the ungrouped list is the one that produced the
+    # complaint: fifty six rows for one apt upgrade.  Off is a click away and
+    # the count of what was folded is on every row, so nothing is hidden, it
+    # is only counted once.
+    grouped = (params.get("group", "action") or "action").strip().lower()
+    if grouped not in {"action", "none"}:
+        grouped = "action"
+    # Sorting by a column is a statement about individual rows, so choosing
+    # one turns the folding off rather than silently ignoring the click.
+    if sort != "priority":
+        grouped = "none"
     direction = "asc" if (params.get("dir", "") or "").lower() == "asc" else "desc"
     try:
         offset = max(0, int(params.get("offset", "0")))
@@ -392,20 +417,36 @@ def findings(request: Request, user: User = Depends(current_user)):
         # rows in the file are always the same set.
         query = _filtered_findings(db, user, params)
 
-        total = query.count()
-        rows = (query.order_by(*_sort_order(sort, direction))
-                .offset(offset).limit(limit).all())
+        if grouped == "action":
+            from app.core import grouping
+            groups, total = grouping.page_of_groups(db, query, offset, limit)
+            rows = [g["lead"] for g in groups]
+            # Findings behind the page, for the tick boxes and the counts.
+            folded = sum(g["count"] for g in groups) - len(groups)
+        else:
+            from app.core import grouping
+            folded = 0
+            total = query.count()
+            rows = (query.order_by(*_sort_order(sort, direction))
+                    .offset(offset).limit(limit).all())
+            # One group per finding, so the template has one shape to render
+            # rather than two branches that drift apart.
+            groups = [grouping.summarize([f]) for f in rows]
 
         # How many the default view is holding back, so the page can say so.
         # Only worth asking when nobody chose a reachability filter, which is
         # the one case where something is being left out without being asked
         # for.
+        # Against findings, never against groups.  `total` counts rows on the
+        # screen and switches meaning with the fold, so subtracting from it
+        # would report a number of hidden findings that changed when somebody
+        # pressed a button that hides nothing.
         hidden_unreachable = 0
         if not (params.get("reach", "") or "").strip():
             wider = dict(params)
             wider["reach"] = "any"
             hidden_unreachable = max(
-                0, _filtered_findings(db, user, wider).count() - total)
+                0, _filtered_findings(db, user, wider).count() - query.count())
 
         orgs = [r[0] for r in rbac.visible_findings(db, user)
                 .with_entities(Finding.organization).distinct().all() if r[0]]
@@ -420,8 +461,10 @@ def findings(request: Request, user: User = Depends(current_user)):
                      "org": org, "q": search, "exception": exception,
                      "connection": connection, "per_page": limit,
                      "confidence": confidence, "sort": sort, "dir": direction,
-                     "triage": triage, "baseline": since, "reach": reach},
+                     "triage": triage, "baseline": since, "reach": reach,
+                     "group": grouped},
             hidden_unreachable=hidden_unreachable,
+            groups=groups, grouped=grouped, folded=folded,
             page_sizes=PAGE_SIZES,
             connections=[c[0] for c in
                          rbac.visible_findings(db, user)

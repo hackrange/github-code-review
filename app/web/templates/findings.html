@@ -11,6 +11,21 @@
        application never imports is true and not work, but a list that quietly
        drops half of what a scan found is indistinguishable from a scan that
        missed it. #}
+    {# The fold, and how much of it there is.
+       A shorter list is only honest if it says what it did.  This is a count
+       of findings folded into the rows on this page, with the way back beside
+       it, so the number can always be checked rather than trusted. #}
+    {% if grouped == 'action' %}
+    <div class="faint small">
+      {% if folded %}{{ folded }} more folded into these rows, one row per
+        package upgrade rather than one per advisory.
+      {% else %}Grouped by the upgrade that fixes them; nothing on this page
+        needed folding.{% endif %}
+      <a href="{{ base }}/findings?{{ page_query }}{% if page_query %}&{% endif %}group=none">Show every advisory</a></div>
+    {% elif filters.group == 'none' and filters.sort == 'priority' %}
+    <div class="faint small">One row per advisory.
+      <a href="{{ base }}/findings?{{ page_query }}{% if page_query %}&{% endif %}group=action">Group by the upgrade</a></div>
+    {% endif %}
     {% if hidden_unreachable %}
     <div class="faint small">{{ hidden_unreachable }} more in packages the code does not reach,
       left out of this list.
@@ -261,13 +276,21 @@
         <th></th>
       </tr></thead>
       <tbody>
-      {% for f in rows %}
+      {# Every row is a group, of one when the fold is off, so there is one
+         shape here rather than two that would drift apart. #}
+      {% for g in groups %}
+        {% set f = g.lead %}
         <tr>
           {% if can_waive or can_delete %}
           {# Excepted rows cannot be waived again, but they can still be
              deleted, so the box only locks when waiving is all this person
              can do with it. #}
-          <td><input type="checkbox" class="pick" name="ids" value="{{ f.id }}"
+          {# The value is every finding in the group, not the one on show.
+             Ticking a row that says it stands for seven advisories and then
+             waiving one of them would be the worst kind of surprise: it would
+             look like it worked. #}
+          <td><input type="checkbox" class="pick" name="ids"
+                     value="{{ g.ids | join(',') }}"
                      form="bulk-form"
                      {{ 'disabled' if f.excepted and not can_delete }}></td>
           {% endif %}
@@ -301,7 +324,17 @@
           <td class="small">
             <a href="{{ base }}/findings/{{ f.id }}">
               {{ f.rule or f.vulnerability_id or (f.title[:60] if f.title else 'finding') }}</a>
-            {% if f.known_exploited %}<span class="badge critical">exploited</span>{% endif %}
+            {# What this row stands for.  A row that speaks for seven
+               advisories has to say seven, and say which, or the shorter list
+               is just a list with things missing from it. #}
+            {% if g.count > 1 %}
+              <span class="badge" title="{{ g.advisories | join(', ') }}">+{{ g.count - 1 }} more</span>
+              {% if g.partial %}<span class="badge medium"
+                title="{{ g.unfixed }} of these have no fix version">partly fixed</span>{% endif %}
+            {% endif %}
+            {% if g.exploited %}<span class="badge critical"
+              title="{{ g.exploited | length }} on the exploited list">exploited</span>
+            {% elif f.known_exploited %}<span class="badge critical">exploited</span>{% endif %}
             {% if f.verified %}<span class="badge critical">live</span>{% endif %}
             {# Only worth saying when it changes what somebody does with the
                row.  A badge on every finding is a badge on none. #}
@@ -314,6 +347,11 @@
             {% if f.state.value == 'waived' %}<span class="badge waived">waived</span>{% endif %}
           </td>
           <td class="small mono">{{ f.file_path[-46:] if f.file_path else f.package_name }}{% if f.line %}:{{ f.line }}{% endif %}
+            {# The action the row is grouped on, spelled out.  Without this a
+               folded row says how many it covers and not what to do. #}
+            {% if g.count > 1 and f.fixed_in %}
+            <div class="faint" style="font-size:.78rem">{{ f.package_version }} &rarr; {{ f.fixed_in }}</div>
+            {% endif %}
             {% if f.triage and f.triage != 'review' %}
             <div class="faint" style="font-size:.78rem" title="{{ f.triage_reason }}">
               set aside: {{ f.triage.replace('_', ' ') }}</div>

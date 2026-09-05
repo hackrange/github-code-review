@@ -1,5 +1,100 @@
 {% extends "base.html" %}
-{% block title %}Finding &middot; Git Code Review{% endblock %}
+{% block title %}Finding &middot; Git Code Review
+{# What is known about this advisory, and where the rest of it is.
+   Not an attempt to reproduce the advisory: the national databases and the
+   distribution trackers do that, and doing it worse from a stale copy would
+   be the wrong kind of helpful.  What is here is the half they cannot know,
+   which is what this advisory means on this system: whether the code reaches
+   it, whether the build already patches it, what it was graded here and the
+   sentences behind that grade.  Then a door to the source for the rest. #}
+{% if f.vulnerability_id %}
+<div class="modal-backdrop" id="advisory-modal" data-sticky hidden>
+  <div class="modal">
+    <div class="modal-head">{{ f.vulnerability_id }}
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      {% if f.title %}<p>{{ f.title }}</p>{% endif %}
+
+      <table class="small">
+        <tbody>
+          <tr><th>Graded here</th><td>
+            <span class="badge {{ f.severity.value }}">{{ f.severity.value }}</span>
+            {% if f.engine_severity and f.engine_severity != f.severity.value %}
+            <span class="faint">the engine said {{ f.engine_severity }}</span>{% endif %}
+          </td></tr>
+          {% if f.impact or f.likelihood %}
+          <tr><th>Why that grade</th><td>
+            {% if f.impact %}<div><strong>Impact {{ f.impact }}.</strong>
+              <span class="faint">{{ f.impact_reason }}</span></div>{% endif %}
+            {% if f.likelihood %}<div><strong>Likelihood {{ f.likelihood }}.</strong>
+              <span class="faint">{{ f.likelihood_reason }}</span></div>{% endif %}
+          </td></tr>
+          {% endif %}
+          {% if f.risk_score %}
+          <tr><th>Risk score</th><td>{{ f.risk_score }} out of 100
+            {% if f.risk_evidence %}<span class="badge {{ 'ok' if f.risk_evidence == 'observed' else '' }}">{{ f.risk_evidence }}</span>{% endif %}
+          </td></tr>
+          {% endif %}
+          {# The published numbers, which are about the flaw rather than about
+             this installation of it.  Absent for a good many advisories, and
+             a blank is said rather than left to look like a zero. #}
+          <tr><th>Published scores</th><td>
+            {% if f.cvss_score %}CVSS {{ f.cvss_score }}{% else %}<span class="faint">no CVSS score published</span>{% endif %}
+            {% if f.epss_score is not none %}
+              &middot; EPSS {{ (f.epss_score * 100) | round(1) }}% chance of exploitation in the next 30 days
+            {% endif %}
+          </td></tr>
+          {% if f.known_exploited %}
+          <tr><th>Exploited</th><td><span class="badge critical">on the CISA list</span>
+            <div class="faint">Somebody is using this in the wild. That says nothing
+              about whether this deployment can be reached, which is the row below.</div>
+          </td></tr>
+          {% endif %}
+          {% if f.cwe %}<tr><th>Weakness</th><td class="mono">{{ f.cwe }}</td></tr>{% endif %}
+
+          <tr><th>Package</th><td>
+            <span class="mono">{{ f.package_name }} {{ f.package_version }}</span>
+            {% if f.package_source and f.package_source != f.package_name %}
+            <div class="faint">built from {{ f.package_source }}, which is what an
+              upgrade names and what this is grouped by</div>{% endif %}
+            {% if f.ecosystem %}<div class="faint">{{ f.ecosystem }}</div>{% endif %}
+          </td></tr>
+          <tr><th>Fix</th><td>
+            {% if f.fixed_in %}<span class="mono">{{ f.fixed_in }}</span>
+            {% else %}<span class="faint">No fixed version is published yet.</span>{% endif %}
+          </td></tr>
+          {% if f.reachability %}
+          <tr><th>Does the code reach it</th><td>
+            {{ 'the code imports it' if f.reachability == 'reachable'
+               else ('not reached' if f.reachability == 'unlikely' else 'could not tell') }}
+            {% if f.reachability_reason %}<div class="faint">{{ f.reachability_reason }}</div>{% endif %}
+          </td></tr>
+          {% endif %}
+          {% if f.image_ref %}
+          <tr><th>Where it lives</th><td>
+            <span class="mono">{{ f.image_ref }}</span>
+            {% if f.base_upgraded %}
+            <div class="faint">The build upgrades this image after pulling it, so
+              the version that ships is probably not the one reported here, as far
+              as the day the image was last built.</div>
+            {% endif %}
+          </td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Close</button>
+      {% set advisory = f.url | web_url %}
+      {% if advisory %}
+      <a class="btn primary" href="{{ advisory }}" target="_blank" rel="noopener noreferrer">
+        Read the full advisory</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
 {% block content %}
 {% if f.triage and f.triage != 'review' %}
 <div class="notice info">
@@ -28,8 +123,14 @@
     {% endif %}
   </div>
   <div class="page-actions">
-    {% if f.url %}<a class="btn" href="{{ f.url }}" rel="noopener noreferrer"
-                     target="_blank">{% if host_name %}Open on {{ host_name }}
+    {# A dependency finding has no file to open: its url is the advisory, and
+       a button offering to open the file that then leaves for a security
+       tracker is the kind of small lie that makes people stop trusting the
+       rest of the page. #}
+    {% set target_url = f.url | web_url %}
+    {% if target_url %}<a class="btn" href="{{ target_url }}" rel="noopener noreferrer"
+                     target="_blank">{% if f.kind.value == 'dependency' %}Read the advisory
+                     {%- elif host_name %}Open on {{ host_name }}
                      {%- else %}Open the file{% endif %}</a>{% endif %}
     {% if f.kind.value in ['credential', 'code'] and f.file_path %}
       {# Read only, and it does not take the scan lock, so it works while a
@@ -296,7 +397,24 @@
           {% endif %}
         </td></tr>
         {% endif %}
-        {% if f.vulnerability_id %}<tr><th>Advisory</th><td>{{ f.vulnerability_id }}</td></tr>{% endif %}
+        {# The advisory itself, which is where the detail actually is.
+           Grype and OSV hand over the source they matched against, which is
+           the national database for a CVE and the distribution tracker for a
+           package a distribution patches, so this lands on the page that says
+           what the flaw is rather than on a search. #}
+        {% if f.vulnerability_id %}
+        <tr><th>Advisory</th><td>
+          {% set advisory = f.url | web_url %}
+          <button type="button" class="btn sm" data-modal="advisory-modal">{{ f.vulnerability_id }}</button>
+          {% if advisory %}
+            <a class="small" href="{{ advisory }}" target="_blank" rel="noopener noreferrer"
+               title="Go straight to the source">at
+               {{ advisory.split('/')[2] }}</a>
+          {% else %}
+            <span class="faint small">No advisory link came with this one.</span>
+          {% endif %}
+        </td></tr>
+        {% endif %}
         {% if f.cvss_score %}<tr><th>CVSS</th><td>{{ f.cvss_score }}</td></tr>{% endif %}
         {% if f.known_exploited %}<tr><th>Exploited</th><td><span class="badge critical">on the CISA list</span></td></tr>{% endif %}
         {% if f.epss_score %}<tr><th>EPSS</th><td>{{ (f.epss_score * 100)|round(2) }}%</td></tr>{% endif %}

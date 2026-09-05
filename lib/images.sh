@@ -223,6 +223,20 @@ images_vulns() {
         version: (.artifact.version // null),
         type: (.artifact.type // null),
         purl: (.artifact.purl // null),
+        # The package this one was built from.
+        #
+        # A distribution ships one source package as many binary ones, and a
+        # vulnerability in the source is reported against every binary that
+        # came out of it.  One flaw in util-linux arrives as eight findings
+        # against bsdutils, libblkid1, libmount1, libsmartcols1, libuuid1,
+        # login, mount and util-linux, and one apt upgrade answers all eight.
+        # Without this the interface has no way to know they are the same job.
+        #
+        # Two spellings because two shapes are in the wild: upstreams is what
+        # a current grype writes, and the metadata the dpkg cataloger
+        # records is what older output has.  Neither exists for something that is not a
+        # distribution package, and null is the right answer there.
+        source: (.artifact.upstreams[0].name // .artifact.metadata.source // null),
         locations: [ $image ]
       },
       image: $image,

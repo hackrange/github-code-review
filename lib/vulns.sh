@@ -38,6 +38,10 @@ vulns_grype() {
         version: (.artifact.version // null),
         type: (.artifact.type // null),
         purl: (.artifact.purl // null),
+        # The package this one was built from, where there is one.  See the
+        # note in images.sh: one source package ships as many binaries and a
+        # single flaw in it arrives once per binary.
+        source: (.artifact.upstreams[0].name // .artifact.metadata.source // null),
         locations: ([ (.artifact.locations // [])[].path ] | unique)
       },
       fixed_in: ((.vulnerability.fix.versions // []) | join(", ") | select(. != "")),

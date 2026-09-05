@@ -497,11 +497,29 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         finding.title = (row.get("title") or "")[:2000]
         finding.package_name = package.get("name") or ""
         finding.package_version = package.get("version") or ""
+        # Falls back to the package name, so the grouping key is never empty
+        # and an ecosystem that has no separate source still groups by the
+        # thing somebody would upgrade.
+        finding.package_source = (package.get("source")
+                                  or package.get("name") or "")[:255]
         finding.ecosystem = package.get("type") or ""
         finding.vulnerability_id = row.get("id") or ""
         finding.fixed_in = row.get("fixed_in") or ""
         finding.known_exploited = bool(row.get("known_exploited"))
         finding.base_upgraded = bool(row.get("base_upgraded"))
+        # The weakness class, which the code path has always kept and this one
+        # dropped on the floor.  Every dependency finding in the database had
+        # an empty cwe, and it read as "the advisories do not say", when what
+        # was happening is that nobody here was looking.
+        #
+        # Three of the sources do say: the provider alert feed, the OSV
+        # advisories, and the rule for a package that is itself the attack.
+        # The two grype paths ask for a field grype does not publish, so those
+        # stay empty, and that is the data being absent rather than lost.
+        #
+        # Spelled cwe here and cwe_ids in the code path because the two
+        # engines spell it differently and both are read where they arrive.
+        finding.cwe = ",".join(_as_list(row.get("cwe")))[:255]
         try:
             finding.cvss_score = float(row["cvss_score"]) if row.get("cvss_score") else None
         except (TypeError, ValueError):

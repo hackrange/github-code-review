@@ -484,6 +484,20 @@ class Finding(Base):
     # Dependencies only.
     package_name = Column(String(255), default="")
     package_version = Column(String(128), default="")
+    # The package this one was built from, where a distribution says so.
+    #
+    # One source package ships as many binaries, and a flaw in the source is
+    # reported against every binary that came out of it.  A single problem in
+    # util-linux arrives as eight findings, against eight package names, with
+    # one apt upgrade answering all of them.  Grouping on the binary name
+    # cannot see that; grouping on this can.
+    #
+    # Blank for anything that is not a distribution package, which is most of
+    # what gets scanned: an npm or PyPI package is its own source.  The
+    # grouping falls back to the package name there, which is correct rather
+    # than a compromise, because for those two the name is the thing you
+    # upgrade.
+    package_source = Column(String(255), default="", index=True)
     ecosystem = Column(String(64), default="")
     vulnerability_id = Column(String(128), default="", index=True)
     cvss_score = Column(Float)
