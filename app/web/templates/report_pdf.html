@@ -65,6 +65,23 @@
   .cover-meta div { margin-bottom: .28rem; }
   .cover-meta .k { display: inline-block; width: 34mm; color: var(--faint); }
 
+  /* The certification seal.  Green, because that is what it means, and
+     immediately followed by what it does not mean, because a green mark on a
+     security document is read as an all clear and this is not one. */
+  .seal { display: flex; gap: 4mm; align-items: flex-start; margin: 8mm 0 0;
+          padding: 4mm; border: .8pt solid #1a7f37; border-radius: 2mm;
+          background: #f2f9f4; break-inside: avoid; }
+  .seal-mark { flex: 0 0 auto; padding-top: .5mm; }
+  .seal-body { flex: 1 1 auto; }
+  .seal-title { font-weight: 700; font-size: 11pt; color: #1a7f37;
+                letter-spacing: .01em; }
+  .seal-scope { font-size: 9.5pt; margin-top: .5mm; }
+  .seal-dates { font-size: 8.5pt; color: var(--soft); margin-top: 1mm; }
+  .seal-note { font-size: 9pt; margin-top: 2mm; font-style: italic; }
+  .seal-caveat { font-size: 7.8pt; color: var(--soft); margin-top: 2.5mm;
+                 line-height: 1.45; border-top: .5pt solid #cfe4d6;
+                 padding-top: 2mm; }
+
   /* ---- the numbers ---- */
   .figures { display: flex; gap: 3mm; margin: 0 0 5mm; }
   .figure { flex: 1; border: .8pt solid var(--rule); border-radius: 2mm;
@@ -227,6 +244,39 @@
     <h1>{{ scope_label }}</h1>
     <div class="cover-scope">{{ period_label }}</div>
   </div>
+
+  {# The security sign off, where this report covers exactly the branch that
+     was signed off.
+
+     The disclaimer is not decoration and is not a lawyer's hedge.  A green
+     seal on a security document is read as "this is safe", and that is not
+     what anybody certified.  What was certified is that a person read the
+     code and found it soundly built, on a date, against what was known then.
+     Saying only the first half would be the most misleading thing in the
+     document, and it would be the part people photograph. #}
+  {% if seal %}
+  <div class="seal">
+    <div class="seal-mark">
+      <svg viewBox="0 0 48 48" width="42" height="42" aria-hidden="true">
+        <circle cx="24" cy="24" r="21" fill="none" stroke="#1a7f37" stroke-width="2"/>
+        <circle cx="24" cy="24" r="17" fill="none" stroke="#1a7f37" stroke-width="1"/>
+        <path d="M15 24.5 21 30.5 33 18.5" fill="none" stroke="#1a7f37"
+              stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="seal-body">
+      <div class="seal-title">Reviewed and certified</div>
+      <div class="seal-scope">{{ seal.repository }} on {{ seal.branch }}</div>
+      <div class="seal-dates">
+        Certified {{ seal.at | dt('%d %B %Y') if seal.at }}
+        &middot; expires {{ seal.expires | dt('%d %B %Y') if seal.expires }}
+        &middot; by {{ seal.by }}
+      </div>
+      {% if seal.note %}<div class="seal-note">&ldquo;{{ seal.note }}&rdquo;</div>{% endif %}
+      <div class="seal-caveat">{{ "This is not a guarantee that the code contains no vulnerabilities, and it is not a statement that none will be found later.  It records that a person reviewed this branch, found it written with sound practices and appropriate gating, and signed their name to that on the date above.  It covers the code as it stood on that date: any commit since then is unreviewed, and the certification is withdrawn automatically when the branch moves." | sentence_spaced }}</div>
+    </div>
+  </div>
+  {% endif %}
 
   <div class="cover-meta">
     <div><span class="k">Prepared for</span>{{ prepared_for }}</div>

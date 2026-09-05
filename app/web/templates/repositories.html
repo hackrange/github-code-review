@@ -3,6 +3,61 @@
 {% block content %}
 <div class="page-head"><div><h1>Repositories</h1>
   <div class="faint small">{{ rows|length }} you can see</div></div></div>
+
+{# The security sign offs.
+   The dashboard counts these and its tile linked here with a filter nothing
+   implemented, so the number opened a list of every repository.  A count that
+   cannot be opened is one somebody has to take on trust, which is the thing
+   this product is meant not to ask of anybody. #}
+{% if certified %}
+<div class="card">
+  <div class="card-head">
+    {% if certified_filter %}{{ certified_filter | capitalize }} certifications
+    {% else %}Certified branches{% endif %}
+    <span class="faint small">reviewed by a person and signed off</span>
+  </div>
+  <div class="table-scroll">
+    <table class="small">
+      <thead>
+        <tr><th>Repository</th><th>Branch</th><th>State</th><th>Certified</th>
+          <th>Expires</th><th>By</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        {% for row in certified %}
+        <tr>
+          <td class="mono">{{ row.repository }}</td>
+          <td>{{ row.branch }}</td>
+          <td>
+            {% if row.state == 'active' %}<span class="badge ok">current</span>
+            {% elif row.state == 'stale' %}<span class="badge medium"
+              title="{{ row.why }}">needs re-checking</span>
+            {% elif row.state == 'lapsed' %}<span class="badge unknown">expired</span>
+            {% elif row.state == 'revoked' %}<span class="badge waived"
+              title="{{ row.why }}">withdrawn</span>
+            {% else %}<span class="faint">{{ row.state }}</span>{% endif %}
+          </td>
+          <td class="nowrap">{{ row.at | dt('%d %b %Y') if row.at }}</td>
+          <td class="nowrap">{{ row.expires | dt('%d %b %Y') if row.expires }}</td>
+          <td>{{ row.by }}</td>
+          <td class="small faint">{{ row.note }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if certified_filter %}
+  <div class="small faint" style="padding:.6rem 1rem 0">
+    <a href="{{ base }}/repositories">Show every certification</a>
+  </div>
+  {% endif %}
+</div>
+{% elif certified_filter %}
+<div class="card">
+  <div class="empty"><p class="faint">No {{ certified_filter }} certifications.
+    <a href="{{ base }}/repositories">Show every certification</a></p></div>
+</div>
+{% endif %}
+
 <div class="card">
   {% if rows %}
   <div class="field" style="max-width:420px;margin-bottom:.75rem">

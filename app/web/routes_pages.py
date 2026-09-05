@@ -565,6 +565,20 @@ def trends_report(request: Request, user: User = Depends(current_user)):
         scope_label = ((branch and repository and "%s on %s" % (repository, branch))
                        or repository or organization or "All repositories")
 
+        # The sign off, where this report is about exactly the thing that was
+        # signed off.  Only a single branch of a single repository: a
+        # certification covers one branch, and putting a seal on a report
+        # covering forty of them would be claiming something nobody said.
+        seal = None
+        if repository and branch:
+            row = _cert.for_branch(db, repository, branch)
+            if row is not None:
+                state = _cert.status(db, row)
+                if state["state"] == _cert.ACTIVE:
+                    seal = {"repository": repository, "branch": branch,
+                            "by": row.certified_by, "at": row.certified_at,
+                            "expires": row.expires_at, "note": row.note}
+
         pass
 
         # The name on the cover.  Whatever the person is actually called, and
@@ -598,6 +612,7 @@ def trends_report(request: Request, user: User = Depends(current_user)):
             "history_note": report_text.history_note(points),
             "hotspot_note": report_text.hotspot_note(data["hotspots"], axis),
             "certified_note": report_text.certified_note(_cert.counts(db)),
+            "seal": seal,
             "recommendations": report_text.what_matters(data),
             "data": data,
         }
@@ -1014,10 +1029,36 @@ def waivers(request: Request, q: str = "", status: str = "", page_no: int = 1,
 
 @router.get("/repositories")
 def repositories(request: Request, user: User = Depends(current_user)):
+    from app.core import certification as _cert
+
+    # The dashboard tile for certified branches linked here with a filter that
+    # did not exist, so the number opened a list of everything.  A count that
+    # cannot be opened is a count somebody has to take on trust.
+    wanted = (request.query_params.get("certified", "") or "").strip().lower()
+    if wanted not in {"", "active", "stale", "lapsed", "revoked"}:
+        wanted = ""
+
     with session_scope() as db:
         rows = (rbac.visible_repositories(db, user)
                 .order_by(Repository.organization, Repository.name)
                 .limit(1000).all())
+
+        # Every sign off, with the state worked out now rather than stored:
+        # a branch that has moved since it was reviewed is amber whether or
+        # not anybody has looked at it since.
+        seen = set(row.full_name for row in rows)
+        badges = []
+        for row in _cert.all_certifications(db):
+            if row.repository not in seen:
+                continue
+            state = _cert.status(db, row)
+            badges.append({"repository": row.repository, "branch": row.branch,
+                           "state": state["state"], "why": state.get("why", ""),
+                           "by": row.certified_by, "at": row.certified_at,
+                           "expires": row.expires_at, "note": row.note})
+        badges.sort(key=lambda b: (b["repository"], b["branch"]))
+        if wanted:
+            badges = [b for b in badges if b["state"] == wanted]
 
         counts = {}
         for repo_name, severity, total in (
@@ -1030,7 +1071,8 @@ def repositories(request: Request, user: User = Depends(current_user)):
             counts.setdefault(key, {})[getattr(severity, "value", "")] = total
 
         context = _shared(db, user)
-        context.update(active_page="repositories", rows=rows, counts=counts)
+        context.update(active_page="repositories", rows=rows, counts=counts,
+                       certified=badges, certified_filter=wanted)
         return page(request, "repositories.html", **context)
 
 

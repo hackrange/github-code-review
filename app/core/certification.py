@@ -196,6 +196,19 @@ def revoke(session, repository: str, branch: str, actor: str,
     return row, ""
 
 
+def all_certifications(session, base=None) -> list:
+    """Every sign off on record, newest first.
+
+    The state is not stored: a branch that has moved since it was reviewed is
+    amber whether or not anybody has looked at it since, so it is worked out
+    when it is asked for rather than written down and left to go stale.
+    """
+    from app.core.models import Certification
+
+    query = base if base is not None else session.query(Certification)
+    return query.order_by(Certification.certified_at.desc()).all()
+
+
 def counts(session, base=None) -> dict:
     """-> {active, stale, lapsed, revoked, total}.  Where the sign offs stand.
 
