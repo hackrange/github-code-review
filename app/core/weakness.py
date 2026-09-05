@@ -152,11 +152,63 @@ CWE_NAMES = {
                 "Work that can be made arbitrarily large by whoever asks for "
                 "it.",
                 "Put a bound on it: a size, a depth or a timeout."),
+    "CWE-346": ("Missing origin check",
+                "A message accepted from another window or frame without "
+                "checking where it came from.",
+                "Check the origin against the one you expect before acting on "
+                "the message, and do not accept a wildcard."),
+    "CWE-470": ("Unsafe reflection",
+                "Choosing which class or method to run from a value that can "
+                "come from outside.",
+                "Map the input to a fixed set of allowed choices rather than "
+                "using it to look one up."),
+    "CWE-20":  ("Incomplete input handling",
+                "Input checked or cleaned in a way that misses cases, such as "
+                "replacing only the first occurrence of something.",
+                "Handle every occurrence, and prefer a library that does the "
+                "cleaning over doing it by hand."),
+    "CWE-250": ("Running with more privilege than needed",
+                "A process or container running as a more powerful user than "
+                "the work requires.",
+                "Run as an unprivileged user.  In a container that is a USER "
+                "line; elsewhere it is the account the service starts under."),
     "CWE-1104": ("Unmaintained dependency",
                  "A component that is no longer receiving fixes.",
                  "Move to a maintained alternative, or take on maintaining "
                  "it deliberately rather than by default."),
 }
+
+# What a finding is, when the rule name is a detector or an advisory number
+# rather than a description.
+#
+# A credential scanner names its rules after the service it recognizes: jwt,
+# snyk-key, polygon, box.  Those are useful names for the detector and useless
+# as a category, because the reader gets one heading per service and no idea
+# that they are all the same problem.  Every one of them is a credential in
+# the source, which is what the kind already says.
+#
+# A dependency finding is named after the advisory, and there are eighteen
+# thousand of those.  Grouped by rule name that is eighteen thousand
+# categories of one, which is the worst possible grouping: it is a list
+# pretending to be a summary.  What they have in common is the thing to do
+# about them, and the section on the largest updates already says which
+# package.
+BY_KIND = {
+    "credential": ("CWE-798", "Hardcoded credentials",
+                   "A password, key or token found in the source or in its "
+                   "history.  The detector names the service it recognized; "
+                   "the problem is the same whichever it is.",
+                   "Rotate it first, then remove it.  Taking it out of the "
+                   "file does not take it out of the history, and anyone who "
+                   "cloned the repository already has it."),
+    "dependency": ("dependency", "Known vulnerability in a dependency",
+                   "A published advisory against a version of a package this "
+                   "code depends on.",
+                   "Upgrade the package.  One upgrade usually answers several "
+                   "advisories, and the largest of those are listed "
+                   "separately in this report."),
+}
+
 
 # Where no CWE is carried, the rule name usually says what it is.  These are
 # the families seen most often, matched loosely because engines spell them
@@ -180,6 +232,13 @@ RULE_FAMILIES = (
     (r"eval|code-inject", "CWE-94"),
     (r"autoescape|template-inject", "CWE-79"),
     (r"reflection|unsafe-reflect", "CWE-470"),
+    (r"postmessage|origin-validation|cors", "CWE-346"),
+    (r"incomplete-sanitiz|incomplete-clean|partial-escape", "CWE-20"),
+    (r"excessive-permission|overly-broad|over-permissive", "CWE-732"),
+    (r"artipacked|credential-persist", "CWE-798"),
+    # Container image rules, which are named by their checker rather than by
+    # what they are about.
+    (r"^ds-0002$|user-should-not-be-root|runs-as-root", "CWE-250"),
 )
 
 
@@ -194,13 +253,23 @@ def _first_cwe(value: str) -> str:
     return ""
 
 
+# An advisory number is an identifier, not a description.
+ADVISORY_ID = re.compile(r"^(?:CVE|GHSA|PYSEC|RUSTSEC|OSV|GO|MAL|SNYK)-", re.I)
+
+
 def classify(cwe: str, rule: str = "", kind: str = "") -> tuple:
     """-> (key, name, what it is, what to do).
 
-    The CWE where there is one, the rule family where the name gives it away,
-    and the rule itself otherwise.  Never a guess dressed up as a category:
-    a finding that falls through keeps its own rule name, which is accurate
-    even when it is not friendly.
+    In order: the CWE where there is one, the rule family where the name gives
+    it away, and then what the kind of finding already tells us.  That last
+    step matters more than it looks.  A credential detector is named after the
+    service it recognized and a dependency finding after the advisory, so
+    grouping either by rule name produces one heading per service or one per
+    advisory, which is a list wearing a summary's clothes.
+
+    Only after all of that does a finding keep its own rule name.  That is
+    still better than a guess: an accurate name nobody recognizes can be
+    looked up, and a wrong category cannot be unlearned.
     """
     identifier = _first_cwe(cwe)
     if identifier in CWE_NAMES:
@@ -212,6 +281,13 @@ def classify(cwe: str, rule: str = "", kind: str = "") -> tuple:
         if re.search(pattern, lowered) and mapped in CWE_NAMES:
             name, what, todo = CWE_NAMES[mapped]
             return mapped, name, what, todo
+
+    # What the kind of finding says, for the two kinds whose rule names are
+    # identifiers rather than descriptions.
+    kind_key = str(kind or "").lower().rsplit(".", 1)[-1]
+    if kind_key in BY_KIND and (not rule or ADVISORY_ID.match(rule)
+                                or kind_key == "credential"):
+        return BY_KIND[kind_key]
 
     if identifier:
         return identifier, identifier, "", ""
