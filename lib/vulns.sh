@@ -175,7 +175,36 @@ vulns_osv() {
   local dir="$1" full_name="$2"
   have_cmd osv-scanner || { log_debug "osv-scanner not installed, skipping"; echo '[]'; return; }
   local out; out=$(tmp_file osv)
-  ( cd "$dir" && with_timeout 600 osv-scanner scan source --format json . ) > "$out" 2>/dev/null || true
+
+  # Transitive resolution is off, and this is the one flag in here worth a
+  # paragraph.
+  #
+  # Given a manifest and no lock file, osv-scanner works out the dependency
+  # tree itself and, for every constraint it cannot pin, takes the lower bound.
+  # A dependency declared `>=0.0.9` is therefore reported as 0.0.9: the oldest
+  # version that satisfies it, which is by definition the one with the most
+  # advisories against it.  That is not what pip would install and not what is
+  # on any machine.
+  #
+  # On this project's own repository it invented python-multipart 0.0.9 with
+  # sixteen advisories, and idna 3.9.0 with two, against 0.0.32 and 3.19
+  # actually installed.  None of the eighteen applied to anything.  Python
+  # packaging is built on `>=`, so this is not one unlucky package: it is every
+  # transitive dependency in every repository, graded at its floor, and all of
+  # it reads as fact.
+  #
+  # Wrong in the direction that manufactures alarm is the worst direction for
+  # this tool to be wrong in, because the cost lands on whether anybody still
+  # reads the list.
+  #
+  # Nothing real is lost by switching it off.  A version pinned with == in the
+  # manifest is read straight out of it, and a lock file is read by a different
+  # part of the scanner entirely; both were checked against known vulnerable
+  # fixtures and both still report.  What goes is only the guessing.
+  local args=(--format json)
+  cfg_bool '.scan.vulnerabilities.osv.resolve_transitive' false || args+=(--no-resolve)
+
+  ( cd "$dir" && with_timeout 600 osv-scanner scan source "${args[@]}" . ) > "$out" 2>/dev/null || true
   [[ -s "$out" ]] || { echo '[]'; return; }
 
   jq -c '[ (.results // [])[] | .source.path as $manifest | (.packages // [])[]

@@ -338,6 +338,26 @@ TEMPLATE = {
                 "grype": {
                     "only_fixed": False,
                     "db_auto_update": True
+                },
+                "osv": {
+                    # Whether osv-scanner may work out the dependency tree
+                    # itself when a manifest has no lock file beside it.
+                    #
+                    # Off, because what it does in that case is take the lower
+                    # bound of every constraint it cannot pin.  A dependency
+                    # declared >=0.0.9 is reported as 0.0.9, the oldest version
+                    # that satisfies it and so the one carrying the most
+                    # advisories, which is neither what would be installed nor
+                    # what is on any machine.  Python packaging is mostly >=,
+                    # so left on it grades every transitive dependency in every
+                    # repository at its floor and presents the result as fact.
+                    #
+                    # Direct pins and lock files are unaffected either way:
+                    # those are read rather than resolved.  Turning this on
+                    # buys transitive coverage at the price of inventing the
+                    # versions it reports, which is not a trade this makes by
+                    # default.
+                    "resolve_transitive": False
                 }
             },
             "threat_intel": {
