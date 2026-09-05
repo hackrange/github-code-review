@@ -17,6 +17,10 @@ scan_one_repo() {
   SBOM_BY_BRANCH_JSON='[]'; ACCESS_JSON='null'
   PULLS_JSON='[]'; CLONE_TRAFFIC_JSON='null'; CODE_FINDINGS_JSON='[]'
   MISCONFIG_JSON='[]'; WORKFLOW_JSON='[]'
+  # Whether a dynamic pass could ever run here.  null until the question is
+  # asked, so a report from before this existed and a repository nobody asked
+  # about are not made to look like a refusal.
+  DAST_JSON='null'
   GHSCAN_SBOM_CDX=""
 
   local result_file="$results_dir/${slug}.json"
@@ -77,7 +81,8 @@ scan_one_repo() {
       --argjson sso "${GHSCAN_SSO_TRUNCATED:-0}" \
       --arg passes "$PASSES_DONE" \
       --arg hist_from "${HISTORY_FROM:-}" \
-      --argjson hist_done "${HISTORY_COMPLETE:-false}" '
+      --argjson hist_done "${HISTORY_COMPLETE:-false}" \
+      --argjson dast "${DAST_JSON:-null}" '
       {
         repository: $repo[0],
         status: $status,
@@ -106,6 +111,11 @@ scan_one_repo() {
         # How far back the credential engines have walked here, so the next run
         # continues instead of starting at the newest commit again.
         history: {walked_from: $hist_from, complete: $hist_done},
+        # Could a dynamic pass run against this repository at all.  Reading
+        # only: nothing is built and nothing is started.  Three answers, and
+        # they are three different things, so a declined and an unknown are
+        # never counted together.
+        dast: $dast,
         timing: {duration_sec: $dur}
       }' > "${result_file}.part"
     # Into place in one step.  A checkpoint is written while the worker may be
@@ -455,6 +465,24 @@ scan_one_repo() {
     else
       log_info "[$full_name] no workflow findings"
     fi
+  fi
+
+  # --- could a dynamic pass run here ----------------------------------------
+  #
+  # Reading only.  Nothing is built and nothing is started: this answers
+  # whether it could be, which is the question worth asking on every scan
+  # because it costs a file read and it is the only way to know what fraction
+  # of an estate a dynamic pass could ever cover.
+  #
+  # Silently skipping would be worse than declining.  A missing answer and an
+  # answer of no look the same on a dashboard and only one of them is true.
+  if cfg_bool '.scan.dast.qualify' true; then
+    DAST_JSON=$(dast_qualify "$clone_dir" "$full_name")
+    case "$(printf '%s' "$DAST_JSON" | jq -r '.verdict')" in
+      qualified) log_info "[$full_name] a dynamic pass could run here: $(printf '%s' "$DAST_JSON" | jq -r '.reason')" ;;
+      declined)  log_debug "[$full_name] no dynamic pass: $(printf '%s' "$DAST_JSON" | jq -r '.reason')" ;;
+      *)         log_debug "[$full_name] dynamic pass qualification unknown" ;;
+    esac
   fi
 
   _checkpoint code

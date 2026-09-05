@@ -17,7 +17,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Upgraded here too.  Nothing from this stage is scanned, because only the
+# wheels it builds are carried forward, but those wheels are compiled against
+# whatever openssl and libffi are present when they are built.  Building them
+# against a library that is known broken and then copying them into a patched
+# image would leave the report clean and the binary not.
+RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
         python3 python3-dev python3-pip python3-venv \
         build-essential libffi-dev libssl-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
@@ -46,7 +51,17 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # Runtime only.  git and jq do the heavy lifting for the scanner, openssl signs
 # the GitHub App tokens, and util-linux gives us flock for the rate limiter.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+#
+# The upgrade is not decoration.  apt-get install only moves the packages it is
+# given and whatever they depend on; everything else stays at whatever version
+# the base layer happened to ship with.  Scanning this image found around eighty
+# advisories against packages nothing here asks for by name, openssl and zlib
+# and the util-linux family among them, all of them fixed in Ubuntu weeks
+# earlier and none of them reached because nothing ever asked for the upgrade.
+#
+# A scanner that ships a base nobody patched is not in a position to report on
+# anybody else's.
+RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
         python3 python3-venv \
         bash git jq curl openssl ca-certificates \
         coreutils findutils util-linux tzdata \

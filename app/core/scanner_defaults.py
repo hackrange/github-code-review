@@ -305,6 +305,31 @@ TEMPLATE = {
                 "max_per_repo": 2000,
                 "include_clone_traffic": True
             },
+            # Dynamic testing.  Only the free half of it exists so far.
+            "dast": {
+                # Ask, of every repository, whether a dynamic pass could run
+                # against it at all.  This reads the compose file and the
+                # Dockerfile and nothing else: no build, no container, no
+                # request.  On by default because it costs a file read, and
+                # because the answer is the only way to know what fraction of
+                # an estate a dynamic pass could ever cover before anybody
+                # spends a week building one.
+                #
+                # The test is deliberately narrow.  A service has to build from
+                # the repository being scanned and something has to publish a
+                # port.  A compose file that pulls a published image by tag
+                # does not qualify: standing that up would test a release
+                # somebody built at some point rather than the commit in hand,
+                # and reporting evidence about a different version of the code
+                # is the same mistake as closing a finding nobody probed.
+                "qualify": True,
+                # Building and running the application, sending probes at it,
+                # and recording what came back.  Not implemented.  The key is
+                # here so that turning it on is a decision somebody makes
+                # rather than something that arrives switched on with a
+                # release, and it does nothing today.
+                "enabled": False
+            },
             "images": {
                 # Read the base image each Dockerfile names.  Nothing is built
                 # and nothing is pushed; the image is pulled from its registry
