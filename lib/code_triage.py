@@ -1389,6 +1389,135 @@ def judge(rule: str, path: str, matched: str, source: str, line: int = 0,
     return REVIEW, "", ""
 
 
+# --- a python subprocess call that never reaches a shell ----------------------
+#
+# subprocess.run(["git", "clone", url]) and subprocess.run(f"git clone {url}",
+# shell=True) are the same function and completely different risks.  The first
+# goes to execve with the arguments already separated, so a semicolon in url is
+# a semicolon in an argument and nothing else.  The second hands the whole
+# string to /bin/sh.
+#
+# The rules that flag these cannot tell them apart: they see data reaching
+# subprocess and report command injection either way.  On this codebase that
+# was two findings, one of them the loudest thing in the list, and both of them
+# were the safe form.
+#
+# What decides it is whether a shell is involved, so that is what is checked
+# first and it wins over everything else.  Any mention of shell that is not
+# plainly False leaves the finding exactly where it is: a call this cannot read
+# confidently is a call it says nothing about.  Guessing towards safe here
+# would silence the one shape that actually is command injection.
+
+SUBPROCESS_RULES = {
+    "subprocess-injection",
+    "dangerous-subprocess-use-tainted-env-args",
+    "dangerous-subprocess-use-audit",
+    "subprocess-shell-true",
+}
+
+SUBPROCESS_CALL = re.compile(
+    r"\b(?:subprocess\s*\.\s*)?(?:run|call|check_call|check_output|Popen)\s*\(")
+# shell= followed by anything at all.  Only an explicit False is read as safe;
+# shell=flag or shell=cfg.get("shell") is unknown, and unknown means leave it.
+# Brackets and dots are in the class so a lookup is captured as something
+# other than False; parentheses are deliberately not, because including them
+# swallowed the closing bracket of the call and turned shell=False into the
+# string "False)", which matches nothing and left the safe spelling uncleared.
+SHELL_KWARG = re.compile(r"\bshell\s*=\s*([A-Za-z0-9_.\[\]\"']+)")
+LIST_ASSIGN = re.compile(r"^\s*\[")
+
+
+def _call_text(source: str, line: int, limit: int = 40) -> str:
+    """The whole call starting at this line, brackets balanced.
+
+    A subprocess call is routinely spread over five lines, and reading only the
+    line the finding points at would miss a shell=True sitting two lines below
+    it.  Missing that is the one mistake this must not make.
+    """
+    lines = (source or "").splitlines()
+    if not (1 <= line <= len(lines)):
+        return ""
+    text = "\n".join(lines[line - 1:line - 1 + limit])
+    start = SUBPROCESS_CALL.search(text)
+    if not start:
+        return ""
+    depth = 0
+    for index in range(start.end() - 1, len(text)):
+        char = text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start.start():index + 1]
+    return ""            # never closed within the window: say nothing
+
+
+def _first_argument(call: str) -> str:
+    """The first positional argument, which is the command being run."""
+    open_at = call.find("(")
+    if open_at < 0:
+        return ""
+    depth = 0
+    for index in range(open_at, len(call)):
+        char = call[index]
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                return call[open_at + 1:index].strip()
+        elif char == "," and depth == 1:
+            return call[open_at + 1:index].strip()
+    return ""
+
+
+def _subprocess_not_a_shell(rule: str, source: str, line: int):
+    """-> a reason this is not command injection, or None.
+
+    Says nothing unless two things are both true: no shell, and a command that
+    is a list.  Either one unknown means the finding stands.
+    """
+    if rule not in SUBPROCESS_RULES:
+        return None
+    call = _call_text(source, line)
+    if not call:
+        return None
+
+    # A shell decides it, and it is checked before anything else.
+    shell = SHELL_KWARG.search(call)
+    if shell and shell.group(1).strip() not in ("False", "0"):
+        return None
+
+    argument = _first_argument(call)
+    if not argument:
+        return None
+
+    if LIST_ASSIGN.match(argument):
+        return ("the arguments are a list and no shell is asked for, so this "
+                "goes straight to execve: there is nothing for a shell "
+                "metacharacter to be interpreted by")
+
+    # A bare name, built earlier.  Followed back to where it was made, because
+    # the safe form is routinely assembled over several lines before the call.
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", argument):
+        assigned = _assignment_before(source, argument, line)
+        if assigned and LIST_ASSIGN.match(assigned.strip()):
+            # Anything that could have replaced it with a string between the
+            # assignment and the call means this cannot be relied on.  Appends
+            # and extends keep it a list; a second plain assignment does not.
+            window = "\n".join((source or "").splitlines()[:max(0, line - 1)])
+            rebound = re.findall(r"^\s*" + re.escape(argument) + r"\s*=\s*(.*)$",
+                                 window, re.M)
+            if rebound and not LIST_ASSIGN.match(rebound[-1].strip()):
+                return None
+            return ("%s is built as a list and no shell is asked for, so the "
+                    "arguments reach the process already separated and a shell "
+                    "metacharacter in any of them is just a character"
+                    % argument)
+    return None
+
+
 SKIP_FRAMEWORK_DIRS = {
     "node_modules", "vendor", "third_party", "bower_components", ".venv",
     "venv", "site-packages", "dist", "build", "target", "__pycache__",
@@ -1587,6 +1716,18 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
         verdict, reason, decided_by = judge(
             rule, relative, matched, source,
             finding.get("start", {}).get("line", 0), muted, escapers)
+
+        # A subprocess call that never reaches a shell is not command
+        # injection, whatever the rule says.  Checked before the framework
+        # question because it is the more specific statement: it is about this
+        # line rather than about the repository.
+        if verdict == REVIEW:
+            no_shell = _subprocess_not_a_shell(rule, source,
+                                               finding.get("start", {}).get("line", 0))
+            if no_shell:
+                verdict = NOT_APPLICABLE
+                reason = no_shell
+                decided_by = "subprocess-not-a-shell"
 
         # A rule for a framework this repository does not use is not a finding
         # about this repository.  Only where nothing stronger has been said:

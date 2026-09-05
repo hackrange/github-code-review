@@ -261,6 +261,14 @@ report_build() {
           history: (.history // null),
           branches_scanned: .branches_scanned,
           branch_count,
+          # Where each branch actually was, and whether a dynamic pass could
+          # run here.  Both are worked out per repository and both were being
+          # dropped at this point: the worker wrote them, this selection did
+          # not name them, and nothing downstream ever saw them.  A field that
+          # is computed and then discarded is worse than one nobody wrote,
+          # because the code that produced it looks like it works.
+          branch_heads: (.branch_heads // {}),
+          dast: (.dast // null),
           secret_counts: {
             reported:   (.secrets.reported | length),
             confirmed:  ([ .secrets.reported[] | select(.verified == true) ] | length),

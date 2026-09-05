@@ -340,6 +340,10 @@ class Repository(Base):
     # and a commit that introduced no finding is still a commit nobody
     # reviewed.
     branch_heads = Column(LONG_JSON, default="{}")
+    # Whether a dynamic pass could run against this repository, and why not
+    # when it could not.  Read only: nothing is built and nothing is started.
+    dast_verdict = Column(String(16), default="")
+    dast_reason = Column(String(500), default="")
 
     # What this particular repository is, who answers for it and what it holds.
     #

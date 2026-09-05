@@ -121,46 +121,6 @@
 </div>
 {% endif %}
 
-{% if can_certify %}
-<div class="card">
-  <div class="card-head">
-    {%- if certification and certification.state == 'active' %}This branch is certified
-    {%- else %}Certify this branch{% endif -%}
-  </div>
-  <div class="card-body">
-    <p class="faint small">A record that somebody in security read this code and
-      found nothing they considered unsafe. It covers
-      <strong>{{ f.repository }}</strong> on
-      <strong>{{ f.branch or 'the default branch' }}</strong> and nothing else:
-      the same code on another branch has not been reviewed.</p>
-    <form method="post" action="{{ base }}/findings/{{ f.id }}/certify">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>What you reviewed, and what you concluded
-        <textarea name="note" rows="3" required minlength="20" maxlength="4000"
-                  placeholder="What you read, what you checked for, and why you are satisfied.">{{ certification.certification.note if certification and certification.certification else '' }}</textarea>
-      </label>
-      <label>Expires
-        <input type="date" name="expires" required value="{{ default_expiry }}">
-        <span class="faint small">Required. It also turns amber the moment
-          anybody pushes to this branch, whichever comes first.</span>
-      </label>
-      <button class="btn primary" type="submit">
-        {%- if certification and certification.state in ['active', 'stale'] %}Re-certify
-        {%- else %}Certify this branch{% endif -%}
-      </button>
-    </form>
-    {% if certification and certification.state in ['active', 'stale', 'lapsed'] %}
-    <form method="post" action="{{ base }}/findings/{{ f.id }}/certify/revoke"
-          style="margin-top:.5rem">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="text" name="reason" maxlength="2000" placeholder="Why withdraw it">
-      <button class="btn" type="submit">Withdraw the certification</button>
-    </form>
-    {% endif %}
-  </div>
-</div>
-{% endif %}
-
 {% if assessment %}
 {# The two questions a severity folds into one, and where this sits in the
    queue.  Shown whether or not there is anything to recommend: a grade says
@@ -467,6 +427,51 @@
     <p class="small faint">Asked for by {{ waiver.requested_by }},
       expires {{ waiver.expires_at | dt('%Y-%m-%d') if waiver.expires_at }}
       {% if waiver.decided_by %}, decided by {{ waiver.decided_by }}{% endif %}</p>
+  </div>
+</div>
+{% endif %}
+
+{# Kept to the bottom of the page on purpose.  It is an action, not
+   information about this finding: whoever is reading the details, the
+   score and the reasoning wants those uninterrupted, and the badge at
+   the top already tells them whether a review exists.  Somebody who has
+   come here to sign the branch off can scroll. #}
+{% if can_certify %}
+<div class="card">
+  <div class="card-head">
+    {%- if certification and certification.state == 'active' %}This branch is certified
+    {%- else %}Certify this branch{% endif -%}
+  </div>
+  <div class="card-body">
+    <p class="faint small">A record that somebody in security read this code and
+      found nothing they considered unsafe. It covers
+      <strong>{{ f.repository }}</strong> on
+      <strong>{{ f.branch or 'the default branch' }}</strong> and nothing else:
+      the same code on another branch has not been reviewed.</p>
+    <form method="post" action="{{ base }}/findings/{{ f.id }}/certify">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>What you reviewed, and what you concluded
+        <textarea name="note" rows="3" required minlength="20" maxlength="4000"
+                  placeholder="What you read, what you checked for, and why you are satisfied.">{{ certification.certification.note if certification and certification.certification else '' }}</textarea>
+      </label>
+      <label>Expires
+        <input type="date" name="expires" required value="{{ default_expiry }}">
+        <span class="faint small">Required. It also turns amber the moment
+          anybody pushes to this branch, whichever comes first.</span>
+      </label>
+      <button class="btn primary" type="submit">
+        {%- if certification and certification.state in ['active', 'stale'] %}Re-certify
+        {%- else %}Certify this branch{% endif -%}
+      </button>
+    </form>
+    {% if certification and certification.state in ['active', 'stale', 'lapsed'] %}
+    <form method="post" action="{{ base }}/findings/{{ f.id }}/certify/revoke"
+          style="margin-top:.5rem">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="text" name="reason" maxlength="2000" placeholder="Why withdraw it">
+      <button class="btn" type="submit">Withdraw the certification</button>
+    </form>
+    {% endif %}
   </div>
 </div>
 {% endif %}

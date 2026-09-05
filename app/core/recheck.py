@@ -115,6 +115,18 @@ def _semgrep_hits(root: Path, rel_path: str, configs: list) -> tuple:
                "--timeout", "60"]
     for config in configs:
         command += ["--config", config]
+    # Everything after this is a path, whatever it looks like.
+    #
+    # rel_path comes from a finding, and a finding's path comes from somebody
+    # else's repository.  A file committed as --config=https://elsewhere/rules
+    # is a legal filename, and appended bare it would be read as an option
+    # rather than as the file to scan: semgrep would go and fetch that ruleset.
+    #
+    # Not the command injection the rule that flags this line reports, because
+    # this is a list and there is no shell for a semicolon to mean anything to.
+    # It is argument injection, which is a smaller thing and still worth
+    # closing, and it costs two characters.
+    command.append("--")
     command.append(rel_path)
     try:
         done = subprocess.run(command, capture_output=True, text=True,

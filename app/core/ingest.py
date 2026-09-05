@@ -243,6 +243,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         heads = entry.get("branch_heads")
         if isinstance(heads, dict) and heads:
             repo.branch_heads = json.dumps(heads)
+        dast = entry.get("dast")
+        if isinstance(dast, dict) and dast.get("verdict"):
+            repo.dast_verdict = str(dast.get("verdict"))[:16]
+            repo.dast_reason = str(dast.get("reason") or "")[:500]
         repo.visibility = meta.get("visibility") or repo.visibility
         repo.default_branch = meta.get("default_branch") or repo.default_branch
         repo.archived = bool(meta.get("archived", repo.archived))
