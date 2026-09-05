@@ -392,6 +392,23 @@ TEMPLATE = {
                 "epss_min_score": 0.01,
                 "max_age_hours": 24
             },
+            # Whether the order of a scan changes between runs.
+            #
+            # Every list here is sorted, which is right for reading and wrong
+            # for scanning.  A run cut short by its time limit, its API budget
+            # or a failure part way stops wherever it had got to, so a stable
+            # order means the tail of the alphabet is never reached and the
+            # same repositories are missed every night.  Not scanned reads
+            # exactly like nothing found.
+            #
+            # max_repos makes that worse rather than better: capped at fifty, a
+            # sorted list scans the same fifty forever.  Shuffled, the cap is a
+            # sample that moves and a month of runs covers the estate.
+            #
+            # Off gives a stable order, which is easier to follow when
+            # comparing two runs by eye.  The order actually used is logged
+            # either way, so a run stays reproducible.
+            "randomize_order": True,
             "parallel_repos": 4,
             "timeout_per_repo_sec": 3600,
             "exclusions": {

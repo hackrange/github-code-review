@@ -20,6 +20,20 @@ run_trivy_config() {
     echo '{}' > "$out"; return 0; }
 
   local args=(config "$dir" --format json --quiet)
+
+  # Checks of our own, beside the ones the engine ships.
+  #
+  # Its rule for a security group open to the whole internet covers SSH and
+  # RDP and nothing else, so an ingress from 0.0.0.0/0 to an application port,
+  # a database or a cache produces no finding at all.  On one repository that
+  # was the most serious thing another scanner reported and this one said
+  # nothing about any security group.
+  local checks="$GHSCAN_HOME/config/trivy-checks"
+  if [[ -d "$checks" ]]; then
+    args+=(--config-check "$checks" --check-namespaces gcr)
+  else
+    log_debug "no custom trivy checks at $checks"
+  fi
   # Trivy phones home for a policy bundle on first use.  On an isolated builder
   # that is a long wait for a timeout, so the offline switch is a setting
   # rather than something to find out about.

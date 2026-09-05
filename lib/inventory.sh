@@ -33,11 +33,38 @@ org_access_status() {
 # Leave scope.orgs empty and we scan every org the token can see.
 # Two gotchas we warn about: no read:org scope gives you an empty list rather
 # than an error, and SAML orgs the token isn't authorized for just vanish.
+# shuffle_json_array <json array> -> the same array in a random order
+#
+# Why a scan should not always start in the same place.
+#
+# Every list here is sorted, which is right for reading and wrong for
+# scanning.  A run that is cut short, by its time limit or by the API budget
+# or by a failure part way, stops wherever it had got to, so a stable order
+# means the tail of the alphabet is never reached.  Not scanned then reads
+# exactly like nothing found, which is the failure this whole tool is built to
+# avoid, and it lands on the same repositories every night.
+#
+# max_repos makes it worse rather than better.  Capped at fifty, a sorted list
+# scans the same fifty forever and the rest of the estate is never looked at
+# once.  Shuffled, the cap becomes a sample that moves, and a month of nightly
+# runs covers most of it.
+#
+# The order that was used is logged, so a run can still be reproduced when
+# somebody needs to know what happened in what sequence.
+shuffle_json_array() {
+  local json="$1"
+  [[ -n "$json" && "$json" != "[]" ]] || { printf '%s' "${json:-[]}"; return 0; }
+  cfg_bool '.scan.randomize_order' true || { printf '%s' "$json"; return 0; }
+  have_cmd shuf || { printf '%s' "$json"; return 0; }
+  printf '%s' "$json" | jq -c '.[]' 2>/dev/null | shuf | jq -sc '.' 2>/dev/null \
+    || printf '%s' "$json"
+}
+
 inventory_orgs() {
   local configured; configured=$(cfg_json '.github.scope.orgs // []')
 
   if [[ "$configured" != "[]" ]]; then
-    printf '%s' "$configured"
+    shuffle_json_array "$configured"
     return 0
   fi
 
@@ -55,7 +82,7 @@ inventory_orgs() {
   else
     log_ok "discovered $(printf '%s' "$orgs" | jq 'length') $(provider_group_noun)(s): $(printf '%s' "$orgs" | jq -r 'join(", ")')"
   fi
-  printf '%s' "$orgs"
+  shuffle_json_array "$orgs"
 }
 
 # inventory_repos -> JSON array of normalized repo objects on stdout
@@ -74,13 +101,13 @@ inventory_repos() {
   max_repos=$(cfg_num '.github.scope.max_repos' 0)
   excl_list=$(cfg_json '.github.scope.exclude_repos // []')
 
-  jq -c \
+  local picked
+  picked=$(jq -c \
     --argjson inc_arch "$inc_arch" \
     --argjson inc_fork "$inc_fork" \
     --argjson inc_tmpl "$inc_tmpl" \
     --arg excl_re "$excl_re" \
-    --argjson excl "$excl_list" \
-    --argjson max "$max_repos" '
+    --argjson excl "$excl_list" '
     ( $excl | map(ascii_downcase) ) as $ex
     | unique_by(.full_name)
     | map(select(.full_name != null))
@@ -90,8 +117,18 @@ inventory_repos() {
     | map(select((.full_name | ascii_downcase) as $n | ($ex | index($n)) == null))
     | map(select($excl_re == "" or ((.full_name | test($excl_re)) | not)))
     | sort_by(.full_name)
-    | if $max > 0 then .[0:$max] else . end
-  ' "$normalized"
+  ' "$normalized")
+
+  # Shuffled first, then capped, and that order is the whole point.  Capping a
+  # sorted list takes the same prefix of the alphabet every night and never
+  # reaches the rest; capping a shuffled one takes a sample that moves, so a
+  # month of runs covers the estate rather than the first fifty of it.
+  picked=$(shuffle_json_array "$picked")
+  if (( max_repos > 0 )); then
+    picked=$(printf '%s' "$picked" | jq -c --argjson max "$max_repos" '.[0:$max]')
+    log_info "scanning $(printf '%s' "$picked" | jq 'length') of them, capped by max_repos"
+  fi
+  printf '%s' "$picked"
 }
 
 # branch_filter_args -> prints the include/exclude globs for use by callers

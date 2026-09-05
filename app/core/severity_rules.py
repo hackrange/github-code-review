@@ -21,6 +21,54 @@ log = logging.getLogger("gcr.severity_rules")
 
 MATCH_TYPES = ("rule", "cwe")
 
+# What this tool thinks some rules are worth, before anybody says otherwise.
+#
+# These are the tool's opinion rather than somebody's decision, which is why
+# they live here as a constant instead of as rows: a row in the table names a
+# person who made a call, and seeding one would have to invent that person.
+# An install that disagrees writes a real row, and that row wins.
+#
+# The three below came out of putting this side by side with a commercial
+# scanner on the same repository.  It graded all three low; this graded all
+# three high, on infrastructure that was doing what it was designed to do.
+# Being louder than the alternative is not the same as being better than it,
+# and on these the other tool was right.
+#
+# Each carries the sensitivity labels that take the exception away again,
+# because these are downgrades of exposure and encryption findings, and the
+# argument for calling them minor stops holding on a system that holds
+# regulated data.
+SHIPPED = {
+    "aws-0053": (
+        "low",
+        "A load balancer being reachable from the internet is what a public "
+        "application is for. Graded high it fires on every public service in "
+        "an estate and teaches people that this rule means nothing, which "
+        "costs more than it finds. It stays reportable because an internal "
+        "service that became internet facing by accident looks exactly the "
+        "same in the file.",
+        "PCI, HIPAA, CUI"),
+    "aws-0132": (
+        "low",
+        "Storage encrypted with a provider managed key rather than a customer "
+        "managed one. The data is encrypted either way: this is a statement "
+        "about who holds the key, which is a compliance preference in most "
+        "places and a requirement in a few.",
+        "PCI, HIPAA, CUI"),
+    "aws-0033": (
+        "low",
+        "The same question about a container registry rather than a bucket, "
+        "and the same answer.",
+        "PCI, HIPAA, CUI"),
+    "aws-0031": (
+        "medium",
+        "A mutable image tag can be moved under you by anybody who can write "
+        "to the registry, which is a real supply chain problem and not a high "
+        "one: it needs push access to the registry first, and that is a much "
+        "larger thing to have already lost.",
+        ""),
+}
+
 
 def all_rules(session) -> list:
     return (session.query(SeverityRule)
@@ -70,6 +118,13 @@ def _tags(value) -> set:
 def as_map(session) -> dict:
     """Loaded once per ingest rather than queried per finding."""
     out = {"rule": {}, "cwe": {}}
+    # The tool's own opinion first, so a decision somebody actually made
+    # overwrites it below rather than the other way round.
+    for pattern, (level, _why, unless) in SHIPPED.items():
+        try:
+            out["rule"][pattern] = (Severity(level), _tags(unless))
+        except ValueError:          # a typo here must not take a scan down
+            log.warning("shipped severity for %s is not a severity", pattern)
     for row in all_rules(session):
         out.setdefault(row.match_type, {})[row.pattern.strip().lower()] = (
             row.severity, _tags(row.unless_sensitivity))
