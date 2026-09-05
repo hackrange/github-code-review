@@ -115,9 +115,68 @@
           break-inside: avoid; }
   section { break-inside: auto; }
   .page-break { break-before: page; }
+
+  /* ---- the assessment sections ---- */
+  .lead { font-size: 10.5pt; line-height: 1.6; }
+  .callout { border-left: 3pt solid var(--bad); background: #fdeceb;
+             padding: 3.5mm 4mm; margin: 0 0 4mm; break-inside: avoid; }
+  .callout.warn { border-left-color: var(--warn); background: #fdf6e3; }
+  .callout .head { font-weight: 700; font-size: 10pt; margin-bottom: 1mm; }
+
+  .rec { break-inside: avoid; margin-bottom: 4mm; padding-bottom: 3mm;
+         border-bottom: .5pt solid var(--rule); }
+  .rec:last-child { border-bottom: none; }
+  .rec .when { font-size: 7.5pt; text-transform: uppercase;
+               letter-spacing: .08em; color: var(--bad); font-weight: 700; }
+  .rec .when.later { color: var(--warn); }
+  .rec .when.soon { color: var(--info); }
+  .rec .what { font-weight: 700; font-size: 10pt; margin: .5mm 0 1mm; }
+
+  /* The heatmap, as a grid of shaded cells rather than a plain table.  The
+     shade carries the shape at a glance and the number is still there to be
+     read, which is what a table on its own cannot do and a picture on its own
+     cannot either. */
+  table.grid { width: 100%; border-collapse: separate; border-spacing: 1.2pt; }
+  table.grid th { font-size: 7pt; text-transform: uppercase;
+                  letter-spacing: .05em; color: var(--faint);
+                  padding: 1mm 1.5mm; text-align: center; border: none; }
+  table.grid th.name { text-align: left; }
+  table.grid td { padding: 1.6mm 1.5mm; text-align: center; border: none;
+                  font-size: 8pt; font-variant-numeric: tabular-nums;
+                  border-radius: .8mm; }
+  table.grid td.name { text-align: left; font-size: 8pt; color: var(--ink);
+                       background: none; padding-left: 0; }
+  td.s0 { background: #f6f6f6; color: #c4c4c4; }
+  td.s1 { background: #fbe3e1; color: #8d2a22; }
+  td.s2 { background: #f4b8b2; color: #7a1f18; }
+  td.s3 { background: #e5827a; color: #ffffff; }
+  td.s4 { background: #c0392f; color: #ffffff; font-weight: 700; }
+  td.w0 { background: #f6f6f6; color: #c4c4c4; }
+  td.w1 { background: #fbf0d6; color: #7a5200; }
+  td.w2 { background: #f2ddab; color: #6b4700; }
+  td.i0 { background: #f6f6f6; color: #c4c4c4; }
+  td.i1 { background: #e4edf7; color: #1f4f82; }
+  td.tot { background: var(--ink); color: #fff; font-weight: 700; }
+
+  .finding { break-inside: avoid; padding: 2mm 0;
+             border-bottom: .5pt solid var(--sunk); }
+  .finding .top { display: flex; gap: 2mm; align-items: baseline; }
+  .finding .sev { font-size: 7pt; text-transform: uppercase; font-weight: 700;
+                  letter-spacing: .05em; }
+  .sev-critical { color: var(--bad); }
+  .sev-high { color: var(--bad); }
+  .sev-medium { color: var(--warn); }
+  .sev-low { color: var(--info); }
+  .finding .rule { font-weight: 700; font-size: 9pt; }
+  .finding .where { font-size: 8pt; color: var(--soft); }
+  .finding .why { font-size: 8pt; color: var(--soft); margin-top: .5mm; }
+
+  .theme { break-inside: avoid; margin-bottom: 3.5mm; }
+  .theme .t { font-weight: 700; font-size: 9.5pt; }
 </style>
 </head>
 <body>
+
 
 {# ---------------------------------------------------------------- cover #}
 <div class="cover">
@@ -130,25 +189,19 @@
   </div>
 
   <div class="cover-mid">
-    {# The kicker names the kind of document and the title names this one, so
-       they must not be the same words.  "Security Assessment" twice, once in
-       small caps above itself, is the look of a template nobody finished. #}
     <div class="kicker">Security Assessment</div>
     <h1>{{ scope_label }}</h1>
     <div class="cover-scope">{{ period_label }}</div>
-
   </div>
 
-  {# The details sit at the foot rather than under the title.  Under it they
-     leave two thirds of the page empty and the eye reads that as a document
-     that stopped early. #}
   <div class="cover-meta">
     <div><span class="k">Prepared for</span>{{ prepared_for }}</div>
     {% if organization_name %}
     <div><span class="k">Organization</span>{{ organization_name }}</div>
     {% endif %}
+    <div><span class="k">Repositories</span>{{ data.coverage.repositories }} across {{ data.coverage.branches }} branch{{ '' if data.coverage.branches == 1 else 'es' }}</div>
+    <div><span class="k">Open findings</span>{{ data.coverage.findings }}</div>
     <div><span class="k">Date of issue</span>{{ issued_at }}</div>
-    <div><span class="k">Counting</span>{{ 'Items of work' if basis == 'actions' else 'Individual advisories' }}</div>
   </div>
 
   <div class="cover-foot faint" style="font-size:8pt">
@@ -160,30 +213,183 @@
 <div class="page-break"></div>
 <section>
   <h2>Executive summary</h2>
-  <p>{{ summary | sentence_spaced }}</p>
+  <p class="lead">{{ summary | sentence_spaced }}</p>
 
   <div class="figures">
     <div class="figure crit"><div class="n">{{ latest.critical }}</div><div class="l">Critical</div></div>
     <div class="figure high"><div class="n">{{ latest.high }}</div><div class="l">High</div></div>
     <div class="figure med"><div class="n">{{ latest.medium }}</div><div class="l">Medium</div></div>
     <div class="figure"><div class="n">{{ latest.low }}</div><div class="l">Low</div></div>
-    <div class="figure"><div class="n">{{ latest.total }}</div><div class="l">Total open</div></div>
+    <div class="figure"><div class="n">{{ data.coverage.findings }}</div><div class="l">Total open</div></div>
   </div>
 
-  <p class="faint" style="font-size:8.5pt">{{ basis_note | sentence_spaced }}</p>
-
-  {% if certified_note %}
-  <h3>Review status</h3>
-  <p>{{ certified_note | sentence_spaced }}</p>
+  {# The things that are not a queue.  Counted apart from the severity totals
+     because mixing them in is how they get lost: a handful of confirmed items
+     inside twelve thousand criticals is a rounding error on the page and a
+     way in to the estate. #}
+  {% set u = data.urgent %}
+  {% if u.live_credentials.count %}
+  <div class="callout">
+    <div class="head">{{ u.live_credentials.count }} credential{{ '' if u.live_credentials.count == 1 else 's' }} confirmed still working</div>
+    <div>{{ "The issuing provider was asked and answered that these still authenticate.  They are in source control, which means they are available to everyone who can read the repository and to anyone who has ever cloned it." | sentence_spaced }}</div>
+  </div>
+  {% endif %}
+  {% if u.malicious_packages.count %}
+  <div class="callout">
+    <div class="head">{{ u.malicious_packages.count }} package{{ '' if u.malicious_packages.count == 1 else 's' }} identified as malicious</div>
+    <div>{{ "These are packages that are themselves hostile, rather than packages with a flaw in them.  Upgrading does not help.  The dependency has to be removed and whatever ran during installation has to be reviewed." | sentence_spaced }}</div>
+  </div>
+  {% endif %}
+  {% if u.known_exploited.count %}
+  <div class="callout warn">
+    <div class="head">{{ u.known_exploited.count }} match a vulnerability known to be exploited</div>
+    <div>{{ "These appear on the public catalog of vulnerabilities that attackers are using.  That is a fact about the world rather than about this system, and it is a good reason to patch them ahead of higher rated issues nobody has been seen using." | sentence_spaced }}</div>
+  </div>
   {% endif %}
 </section>
 
-{# ------------------------------------------------------------ the trend #}
+{# ------------------------------------------------------- recommendations #}
+{% if recommendations %}
+<section style="margin-top:6mm">
+  <h2>What to do, in order</h2>
+  {% for item in recommendations %}
+  <div class="rec">
+    <div class="when {{ 'soon' if item.priority == 'This week' else ('later' if item.priority == 'This month' else '') }}">{{ item.priority }}</div>
+    <div class="what">{{ item.title }}</div>
+    <div>{{ item.detail | sentence_spaced }}</div>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{# --------------------------------------------------------- what it is made of #}
+{# No forced break here.  A section that has just overflowed by one paragraph
+   followed by a page break leaves a page holding that paragraph and nothing
+   else, which reads as a mistake rather than as a design. #}
 <section style="margin-top:7mm">
-  <h2>Trend</h2>
-  {% if chart.empty %}
-  <p class="soft">There is no recorded history for this selection yet.</p>
+  <h2>What the findings are</h2>
+  <p>{{ "Four different kinds of work live under one word, and they are usually done by different people.  A leaked credential is revoked, a weak line of code is rewritten, a vulnerable package is upgraded, and an unsafe setting is changed." | sentence_spaced }}</p>
+  <table>
+    <thead>
+      <tr><th>Kind</th><th>Critical or high</th><th>Total</th><th style="text-align:left">What it takes</th></tr>
+    </thead>
+    <tbody>
+      {% for row in data.kinds %}
+      <tr>
+        <td>{{ row.name }}</td>
+        <td class="{{ 'v-crit' if row.serious else 'zero' }}">{{ row.serious }}</td>
+        <td><strong>{{ row.total }}</strong></td>
+        <td style="text-align:left" class="soft">{{ row.advice | sentence_spaced }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{# ------------------------------------------------------------- the heatmap #}
+<section style="margin-top:7mm">
+  <h2>Where it is concentrated</h2>
+  {% if hotspot_note %}<p>{{ hotspot_note | sentence_spaced }}</p>{% endif %}
+  {% if heat_rows %}
+  <table class="grid">
+    <thead>
+      <tr>
+        <th class="name">{{ heat.axis | capitalize }}</th>
+        <th>Critical</th><th>High</th><th>Medium</th><th>Low</th>
+        <th>Info</th><th>Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in heat_rows %}
+      <tr>
+        <td class="name">{{ row.name }}</td>
+        <td class="s{{ 0 if not row.critical else (4 if row.critical >= 20 else (3 if row.critical >= 8 else (2 if row.critical >= 3 else 1))) }}">{{ row.critical or '' }}</td>
+        <td class="s{{ 0 if not row.high else (4 if row.high >= 40 else (3 if row.high >= 15 else (2 if row.high >= 5 else 1))) }}">{{ row.high or '' }}</td>
+        <td class="w{{ 0 if not row.medium else (2 if row.medium >= 20 else 1) }}">{{ row.medium or '' }}</td>
+        <td class="i{{ 0 if not row.low else 1 }}">{{ row.low or '' }}</td>
+        <td class="i{{ 0 if not row.info else 1 }}">{{ row.info or '' }}</td>
+        <td class="tot">{{ row.total }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="faint" style="font-size:8pt;margin-top:2mm">{{ "Shading is relative to the counts in this table, so it shows which of these is worst rather than how this compares to anywhere else." | sentence_spaced }}</p>
   {% else %}
+  <p class="soft">Nothing to show at this scope.</p>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------- the biggest single jobs #}
+{% if data.actions %}
+<section style="margin-top:7mm">
+  <h2>The updates that clear the most</h2>
+  <p>{{ "One update usually answers several published advisories at once.  These are the largest, so doing them first removes the most work." | sentence_spaced }}</p>
+  <table>
+    <thead>
+      <tr><th style="text-align:left">Update</th><th style="text-align:left">Where</th><th>Rated</th><th>Advisories closed</th></tr>
+    </thead>
+    <tbody>
+      {% for a in data.actions %}
+      <tr>
+        <td style="text-align:left"><strong>{{ a.package }}</strong>
+          {% if a.version and a.fixed_in %}<span class="soft">{{ a.version }} &rarr; {{ a.fixed_in }}</span>{% endif %}</td>
+        <td style="text-align:left" class="soft">{{ a.repository }}{% if a.branch and a.branch != 'main' %} ({{ a.branch }}){% endif %}</td>
+        <td class="{{ 'v-crit' if a.severity == 'critical' else ('v-high' if a.severity == 'high' else ('v-med' if a.severity == 'medium' else '')) }}">{{ a.severity }}</td>
+        <td><strong>{{ a.advisories }}</strong></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{# --------------------------------------------------- the individual worst #}
+{% if data.worst %}
+{# The only forced break in this document is the one after the cover.  Every
+   other one leaves whatever came before it sitting alone on a half empty
+   page, which reads as a printing fault rather than as a decision.  Sections
+   and rows are marked to avoid breaking across a page, which is the thing
+   that actually needed controlling. #}
+<section style="margin-top:7mm">
+  <h2>Highest risk findings</h2>
+  <p>{{ "Ordered by the risk score, which combines how much harm the issue could do with how likely it is that someone could use it.  A finding with no score has not been assessed that way yet and is ordered by its rating instead." | sentence_spaced }}</p>
+  {% for f in data.worst %}
+  <div class="finding">
+    <div class="top">
+      <span class="sev sev-{{ f.severity.value }}">{{ f.severity.value }}</span>
+      {% if f.risk_score %}<span class="soft" style="font-size:8pt">risk {{ f.risk_score }}/100{% if f.risk_evidence == 'observed' %}, observed{% endif %}</span>{% endif %}
+      <span class="rule">{{ f.rule or f.vulnerability_id or 'finding' }}</span>
+    </div>
+    <div class="where">{{ f.repository }}{% if f.branch %} ({{ f.branch }}){% endif %}{% if f.file_path %} &middot; {{ f.file_path }}{% if f.line %}:{{ f.line }}{% endif %}{% elif f.package_name %} &middot; {{ f.package_name }} {{ f.package_version }}{% endif %}</div>
+    {% if f.title %}<div class="why">{{ f.title[:260] }}</div>{% endif %}
+    {% if f.impact and f.likelihood %}
+    <div class="why"><strong>Impact {{ f.impact }}, likelihood {{ f.likelihood }}.</strong>
+      {{ (f.likelihood_reason or '')[:200] }}</div>
+    {% endif %}
+    {% if f.fixed_in %}<div class="why">Fixed in {{ f.fixed_in }}.</div>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{# ------------------------------------------------------------- the themes #}
+{% if data.themes %}
+<section style="margin-top:7mm">
+  <h2>What else is worth knowing</h2>
+  {% for t in data.themes %}
+  <div class="theme">
+    <div class="t">{{ t.title }}</div>
+    <div class="soft">{{ t.detail | sentence_spaced }}</div>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{# -------------------------------------------------------------- the trend #}
+<section style="margin-top:7mm">
+  <h2>How this has moved</h2>
+  <p>{{ movement | sentence_spaced }}</p>
+  {% if not chart.empty %}
   <svg class="chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
        preserveAspectRatio="none">
     {% for line in chart.grid %}
@@ -218,63 +424,15 @@
     <span><i style="background:#8a8a8a;opacity:.35"></i>Informational</span>
   </div>
   {% endif %}
-
   {% if history_note %}
   <div class="note" style="margin-top:4mm">{{ history_note | sentence_spaced }}</div>
   {% endif %}
+  {% if certified_note %}<p style="margin-top:3mm">{{ certified_note | sentence_spaced }}</p>{% endif %}
 </section>
 
-{# --------------------------------------------------------- where it sits #}
-<section style="margin-top:7mm">
-  <h2>Where the work sits</h2>
-  {% if concentration %}<p>{{ concentration | sentence_spaced }}</p>{% endif %}
-
-  {% if heat_rows %}
-  <table>
-    <thead>
-      <tr>
-        <th>{{ heat.axis | capitalize }}</th>
-        <th>Critical</th><th>High</th><th>Medium</th><th>Low</th>
-        <th>Informational</th><th>Total</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in heat_rows %}
-      <tr>
-        <td>{{ row.name }}</td>
-        <td class="{{ 'zero' if not row.critical else 'v-crit' }}">{{ row.critical or '0' }}</td>
-        <td class="{{ 'zero' if not row.high else 'v-high' }}">{{ row.high or '0' }}</td>
-        <td class="{{ 'zero' if not row.medium else 'v-med' }}">{{ row.medium or '0' }}</td>
-        <td class="{{ 'zero' if not row.low else 'v-low' }}">{{ row.low or '0' }}</td>
-        <td class="{{ 'zero' if not row.info }}">{{ row.info or '0' }}</td>
-        <td><strong>{{ row.total }}</strong></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="soft">Nothing to show at this scope.</p>
-  {% endif %}
-</section>
-
-{# ------------------------------------------------------------ next steps #}
-{% if actions %}
-<section style="margin-top:7mm">
-  <h2>What would help most</h2>
-  <ol class="actions">
-    {% for item in actions %}<li>{{ item | sentence_spaced }}</li>{% endfor %}
-  </ol>
-</section>
-{% endif %}
-
-{# ------------------------------------------------------------ the method #}
+{# ------------------------------------------------------------- the method #}
 <section style="margin-top:7mm">
   <h2>How these numbers were produced</h2>
-  {# The fixed prose goes through the same filter as the generated prose, so
-     the two spaces after a full stop survive into the document instead of
-     being collapsed by HTML.  Written on one line each because the filter
-     works on the string, and a newline in the middle of a sentence is another
-     thing HTML turns into a single space. #}
   <p>{{ "Every repository in scope is cloned and scanned.  The scan looks for credentials committed by mistake, weaknesses in the source code, unsafe settings in the infrastructure files, and known security problems in the software the code depends on." | sentence_spaced }}</p>
   <p>{{ "Findings are rated by combining two questions that are asked separately.  The first is how much harm the issue could do, which depends on what the system holds.  The second is how likely it is that someone could use it, which depends on the evidence available.  Keeping them apart avoids the common problem where everything is rated urgent and nothing stands out." | sentence_spaced }}</p>
   <p>{{ basis_note | sentence_spaced }}</p>

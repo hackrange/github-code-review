@@ -1518,6 +1518,167 @@ def _subprocess_not_a_shell(rule: str, source: str, line: int):
     return None
 
 
+# --- a logger that mentions a secret rather than logging one -----------------
+#
+# The rule reads the message and not the values.  A line that says it could not
+# get a token contains the word token, so the rule fires, and what is actually
+# written to the log is an exception.
+#
+#     log.warning("could not reach Microsoft to get a token: %s", exc)
+#
+# Nothing there is a credential.  The sentence is about a credential, which is
+# what an error message about authentication is bound to be, and the only
+# variable in it is the failure.  Reported as written, the rule fires on
+# roughly every honest error message in an authentication path, which is
+# exactly where careful messages get written.
+#
+# So this asks the only question that matters: what reaches the log.  The
+# literal text is not evidence either way, because a message has to be allowed
+# to name the thing it failed to get.
+LOGGER_RULES = {
+    "python-logger-credential-disclosure",
+    "python.lang.security.audit.logging.logger-credential-leak.python-logger-credential-disclosure",
+}
+
+LOGGER_CALL = re.compile(
+    r"\b(?:log|logger|logging|_log|LOG|LOGGER)\s*\.\s*"
+    r"(?:debug|info|warning|warn|error|exception|critical|fatal|log)\s*\(")
+
+# Names that would make this a real disclosure.
+#
+# Matched anywhere in the expression rather than on word boundaries, and that
+# is deliberate.  An underscore is a word character, so a boundary anchored
+# pattern does not match bearer_token, get_access_key or api_token, which is
+# precisely how these are named in Python.  Written the careful way it missed
+# three real disclosures in the first run of its own tests.
+#
+# Matching loosely errs toward keeping a finding, which is the direction to
+# err in: the cost of keeping one is somebody reads a line and moves on, and
+# the cost of clearing one is a credential sitting in a log file that nobody
+# is looking through any more.
+SECRET_NAME = re.compile(
+    r"secret|token|password|passwd|pwd|apikey|api_key|access_key|"
+    r"privatekey|private_key|credential|auth|bearer|session_key|"
+    r"client_secret|refresh_token|passphrase|signing_key", re.I)
+
+# What an exception is called.  These carry a message about a failure, and a
+# provider that puts a credential into an error string has a problem this rule
+# was not written to find.
+FAILURE_NAME = re.compile(
+    r"^(?:exc|e|err|error|ex|reason|why|detail|status|code|resp\.status|"
+    r"response\.status|exc\.code|exc\.reason|type\(exc\)\.__name__)$", re.I)
+
+
+def _logger_arguments(call: str) -> list:
+    """Everything the call would interpolate, or None when it cannot be read.
+
+    The format string itself is not one of them: it is a literal written by
+    whoever wrote the line.  What matters is the values filled into it, plus
+    anything inside an f-string, which is the same thing spelled differently.
+    """
+    open_at = call.find("(")
+    if open_at < 0:
+        return None
+    depth = 0
+    parts, current = [], ""
+    for index in range(open_at, len(call)):
+        char = call[index]
+        if char in "([{":
+            depth += 1
+            if depth == 1:
+                continue
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                parts.append(current)
+                break
+        elif char == "," and depth == 1:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+
+    if not parts:
+        return None
+    parts = [piece.strip() for piece in parts]
+    message, rest = parts[0], parts[1:]
+
+    # An f-string interpolates inside the message, so its braces are arguments
+    # even though they are written as part of the text.
+    if re.match(r"^[rbu]*f", message, re.I):
+        rest = rest + re.findall(r"\{([^{}]+)\}", message)
+
+    # Concatenation is interpolation with a different spelling.
+    if "+" in message and not re.match(r"^[rbu]*f", message, re.I):
+        for piece in message.split("+"):
+            piece = piece.strip()
+            if piece and not piece.startswith(("'", '"')):
+                rest.append(piece)
+
+    # A keyword argument that is not a value being logged.
+    rest = [piece for piece in rest
+            if piece and not re.match(r"^(exc_info|stack_info|stacklevel|extra)\s*=", piece)]
+    return rest
+
+
+def _logger_not_a_secret(rule: str, source: str, line: int):
+    """-> a reason this logs no credential, or None to leave the finding alone.
+
+    Only ever answers when the whole call could be read and every value going
+    into it could be named.  Anything unreadable leaves the finding standing,
+    because the cost of being wrong here is a credential in a log file that
+    nobody is looking for any more.
+    """
+    if rule not in LOGGER_RULES and not rule.endswith(
+            "python-logger-credential-disclosure"):
+        return None
+
+    lines = (source or "").splitlines()
+    if not (1 <= line <= len(lines)):
+        return None
+    window = "\n".join(lines[line - 1:line - 1 + 20])
+    start = LOGGER_CALL.search(window)
+    if not start:
+        return None
+
+    depth = 0
+    call = ""
+    for index in range(start.end() - 1, len(window)):
+        char = window[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                call = window[start.start():index + 1]
+                break
+    if not call:
+        return None
+
+    arguments = _logger_arguments(call)
+    if arguments is None:
+        return None
+
+    if not arguments:
+        return ("the message is a literal with nothing interpolated into it, "
+                "so whatever the sentence mentions, no value reaches the log")
+
+    named = []
+    for argument in arguments:
+        if SECRET_NAME.search(argument):
+            return None                     # something here really is one
+        if not FAILURE_NAME.match(argument.strip()):
+            named.append(argument.strip())
+
+    if not named:
+        return ("the only value logged is the failure itself, and the words in "
+                "the message are the message naming what it could not get")
+
+    return ("the values logged are %s, none of which is a credential: the rule "
+            "matched words in the message text rather than anything reaching "
+            "the log" % ", ".join(named[:4]))
+
+
 SKIP_FRAMEWORK_DIRS = {
     "node_modules", "vendor", "third_party", "bower_components", ".venv",
     "venv", "site-packages", "dist", "build", "target", "__pycache__",
@@ -1728,6 +1889,18 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
                 verdict = NOT_APPLICABLE
                 reason = no_shell
                 decided_by = "subprocess-not-a-shell"
+
+        # A log line that mentions a credential is not a log line that writes
+        # one.  Same placement and the same reason as above: this is a fact
+        # about the call on this line, which outranks anything read from the
+        # manifests.
+        if verdict == REVIEW:
+            no_secret = _logger_not_a_secret(rule, source,
+                                             finding.get("start", {}).get("line", 0))
+            if no_secret:
+                verdict = NOT_APPLICABLE
+                reason = no_secret
+                decided_by = "logger-logs-no-secret"
 
         # A rule for a framework this repository does not use is not a finding
         # about this repository.  Only where nothing stronger has been said:

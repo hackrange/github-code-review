@@ -498,17 +498,26 @@ def trends_report(request: Request, user: User = Depends(current_user)):
         points = trends.series(db, basis=basis, base=base,
                                organization=organization, repository=repository,
                                branch=branch, connection=connection, since=since)
-        grid = trends.heatmap(db, basis=basis, base=base,
-                              organization=organization, repository=repository,
-                              branch=branch, connection=connection)
-        heat_rows = charts.heat_levels(grid["rows"])
+
+        # The assessment itself, read from the findings rather than from the
+        # daily rollup.  The rollup knows how many there were and nothing
+        # about what they are, and a report that only knows the first is a
+        # chart with a cover page on it.
+        from app.core import report_data
+
+        axis = ("branch" if repository else
+                "repository" if organization else "organization")
+        data = report_data.assemble(
+            db, rbac.visible_findings(db, user),
+            organization=organization, repository=repository,
+            branch=branch, connection=connection, axis=axis)
+        heat_rows = charts.heat_levels(data["hotspots"])
+        grid = {"axis": axis, "rows": data["hotspots"]}
 
         scope_label = ((branch and repository and "%s on %s" % (repository, branch))
                        or repository or organization or "All repositories")
 
-        latest = points[-1] if points else {
-            "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
-            "total": 0}
+        pass
 
         # The name on the cover.  Whatever the person is actually called, and
         # their sign in name only when that is all there is: a document that
@@ -528,16 +537,18 @@ def trends_report(request: Request, user: User = Depends(current_user)):
                                           now.strftime("%d %B %Y")),
             "issued_at": now.strftime("%d %B %Y"),
             "basis": basis,
-            "latest": latest,
+            "latest": data["severity"],
             "chart": charts.stacked_area(points, width=880, height=250),
             "heat": grid,
             "heat_rows": heat_rows,
-            "summary": report_text.headline(scope_label, points, basis),
+            "summary": report_text.assessment(data, scope_label),
+            "movement": report_text.headline(scope_label, points, basis),
             "basis_note": report_text.basis_note(basis),
             "history_note": report_text.history_note(points),
-            "concentration": report_text.concentration(grid["rows"], grid["axis"]),
+            "hotspot_note": report_text.hotspot_note(data["hotspots"], axis),
             "certified_note": report_text.certified_note(_cert.counts(db)),
-            "actions": report_text.what_to_do(grid["rows"], grid["axis"], points),
+            "recommendations": report_text.what_matters(data),
+            "data": data,
         }
         html = render_partial("report_pdf.html", **context)
 

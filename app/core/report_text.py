@@ -227,3 +227,187 @@ def what_to_do(rows: list, axis: str, points: list) -> list:
                 "The total came down over this period.  Keeping the same pace "
                 "would continue that.")
     return out
+
+
+# --- the assessment, rather than the chart ----------------------------------
+
+def assessment(data: dict, scope_label: str) -> str:
+    """The opening paragraph, built from what was actually found.
+
+    Leads with whatever is provably live, because that is the only part of a
+    security report that is not a queue.  Falls back to the shape of the work
+    when nothing is proven, and says plainly that nothing was proven rather
+    than implying an all clear.
+    """
+    cover = data["coverage"]
+    sev = data["severity"]
+    urgent_now = data["urgent"]
+
+    repos = cover["repositories"]
+    opening = ("This assessment covers %s: %d %s across %d %s, with %d open "
+               "findings."
+               % (_mid_sentence(scope_label), repos,
+                  _plural(repos, "repository", "repositories"),
+                  cover["branches"], _plural(cover["branches"], "branch", "branches"),
+                  cover["findings"]))
+
+    serious = sev["critical"] + sev["high"]
+    weight = ("%d of them %s rated critical or high."
+              % (serious, _plural(serious, "is", "are"))
+              if serious else
+              "None of them is rated critical or high.")
+
+    live = urgent_now["live_credentials"]["count"]
+    bad = urgent_now["malicious_packages"]["count"]
+    hot = urgent_now["known_exploited"]["count"]
+
+    if live or bad:
+        pieces = []
+        if live:
+            pieces.append("%d credential%s confirmed to still work"
+                          % (live, " was" if live == 1 else "s were"))
+        if bad:
+            pieces.append("%d package%s identified as malicious rather than "
+                          "merely vulnerable"
+                          % (bad, " was" if bad == 1 else "s were"))
+        alarm = ("Two findings need attention before the rest: "
+                 if len(pieces) > 1 else "One finding needs attention before "
+                 "the rest: ") + " and ".join(pieces) + "."
+        alarm += ("  These are not estimates.  Someone or something confirmed "
+                  "each one, and they are listed by name later in this "
+                  "report.")
+    elif hot:
+        alarm = ("%d of these %s a vulnerability that is being exploited "
+                 "somewhere in the world today, according to the public "
+                 "catalog of known exploited vulnerabilities.  That says "
+                 "nothing about whether this system can be reached, and it "
+                 "does move them to the front of the queue."
+                 % (hot, "is" if hot == 1 else "are"))
+    else:
+        alarm = ("Nothing in this set has been confirmed as live or as "
+                 "actively exploited.  That is a good sign and it is not "
+                 "proof of safety: it means no confirmation was found, not "
+                 "that none exists.")
+
+    return _join([opening, weight, alarm])
+
+
+def what_matters(data: dict) -> list:
+    """An ordered list of what to do, each item tied to its own number.
+
+    Ordered by what is known rather than by what is rated.  Something proven
+    to work comes before something rated critical, because a rating is an
+    opinion about a rule and a confirmation is a fact about this system.
+    """
+    out = []
+    urgent_now = data["urgent"]
+    sev = data["severity"]
+
+    live = urgent_now["live_credentials"]
+    if live["count"]:
+        where = sorted({row.repository for row in live["rows"] if row.repository})
+        out.append({
+            "priority": "Immediately",
+            "title": "Rotate the credentials confirmed to still work",
+            "detail": ("%d credential%s committed to source control and "
+                       "confirmed still valid.  Anyone who can read the "
+                       "repository, or its history, has them.  Rotate first "
+                       "and remove them from the code second: removing a "
+                       "credential from a file does not remove it from the "
+                       "history.%s"
+                       % (live["count"], " was" if live["count"] == 1 else "s were",
+                          ("  Affected: " + ", ".join(where[:6]) + ".") if where else "")),
+        })
+
+    bad = urgent_now["malicious_packages"]
+    if bad["count"]:
+        names = sorted({row.package_name for row in bad["rows"] if row.package_name})
+        out.append({
+            "priority": "Immediately",
+            "title": "Remove the packages identified as malicious",
+            "detail": ("%s hostile in itself rather than merely flawed.  "
+                       "Upgrading does not help.  Remove the dependency and "
+                       "check what ran during installation.%s"
+                       % ("One dependency is" if bad["count"] == 1
+                          else "%d dependencies are" % bad["count"],
+                          ("  Packages: " + ", ".join(names[:6]) + ".") if names else "")),
+        })
+
+    hot = urgent_now["known_exploited"]
+    if hot["count"]:
+        out.append({
+            "priority": "This week",
+            "title": "Patch the vulnerabilities known to be exploited",
+            "detail": ("%d finding%s a vulnerability on the public catalog of "
+                       "known exploited vulnerabilities.  Attacks using these "
+                       "exist and are in use, so they are worth patching ahead "
+                       "of higher rated issues that nobody has been seen "
+                       "using."
+                       % (hot["count"], " matches" if hot["count"] == 1
+                          else "s match")),
+        })
+
+    actions = data["actions"]
+    if actions:
+        biggest = max(actions, key=lambda a: a["advisories"])
+        if biggest["advisories"] > 1:
+            out.append({
+                "priority": "This month",
+                "title": "Take the upgrades that clear the most at once",
+                "detail": ("Updating %s from %s to %s in %s closes %d "
+                           "advisories on its own.  The full list of the "
+                           "largest updates is later in this report, and most "
+                           "of the dependency work in this assessment is a "
+                           "small number of updates repeated across "
+                           "repositories."
+                           % (biggest["package"], biggest["version"] or "its "
+                              "current version", biggest["fixed_in"] or "the "
+                              "fixed version", biggest["repository"],
+                              biggest["advisories"])),
+            })
+
+    creds = next((k for k in data["kinds"] if k["kind"] == "credential"), None)
+    if creds and creds["total"] and not live["count"]:
+        out.append({
+            "priority": "This month",
+            "title": "Review the credentials found in source control",
+            "detail": ("%d credential%s found in the code or its history.  "
+                       "None was confirmed as still working, which is not the "
+                       "same as none working: many providers give no way to "
+                       "ask.  Treat them as exposed and rotate them."
+                       % (creds["total"], " was" if creds["total"] == 1
+                          else "s were")),
+        })
+
+    if sev["critical"] + sev["high"] and not out:
+        out.append({
+            "priority": "This month",
+            "title": "Work through the critical and high rated findings",
+            "detail": ("%d findings are rated critical or high.  Nothing in "
+                       "this set has been confirmed as live, so this is "
+                       "ordinary remediation work rather than an incident."
+                       % (sev["critical"] + sev["high"])),
+        })
+
+    return out
+
+
+def hotspot_note(rows: list, axis: str) -> str:
+    """Whether the problem is concentrated, in one sentence with its numbers."""
+    if not rows:
+        return ""
+    total = sum(row["total"] for row in rows)
+    if not total:
+        return ""
+    top = rows[0]
+    share = round(100.0 * top["total"] / total)
+    serious = top["critical"] + top["high"]
+    return _join([
+        "%s carries the most, with %d open findings of which %d %s rated "
+        "critical or high."
+        % (_sentence_start(top["name"]), top["total"], serious,
+           _plural(serious, "is", "are")),
+        "That is %d percent of everything in this report." % share
+        if share >= 20 else
+        "No single %s dominates the total." % axis,
+    ])
