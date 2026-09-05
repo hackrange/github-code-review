@@ -338,6 +338,19 @@ normalize_semgrep() {
         triage: (($r.triage.verdict // "review")),
         triage_reason: (($r.triage.reason // "")),
         triage_rule: ($r.triage.promote.rule // $r.triage.rule // ""),
+        # The expression the rule actually matched, which is what makes this
+        # finding this finding.
+        #
+        # Identity used to include the line number, so inserting a function
+        # anywhere above a finding retired it and created a new one, and every
+        # decision recorded on it stayed with the row that had just been
+        # resolved.  Somebody graded the same three lines twice in one evening
+        # because of it.
+        #
+        # The matched text moves with the code.  The triage pass already reads
+        # it out of the source using the column offsets, so this is carrying
+        # something already computed rather than computing anything.
+        matched: (($r.triage.matched // "")),
         url: ($web + "/" + $repo + "/blob/" + $br + "/" + (($r.path // "") | sub("^\\./"; "")) + "#L" + (($r.start.line // 0) | tostring)),
         state: "open"
       } ]

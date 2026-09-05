@@ -12,6 +12,7 @@ of one organization never marks another organization's findings as gone.
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 import logging
 from datetime import datetime, timezone
@@ -92,10 +93,24 @@ def fingerprint_for(kind: str, row: dict) -> str:
     Secrets come with one from the scanner, built from the secret itself, so it
     survives the file moving.
 
-    Code findings get repo, file, rule and line.  Line is in there because two
-    hits of the same rule in one file are two different things.  The cost is
-    that shifting code down looks like the old one went away and a new one
-    arrived, which is worth it for not merging things that are not the same.
+    Code findings get repo, file, rule, the expression that was matched, and
+    which occurrence of it this is.  Not the line.
+
+    Line used to be in there, on the reasoning that two hits of the same rule
+    in one file are two different things.  That is true and the line is the
+    wrong way to say it: inserting a function anywhere above a finding retires
+    it and creates a new one, so every waiver and every regrade recorded on it
+    stays attached to a row that has just been resolved.  Somebody graded the
+    same three lines twice in one evening because of it, and a decision that
+    evaporates teaches people the button does not work.
+
+    The matched expression moves with the code, so an edit above it changes
+    nothing.  The occurrence index keeps three identical calls in one file
+    three findings, which was the whole point of having the line in there.
+    Changing the matched code does change the identity, and that is correct:
+    it is not the same code any more.
+
+    Package findings get repo, package, version and advisory, no line at all.
 
     Package findings get repo, package, version and advisory, no line at all.
     """
@@ -106,9 +121,20 @@ def fingerprint_for(kind: str, row: dict) -> str:
         return "cred:" + _digest(row.get("repository"), row.get("file"),
                                  row.get("detector"), row.get("start_line"))
     if kind == "code":
+        matched = _normalize_match(row.get("matched"))
+        if matched:
+            return "code:" + _digest(row.get("repository"), row.get("file"),
+                                     row.get("rule_name") or row.get("rule"),
+                                     matched, row.get("_occurrence", 0))
+        # No matched text: an engine that does not report column offsets, or
+        # an older report being re-read.  The line is all there is, and it is
+        # better than nothing so long as the fallback below can still find
+        # what a person decided.
         return "code:" + _digest(row.get("repository"), row.get("file"),
                                  row.get("rule_name") or row.get("rule"),
                                  row.get("start_line"))
+
+
     if kind == "misconfiguration":
         # The resource rather than the line, where there is one.  Terraform
         # moves around a file far more than it gets renamed, and a finding that
@@ -134,6 +160,117 @@ def fingerprint_for(kind: str, row: dict) -> str:
         # and the same signal in two manifests is two as well.
         parts.append(bad["manifest"])
     return "dep:" + _digest(*parts)
+
+
+def legacy_code_fingerprint(row: dict) -> str:
+    """What this finding was called before identity stopped using the line.
+
+    Kept so a decision somebody already made survives the change.  Without it
+    every regrade and waiver on a code finding is orphaned once, on the scan
+    after this ships, which is exactly the failure this whole change is about.
+    """
+    return "code:" + _digest(row.get("repository"), row.get("file"),
+                             row.get("rule_name") or row.get("rule"),
+                             row.get("start_line"))
+
+
+_PADDING = re.compile(r"\s*([^\w\s])\s*")
+
+
+def _normalize_match(value) -> str:
+    """The matched expression, with formatting taken out of it.
+
+    Reformatting is not a new finding.  Somebody running a formatter over a
+    file should not lose every decision in it, and the difference between
+    `f( a, b )` and `f(a, b)` is not a difference in what the rule found.
+
+    Space next to punctuation is removed and space between two words is kept.
+    Removing all of it would be simpler and would quietly merge `not x` with
+    `notx`, which are two different pieces of code, and identity is the one
+    place where being simpler is not worth being wrong.
+    """
+    text = " ".join(str(value or "").split())
+    text = _PADDING.sub(r"\1", text)
+    return text[:200]
+
+
+def number_occurrences(rows) -> None:
+    """Mark each code finding as the nth identical match in its file.
+
+    Three identical calls in one file are three findings, and without this
+    they would collapse into one and take two thirds of the decisions with
+    them.  Ordered by line so the numbering is stable between scans as long as
+    the code is in the same order, which is the same assumption every diff
+    tool makes.
+    """
+    seen = {}
+    for row in sorted(rows or [], key=lambda r: (
+            str(r.get("file") or ""), int(r.get("start_line") or 0))):
+        key = (row.get("repository"), row.get("file"),
+               row.get("rule_name") or row.get("rule"),
+               _normalize_match(row.get("matched")))
+        row["_occurrence"] = seen.get(key, 0)
+        seen[key] = row["_occurrence"] + 1
+
+
+def adopt_renamed(session, rows) -> dict:
+    """-> {new fingerprint: the existing finding it used to be}.
+
+    Code findings were identified by their line number until this release.
+    Changing that means every one of them looks new on the next scan, and
+    every waiver and every regrade anybody recorded is orphaned exactly once,
+    on the way to fixing the problem of decisions being orphaned.
+
+    The old name cannot be recomputed, because it was built from the line the
+    finding used to be on and the new report only knows where it is now.  So
+    the pairing is positional: within one file and one rule, the findings
+    already in the database and the ones arriving are both put in line order
+    and matched off against each other.  That is the same assumption every
+    diff makes, and it is right whenever the edit was an insertion or a
+    deletion rather than a reordering.
+
+    Only ever pairs what is left over.  Anything the new name already found is
+    taken out first, so this can never move a decision onto a finding that
+    already has one, and a row it does not pair is left to be created as new.
+    """
+    from collections import defaultdict
+
+    incoming = defaultdict(list)
+    for row in rows or []:
+        key = (row.get("repository"), row.get("file"),
+               row.get("rule_name") or row.get("rule"))
+        if all(key):
+            incoming[key].append(row)
+    if not incoming:
+        return {}
+
+    out = {}
+    for key, arriving in incoming.items():
+        repository, path, rule = key
+        existing = (session.query(Finding)
+                    .filter(Finding.kind == FindingKind.CODE,
+                            Finding.repository == repository,
+                            Finding.file_path == path,
+                            Finding.rule == rule,
+                            Finding.state == FindingState.OPEN)
+                    .all())
+        if not existing:
+            continue
+
+        wanted = {fingerprint_for("code", row): row for row in arriving}
+        # Whatever the new name already matches is not a rename.
+        held = {row.fingerprint for row in existing}
+        unclaimed_new = [(marker, row) for marker, row in wanted.items()
+                         if marker not in held]
+        unclaimed_old = [row for row in existing if row.fingerprint not in wanted]
+        if not unclaimed_new or not unclaimed_old:
+            continue
+
+        unclaimed_new.sort(key=lambda pair: int(pair[1].get("start_line") or 0))
+        unclaimed_old.sort(key=lambda row: int(row.line or 0))
+        for (marker, _row), previous in zip(unclaimed_new, unclaimed_old):
+            out[marker] = previous
+    return out
 
 
 def _repo_for(session, organization: str, full_name: str, cache: dict,
@@ -294,6 +431,14 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         counts["repositories"] += 1
 
     def upsert(kind_name: str, kind_enum, rows, fill) -> None:
+        # Which identical match this is, before anything is looked up.  The
+        # numbering is over the whole set for a repository, so it cannot be
+        # done a row at a time.
+        renamed = {}
+        if kind_name == "code":
+            number_occurrences(rows)
+            renamed = adopt_renamed(session, rows)
+
         for row in rows or []:
             full_name = row.get("repository") or ""
             if not full_name:
@@ -308,6 +453,16 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             finding = (session.query(Finding)
                        .filter(Finding.fingerprint == marker)
                        .one_or_none())
+
+            # Nothing under the new name.  It may be a finding this release
+            # renamed rather than a new one: see adopt_renamed above.
+            if finding is None and kind_name == "code":
+                carried = renamed.pop(marker, None)
+                if carried is not None:
+                    carried.fingerprint = marker
+                    finding = carried
+                    counts["renamed"] = counts.get("renamed", 0) + 1
+
             if finding is None:
                 finding = Finding(fingerprint=marker,
                                   vuln_id=vuln_id_for(marker),
