@@ -114,8 +114,11 @@
         if (field && field.type !== "checkbox" && field.type !== "radio") {
           field.value = trigger.dataset[name];
         }
-        var slot = panel.querySelector('[data-slot="' + name + '"]');
-        if (slot) { slot.textContent = trigger.dataset[name]; }
+        /* Every slot, not the first one.  A dialog that names the thing it
+         * is about twice, once in the heading and once in the sentence you
+         * have to type it into, filled only the heading. */
+        panel.querySelectorAll('[data-slot="' + name + '"]').forEach(
+          function (slot) { slot.textContent = trigger.dataset[name]; });
       });
       var first = panel.querySelector("input:not([type=hidden]), textarea, select");
       if (first) { first.focus(); }

@@ -381,23 +381,57 @@ def risk_matrix(query) -> dict:
     from app.core.models import Severity as _Severity
     from app.core.risk import MATRIX
 
+    # Both the count and the worst grade actually carried by what is in each
+    # cell.
+    #
+    # The color used to come from the matrix, on the reasoning that the
+    # picture then cannot disagree with the number.  It can, and it did: a
+    # cell reading high impact and unlikely was colored medium because that
+    # is what the model says the pair means, while every one of the hundred
+    # and thirty six findings in it was graded info.  The pair is a
+    # recommendation and the grade is what stands after triage and after
+    # anybody has had their say, and presenting the first as though it were
+    # the second is the picture telling a story the list does not.
+    #
+    # So the color is what the findings are.  The model's own answer is kept
+    # beside it, because where the two differ that is worth seeing rather than
+    # smoothing over.
+    from app.core.grouping import RANK
+
     counts = {}
-    for impact, likelihood, total in (query.with_entities(
-            Finding.impact, Finding.likelihood, func.count(Finding.id))
-            .group_by(Finding.impact, Finding.likelihood).all()):
-        counts[((impact or "").lower(), (likelihood or "").lower())] = total
+    worst_at = {}
+    for impact, likelihood, severity, total in (query.with_entities(
+            Finding.impact, Finding.likelihood, Finding.severity,
+            func.count(Finding.id))
+            .group_by(Finding.impact, Finding.likelihood, Finding.severity).all()):
+        key = ((impact or "").lower(), (likelihood or "").lower())
+        counts[key] = counts.get(key, 0) + total
+        if RANK.get(severity, 0) > RANK.get(worst_at.get(key), -1):
+            worst_at[key] = severity
 
     placed = 0
     grid = []
     for impact in IMPACT_ROWS:
         row = {"impact": impact, "cells": []}
         for likelihood in LIKELIHOOD_COLUMNS:
-            total = counts.get((impact, likelihood), 0)
+            key = (impact, likelihood)
+            total = counts.get(key, 0)
             placed += total
-            severity = MATRIX.get(impact, {}).get(likelihood, _Severity.UNKNOWN)
+            proposed = MATRIX.get(impact, {}).get(likelihood, _Severity.UNKNOWN)
+            actual = worst_at.get(key)
             row["cells"].append({
                 "impact": impact, "likelihood": likelihood, "count": total,
-                "severity": getattr(severity, "value", str(severity)),
+                # What the findings in here are graded, which is what the
+                # color follows and what the list will show.
+                "severity": (getattr(actual, "value", str(actual))
+                             if actual is not None
+                             else getattr(proposed, "value", str(proposed))),
+                # What the model says this pair means, kept so the two can be
+                # compared rather than conflated.
+                "proposed": getattr(proposed, "value", str(proposed)),
+                "differs": (actual is not None
+                            and getattr(actual, "value", "") !=
+                            getattr(proposed, "value", "")),
             })
         row["total"] = sum(cell["count"] for cell in row["cells"])
         grid.append(row)

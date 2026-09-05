@@ -135,13 +135,25 @@ def create_app() -> FastAPI:
         with session_scope() as db:
             created = ensure_bootstrap_admin(db)
         if created:
-            # Printed once, never stored anywhere else.  They have to change it
-            # and set up two step before the app lets them do anything.
+            # The password is not written here, and the comment that used to
+            # say it was printed once and stored nowhere else was wrong: a log
+            # is somewhere else, and a worse one than the file.
+            #
+            # ensure_bootstrap_admin writes it to first-admin.txt at mode 600
+            # and the application deletes that file the moment the account
+            # changes its password.  The log has none of those properties.  It
+            # is kept for the life of the container, it survives the password
+            # being changed, and anybody who can read container logs can read
+            # it, which on most installations is more people than can read the
+            # data directory.
+            #
+            # Found by this scanner, on this file.  The rule was right.
             log.warning("")
             log.warning("  FIRST ADMIN")
             log.warning("    username: %s", created["username"])
-            log.warning("    password: %s", created["password"])
-            log.warning("    Change it at first sign in.  This will not be shown again.")
+            log.warning("    password: written to %s, mode 600",
+                        created.get("path") or "first-admin.txt in the data directory")
+            log.warning("    Change it at first sign in.  That deletes the file.")
             log.warning("")
 
         # Cron for scans and for refreshing the vulnerability feeds.  Off

@@ -1170,6 +1170,65 @@ async def delete_connection(connection_id: int, request: Request,
     return redirect(f"/connections?msg={quote(message)}&kind=ok")
 
 
+@router.post("/connections/flush")
+async def flush_connection_data(request: Request,
+                                user: User = Depends(current_user)):
+    """Remove everything a connection brought in.
+
+    A connection can be deleted while its findings, its repositories and its
+    history stay, which is the right default: taking away the way in should
+    not quietly take away the evidence.  The cost is a name that goes on
+    appearing in every filter and every report with nothing behind it, and no
+    way to be rid of it short of the database.
+
+    Not reversible, so the name has to be typed rather than clicked, and the
+    counts come back so the answer says what went rather than "done".
+    """
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+
+    from urllib.parse import quote
+
+    from app.core import connections as connection_data
+    from app.core.models import Connection
+
+    form = await request.form()
+    name = clean_text(form.get("name"), "Connection", limit=120)
+    typed = clean_text(form.get("confirm"), "Confirmation", limit=120,
+                       required=False)
+    if typed != name:
+        raise HTTPException(
+            status_code=400,
+            detail="Type the connection name to confirm.  This removes its "
+                   "findings and cannot be undone.")
+
+    with session_scope() as db:
+        # Refuse where the connection still exists.  Removing the data under a
+        # working connection would have it all arrive again on the next scan,
+        # minus every decision anybody had recorded on it, which is a very
+        # expensive way to achieve nothing.
+        live = (db.query(Connection)
+                .filter(Connection.name == name).one_or_none())
+        if live is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="That connection still exists.  Delete the connection "
+                       "first, or its data will simply be scanned again "
+                       "without the decisions recorded on it.")
+
+        removed = connection_data.flush(db, name, actor=user.username)
+        audit(db, user, "connection.flushed", name,
+              "%d row(s): %d finding(s), %d repositor(y/ies), %d component(s), "
+              "%d trend point(s)"
+              % (removed["total"], removed.get("findings", 0),
+                 removed.get("repositories", 0), removed.get("components", 0),
+                 removed.get("trend_points", 0)))
+
+    return redirect("/connections?msg=" + quote(
+        "Removed %d row(s) left by %s. The scan history is kept."
+        % (removed["total"], name)) + "&kind=ok")
+
+
 @router.post("/connections/{connection_id}/test")
 async def test_connection(connection_id: int, request: Request,
                           user: User = Depends(current_user)):

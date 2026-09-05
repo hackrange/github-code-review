@@ -382,6 +382,7 @@ def ensure_bootstrap_admin(session) -> dict:
     # Drop it in a file too.  Grepping the log for it is fragile, and the
     # installer needs something it can rely on.  Mode 600, and the app deletes
     # it the moment that account changes its password.
+    path = None
     try:
         path = settings.data_dir / "first-admin.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -397,8 +398,14 @@ def ensure_bootstrap_admin(session) -> dict:
         path.chmod(0o600)
     except OSError as exc:
         log.warning("could not write the first admin file: %s", exc)
+        path = None
 
-    return {"username": "admin", "password": password}
+    # The path travels with the result so the caller can point at it without
+    # knowing where the data directory is.  The password travels too, because
+    # the installer path uses it, and it is the caller's business not to write
+    # it anywhere that outlives the file.
+    return {"username": "admin", "password": password,
+            "path": str(path) if path else ""}
 
 
 def clear_bootstrap_file() -> None:

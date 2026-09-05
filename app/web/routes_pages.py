@@ -1533,6 +1533,7 @@ def connections_page(request: Request, msg: str = "", kind: str = "",
     rbac.require(user, "settings.read")
 
     from app.core import connections as connection_store
+    from app.core import connections as _connections
     from app.core import settings_store as connection_settings
     from app.core.models import Finding
     from sqlalchemy import func as sql_func
@@ -1578,6 +1579,12 @@ def connections_page(request: Request, msg: str = "", kind: str = "",
             shown=len(listed),
             total=total,
             unassigned=counts.get("", 0) + counts.get(None, 0),
+            # Names that appear in the data and in no connection.  A
+            # connection can be removed while everything it brought in stays,
+            # which is the right default, and the cost is a name that goes on
+            # appearing in filters and reports with nothing behind it.
+            leftovers=(_connections.leftovers(db)
+                       if rbac.can(user, "settings.write") else []),
             can_write=rbac.can(user, "settings.write"),
             message=clean_text(msg, "message", limit=400, required=False),
             message_kind="error" if kind == "error" else "ok",

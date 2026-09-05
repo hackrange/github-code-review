@@ -286,3 +286,98 @@ def normalize_urls(provider: str, web: str, api: str) -> tuple:
             web = "https://github.com"
 
     return web, api
+
+
+# --- removing what a connection left behind ---------------------------------
+
+# Every table that names a connection.  Written out rather than discovered,
+# because a table added later should be a deliberate decision about whether
+# its rows belong to a connection, not something a loop quietly starts
+# deleting.
+CONNECTION_TABLES = (
+    ("findings", "connection"),
+    ("components", "connection"),
+    ("repo_access", "connection"),
+    ("trend_points", "connection"),
+    ("repositories", "connection"),
+)
+
+# Scan runs are the exception and are deliberately kept.  They are the record
+# of what was done and when, they carry no findings, and deleting them would
+# make the history of the estate disagree with the audit log.
+KEEP = ("scan_runs",)
+
+
+def leftovers(session) -> list:
+    """-> [{name, findings, ...}] for connection names with no connection row.
+
+    A connection can be deleted while everything it brought in stays, which is
+    the right default: removing the way in should not silently remove the
+    evidence.  The cost is that the name goes on appearing in filters and
+    reports for ever, with nothing behind it a reader can act on.
+
+    So the names are found rather than remembered, by asking which ones appear
+    in the data and do not appear in the connection list.
+    """
+    from sqlalchemy import text
+
+    known = {row[0] for row in session.execute(
+        text("select name from connections")).all() if row[0]}
+
+    seen = {}
+    for table, column in CONNECTION_TABLES:
+        for name, total in session.execute(text(
+                "select %s, count(*) from %s where %s <> '' group by %s"
+                % (column, table, column, column))).all():
+            if not name or name in known:
+                continue
+            seen.setdefault(name, {"name": name, "total": 0})
+            seen[name][table] = total
+            seen[name]["total"] += total
+
+    return sorted(seen.values(), key=lambda row: -row["total"])
+
+
+def counts_for(session, name: str) -> dict:
+    """What a flush would remove, so somebody can see it before agreeing."""
+    from sqlalchemy import text
+
+    out = {"name": name, "total": 0}
+    for table, column in CONNECTION_TABLES:
+        total = session.execute(
+            text("select count(*) from %s where %s = :name" % (table, column)),
+            {"name": name}).scalar() or 0
+        out[table] = total
+        out["total"] += total
+    out["scan_runs"] = session.execute(
+        text("select count(*) from scan_runs where connection = :name"),
+        {"name": name}).scalar() or 0
+    return out
+
+
+def flush(session, name: str, actor: str = "") -> dict:
+    """Remove everything a connection brought in.  -> what was removed.
+
+    Deliberately not reversible and deliberately not quiet.  The counts come
+    back so the caller can say what happened rather than "done", and the audit
+    entry names them for the same reason.
+
+    The scan history is left alone.  It is the record of what ran and when,
+    it holds no findings, and removing it would leave the audit log describing
+    scans that no longer appear anywhere.
+    """
+    from sqlalchemy import text
+
+    name = (name or "").strip()
+    if not name:
+        return {"removed": 0}
+
+    removed = counts_for(session, name)
+    for table, column in CONNECTION_TABLES:
+        session.execute(
+            text("delete from %s where %s = :name" % (table, column)),
+            {"name": name})
+    session.flush()
+    log.warning("flushed %d row(s) left by connection %s, requested by %s",
+                removed["total"], name, actor or "?")
+    return removed

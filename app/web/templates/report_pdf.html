@@ -335,14 +335,14 @@
   <table class="matrix">
     <thead>
       <tr>
-        <th class="corner">Impact / Likelihood</th>
+        <th class="corner">How bad if real / how likely</th>
         {% for column in matrix.columns %}<th>{{ column }}</th>{% endfor %}
       </tr>
     </thead>
     <tbody>
       {% for row in matrix.rows %}
       <tr>
-        <th class="impact">{{ row.impact }}</th>
+        <th class="impact">{{ row.impact }} impact</th>
         {% for cell in row.cells %}
         <td class="m-{{ cell.severity }}{{ ' is-empty' if not cell.count }}">{{ cell.count or '' }}</td>
         {% endfor %}
@@ -351,7 +351,7 @@
     </tbody>
   </table>
   <p class="faint" style="font-size:8pt;margin-top:2mm">
-    {{ (matrix.placed ~ " of " ~ matrix.total ~ " findings are placed on this grid.") | sentence_spaced }}
+    {{ (matrix.placed ~ " of " ~ matrix.total ~ " findings are placed on this grid.  Rows are how much harm an issue could do and columns are how likely it is that someone could use it.  Neither is a severity: the shading follows the worst grade the findings in a cell actually carry.") | sentence_spaced }}
     {% if matrix.unplaced %}{{ (matrix.unplaced ~ " have not been assessed on both axes yet and are left off rather than guessed into a cell.  They fill in as each repository is rescanned.") | sentence_spaced }}{% endif %}
   </p>
   {% endif %}

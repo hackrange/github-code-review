@@ -182,20 +182,24 @@
   <div class="table-scroll">
     <table class="matrix">
       <thead>
+        {# The row label is an impact and the column is a likelihood, and
+           neither is a severity.  Somebody read "High" in the first column as
+           a count of high findings and asked why it said a hundred and thirty
+           six when the list showed three.  It is spelled out now. #}
         <tr>
-          <th class="corner"><span>Impact</span><span class="axis-x">Likelihood</span></th>
+          <th class="corner"><span>How bad if real</span><span class="axis-x">How likely &rarr;</span></th>
           {% for column in matrix.columns %}<th>{{ column }}</th>{% endfor %}
         </tr>
       </thead>
       <tbody>
         {% for row in matrix.rows %}
         <tr>
-          <th class="impact">{{ row.impact }}</th>
+          <th class="impact">{{ row.impact }} impact</th>
           {% for cell in row.cells %}
           <td class="mcell m-{{ cell.severity }} {{ 'is-empty' if not cell.count }}">
             {%- if cell.count %}
             <a href="{{ base }}/findings?state=open&exception=any&triage=any&baseline=any&group=none&impact={{ cell.impact }}&likelihood={{ cell.likelihood | urlencode }}{% if filters.org %}&org={{ filters.org | urlencode }}{% endif %}{% if filters.repo %}&repo={{ filters.repo | urlencode }}{% endif %}{% if filters.branch %}&branch={{ filters.branch | urlencode }}{% endif %}{% if filters.connection %}&connection={{ filters.connection | urlencode }}{% endif %}"
-               title="{{ cell.count }} rated {{ cell.severity }}: impact {{ cell.impact }}, likelihood {{ cell.likelihood }}">
+               title="{{ cell.count }} finding{{ '' if cell.count == 1 else 's' }} with {{ cell.impact }} impact and {{ cell.likelihood }} likelihood. Worst graded {{ cell.severity }}{% if cell.differs %}, though this pair would ordinarily be {{ cell.proposed }}: triage or somebody's decision has moved them{% endif %}.">
               {{ cell.count }}</a>
             {%- else %}<span>&middot;</span>{% endif -%}
           </td>
@@ -211,6 +215,9 @@
      complete picture of the estate. #}
   <div class="legend">
     <span>{{ matrix.placed }} of {{ matrix.total }} placed</span>
+    <span class="faint">Rows are how much harm, columns are how likely.
+      Neither is a severity: the color is the worst grade the findings in a
+      cell actually carry.</span>
     {% if matrix.unplaced %}
     <span class="faint">{{ matrix.unplaced }} not yet assessed on both axes,
       and left off rather than guessed into a cell. They fill in as each

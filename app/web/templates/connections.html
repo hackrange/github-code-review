@@ -143,6 +143,79 @@
 </div>
 {% endif %}
 
+{# Data belonging to a connection that no longer exists.
+
+   Deleting a connection deliberately leaves its findings behind: taking away
+   the way in should not quietly take away the evidence.  The cost is that the
+   name goes on appearing in every filter and every report with nothing behind
+   it a reader can act on, and there was no way to be rid of it short of the
+   database. #}
+{% if leftovers %}
+<div class="card">
+  <div class="card-head">Data with no connection
+    <span class="faint small">left behind when a connection was deleted</span>
+  </div>
+  <div class="table-scroll">
+    <table class="small">
+      <thead>
+        <tr><th>Name</th><th>Findings</th><th>Repositories</th>
+          <th>Components</th><th>Trend points</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for row in leftovers %}
+        <tr>
+          <td><strong>{{ row.name }}</strong></td>
+          <td>{{ row.findings or 0 }}</td>
+          <td>{{ row.repositories or 0 }}</td>
+          <td>{{ row.components or 0 }}</td>
+          <td>{{ row.trend_points or 0 }}</td>
+          <td class="nowrap">
+            <button type="button" class="btn sm danger" data-modal="flush-modal"
+                    data-name="{{ row.name }}" data-total="{{ row.total }}">
+              Remove its data</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="small faint" style="padding:.6rem 1rem 0">
+    The scan history is kept. It is the record of what ran and when, it holds
+    no findings, and removing it would leave the audit log describing scans
+    that appear nowhere.
+  </div>
+</div>
+
+<div class="modal-backdrop" id="flush-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/connections/flush">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="modal-head">Remove the data left by
+        <span data-slot="name">this connection</span>
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <div class="notice bad">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm0 4a.7.7 0 0 0-.7.8l.25 3.2a.45.45 0 0 0 .9 0l.25-3.2A.7.7 0 0 0 8 5.5zm0 5.4a.8.8 0 1 0 0 1.6.8.8 0 0 0 0-1.6z"/></svg>
+          <div><strong><span data-slot="total">0</span></strong> rows go, and
+            they do not come back. Every finding, every repository, every
+            component and every point of history belonging to this name,
+            including any waiver or grade somebody recorded on them.</div>
+        </div>
+        <label>Type <strong><span data-slot="name">the name</span></strong> to confirm
+          <input type="text" name="confirm" autocomplete="off" required
+                 placeholder="the connection name">
+        </label>
+        <input type="hidden" name="name" value="">
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn danger">Remove it</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
 {% if can_write %}
 <div class="modal-backdrop" id="connection-modal" hidden>
   <div class="modal">
