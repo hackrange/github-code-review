@@ -115,14 +115,14 @@
             {% if t.live() %}
             <form method="post" action="{{ base }}/tokens/{{ t.id }}/revoke"
                   style="display:inline"
-                  onsubmit="return confirm('Revoke this token? Anything using it stops working straight away.')">
+                  data-confirm="Revoke this token? Anything using it stops working straight away.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn sm danger" type="submit">Revoke</button>
             </form>
             {% else %}
             <form method="post" action="{{ base }}/tokens/{{ t.id }}/delete"
                   style="display:inline"
-                  onsubmit="return confirm('Delete this row? It already does not work; this just tidies it away.')">
+                  data-confirm="Delete this row? It already does not work; this just tidies it away.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn sm" type="submit">Delete</button>
             </form>

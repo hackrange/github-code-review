@@ -19,12 +19,12 @@
     {% endif %}
     {% if can_clear and rows %}
     <form method="post" action="{{ base }}/scans/clear" style="display:inline"
-          onsubmit="return confirm('Remove every finished run from the history? The findings themselves are untouched. Export it first if you need the record.')">
+          data-confirm="Remove every finished run from the history? The findings themselves are untouched. Export it first if you need the record.">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn danger" type="submit">Clear the history</button>
     </form>
     <form method="post" action="{{ base }}/scans/clear" style="display:inline"
-          onsubmit="return confirm('Remove runs older than 90 days?')">
+          data-confirm="Remove runs older than 90 days?">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="older_than_days" value="90">
       <button class="btn" type="submit">Older than 90 days</button>
@@ -106,7 +106,7 @@
                a single button meaning "whichever one happens to be going" is
                a way to stop the wrong one. #}
             <form method="post" action="{{ base }}/scans/stop" style="display:inline"
-                  onsubmit="return confirm('Stop this scan? The repositories it has already finished are kept; anything it never reached is unchanged.')">
+                  data-confirm="Stop this scan? The repositories it has already finished are kept; anything it never reached is unchanged.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <input type="hidden" name="run_id" value="{{ r.id }}">
               <button class="btn sm danger" type="submit">Stop</button>
@@ -114,7 +114,7 @@
             {% endif %}
             {% if can_clear and r.status != 'running' %}
             <form method="post" action="{{ base }}/scans/{{ r.id }}/delete"
-                  onsubmit="return confirm('Remove this run from the history? The findings it brought in stay.')">
+                  data-confirm="Remove this run from the history? The findings it brought in stay.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn sm danger" type="submit">Remove</button>
             </form>

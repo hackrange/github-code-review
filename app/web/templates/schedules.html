@@ -7,7 +7,7 @@
   {% if can_edit %}
   <div class="page-actions">
     <form method="post" action="{{ base }}/schedules/split" style="display:inline"
-          onsubmit="return confirm('Make one nightly schedule per organization, forty minutes apart?')">
+          data-confirm="Make one nightly schedule per organization, forty minutes apart?">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn" type="submit">One per organization</button>
     </form>
@@ -53,7 +53,7 @@
               </form>
               <form method="post" action="{{ base }}/schedules/{{ s.id }}/delete"
                     style="display:inline"
-                    onsubmit="return confirm('Delete this schedule?')">
+                    data-confirm="Delete this schedule?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button class="btn sm danger" type="submit">Delete</button>
               </form>

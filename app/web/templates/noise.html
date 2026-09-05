@@ -26,17 +26,19 @@
     {% else %}
     <p class="small">Nothing in the work list yet. Run a scan.</p>
     {% endif %}
-    <form method="get" action="{{ base }}/noise" class="filters">
+    <form method="get" action="{{ base }}/noise" class="filters" data-autosubmit>
       <div class="field">
         <label for="only">Kind</label>
-        <select id="only" name="only" onchange="this.form.submit()">
+        <select id="only" name="only">
           <option value="">everything</option>
           {% for k in kinds %}
           <option value="{{ k }}" {{ 'selected' if only == k }}>{{ k }}</option>
           {% endfor %}
         </select>
       </div>
-      <noscript><button class="btn" type="submit">Filter</button></noscript>
+      {# Hidden by the script once it runs, so the filter applies on change
+         and still works if the script does not. #}
+      <button class="btn" type="submit" data-manual-apply>Filter</button>
     </form>
   </div>
 </div>

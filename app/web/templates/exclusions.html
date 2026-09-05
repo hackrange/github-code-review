@@ -13,7 +13,7 @@
     {% if expired_count %}
     <form method="post" action="{{ base }}/exclusions/purge-expired"
           style="display:inline"
-          onsubmit="return confirm('Delete {{ expired_count }} expired rule(s)? They already do nothing, and the audit log keeps the record.')">
+          data-confirm="Delete {{ expired_count }} expired rule(s)? They already do nothing, and the audit log keeps the record.">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn" type="submit">Delete {{ expired_count }} expired</button>
     </form>
@@ -149,7 +149,7 @@
                     data-expires="{{ e.expires_at | dt('%Y-%m-%d') if e.expires_at else '' }}">Edit</button>
             <form method="post" action="{{ base }}/exclusions/{{ e.id }}/delete"
                   style="display:inline"
-                  onsubmit="return confirm('Delete this exclusion? Anything it covers comes back into both report files.')">
+                  data-confirm="Delete this exclusion? Anything it covers comes back into both report files.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn sm danger" type="submit">Delete</button>
             </form>

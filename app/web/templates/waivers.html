@@ -129,7 +129,7 @@
             {% elif can_approve and w.status.value == 'approved' %}
               <form method="post" action="{{ base }}/waivers/{{ w.id }}/revoke"
                     style="display:inline"
-                    onsubmit="return confirm('The finding comes straight back into both report files. Continue?')">
+                    data-confirm="The finding comes straight back into both report files. Continue?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button class="btn sm danger" type="submit">Revoke</button>
               </form>

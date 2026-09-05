@@ -135,7 +135,7 @@
             {% if r.source == 'custom' %}
             <form method="post" action="{{ base }}/triage/{{ r.id }}/delete"
                   style="display:inline"
-                  onsubmit="return confirm('Delete this rule? Anything it was hiding is reported again from the next scan.')">
+                  data-confirm="Delete this rule? Anything it was hiding is reported again from the next scan.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn sm danger" type="submit">Delete</button>
             </form>

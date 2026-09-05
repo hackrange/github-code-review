@@ -182,6 +182,43 @@
     });
   });
 
+  /* Forms that ask before they do something.
+   *
+   * These used to be an onsubmit attribute on the form, and every one of them
+   * was dead.  The content security policy has no unsafe-inline for scripts,
+   * which is the whole point of it, and an event handler written as an
+   * attribute is inline script: the browser refuses to run it and says so
+   * only in the console.  So six destructive actions across three pages were
+   * going straight through without asking, and the confirmation each one
+   * appeared to have was markup that never executed.
+   *
+   * Nothing here is new behavior.  It is the behavior those pages were
+   * written to have. */
+  document.querySelectorAll("form[data-confirm]").forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      if (!window.confirm(form.dataset.confirm)) {
+        event.preventDefault();
+      }
+    });
+  });
+
+  /* Filter bars that apply as soon as something is picked.
+   *
+   * Same reason as above: this was an onchange attribute and the policy
+   * refuses to run it, so the boxes moved and the page never reloaded.  A
+   * submit button is kept in the markup for anybody without javascript, and
+   * hidden here once this is running, so the form works either way. */
+  document.querySelectorAll("form[data-autosubmit]").forEach(function (form) {
+    form.addEventListener("change", function (event) {
+      if (event.target.matches("select, input[type=date], input[type=radio]")) {
+        form.submit();
+      }
+    });
+    form.querySelectorAll("[data-manual-apply]").forEach(function (button) {
+      button.hidden = true;
+    });
+  });
+
   /* Anything that kicks off work and then needs the page back. */
   document.querySelectorAll("[data-post]").forEach(function (button) {
     button.addEventListener("click", function (event) {

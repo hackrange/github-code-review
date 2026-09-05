@@ -92,7 +92,7 @@
                  both ends of it are in the audit log. #}
               <form method="post" action="{{ base }}/users/{{ u.id }}/impersonate"
                     style="display:inline"
-                    onsubmit="return confirm('Look at this as {{ u.username }}? Every page will answer as they see it, and nothing can be changed until you stop.')">
+                    data-confirm="Look at this as {{ u.username }}? Every page will answer as they see it, and nothing can be changed until you stop.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button class="btn sm" type="submit">View as</button>
               </form>
@@ -103,13 +103,13 @@
               {% if u.source.value == 'local' and auth.local_enabled %}
               <form method="post" action="{{ base }}/users/{{ u.id }}/password"
                     style="display:inline"
-                    onsubmit="return confirm('Give {{ u.username }} a new password? Their sessions end and the new one is shown once.')">
+                    data-confirm="Give {{ u.username }} a new password? Their sessions end and the new one is shown once.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button class="btn sm" type="submit">New password</button>
               </form>
               <form method="post" action="{{ base }}/users/{{ u.id }}/totp"
                     style="display:inline"
-                    onsubmit="return confirm('Clear two step for {{ u.username }}? They enroll again at the next sign in.')">
+                    data-confirm="Clear two step for {{ u.username }}? They enroll again at the next sign in.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button class="btn sm" type="submit">Reset two step</button>
               </form>
@@ -127,7 +127,7 @@
               </form>
               <form method="post" action="{{ base }}/users/{{ u.id }}/delete"
                     style="display:inline"
-                    onsubmit="return confirm('Delete {{ u.username }} for good? The audit log keeps what they did.')">
+                    data-confirm="Delete {{ u.username }} for good? The audit log keeps what they did.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button class="btn sm danger" type="submit">Delete</button>
               </form>
@@ -174,7 +174,7 @@
                     data-entries="{{ g.entries }}">Edit</button>
             <form method="post" action="{{ base }}/groups/{{ g.id }}/delete"
                   style="display:inline"
-                  onsubmit="return confirm('Delete {{ g.name }}? Anybody in it loses what it gave them.')">
+                  data-confirm="Delete {{ g.name }}? Anybody in it loses what it gave them.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn sm danger" type="submit">Delete</button>
             </form>

@@ -115,7 +115,7 @@
             </form>
             <form method="post" action="{{ base }}/connections/{{ c.id }}/delete"
                   style="display:inline"
-                  onsubmit="return confirm('Delete {{ c.name }} and its credential? The {{ entry.findings }} finding(s) it brought in stay, still labeled {{ c.name }}.')">
+                  data-confirm="Delete {{ c.name }} and its credential? The {{ entry.findings }} finding(s) it brought in stay, still labeled {{ c.name }}.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn sm danger" type="submit">Delete</button>
             </form>

@@ -26,10 +26,10 @@
    button above carries whatever is set here, so a document is always of the
    thing somebody was looking at rather than a second view assembled
    separately that could disagree with it. #}
-<form class="card filters" method="get" action="{{ base }}/trends">
+<form class="card filters" method="get" action="{{ base }}/trends" data-autosubmit>
   <div class="filter-row">
     <label>Connection
-      <select name="connection" onchange="this.form.submit()">
+      <select name="connection">
         <option value="">All connections</option>
         {% for c in options.connections %}
         <option value="{{ c }}" {{ 'selected' if filters.connection == c }}>{{ c }}</option>
@@ -37,7 +37,7 @@
       </select>
     </label>
     <label>Organization
-      <select name="org" onchange="this.form.submit()">
+      <select name="org">
         <option value="">All organizations</option>
         {% for o in options.organizations %}
         <option value="{{ o }}" {{ 'selected' if filters.org == o }}>{{ o }}</option>
@@ -45,7 +45,7 @@
       </select>
     </label>
     <label>Repository
-      <select name="repo" onchange="this.form.submit()">
+      <select name="repo">
         <option value="">All repositories</option>
         {% for r in options.repositories %}
         {% if not filters.org or r.startswith(filters.org + '/') %}
@@ -55,7 +55,7 @@
       </select>
     </label>
     <label>Branch
-      <select name="branch" onchange="this.form.submit()">
+      <select name="branch">
         <option value="">All branches</option>
         {% for b in options.branches %}
         <option value="{{ b }}" {{ 'selected' if filters.branch == b }}>{{ b }}</option>
@@ -63,7 +63,7 @@
       </select>
     </label>
     <label>Period
-      <select name="days" onchange="this.form.submit()">
+      <select name="days">
         {% for d, name in [(7, 'Last 7 days'), (30, 'Last 30 days'),
                            (90, 'Last 90 days'), (365, 'Last year')] %}
         <option value="{{ d }}" {{ 'selected' if window == d }}>{{ name }}</option>
@@ -71,12 +71,15 @@
       </select>
     </label>
     <label>Counting
-      <select name="basis" onchange="this.form.submit()">
+      <select name="basis">
         <option value="actions" {{ 'selected' if basis == 'actions' }}>Things to do</option>
         <option value="advisories" {{ 'selected' if basis == 'advisories' }}>Advisories</option>
       </select>
     </label>
-    <noscript><button class="btn" type="submit">Apply</button></noscript>
+    {# Kept in the markup and hidden by the script, rather than wrapped in
+       noscript.  The filters apply on change once app.js is running; if it is
+       not, for any reason, the form still works with this. #}
+    <button class="btn" type="submit" data-manual-apply>Apply</button>
   </div>
 </form>
 

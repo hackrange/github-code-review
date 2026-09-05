@@ -102,7 +102,7 @@
           <td class="nowrap">
             {% if can_write %}
             <form method="post" action="{{ base }}/severity/{{ r.id }}/delete"
-                  onsubmit="return confirm('Remove this override? The engine grade applies again from the next scan.')">
+                  data-confirm="Remove this override? The engine grade applies again from the next scan.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn sm danger" type="submit">Remove</button>
             </form>
