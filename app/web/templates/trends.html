@@ -36,7 +36,8 @@
         {% endfor %}
       </select>
     </label>
-    <label>Organization
+    <label>Organization{% if filters.connection %}
+      <span class="faint" style="font-weight:400"> in this connection</span>{% endif %}
       <select name="org">
         <option value="">All organizations</option>
         {% for o in options.organizations %}
@@ -44,17 +45,21 @@
         {% endfor %}
       </select>
     </label>
-    <label>Repository
+    <label>Repository{% if filters.connection or filters.org %}
+      <span class="faint" style="font-weight:400"> in this {{ 'organization' if filters.org else 'connection' }}</span>{% endif %}
       <select name="repo">
         <option value="">All repositories</option>
+        {# Narrowed by the query rather than here.  Filtering in the template
+           left the box offering repositories the chosen connection does not
+           have, because the template can only hide what the query already
+           returned. #}
         {% for r in options.repositories %}
-        {% if not filters.org or r.startswith(filters.org + '/') %}
         <option value="{{ r }}" {{ 'selected' if filters.repo == r }}>{{ r }}</option>
-        {% endif %}
         {% endfor %}
       </select>
     </label>
-    <label>Branch
+    <label>Branch{% if filters.repo %}
+      <span class="faint" style="font-weight:400"> in this repository</span>{% endif %}
       <select name="branch">
         <option value="">All branches</option>
         {% for b in options.branches %}
@@ -151,6 +156,70 @@
   </div>
 </div>
 
+{# The risk matrix: what it would cost against how likely it is.
+
+   A shaded table of counts shows where the numbers are large, which is
+   usually where the codebase is large.  This is a different question.  The
+   two axes are asked separately and answered from different evidence, so a
+   critical in a package nothing imports and a medium somebody proved live
+   land in different cells, and that difference is invisible in any severity
+   total.
+
+   The cell color comes from the same matrix that decides the grade, so the
+   picture and the number cannot disagree. #}
+<div class="card">
+  <div class="card-head">
+    Risk matrix
+    <span class="faint small">Impact against likelihood, asked separately</span>
+  </div>
+
+  {% if not matrix.placed %}
+  <div class="empty">
+    <p class="faint">Nothing in this scope has been assessed on both axes yet.
+      Findings are placed here as each repository is rescanned.</p>
+  </div>
+  {% else %}
+  <div class="table-scroll">
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th class="corner"><span>Impact</span><span class="axis-x">Likelihood</span></th>
+          {% for column in matrix.columns %}<th>{{ column }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in matrix.rows %}
+        <tr>
+          <th class="impact">{{ row.impact }}</th>
+          {% for cell in row.cells %}
+          <td class="mcell m-{{ cell.severity }} {{ 'is-empty' if not cell.count }}">
+            {%- if cell.count %}
+            <a href="{{ base }}/findings?state=open&exception=any&triage=any&baseline=any&group=none&impact={{ cell.impact }}&likelihood={{ cell.likelihood | urlencode }}{% if filters.org %}&org={{ filters.org | urlencode }}{% endif %}{% if filters.repo %}&repo={{ filters.repo | urlencode }}{% endif %}{% if filters.branch %}&branch={{ filters.branch | urlencode }}{% endif %}{% if filters.connection %}&connection={{ filters.connection | urlencode }}{% endif %}"
+               title="{{ cell.count }} rated {{ cell.severity }}: impact {{ cell.impact }}, likelihood {{ cell.likelihood }}">
+              {{ cell.count }}</a>
+            {%- else %}<span>&middot;</span>{% endif -%}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {# What is not on the picture, said on the picture.  A matrix holding an
+     eighth of the findings, presented without that number, is read as a
+     complete picture of the estate. #}
+  <div class="legend">
+    <span>{{ matrix.placed }} of {{ matrix.total }} placed</span>
+    {% if matrix.unplaced %}
+    <span class="faint">{{ matrix.unplaced }} not yet assessed on both axes,
+      and left off rather than guessed into a cell. They fill in as each
+      repository is rescanned.</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
 {# Where it is, rather than when.  The rows follow the filter, so this is the
    same widget at every level and narrowing it is a drill down rather than a
    different chart. #}
@@ -176,19 +245,38 @@
       <tbody>
         {% for row in heat_rows %}
         <tr>
-          <td class="heat-name">
-            {% if heat.axis == 'organization' %}
-              <a href="{{ base }}/trends?org={{ row.name | urlencode }}&basis={{ basis }}&days={{ window }}">{{ row.name }}</a>
-            {% elif heat.axis == 'repository' %}
-              <a href="{{ base }}/trends?repo={{ row.name | urlencode }}&basis={{ basis }}&days={{ window }}">{{ row.name }}</a>
-            {% else %}
-              <a href="{{ base }}/trends?repo={{ filters.repo | urlencode }}&branch={{ row.name | urlencode }}&basis={{ basis }}&days={{ window }}">{{ row.name }}</a>
-            {% endif %}
-          </td>
+          {# Every cell opens the rows behind it.
+             A number somebody can see and not reach is a number they have to
+             take on trust, and the whole argument of this product is that you
+             should not have to.  The name opens the findings for that scope
+             and each figure opens the same list narrowed to that severity.
+
+             These go to the findings list rather than deeper into the trends
+             page: at this point somebody has finished asking how much and
+             started asking which ones. #}
+          {% set scope = ('org=' ~ (row.name | urlencode)) if heat.axis == 'organization'
+             else (('repo=' ~ (row.name | urlencode)) if heat.axis == 'repository'
+             else ('repo=' ~ (filters.repo | urlencode) ~ '&branch=' ~ (row.name | urlencode))) %}
+          {# The same filters the dashboard tiles use, and for the same reason.
+             The cell counts every open finding in scope, so the list it opens
+             has to hold every one of them: set aside, excepted and backlog
+             included.  Sent to the work list instead it showed four rows for
+             a cell reading seven, which is the drill down landing somewhere
+             else, and the test that caught it says so in those words.
+
+             group=none for the same reason.  The list folds several
+             advisories into one row per upgrade by default, so seven findings
+             arrive as four rows.  This cell counts findings, so the list it
+             opens has to count them the same way. #}
+          {% set findings_url = base ~ '/findings?state=open&exception=any&triage=any&baseline=any&group=none&' ~ scope %}
+          <td class="heat-name"><a href="{{ findings_url }}">{{ row.name }}</a></td>
           {% for band in ['critical', 'high', 'medium', 'low', 'info'] %}
-          <td class="cell band-{{ band }} {{ 'is-zero' if not row[band] }}">{{ row[band] or '' }}</td>
+          <td class="cell band-{{ band }} {{ 'is-zero' if not row[band] }}">
+            {%- if row[band] %}<a href="{{ findings_url }}&severity={{ band }}">{{ row[band] }}</a>{% endif -%}
+          </td>
           {% endfor %}
-          <td class="cell total heat-{{ row.level }}">{{ row.total }}</td>
+          <td class="cell total heat-{{ row.level }}">
+            <a href="{{ findings_url }}">{{ row.total }}</a></td>
         </tr>
         {% endfor %}
       </tbody>

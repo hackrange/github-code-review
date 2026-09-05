@@ -670,3 +670,56 @@ table.heat .cell.total { font-weight: 600; }
 
 .empty { padding: 1.5rem 1rem; text-align: center; }
 .empty p { margin: .25rem 0; }
+
+/* Every figure in the heatmap opens the rows behind it, and it has to look
+   like it does.  The link takes the cell's own color rather than the link
+   color, because a grid of blue numbers stops reading as a heatmap. */
+table.heat .cell a, table.heat .heat-name a { color: inherit;
+  text-decoration: none; }
+table.heat .cell a:hover, table.heat .heat-name a:hover {
+  text-decoration: underline; }
+/* The name is the one that should look clickable, and this file has no link
+   color to reach for: links here inherit and are marked by an underline. */
+table.heat .heat-name a { text-decoration: underline;
+  text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
+
+/* ---------------------------------------------------------------------------
+   The risk matrix.
+
+   Impact down the side, likelihood across the top, and the cell colored by
+   what those two together mean.  The color is the same one the badges use
+   for that severity, so a cell and a grade can never say different things.
+
+   Deliberately not a smooth gradient.  A gradient implies the axes are
+   continuous, and they are not: they are four words and three, each of which
+   was chosen for a reason.  Five flat steps say that.
+   --------------------------------------------------------------------------- */
+table.matrix { border-collapse: separate; border-spacing: 3px; width: 100%;
+  max-width: 46rem; margin: .25rem 0 0; }
+table.matrix th { font-size: .74rem; font-weight: 600; color: var(--text-faint);
+  text-transform: capitalize; padding: .35rem .5rem; text-align: center; }
+table.matrix th.impact { text-align: right; white-space: nowrap; }
+table.matrix th.corner { text-align: left; position: relative; }
+table.matrix th.corner span { display: block; font-size: .68rem;
+  letter-spacing: .04em; }
+table.matrix th.corner .axis-x { color: var(--text-soft); }
+
+table.matrix td.mcell { text-align: center; padding: 0; border-radius: 4px;
+  font-variant-numeric: tabular-nums; font-weight: 600; font-size: .95rem;
+  height: 3rem; }
+table.matrix td.mcell a { display: flex; align-items: center;
+  justify-content: center; height: 100%; width: 100%; color: inherit;
+  text-decoration: none; border-radius: 4px; }
+table.matrix td.mcell a:hover { outline: 2px solid var(--text);
+  outline-offset: -2px; }
+table.matrix td.mcell.is-empty { color: var(--text-faint); font-weight: 400; }
+table.matrix td.mcell.is-empty span { display: flex; align-items: center;
+  justify-content: center; height: 3rem; }
+
+/* The five steps, taken from the same palette as the badges. */
+.m-critical { background: var(--bad);     color: #fff; }
+.m-high     { background: var(--bad-bg);  color: var(--bad); }
+.m-medium   { background: var(--warn-bg); color: var(--warn); }
+.m-low      { background: var(--info-bg); color: var(--info); }
+.m-info     { background: var(--bg-sunk); color: var(--text-soft); }
+.m-unknown  { background: var(--bg-sunk); color: var(--text-faint); }

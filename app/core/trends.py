@@ -400,21 +400,46 @@ def heatmap(session, basis: str = "actions", base=None, **scope) -> dict:
     }
 
 
-def choices(session, base=None) -> dict:
-    """What the filter boxes can offer, from what has actually been recorded.
+def choices(session, base=None, connection: str = "", organization: str = "",
+            repository: str = "") -> dict:
+    """What the filter boxes can offer, given what is already chosen.
 
-    Narrowed the same way everything else is, so the boxes never name a
+    Each box offers only what the boxes to its left leave possible.  Picking a
+    connection and then being offered every branch in the estate, most of
+    which return nothing, is a filter that makes somebody prove a negative one
+    click at a time.
+
+    Every list is narrowed by what came before it, and never by what comes
+    after: choosing a branch must not remove the connections, or the reader
+    cannot get back out of a dead end they have just walked into.
+
+    Scoped the same way everything else is, so the boxes never name a
     repository the reader cannot open.  A filter list is a disclosure too.
     """
     source = base if base is not None else session.query(TrendPoint)
 
-    def distinct(column):
+    def distinct(column, **narrowing):
+        query = source
+        if narrowing.get("connection"):
+            query = query.filter(TrendPoint.connection == narrowing["connection"])
+        if narrowing.get("organization"):
+            query = query.filter(
+                TrendPoint.organization == narrowing["organization"])
+        if narrowing.get("repository"):
+            query = query.filter(TrendPoint.repository == narrowing["repository"])
         return sorted({row[0] for row in
-                       source.with_entities(column).distinct().all() if row[0]})
+                       query.with_entities(column).distinct().all() if row[0]})
 
     return {
+        # Never narrowed: this is the way back out.
         "connections": distinct(TrendPoint.connection),
-        "organizations": distinct(TrendPoint.organization),
-        "repositories": distinct(TrendPoint.repository),
-        "branches": distinct(TrendPoint.branch),
+        "organizations": distinct(TrendPoint.organization,
+                                  connection=connection),
+        "repositories": distinct(TrendPoint.repository,
+                                 connection=connection,
+                                 organization=organization),
+        "branches": distinct(TrendPoint.branch,
+                             connection=connection,
+                             organization=organization,
+                             repository=repository),
     }

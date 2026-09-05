@@ -175,6 +175,63 @@ def init_db() -> None:
             pass
 
 
+def _safe_default(value) -> bool:
+    """Whether a reflected default can go back into a statement as it stands."""
+    text_value = str(value)
+    return ";" not in text_value and "--" not in text_value and "/*" not in text_value
+
+
+def _literal(column_type, value, dialect):
+    """A default value written the way this database writes literals, or None.
+
+    Handing the job to the type keeps the quoting rules with the driver that
+    owns them.  Booleans and numbers are rendered here because their spelling
+    is a property of the statement rather than of the value, and because a
+    boolean column whose type declines to render True is common enough to be
+    worth answering directly.
+
+    None means there is no safe rendering, and the caller adds the column with
+    no default rather than inventing one.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    try:
+        processor = column_type.literal_processor(dialect=dialect)
+    except Exception:
+        processor = None
+    if processor is None:
+        return None
+    try:
+        rendered = processor(value)
+    except Exception:
+        return None
+    # A processor that hands back something with a statement terminator or a
+    # comment in it has not quoted the value, whatever it thinks it did.
+    if rendered is None or ";" in rendered or "--" in rendered:
+        return None
+
+    # And a backslash is refused outright, because nothing here escapes one.
+    #
+    # This was the whole reason for moving the job to the driver, and the
+    # driver does not do it either: literal_processor doubles quotes and
+    # leaves a backslash alone, on MySQL as much as anywhere else.  MySQL
+    # treats a backslash as an escape character by default, so a value holding
+    # one can end its own string early no matter which of the two wrote it.
+    #
+    # There is no correct escaping to reach for here that is worth writing,
+    # because a default holding a backslash is not a thing this application
+    # has or needs.  So the column is added without a default and a line says
+    # so, which is a visible gap rather than a statement that might not mean
+    # what it reads.
+    if "\\" in str(value):
+        return None
+    return rendered
+
+
 def _add_missing_columns() -> int:
     """Add columns the models have that the database does not.
 
@@ -216,16 +273,31 @@ def _add_missing_columns() -> int:
                 spec = column.type.compile(dialect)
                 clause = (f"ALTER TABLE {quote(table.name)} ADD COLUMN "
                           f"{quote(column.name)} {spec}")
+                # The default, rendered by the driver rather than by hand.
+                #
+                # This used to double any apostrophe and wrap the result in
+                # quotes, which is the standard SQL answer and not the whole
+                # answer: MySQL and MariaDB also treat a backslash as an
+                # escape character, so doubling quotes alone does not make a
+                # string safe to paste into a statement there.
+                #
+                # It was never reachable.  Every default here is a literal
+                # written in models.py, so nothing an outsider controls has
+                # ever reached it.  That is an argument about where the values
+                # come from rather than a property of the code, and it stops
+                # holding the moment somebody feeds this from anywhere else.
+                # The type knows how to render its own literal for the dialect
+                # in hand, so it does that instead, and a type that cannot is
+                # left without a default rather than guessed at.
                 default = column.default
                 if default is not None and getattr(default, "is_scalar", False):
-                    value = default.arg
-                    if isinstance(value, bool):
-                        clause += f" DEFAULT {1 if value else 0}"
-                    elif isinstance(value, (int, float)):
-                        clause += f" DEFAULT {value}"
-                    elif isinstance(value, str):
-                        escaped = value.replace("'", "''")
-                        clause += f" DEFAULT '{escaped}'"
+                    rendered = _literal(column.type, default.arg, dialect)
+                    if rendered is not None:
+                        clause += f" DEFAULT {rendered}"
+                    else:
+                        log.debug("no safe way to render the default for "
+                                  "%s.%s, adding the column without one",
+                                  table.name, column.name)
 
                 try:
                     conn.execute(text(clause))
@@ -332,8 +404,19 @@ def _extend_enums() -> int:
                           f"{quote(column.name)} {wanted_spec}")
                 if not current.get("nullable", True):
                     clause += " NOT NULL"
+                # The default the database just reported, handed back to the
+                # database that reported it.  Already a literal in that
+                # dialect, so it is not re-quoted, and checked rather than
+                # trusted: anything carrying a terminator or a comment is not
+                # a default, whatever the inspector called it.
+                #
+                # Nothing an outsider controls reaches this.  Writing a column
+                # default takes rights over the schema, and somebody holding
+                # those does not need this statement.  It is checked anyway
+                # because the check costs one line and the argument for
+                # skipping it is one nobody should have to re-derive.
                 server_default = current.get("default")
-                if server_default not in (None, ""):
+                if server_default not in (None, "") and _safe_default(server_default):
                     clause += f" DEFAULT {server_default}"
 
                 try:
@@ -406,8 +489,19 @@ def _widen_columns() -> int:
                           f"{quote(column.name)} {wanted_spec}")
                 if not current.get("nullable", True):
                     clause += " NOT NULL"
+                # The default the database just reported, handed back to the
+                # database that reported it.  Already a literal in that
+                # dialect, so it is not re-quoted, and checked rather than
+                # trusted: anything carrying a terminator or a comment is not
+                # a default, whatever the inspector called it.
+                #
+                # Nothing an outsider controls reaches this.  Writing a column
+                # default takes rights over the schema, and somebody holding
+                # those does not need this statement.  It is checked anyway
+                # because the check costs one line and the argument for
+                # skipping it is one nobody should have to re-derive.
                 server_default = current.get("default")
-                if server_default not in (None, ""):
+                if server_default not in (None, "") and _safe_default(server_default):
                     clause += f" DEFAULT {server_default}"
 
                 try:

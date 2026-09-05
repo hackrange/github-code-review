@@ -255,6 +255,31 @@ def _filtered_findings(db, user, params):
 
     if org:
         query = query.filter(Finding.organization == org)
+    # A repository and a branch, exactly rather than by search.
+    #
+    # These exist so the heatmap on the trends page can hand somebody the rows
+    # behind a number.  Done through the free text box instead, a repository
+    # called api would also match one called api-gateway, and a drill down
+    # that lands on a different number than the one clicked is worse than no
+    # link at all.
+    repo = clean_text(params.get("repo", ""), "Repository", limit=320,
+                      required=False)
+    if repo:
+        query = query.filter(Finding.repository == repo)
+    branch = clean_text(params.get("branch", ""), "Branch", limit=255,
+                        required=False)
+    if branch:
+        query = query.filter(Finding.branch == branch)
+    # The two axes of the risk matrix, so a cell in it opens its own rows.
+    # An allowlist rather than the value as it arrives, because these go
+    # straight into a comparison and the list of legal answers is four words
+    # long.
+    impact = (params.get("impact", "") or "").strip().lower()
+    if impact in ("low", "medium", "high"):
+        query = query.filter(Finding.impact == impact)
+    likelihood = (params.get("likelihood", "") or "").strip().lower()
+    if likelihood in ("unlikely", "possible", "likely", "happening now"):
+        query = query.filter(Finding.likelihood == likelihood)
     if search:
         like = f"%{search}%"
         bare = search.strip().upper()
@@ -414,11 +439,30 @@ def trends_page(request: Request, user: User = Depends(current_user)):
                  "branch": branch, "connection": connection, "since": since}
 
         points = trends.series(db, basis=basis, base=base, **scope)
-        grid = trends.heatmap(db, basis=basis, base=base,
-                              organization=organization,
-                              repository=repository, branch=branch,
-                              connection=connection)
-        options = trends.choices(db, base=base)
+
+        # The heatmap reads the findings, not the daily rollup.
+        #
+        # Every cell links to the rows behind it, and the rollup is only
+        # written when a scan runs, so on any day without one the number in
+        # the cell and the number on the page it opens would disagree.  A
+        # drill down that lands on a different number is worse than no link,
+        # and it is the kind of wrong that makes somebody stop believing the
+        # rest of the screen.  It is also the same call the report makes, so
+        # the page and the document cannot drift apart.
+        from app.core import report_data
+
+        axis = ("branch" if repository else
+                "repository" if organization else "organization")
+        grid = {"axis": axis, "rows": report_data.hotspots(
+            report_data._scoped(rbac.visible_findings(db, user),
+                                organization, repository, branch, connection),
+            axis=axis)}
+        matrix = report_data.risk_matrix(
+            report_data._scoped(rbac.visible_findings(db, user),
+                                organization, repository, branch, connection))
+        options = trends.choices(db, base=base, connection=connection,
+                                 organization=organization,
+                                 repository=repository)
 
         # Where the recorded history starts.  Everything before it was worked
         # out from when findings were first seen and resolved, and its
@@ -435,6 +479,7 @@ def trends_page(request: Request, user: User = Depends(current_user)):
         context = _shared(db, user)
         context.update(
             active_page="trends", points=points, heat=grid,
+            matrix=matrix,
             chart=charts.stacked_area(points),
             heat_rows=charts.heat_levels(grid["rows"]),
             basis=basis, window=window, options=options,
@@ -513,6 +558,9 @@ def trends_report(request: Request, user: User = Depends(current_user)):
             branch=branch, connection=connection, axis=axis)
         heat_rows = charts.heat_levels(data["hotspots"])
         grid = {"axis": axis, "rows": data["hotspots"]}
+        matrix = report_data.risk_matrix(
+            report_data._scoped(rbac.visible_findings(db, user),
+                                organization, repository, branch, connection))
 
         scope_label = ((branch and repository and "%s on %s" % (repository, branch))
                        or repository or organization or "All repositories")
@@ -541,7 +589,10 @@ def trends_report(request: Request, user: User = Depends(current_user)):
             "chart": charts.stacked_area(points, width=880, height=250),
             "heat": grid,
             "heat_rows": heat_rows,
+            "matrix": matrix,
             "summary": report_text.assessment(data, scope_label),
+            "context": report_text.context(data),
+            "standing": report_text.standing_sentence(data),
             "movement": report_text.headline(scope_label, points, basis),
             "basis_note": report_text.basis_note(basis),
             "history_note": report_text.history_note(points),
@@ -579,6 +630,13 @@ def findings(request: Request, user: User = Depends(current_user)):
     kind = params.get("kind", "")
     state = params.get("state", "open")
     org = params.get("org", "")
+    # Carried so the paging links keep them.  The builder applies these;
+    # they are read here only so a second page of a drilled down list is
+    # still the same list.
+    repo_filter = clean_text(params.get("repo", ""), "Repository",
+                             limit=320, required=False)
+    branch_filter = clean_text(params.get("branch", ""), "Branch",
+                               limit=255, required=False)
     search = (params.get("q", "") or "").strip()[:120]
     # without: the work list.  with: what somebody signed off.  any: both.
     connection = clean_text(params.get("connection", ""), "Connection",
@@ -678,6 +736,7 @@ def findings(request: Request, user: User = Depends(current_user)):
             states=[s.value for s in FindingState],
             filters={"severity": severity, "kind": kind, "state": state,
                      "org": org, "q": search, "exception": exception,
+                     "repo": repo_filter, "branch": branch_filter,
                      "connection": connection, "per_page": limit,
                      "confidence": confidence, "sort": sort, "dir": direction,
                      "triage": triage, "baseline": since, "reach": reach,
@@ -694,6 +753,8 @@ def findings(request: Request, user: User = Depends(current_user)):
             page_query=urlencode({name: value for name, value in
                                   (("severity", severity), ("kind", kind),
                                    ("state", state), ("org", org),
+                                   ("repo", repo_filter),
+                                   ("branch", branch_filter),
                                    ("q", search), ("exception", exception),
                                    ("confidence", confidence),
                                    ("reach", reach),

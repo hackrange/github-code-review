@@ -46,6 +46,28 @@ def _scoped(query, organization="", repository="", branch="", connection=""):
     return query
 
 
+def resolved_since(base_query, organization="", repository="", branch="",
+                   connection="") -> int:
+    """How many findings in this scope have been closed rather than are open.
+
+    Without this a scope where everything was fixed produces a report full of
+    zeroes, which reads as a blank form or a broken filter.  It is neither: it
+    is the best outcome this product can report, and it should say so.
+    """
+    from app.core.models import FindingState as _State
+
+    query = base_query.filter(Finding.state == _State.FIXED)
+    if connection:
+        query = query.filter(Finding.connection == connection)
+    if organization:
+        query = query.filter(Finding.organization == organization)
+    if repository:
+        query = query.filter(Finding.repository == repository)
+    if branch:
+        query = query.filter(Finding.branch == branch)
+    return query.count()
+
+
 def coverage(query) -> dict:
     """What this report is actually about, in repositories and branches."""
     return {
@@ -311,6 +333,12 @@ def assemble(db, base_query, organization="", repository="", branch="",
     """Everything the document needs, from one scoped query."""
     query = _scoped(base_query, organization, repository, branch, connection)
     return {
+        "resolved": resolved_since(base_query, organization, repository,
+                                   branch, connection),
+        "posture": posture(query),
+        "matrix": risk_matrix(query),
+        "detail": by_class(query, levels=("critical", "high")),
+        "medium_detail": by_class(query, levels=("medium",), limit=6, examples=1),
         "coverage": coverage(query),
         "severity": by_severity(query),
         "kinds": by_kind(query),
@@ -319,4 +347,176 @@ def assemble(db, base_query, organization="", repository="", branch="",
         "worst": worst_findings(query),
         "hotspots": hotspots(query, axis=axis),
         "themes": themes(query),
+    }
+
+
+# --- the risk matrix ---------------------------------------------------------
+#
+# The grid a security team actually recognizes: what it would cost against how
+# likely it is, with the cell colored by what those two together mean.
+#
+# A shaded table of counts is decoration.  It shows where the numbers are
+# large, which is usually where the codebase is large.  This is different
+# because the two axes are asked separately and answered from different
+# evidence: impact from what the system holds, likelihood from what anybody
+# has actually established.  A critical in a package nothing imports and a
+# medium somebody proved live land in different cells, which is the entire
+# point and is invisible in a severity total.
+#
+# The cell color is not chosen here.  It comes from the same matrix that
+# decides the grade, so the picture and the number can never disagree.
+
+IMPACT_ROWS = ("high", "medium", "low")
+LIKELIHOOD_COLUMNS = ("unlikely", "possible", "likely", "happening now")
+
+
+def risk_matrix(query) -> dict:
+    """-> the grid, its coverage, and what is not on it.
+
+    Only findings carrying both axes in the risk vocabulary are placed.  Rows
+    from before the model existed carry the engine's own words and are counted
+    as unplaced rather than guessed into a cell, because putting them
+    somewhere plausible is how a picture starts lying.
+    """
+    from app.core.models import Severity as _Severity
+    from app.core.risk import MATRIX
+
+    counts = {}
+    for impact, likelihood, total in (query.with_entities(
+            Finding.impact, Finding.likelihood, func.count(Finding.id))
+            .group_by(Finding.impact, Finding.likelihood).all()):
+        counts[((impact or "").lower(), (likelihood or "").lower())] = total
+
+    placed = 0
+    grid = []
+    for impact in IMPACT_ROWS:
+        row = {"impact": impact, "cells": []}
+        for likelihood in LIKELIHOOD_COLUMNS:
+            total = counts.get((impact, likelihood), 0)
+            placed += total
+            severity = MATRIX.get(impact, {}).get(likelihood, _Severity.UNKNOWN)
+            row["cells"].append({
+                "impact": impact, "likelihood": likelihood, "count": total,
+                "severity": getattr(severity, "value", str(severity)),
+            })
+        row["total"] = sum(cell["count"] for cell in row["cells"])
+        grid.append(row)
+
+    everything = query.count()
+    return {
+        "rows": grid,
+        "columns": LIKELIHOOD_COLUMNS,
+        "placed": placed,
+        "total": everything,
+        "unplaced": everything - placed,
+        # The busiest cell, so the page can say what the picture shows rather
+        # than leaving the reader to find it.
+        "worst": max(
+            (cell for row in grid for cell in row["cells"] if cell["count"]),
+            key=lambda c: (["info", "low", "medium", "high", "critical"]
+                           .index(c["severity"])
+                           if c["severity"] in ("info", "low", "medium", "high",
+                                                "critical") else 0,
+                           c["count"]),
+            default=None),
+    }
+
+
+def by_class(query, levels=("critical", "high"), limit=8, examples=3) -> list:
+    """-> the findings at these severities, grouped by what they are examples of.
+
+    A list of rule names is a list of the tool's vocabulary.  Three rules that
+    are all SQL injection read as three problems to somebody who does not
+    already know they are one, and the count of distinct things to understand
+    is what makes a report feel unmanageable.
+
+    So each section is a weakness, with how many, where, a sentence on what it
+    is and a sentence on what to do.  Ordered by count, because within one
+    severity the size of the pile is what decides where to start.
+    """
+    from app.core.models import Severity as _Severity
+    from app.core.weakness import classify
+
+    out = []
+    for level in levels:
+        try:
+            wanted = _Severity(level)
+        except ValueError:
+            continue
+        rows = query.filter(Finding.severity == wanted).all()
+        if not rows:
+            continue
+
+        buckets = {}
+        for row in rows:
+            key, name, what, todo = classify(
+                getattr(row, "cwe", ""), getattr(row, "rule", ""),
+                str(getattr(row, "kind", "")))
+            entry = buckets.setdefault(key, {
+                "key": key, "name": name, "what": what, "todo": todo,
+                "count": 0, "repositories": set(), "rows": []})
+            entry["count"] += 1
+            if row.repository:
+                entry["repositories"].add(row.repository)
+            if len(entry["rows"]) < examples:
+                entry["rows"].append(row)
+
+        classes = sorted(buckets.values(), key=lambda e: e["count"], reverse=True)
+        for entry in classes:
+            entry["repositories"] = sorted(entry["repositories"])
+        shown = classes[:limit]
+        out.append({
+            "severity": level,
+            "total": len(rows),
+            "classes": shown,
+            # What did not fit, said rather than dropped.
+            "other_classes": len(classes) - len(shown),
+            "other_findings": sum(e["count"] for e in classes[limit:]),
+        })
+    return out
+
+
+def posture(query) -> dict:
+    """The few facts an executive summary should be built from.
+
+    Not a score.  A score compresses everything into one number and the
+    compression is where the argument goes: two estates with the same score
+    can need completely different things done.  These are the handful of
+    questions somebody senior actually asks, each answered with a number that
+    can be checked.
+    """
+    from app.core.models import Severity as _Severity
+
+    total = query.count()
+    if not total:
+        return {"total": 0}
+
+    serious = query.filter(Finding.severity.in_(
+        [_Severity.CRITICAL, _Severity.HIGH])).count()
+    proven = query.filter(Finding.verified.is_(True)).count()
+    exploited = query.filter(Finding.known_exploited.is_(True)).count()
+    hostile = query.filter(Finding.malicious.is_(True)).count()
+    reachable = query.filter(Finding.reachability == "reachable").count()
+    set_aside = query.filter(Finding.triage.in_(
+        ["not_applicable", "advisory", "third_party"])).count()
+    patched = query.filter(Finding.base_upgraded.is_(True)).count()
+    fixable = query.filter(Finding.fixed_in != "").count()
+
+    return {
+        "total": total,
+        "serious": serious,
+        "serious_share": round(100.0 * serious / total),
+        "proven": proven,
+        "exploited": exploited,
+        "hostile": hostile,
+        "reachable": reachable,
+        "set_aside": set_aside,
+        "patched": patched,
+        "fixable": fixable,
+        "fixable_share": round(100.0 * fixable / total),
+        # The one number that is a judgement rather than a count, and it is
+        # deliberately coarse: three words, not a score out of a hundred.
+        "standing": ("needs attention now" if (proven or hostile)
+                     else "work to do" if serious
+                     else "routine"),
     }

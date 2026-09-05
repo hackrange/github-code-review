@@ -1580,12 +1580,44 @@ def _logger_arguments(call: str) -> list:
     if open_at < 0:
         return None
     depth = 0
+    quote = ""
     parts, current = [], ""
-    for index in range(open_at, len(call)):
+    index = open_at
+    while index < len(call):
         char = call[index]
+
+        # Inside a string nothing is punctuation.  Without this a message
+        # holding a comma, which is most of them, is split into pieces and
+        # half a sentence is reported as a value being logged.  It was, and
+        # the reason printed on a finding read "the values logged are %d
+        # day(s)", which is not a value and not a sentence.
+        if quote:
+            if char == "\\":
+                current += call[index:index + 2]
+                index += 2
+                continue
+            if call.startswith(quote, index):
+                current += quote
+                index += len(quote)
+                quote = ""
+                continue
+            current += char
+            index += 1
+            continue
+
+        if char in "\"'":
+            for candidate in (char * 3, char):
+                if call.startswith(candidate, index):
+                    quote = candidate
+                    current += candidate
+                    index += len(candidate)
+                    break
+            continue
+
         if char in "([{":
             depth += 1
             if depth == 1:
+                index += 1
                 continue
         elif char in ")]}":
             depth -= 1
@@ -1595,8 +1627,10 @@ def _logger_arguments(call: str) -> list:
         elif char == "," and depth == 1:
             parts.append(current)
             current = ""
+            index += 1
             continue
         current += char
+        index += 1
 
     if not parts:
         return None
@@ -1677,6 +1711,94 @@ def _logger_not_a_secret(rule: str, source: str, line: int):
     return ("the values logged are %s, none of which is a credential: the rule "
             "matched words in the message text rather than anything reaching "
             "the log" % ", ".join(named[:4]))
+
+
+# --- a code rule that fired on something that is not code ---------------------
+#
+# The largest single source of noise in a real estate turned out not to be any
+# rule.  It was code analysis running over files that are not code: run logs,
+# captured traffic, saved responses, the output of a load test.  Twenty
+# percent of the findings on one estate were a code rule firing on a file that
+# has never been executed by anything.
+#
+# A log cannot have a weakness in it.  It is a record of something that
+# happened, and the rules here are about what a program does.  Matching a
+# pattern inside a transcript says the transcript contains the pattern, which
+# is a fact about the transcript.
+#
+# Credentials are the exception and they are deliberately untouched.  A token
+# written into a log and committed is exposed exactly as much as one in a
+# source file, arguably more, because nobody thinks to look there.  That is
+# the credential scanner's job and it keeps doing it: this only ever answers
+# for a code or configuration rule.
+#
+# The list is written as whole names and extensions rather than as a guess at
+# what looks generated, because "looks generated" is how a real source file
+# gets muted by accident.
+GENERATED_SUFFIXES = (
+    ".log", ".har", ".jsonl", ".ndjson", ".dmp", ".trace", ".pcap",
+    ".out", ".stdout", ".stderr",
+)
+
+GENERATED_NAMES = (
+    "output.txt", "output.bak", "results.xml", "mdrv.log", "vugen.log",
+    "combined_res.xml", "console.log", "npm-debug.log", "yarn-error.log",
+    "pip-log.txt", "junit.xml", "testng-results.xml", "nosetests.xml",
+)
+
+# A directory whose whole purpose is to hold what a run produced.
+GENERATED_DIRS = (
+    "test-results", "test-output", "testoutput", "allure-results",
+    "surefire-reports", "failsafe-reports", "har", "recordings",
+    "captured", "coverage", "htmlcov", ".pytest_cache", "result1",
+)
+
+
+def _looks_generated(path: str):
+    """-> what kind of output this file is, or None if it is not output.
+
+    Named parts only.  Anything cleverer, like calling a file generated
+    because it is large or has long lines, mutes a minified bundle that
+    somebody does ship and does want looked at.
+    """
+    if not path:
+        return None
+    lowered = path.replace("\\", "/").lower()
+    name = lowered.rsplit("/", 1)[-1]
+
+    if name in GENERATED_NAMES:
+        return "a file that holds what a run produced"
+    for suffix in GENERATED_SUFFIXES:
+        if name.endswith(suffix):
+            return "a %s file, which is a record of a run rather than code" % suffix
+    parts = lowered.split("/")
+    for directory in GENERATED_DIRS:
+        if directory in parts:
+            return ("inside a %s directory, which holds what a run produced"
+                    % directory)
+    # A backup of something, which is not what runs.  Checked after the names
+    # above so that output.bak is described as output rather than as a backup.
+    if name.endswith(".bak") or name.endswith(".orig") or name.endswith("~"):
+        return ("a backup copy, which is not the file that runs: whatever is "
+                "wrong in it is either fixed in the live file or reported "
+                "against it separately")
+    return None
+
+
+def _not_code_at_all(kind: str, path: str):
+    """-> a reason a code rule does not apply here, or None.
+
+    Answers only for code and configuration rules.  A credential found in a
+    log is a real disclosure and is left exactly where it is.
+    """
+    if kind not in ("code", "misconfiguration"):
+        return None
+    what = _looks_generated(path)
+    if not what:
+        return None
+    return ("this is %s, and a rule about what a program does cannot be "
+            "answered by a transcript of one: the pattern is in the record, "
+            "not in anything that runs" % what)
 
 
 SKIP_FRAMEWORK_DIRS = {
@@ -1877,6 +1999,18 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
         verdict, reason, decided_by = judge(
             rule, relative, matched, source,
             finding.get("start", {}).get("line", 0), muted, escapers)
+
+        # Before anything else: is this a file that runs at all.
+        #
+        # First because it is the widest statement available.  Every other
+        # check here reasons about what the code does, and none of that means
+        # anything if the file is a transcript of a run rather than a program.
+        if verdict == REVIEW:
+            not_code = _not_code_at_all("code", relative)
+            if not_code:
+                verdict = NOT_APPLICABLE
+                reason = not_code
+                decided_by = "not-code"
 
         # A subprocess call that never reaches a shell is not command
         # injection, whatever the rule says.  Checked before the framework

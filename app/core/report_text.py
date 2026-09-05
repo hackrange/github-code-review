@@ -13,6 +13,8 @@ supports is the fastest way to lose the reader who checks.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 TWO_SPACES = "  "
 
 
@@ -73,12 +75,31 @@ def headline(scope_label: str, points: list, basis: str) -> str:
     start, end = first["total"], last["total"]
     days = len(points)
 
+    # How long ago the last reading is.
+    #
+    # History is written when a scan runs, so a scope nobody has scanned for a
+    # week has its most recent point a week old.  Reporting that number as
+    # though it were today is how a report says a problem stands at thirty
+    # seven when it was fixed six days ago.  Where the last reading is not
+    # from today, the sentence says when it is from.
+    stale_days = 0
+    try:
+        stale_days = (datetime.now(timezone.utc).date()
+                      - last["day"].date()).days
+    except Exception:
+        stale_days = 0
+
     opening = ("This report covers %s over the last %d %s."
                % (_mid_sentence(scope_label), days, _plural(days, "day")))
+    if stale_days > 1:
+        opening += ("  The most recent reading is from %s, %d days ago, "
+                    "because that is when this scope was last scanned."
+                    % (last["day"].strftime("%d %B"), stale_days))
 
+    when = "It stood at %d on that date." if stale_days > 1 else "It stands at %d."
     if start == end:
         movement = ("The number of open %s did not change over the period.  "
-                    "It stands at %d." % (unit, end))
+                    % unit) + (when % end)
     elif end < start:
         movement = ("Open %s fell from %d to %d, a decrease of %d."
                     % (unit, start, end, start - end))
@@ -87,11 +108,13 @@ def headline(scope_label: str, points: list, basis: str) -> str:
                     % (unit, start, end, end - start))
 
     serious = last.get("critical", 0) + last.get("high", 0)
+    # "today" is a claim about now, and the last reading may not be from now.
+    moment = "at that point" if stale_days > 1 else "today"
     if serious:
-        weight = ("Of the %d open today, %d %s rated critical or high."
-                  % (end, serious, _plural(serious, "is", "are")))
+        weight = ("Of the %d open %s, %d %s rated critical or high."
+                  % (end, moment, serious, _plural(serious, "is", "are")))
     else:
-        weight = "Nothing open today is rated critical or high."
+        weight = "Nothing open %s is rated critical or high." % moment
 
     return _join([opening, movement, weight])
 
@@ -242,6 +265,30 @@ def assessment(data: dict, scope_label: str) -> str:
     cover = data["coverage"]
     sev = data["severity"]
     urgent_now = data["urgent"]
+
+    # Nothing open.  Two very different situations look identical in a table
+    # of zeroes, and the difference is the whole message: a scope where
+    # everything found has since been fixed is the best result this produces,
+    # and a scope that was never scanned is not a result at all.  A report
+    # that renders both as a blank form is the reason somebody thinks the
+    # filter is broken.
+    if not cover["findings"]:
+        closed = data.get("resolved", 0)
+        if closed:
+            return _join([
+                "There are no open findings in %s." % _mid_sentence(scope_label),
+                "%d %s previously found here and %s since been resolved."
+                % (closed, _plural(closed, "finding was", "findings were"),
+                   _plural(closed, "has", "have")),
+                "The history further down shows them while they were open, "
+                "which is why the chart is not empty.",
+            ])
+        return _join([
+            "There are no findings recorded for %s." % _mid_sentence(scope_label),
+            "That means nothing has been scanned in this scope rather than "
+            "that nothing was found, so it is not a result to rely on.",
+            "Check that the filters name something that has been scanned.",
+        ])
 
     repos = cover["repositories"]
     opening = ("This assessment covers %s: %d %s across %d %s, with %d open "
@@ -411,3 +458,120 @@ def hotspot_note(rows: list, axis: str) -> str:
         if share >= 20 else
         "No single %s dominates the total." % axis,
     ])
+
+
+def context(data: dict) -> list:
+    """The paragraphs that say what this estate is like, not how big it is.
+
+    A summary made of totals tells a reader the size of a list.  What somebody
+    senior is deciding is whether this needs their attention this week, and
+    that turns on a handful of questions: is any of it proven, is any of it
+    being used in the wild, how much of it is even reachable, and how much has
+    a fix waiting.
+
+    Every paragraph here is dropped entirely when its number is zero.  A
+    report padded with "0 of these" reads as a form somebody filled in rather
+    than as an assessment somebody wrote.
+    """
+    facts = data.get("posture") or {}
+    if not facts.get("total"):
+        return []
+
+    out = []
+
+    # What is proven, which is the only part that is not a queue.
+    if facts["proven"] or facts["hostile"]:
+        pieces = []
+        if facts["proven"]:
+            pieces.append("%d credential%s confirmed to still work"
+                          % (facts["proven"], "" if facts["proven"] == 1 else "s"))
+        if facts["hostile"]:
+            pieces.append("%d hostile %s"
+                          % (facts["hostile"],
+                             "dependency" if facts["hostile"] == 1
+                             else "dependencies"))
+        # "Neither" needs two things to be neither of.  With one it is wrong,
+        # and a summary whose first paragraph does not parse is one nobody
+        # trusts the numbers in.
+        many = len(pieces) > 1 or (facts["proven"] + facts["hostile"]) > 1
+        out.append(_join([
+            "This estate contains %s." % " and ".join(pieces),
+            ("%s a rating or an estimate.  Something confirmed %s, and %s be "
+             "dealt with before the rest of this report is read."
+             % ("Neither is" if len(pieces) > 1 else "That is not",
+                "each one" if many else "it",
+                "they should" if many else "it should")),
+        ]))
+
+    if facts["exploited"]:
+        out.append(_join([
+            "%d %s a vulnerability that is on the public list of ones being "
+            "exploited in the world today."
+            % (facts["exploited"], "finding matches" if facts["exploited"] == 1
+               else "findings match"),
+            "That is a fact about attackers rather than about this system, "
+            "and it is a reason to patch these ahead of higher rated issues "
+            "that nobody has been seen using.",
+        ]))
+
+    # How much of the pile is actually work.
+    #
+    # Nothing serious is the best sentence in this report and it deserves to
+    # be written as one.  "0 of the 10 open findings are rated critical or
+    # high, which is 0 percent" is the same fact told as though a form filled
+    # itself in.
+    if facts["serious"]:
+        weight = ["%d of the %d open findings are rated critical or high, "
+                  "which is %d percent."
+                  % (facts["serious"], facts["total"], facts["serious_share"])]
+    else:
+        weight = ["None of the %d open findings is rated critical or high."
+                  % facts["total"]]
+    if facts["fixable"]:
+        weight.append(
+            "%d of them have a published fix already available, so %d percent "
+            "of this is an upgrade rather than a piece of design work."
+            % (facts["fixable"], facts["fixable_share"]))
+    out.append(_join(weight))
+
+    # What makes the number smaller than it looks, said plainly rather than
+    # used quietly to shrink the total.
+    softening = []
+    if facts["set_aside"]:
+        softening.append(
+            "%d have been set aside automatically, usually a rule written for "
+            "one framework firing on an application that does not use it."
+            % facts["set_aside"])
+    if facts["patched"]:
+        softening.append(
+            "%d are in a base container image that the build already patches "
+            "after pulling it." % facts["patched"])
+    if facts["reachable"]:
+        softening.append(
+            "%d are in a package the code actually imports, which is the "
+            "subset most worth starting with." % facts["reachable"])
+    if softening:
+        out.append(_join(
+            ["Some of this total is smaller than it appears."] + softening
+            + ["None of these are hidden from the counts in this report; they "
+               "are noted so the total is read for what it is."]))
+
+    return out
+
+
+def standing_sentence(data: dict) -> str:
+    """One line naming where this sits, for the top of the document."""
+    facts = data.get("posture") or {}
+    if not facts.get("total"):
+        return ""
+    return {
+        "needs attention now":
+            "Something here has been confirmed rather than inferred, and it "
+            "needs attention before the rest.",
+        "work to do":
+            "Nothing here has been confirmed as live.  There is a body of "
+            "rated work to get through.",
+        "routine":
+            "Nothing here is rated critical or high, and nothing has been "
+            "confirmed as live.",
+    }.get(facts.get("standing", ""), "")

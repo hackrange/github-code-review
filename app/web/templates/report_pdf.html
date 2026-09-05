@@ -91,6 +91,40 @@
   .legend i { display: inline-block; width: 3mm; height: 3mm; border-radius: .5mm;
               vertical-align: -.3mm; margin-right: 1.2mm; }
 
+  /* The risk matrix.  Flat steps rather than a gradient, because the axes are
+     four words and three rather than a continuum, and the colors are the same
+     ones the severity badges use so a cell and a grade cannot disagree. */
+  table.matrix { border-collapse: separate; border-spacing: 1.5pt;
+                 width: auto; margin: 3mm 0 0; }
+  table.matrix th { font-size: 7.5pt; color: var(--faint); font-weight: 600;
+                    padding: 1mm 2mm; text-align: center; border: none;
+                    text-transform: capitalize; }
+  table.matrix th.impact { text-align: right; }
+  table.matrix th.corner { text-align: left; font-size: 7pt; }
+  table.matrix td { text-align: center; padding: 3mm 5mm; border: none;
+                    border-radius: 1mm; font-weight: 700; font-size: 9.5pt;
+                    font-variant-numeric: tabular-nums; }
+  td.m-critical { background: #b42318; color: #ffffff; }
+  td.m-high     { background: #fdeceb; color: #b42318; }
+  td.m-medium   { background: #fdf6e3; color: #9a6700; }
+  td.m-low      { background: #eaf1f8; color: #1f4f82; }
+  td.m-info     { background: #f4f4f4; color: #5a5a5a; }
+  td.m-unknown  { background: #f4f4f4; color: #8a8a8a; }
+  td.is-empty   { background: #fafafa; color: #c8c8c8; font-weight: 400; }
+
+  /* A weakness block: what it is, what to do, and where to look. */
+  .wclass { break-inside: avoid; margin: 0 0 4mm; padding: 0 0 3mm;
+            border-bottom: .5pt solid var(--sunk); }
+  .wclass:last-child { border-bottom: none; }
+  .wtitle { font-weight: 700; font-size: 10pt; }
+  .wtitle .soft { font-weight: 400; font-size: 8.5pt; color: var(--soft);
+                  margin-left: 2mm; }
+  .wtitle .wid { font-size: 7.5pt; color: var(--faint); margin-left: 2mm; }
+  .wwhat { font-size: 9pt; margin-top: .8mm; }
+  .wtodo { font-size: 9pt; margin-top: 1.2mm; }
+  .wwhere { font-size: 8pt; color: var(--soft); margin-top: 1.5mm;
+            font-family: "DejaVu Sans Mono", monospace; }
+
   /* ---- tables ---- */
   table { width: 100%; border-collapse: collapse; font-size: 8.5pt; }
   th { text-align: right; font-size: 7.5pt; text-transform: uppercase;
@@ -214,6 +248,10 @@
 <section>
   <h2>Executive summary</h2>
   <p class="lead">{{ summary | sentence_spaced }}</p>
+  {% if standing %}<p class="lead"><strong>{{ standing | sentence_spaced }}</strong></p>{% endif %}
+  {% for paragraph in context %}
+  <p>{{ paragraph | sentence_spaced }}</p>
+  {% endfor %}
 
   <div class="figures">
     <div class="figure crit"><div class="n">{{ latest.critical }}</div><div class="l">Critical</div></div>
@@ -286,6 +324,39 @@
   </table>
 </section>
 
+{# ---------------------------------------------------------- the risk matrix #}
+<section style="margin-top:7mm">
+  <h2>Risk matrix</h2>
+  <p>{{ "This grid asks two questions separately.  Down the side is how much harm an issue could do, which depends on what the system holds.  Across the top is how likely it is that someone could use it, which depends on what anyone has actually established.  Keeping them apart is what stops everything being rated urgent." | sentence_spaced }}</p>
+
+  {% if not matrix.placed %}
+  <p class="soft">{{ "Nothing in this scope has been assessed on both axes yet.  Findings are placed here as each repository is rescanned." | sentence_spaced }}</p>
+  {% else %}
+  <table class="matrix">
+    <thead>
+      <tr>
+        <th class="corner">Impact / Likelihood</th>
+        {% for column in matrix.columns %}<th>{{ column }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in matrix.rows %}
+      <tr>
+        <th class="impact">{{ row.impact }}</th>
+        {% for cell in row.cells %}
+        <td class="m-{{ cell.severity }}{{ ' is-empty' if not cell.count }}">{{ cell.count or '' }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="faint" style="font-size:8pt;margin-top:2mm">
+    {{ (matrix.placed ~ " of " ~ matrix.total ~ " findings are placed on this grid.") | sentence_spaced }}
+    {% if matrix.unplaced %}{{ (matrix.unplaced ~ " have not been assessed on both axes yet and are left off rather than guessed into a cell.  They fill in as each repository is rescanned.") | sentence_spaced }}{% endif %}
+  </p>
+  {% endif %}
+</section>
+
 {# ------------------------------------------------------------- the heatmap #}
 <section style="margin-top:7mm">
   <h2>Where it is concentrated</h2>
@@ -318,6 +389,71 @@
   <p class="soft">Nothing to show at this scope.</p>
   {% endif %}
 </section>
+
+{# The detail, by severity and then by what each finding is an example of.
+
+   A list of rule names is a list of the tool's vocabulary.  Three rules that
+   are all SQL injection read as three separate problems to a reader who does
+   not already know they are one, and the number of distinct things to
+   understand is what makes a report feel unmanageable.
+
+   So each block is a weakness: how many, across how many repositories, what
+   it is in a sentence, and what to do about it in another.  Examples are
+   named so somebody can go and look rather than take it on trust. #}
+{% for section in data.detail %}
+<section style="margin-top:7mm">
+  <h2>{{ section.severity | capitalize }} findings
+    <span class="soft" style="font-weight:400;font-size:10pt">&nbsp;{{ section.total }} in {{ section.classes | length }} {{ 'class' if section.classes | length == 1 else 'classes' }}</span>
+  </h2>
+  {% for entry in section.classes %}
+  <div class="wclass">
+    <div class="wtitle">{{ entry.name }}
+      <span class="soft">{{ entry.count }} finding{{ '' if entry.count == 1 else 's' }}
+        across {{ entry.repositories | length }} repositor{{ 'y' if entry.repositories | length == 1 else 'ies' }}</span>
+      {% if entry.key.startswith('CWE-') %}<span class="wid">{{ entry.key }}</span>{% endif %}
+    </div>
+    {% if entry.what %}<div class="wwhat">{{ entry.what | sentence_spaced }}</div>{% endif %}
+    {% if entry.todo %}<div class="wtodo"><strong>What to do.</strong> {{ entry.todo | sentence_spaced }}</div>{% endif %}
+    <div class="wwhere">
+      {%- for row in entry.rows %}
+      <div>{{ row.repository }}{% if row.file_path %} &middot; {{ row.file_path }}{% if row.line %}:{{ row.line }}{% endif %}
+        {%- elif row.package_name %} &middot; {{ row.package_name }} {{ row.package_version }}{% endif %}</div>
+      {%- endfor %}
+      {%- if entry.count > entry.rows | length %}
+      <div class="faint">and {{ entry.count - entry.rows | length }} more</div>
+      {%- endif %}
+    </div>
+  </div>
+  {% endfor %}
+  {% if section.other_classes %}
+  <p class="faint" style="font-size:8.5pt">{{ ("A further " ~ section.other_findings ~ " findings at this severity fall into " ~ section.other_classes ~ " other classes, each smaller than those above.") | sentence_spaced }}</p>
+  {% endif %}
+</section>
+{% endfor %}
+
+{% if data.medium_detail and data.medium_detail[0].classes %}
+<section style="margin-top:7mm">
+  <h2>Medium findings
+    <span class="soft" style="font-weight:400;font-size:10pt">&nbsp;{{ data.medium_detail[0].total }} in total</span>
+  </h2>
+  <p>{{ "Summarized rather than listed.  These are worth working through once the critical and high findings above are dealt with." | sentence_spaced }}</p>
+  <table>
+    <thead><tr><th style="text-align:left">Weakness</th><th>Findings</th><th>Repositories</th></tr></thead>
+    <tbody>
+      {% for entry in data.medium_detail[0].classes %}
+      <tr>
+        <td style="text-align:left">{{ entry.name }}{% if entry.key.startswith('CWE-') %} <span class="faint">{{ entry.key }}</span>{% endif %}</td>
+        <td>{{ entry.count }}</td>
+        <td>{{ entry.repositories | length }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if data.medium_detail[0].other_classes %}
+  <p class="faint" style="font-size:8.5pt">{{ ("And " ~ data.medium_detail[0].other_findings ~ " more across " ~ data.medium_detail[0].other_classes ~ " further classes.") | sentence_spaced }}</p>
+  {% endif %}
+</section>
+{% endif %}
 
 {# ------------------------------------------------- the biggest single jobs #}
 {% if data.actions %}
