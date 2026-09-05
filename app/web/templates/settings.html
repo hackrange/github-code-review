@@ -436,6 +436,34 @@
   </div>
 </div>
 
+<div class="card" id="reports">
+  <div class="card-head"><span class="head-text">Generated reports<button type="button" class="help-dot" data-modal="help-reports" aria-label="What this section is for">?</button></span></div>
+  <div class="form-grid">
+    <label class="wide">Organization name
+      <input type="text" name="report.organization_name"
+             value="{{ values['report.organization_name'] }}"
+             placeholder="Leave empty to print no name">
+      <span class="faint small">Printed on the cover of every generated report.
+        Left empty the cover says nothing rather than guessing, because a
+        report carrying the wrong name is worse than one carrying none.</span>
+    </label>
+    <label class="wide">Logo
+      <input type="text" name="report.logo" value="{{ values['report.logo'] }}"
+             placeholder="data:image/png;base64,... or https://...">
+      <span class="faint small">A link to an image, or the image itself as a
+        data URI.  A data URI is the safer of the two: it travels inside the
+        document, so a report opened next year still has its logo and no part
+        of reading one reaches out to a web server.</span>
+    </label>
+    <label class="wide">Footer line
+      <input type="text" name="report.footer" value="{{ values['report.footer'] }}"
+             placeholder="Confidential. Internal use only.">
+      <span class="faint small">Printed at the foot of every page, for a
+        classification marking or a handling instruction.</span>
+    </label>
+  </div>
+</div>
+
 <div class="card" id="display">
   <div class="card-head"><span class="head-text">Display<button type="button" class="help-dot" data-modal="help-display" aria-label="What this section is for">?</button></span></div>
   <div class="small faint" style="margin-bottom:.6rem">

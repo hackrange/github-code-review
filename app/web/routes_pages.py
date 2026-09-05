@@ -53,6 +53,9 @@ def _shared(db, user: User) -> dict:
         "user": user,
         "pending_waivers": pending,
         "last_scan": _ago(last.finished_at) if last and last.finished_at else "",
+        # The shell decides whether to offer the link, so a role without the
+        # permission is not shown a page it would be refused at.
+        "can_see_trends": rbac.can(user, "trend.read"),
     }
 
 
@@ -330,6 +333,14 @@ def dashboard(request: Request, user: User = Depends(current_user)):
         malicious = query.filter(Finding.malicious.is_(True)).count()
         verified = query.filter(Finding.verified.is_(True)).count()
 
+        # Where the security sign offs stand.  Amber is counted apart from
+        # green on purpose: a review that no longer describes the code is the
+        # one somebody has to look at, and one number covering both would
+        # report it as though it still held.
+        from app.core import certification as _cert
+
+        certified = _cert.counts(db)
+
         worst = (query.order_by(_priority_order(), Finding.last_found_at.desc())
                  .limit(15).all())
 
@@ -347,10 +358,207 @@ def dashboard(request: Request, user: User = Depends(current_user)):
                        exploited=exploited, verified=verified, worst=worst,
                        malicious=malicious,
                        top_repos=top_repos, runs=runs,
+                       certified=certified,
                        advisory_counts=advisory_counts,
                        advisory_total=sum(advisory_counts.values()),
                        total=sum(counts.values()))
         return page(request, "dashboard.html", **context)
+
+
+@router.get("/trends")
+def trends_page(request: Request, user: User = Depends(current_user)):
+    """How the numbers have moved, at whatever scope somebody asks for.
+
+    Every filter narrows the same query, and the report is generated from
+    exactly this scope, so what somebody exports is what they were looking at
+    rather than a second thing assembled separately that might disagree.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.core import trends
+
+    rbac.require(user, "trend.read")
+    params = request.query_params
+
+    basis = (params.get("basis", "actions") or "actions").strip().lower()
+    if basis not in ("actions", "advisories"):
+        basis = "actions"
+
+    organization = clean_text(params.get("org", ""), "Organization",
+                              limit=255, required=False)
+    repository = clean_text(params.get("repo", ""), "Repository",
+                            limit=320, required=False)
+    branch = clean_text(params.get("branch", ""), "Branch",
+                        limit=255, required=False)
+    connection = clean_text(params.get("connection", ""), "Connection",
+                            limit=120, required=False)
+    try:
+        window = int(params.get("days", "30"))
+    except ValueError:
+        window = 30
+    if window not in (7, 30, 90, 365):
+        window = 30
+
+    # A repository names its own organization, so picking one and then a
+    # repository somewhere else would silently return nothing.  The narrower
+    # of the two wins, which is what somebody clicking through a drill down
+    # expects.
+    if repository and "/" in repository:
+        organization = repository.split("/")[0]
+
+    since = datetime.now(timezone.utc) - timedelta(days=window)
+
+    with session_scope() as db:
+        base = rbac.visible_trends(db, user)
+        scope = {"organization": organization, "repository": repository,
+                 "branch": branch, "connection": connection, "since": since}
+
+        points = trends.series(db, basis=basis, base=base, **scope)
+        grid = trends.heatmap(db, basis=basis, base=base,
+                              organization=organization,
+                              repository=repository, branch=branch,
+                              connection=connection)
+        options = trends.choices(db, base=base)
+
+        # Where the recorded history starts.  Everything before it was worked
+        # out from when findings were first seen and resolved, and its
+        # severities are today's applied backwards, so the chart marks it
+        # rather than drawing one line across two different things.
+        first_snapshot = None
+        for point in points:
+            if point["source"] == trends.SNAPSHOT:
+                first_snapshot = point["day"]
+                break
+
+        from app.core import charts
+
+        context = _shared(db, user)
+        context.update(
+            active_page="trends", points=points, heat=grid,
+            chart=charts.stacked_area(points),
+            heat_rows=charts.heat_levels(grid["rows"]),
+            basis=basis, window=window, options=options,
+            first_snapshot=first_snapshot,
+            filters={"org": organization, "repo": repository,
+                     "branch": branch, "connection": connection,
+                     "basis": basis, "days": window},
+            can_report=rbac.can(user, "report.generate"),
+            # The report is built from exactly this scope, so the link
+            # carries the filters rather than rebuilding them at the far end
+            # where they could be read differently.
+            report_query=urlencode({name: value for name, value in (
+                ("org", organization), ("repo", repository),
+                ("branch", branch), ("connection", connection),
+                ("basis", basis), ("days", window)) if value}),
+            scope_label=(branch and f"{repository} on {branch}")
+                        or repository or organization or "every repository",
+        )
+        return page(request, "trends.html", **context)
+
+
+@router.get("/trends/report")
+def trends_report(request: Request, user: User = Depends(current_user)):
+    """The trends view as a document, for people who will not open the app.
+
+    Built from the same filters the page uses and from the same scoped query,
+    so a report can never contain a repository the person asking for it could
+    not open directly, and can never disagree with the screen it came from.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.core import certification as _cert
+    from app.core import charts, report_text, settings_store, trends
+
+    rbac.require(user, "report.generate")
+    params = request.query_params
+
+    basis = (params.get("basis", "actions") or "actions").strip().lower()
+    if basis not in ("actions", "advisories"):
+        basis = "actions"
+    organization = clean_text(params.get("org", ""), "Organization",
+                              limit=255, required=False)
+    repository = clean_text(params.get("repo", ""), "Repository",
+                            limit=320, required=False)
+    branch = clean_text(params.get("branch", ""), "Branch",
+                        limit=255, required=False)
+    connection = clean_text(params.get("connection", ""), "Connection",
+                            limit=120, required=False)
+    try:
+        window = int(params.get("days", "30"))
+    except ValueError:
+        window = 30
+    if window not in (7, 30, 90, 365):
+        window = 30
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=window)
+
+    with session_scope() as db:
+        base = rbac.visible_trends(db, user)
+        points = trends.series(db, basis=basis, base=base,
+                               organization=organization, repository=repository,
+                               branch=branch, connection=connection, since=since)
+        grid = trends.heatmap(db, basis=basis, base=base,
+                              organization=organization, repository=repository,
+                              branch=branch, connection=connection)
+        heat_rows = charts.heat_levels(grid["rows"])
+
+        scope_label = ((branch and repository and "%s on %s" % (repository, branch))
+                       or repository or organization or "All repositories")
+
+        latest = points[-1] if points else {
+            "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
+            "total": 0}
+
+        # The name on the cover.  Whatever the person is actually called, and
+        # their sign in name only when that is all there is: a document that
+        # says "Prepared for admin" reads like something nobody checked.
+        prepared_for = (getattr(user, "display_name", "") or "").strip() \
+            or (getattr(user, "email", "") or "").strip() \
+            or getattr(user, "username", "")
+
+        context = {
+            "title": "Security Assessment",
+            "scope_label": scope_label,
+            "prepared_for": prepared_for,
+            "organization_name": settings_store.get(db, "report.organization_name", ""),
+            "logo": (settings_store.get(db, "report.logo", "") or "").strip(),
+            "footer_text": settings_store.get(db, "report.footer", ""),
+            "period_label": "%s to %s" % (since.strftime("%d %B %Y"),
+                                          now.strftime("%d %B %Y")),
+            "issued_at": now.strftime("%d %B %Y"),
+            "basis": basis,
+            "latest": latest,
+            "chart": charts.stacked_area(points, width=880, height=250),
+            "heat": grid,
+            "heat_rows": heat_rows,
+            "summary": report_text.headline(scope_label, points, basis),
+            "basis_note": report_text.basis_note(basis),
+            "history_note": report_text.history_note(points),
+            "concentration": report_text.concentration(grid["rows"], grid["axis"]),
+            "certified_note": report_text.certified_note(_cert.counts(db)),
+            "actions": report_text.what_to_do(grid["rows"], grid["axis"], points),
+        }
+        html = render_partial("report_pdf.html", **context)
+
+    try:
+        from weasyprint import HTML
+    except Exception:
+        log.exception("weasyprint is not available")
+        raise HTTPException(
+            status_code=503,
+            detail="Reports need the typesetting libraries, which are not "
+                   "installed on this server.")
+
+    pdf = HTML(string=html, base_url=str(request.base_url)).write_pdf()
+
+    stem = (repository or organization or "all-repositories").replace("/", "-")
+    name = "security-assessment-%s-%s.pdf" % (stem, now.strftime("%Y-%m-%d"))
+    log.info("report generated for %s by %s", scope_label,
+             getattr(user, "username", "?"))
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="%s"' % name})
 
 
 @router.get("/findings")

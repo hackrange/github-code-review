@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+{# A security assessment, laid out as a document rather than as a web page.
+
+   Written as HTML because the alternative is drawing it shape by shape in
+   code nobody can preview, and because this way it shares its type and its
+   palette with the product it reports on.
+
+   The prose is held to a different standard than the rest of this codebase:
+   US English, about a tenth grade reading level, no em dashes, two spaces
+   between sentences.  It is read by people who do not work in security, and
+   the sentences are built in report_text.py so that rule is applied in one
+   place rather than remembered in a template. #}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 20mm 18mm 22mm 18mm;
+    @bottom-left {
+      content: "{{ footer_text }}";
+      font-family: "DejaVu Sans", sans-serif; font-size: 7.5pt; color: #8a8a8a;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: "DejaVu Sans", sans-serif; font-size: 7.5pt; color: #8a8a8a;
+    }
+  }
+  /* The cover carries no running furniture.  A page number on a title page
+     looks like a document that was printed rather than produced. */
+  @page :first { @bottom-left { content: ""; } @bottom-right { content: ""; } }
+
+  :root {
+    --ink: #1a1a1a; --soft: #5a5a5a; --faint: #8a8a8a;
+    --rule: #dcdcdc; --sunk: #f4f4f4;
+    --bad: #b42318; --warn: #9a6700; --info: #1f4f82; --ok: #1a7f37;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "DejaVu Sans", sans-serif; font-size: 9.5pt;
+         line-height: 1.55; color: var(--ink); margin: 0; }
+
+  h1 { font-size: 24pt; line-height: 1.15; margin: 0 0 .35rem; font-weight: 700;
+       letter-spacing: -.01em; }
+  h2 { font-size: 13pt; margin: 0 0 .5rem; font-weight: 700;
+       padding-bottom: .3rem; border-bottom: 1.5pt solid var(--ink); }
+  h3 { font-size: 10.5pt; margin: 1.1rem 0 .35rem; font-weight: 700; }
+  p  { margin: 0 0 .6rem; }
+  .soft { color: var(--soft); }
+  .faint { color: var(--faint); }
+
+  /* ---- cover ---- */
+  .cover { height: 235mm; display: flex; flex-direction: column; }
+  .cover-top { flex: 0 0 auto; }
+  .cover-mid { flex: 1 1 auto; padding-top: 30mm; }
+  .cover-foot { flex: 0 0 auto; border-top: 1pt solid var(--rule);
+                padding-top: 4mm; }
+  .logo { max-height: 22mm; max-width: 70mm; }
+  .wordmark { font-size: 12pt; font-weight: 700; letter-spacing: .02em; }
+  .kicker { font-size: 8.5pt; text-transform: uppercase; letter-spacing: .12em;
+            color: var(--faint); margin-bottom: .8rem; }
+  .cover-scope { font-size: 11pt; color: var(--soft); margin-top: .5rem; }
+  .cover-meta { flex: 0 0 auto; font-size: 9pt; margin-bottom: 6mm;
+                padding-top: 5mm; border-top: .8pt solid var(--rule); }
+  .cover-meta div { margin-bottom: .28rem; }
+  .cover-meta .k { display: inline-block; width: 34mm; color: var(--faint); }
+
+  /* ---- the numbers ---- */
+  .figures { display: flex; gap: 3mm; margin: 0 0 5mm; }
+  .figure { flex: 1; border: .8pt solid var(--rule); border-radius: 2mm;
+            padding: 3mm; text-align: center; }
+  .figure .n { font-size: 19pt; font-weight: 700; line-height: 1.1; }
+  .figure .l { font-size: 7.5pt; text-transform: uppercase;
+               letter-spacing: .07em; color: var(--faint); margin-top: .5mm; }
+  .figure.crit .n { color: var(--bad); }
+  .figure.high .n { color: var(--bad); }
+  .figure.med  .n { color: var(--warn); }
+
+  /* ---- chart ---- */
+  .chart { width: 100%; height: auto; }
+  .chart .grid { stroke: var(--rule); stroke-width: 1; }
+  .chart .axis { fill: var(--faint); font-size: 11px; }
+  .chart .boundary { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 3 3; }
+  .band-critical { fill: #b42318; }
+  .band-high     { fill: #b42318; fill-opacity: .62; }
+  .band-medium   { fill: #9a6700; fill-opacity: .78; }
+  .band-low      { fill: #1f4f82; fill-opacity: .55; }
+  .band-info     { fill: #8a8a8a; fill-opacity: .35; }
+  .legend { font-size: 8pt; color: var(--soft); margin-top: 2mm; }
+  .legend span { margin-right: 5mm; white-space: nowrap; }
+  .legend i { display: inline-block; width: 3mm; height: 3mm; border-radius: .5mm;
+              vertical-align: -.3mm; margin-right: 1.2mm; }
+
+  /* ---- tables ---- */
+  table { width: 100%; border-collapse: collapse; font-size: 8.5pt; }
+  th { text-align: right; font-size: 7.5pt; text-transform: uppercase;
+       letter-spacing: .05em; color: var(--faint); padding: 1.5mm 2mm;
+       border-bottom: .8pt solid var(--rule); }
+  th:first-child { text-align: left; }
+  td { padding: 1.5mm 2mm; text-align: right; border-bottom: .5pt solid var(--sunk);
+       font-variant-numeric: tabular-nums; }
+  td:first-child { text-align: left; }
+  tr { break-inside: avoid; }
+  .zero { color: #c8c8c8; }
+  .v-crit { color: var(--bad); font-weight: 700; }
+  .v-high { color: var(--bad); }
+  .v-med  { color: var(--warn); }
+  .v-low  { color: var(--info); }
+
+  ol.actions { margin: 0; padding-left: 5mm; }
+  ol.actions li { margin-bottom: .5rem; break-inside: avoid; }
+
+  .note { background: var(--sunk); border-left: 2pt solid var(--rule);
+          padding: 3mm 4mm; font-size: 8.5pt; color: var(--soft);
+          break-inside: avoid; }
+  section { break-inside: auto; }
+  .page-break { break-before: page; }
+</style>
+</head>
+<body>
+
+{# ---------------------------------------------------------------- cover #}
+<div class="cover">
+  <div class="cover-top">
+    {% if logo %}
+      <img class="logo" src="{{ logo }}" alt="">
+    {% elif organization_name %}
+      <div class="wordmark">{{ organization_name }}</div>
+    {% endif %}
+  </div>
+
+  <div class="cover-mid">
+    {# The kicker names the kind of document and the title names this one, so
+       they must not be the same words.  "Security Assessment" twice, once in
+       small caps above itself, is the look of a template nobody finished. #}
+    <div class="kicker">Security Assessment</div>
+    <h1>{{ scope_label }}</h1>
+    <div class="cover-scope">{{ period_label }}</div>
+
+  </div>
+
+  {# The details sit at the foot rather than under the title.  Under it they
+     leave two thirds of the page empty and the eye reads that as a document
+     that stopped early. #}
+  <div class="cover-meta">
+    <div><span class="k">Prepared for</span>{{ prepared_for }}</div>
+    {% if organization_name %}
+    <div><span class="k">Organization</span>{{ organization_name }}</div>
+    {% endif %}
+    <div><span class="k">Date of issue</span>{{ issued_at }}</div>
+    <div><span class="k">Counting</span>{{ 'Items of work' if basis == 'actions' else 'Individual advisories' }}</div>
+  </div>
+
+  <div class="cover-foot faint" style="font-size:8pt">
+    {{ footer_text or 'Produced by Git Code Review.' }}
+  </div>
+</div>
+
+{# ------------------------------------------------------ executive summary #}
+<div class="page-break"></div>
+<section>
+  <h2>Executive summary</h2>
+  <p>{{ summary | sentence_spaced }}</p>
+
+  <div class="figures">
+    <div class="figure crit"><div class="n">{{ latest.critical }}</div><div class="l">Critical</div></div>
+    <div class="figure high"><div class="n">{{ latest.high }}</div><div class="l">High</div></div>
+    <div class="figure med"><div class="n">{{ latest.medium }}</div><div class="l">Medium</div></div>
+    <div class="figure"><div class="n">{{ latest.low }}</div><div class="l">Low</div></div>
+    <div class="figure"><div class="n">{{ latest.total }}</div><div class="l">Total open</div></div>
+  </div>
+
+  <p class="faint" style="font-size:8.5pt">{{ basis_note | sentence_spaced }}</p>
+
+  {% if certified_note %}
+  <h3>Review status</h3>
+  <p>{{ certified_note | sentence_spaced }}</p>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------ the trend #}
+<section style="margin-top:7mm">
+  <h2>Trend</h2>
+  {% if chart.empty %}
+  <p class="soft">There is no recorded history for this selection yet.</p>
+  {% else %}
+  <svg class="chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
+       preserveAspectRatio="none">
+    {% for line in chart.grid %}
+    <line x1="{{ chart.pad_left }}" y1="{{ line.y }}"
+          x2="{{ chart.width - 12 }}" y2="{{ line.y }}"
+          stroke="#dcdcdc" stroke-width="1"/>
+    <text x="{{ chart.pad_left - 8 }}" y="{{ line.y + 4 }}" text-anchor="end"
+          fill="#8a8a8a" font-size="11">{{ line.value }}</text>
+    {% endfor %}
+    {% for area in chart.areas %}
+    <polygon points="{{ area.points }}" fill="{{ area.fill }}"
+             fill-opacity="{{ area.opacity }}"/>
+    {% endfor %}
+    {% for mark in chart.marks %}
+      {% if not loop.first and not mark.reconstructed
+            and chart.marks[loop.index0 - 1].reconstructed %}
+      <line x1="{{ mark.x }}" y1="{{ chart.pad_top }}"
+            x2="{{ mark.x }}" y2="{{ chart.pad_top + chart.plot_h }}"
+            stroke="#8a8a8a" stroke-width="1" stroke-dasharray="3 3"/>
+      {% endif %}
+    {% endfor %}
+    {% for label in chart.labels %}
+    <text x="{{ label.x }}" y="{{ chart.height - 8 }}" text-anchor="{{ label.anchor }}"
+          fill="#8a8a8a" font-size="11">{{ label.text }}</text>
+    {% endfor %}
+  </svg>
+  <div class="legend">
+    <span><i style="background:#b42318"></i>Critical</span>
+    <span><i style="background:#b42318;opacity:.62"></i>High</span>
+    <span><i style="background:#9a6700;opacity:.78"></i>Medium</span>
+    <span><i style="background:#1f4f82;opacity:.55"></i>Low</span>
+    <span><i style="background:#8a8a8a;opacity:.35"></i>Informational</span>
+  </div>
+  {% endif %}
+
+  {% if history_note %}
+  <div class="note" style="margin-top:4mm">{{ history_note | sentence_spaced }}</div>
+  {% endif %}
+</section>
+
+{# --------------------------------------------------------- where it sits #}
+<section style="margin-top:7mm">
+  <h2>Where the work sits</h2>
+  {% if concentration %}<p>{{ concentration | sentence_spaced }}</p>{% endif %}
+
+  {% if heat_rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>{{ heat.axis | capitalize }}</th>
+        <th>Critical</th><th>High</th><th>Medium</th><th>Low</th>
+        <th>Informational</th><th>Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in heat_rows %}
+      <tr>
+        <td>{{ row.name }}</td>
+        <td class="{{ 'zero' if not row.critical else 'v-crit' }}">{{ row.critical or '0' }}</td>
+        <td class="{{ 'zero' if not row.high else 'v-high' }}">{{ row.high or '0' }}</td>
+        <td class="{{ 'zero' if not row.medium else 'v-med' }}">{{ row.medium or '0' }}</td>
+        <td class="{{ 'zero' if not row.low else 'v-low' }}">{{ row.low or '0' }}</td>
+        <td class="{{ 'zero' if not row.info }}">{{ row.info or '0' }}</td>
+        <td><strong>{{ row.total }}</strong></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="soft">Nothing to show at this scope.</p>
+  {% endif %}
+</section>
+
+{# ------------------------------------------------------------ next steps #}
+{% if actions %}
+<section style="margin-top:7mm">
+  <h2>What would help most</h2>
+  <ol class="actions">
+    {% for item in actions %}<li>{{ item | sentence_spaced }}</li>{% endfor %}
+  </ol>
+</section>
+{% endif %}
+
+{# ------------------------------------------------------------ the method #}
+<section style="margin-top:7mm">
+  <h2>How these numbers were produced</h2>
+  {# The fixed prose goes through the same filter as the generated prose, so
+     the two spaces after a full stop survive into the document instead of
+     being collapsed by HTML.  Written on one line each because the filter
+     works on the string, and a newline in the middle of a sentence is another
+     thing HTML turns into a single space. #}
+  <p>{{ "Every repository in scope is cloned and scanned.  The scan looks for credentials committed by mistake, weaknesses in the source code, unsafe settings in the infrastructure files, and known security problems in the software the code depends on." | sentence_spaced }}</p>
+  <p>{{ "Findings are rated by combining two questions that are asked separately.  The first is how much harm the issue could do, which depends on what the system holds.  The second is how likely it is that someone could use it, which depends on the evidence available.  Keeping them apart avoids the common problem where everything is rated urgent and nothing stands out." | sentence_spaced }}</p>
+  <p>{{ basis_note | sentence_spaced }}</p>
+  <p class="faint" style="font-size:8.5pt">{{ ("Generated by Git Code Review on " ~ issued_at ~ ".  This report covers only what automated scanning can see.  It is not a substitute for a manual review, and an absence of findings is not proof that a system is safe.") | sentence_spaced }}</p>
+</section>
+
+</body>
+</html>

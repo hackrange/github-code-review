@@ -44,3 +44,17 @@ apscheduler==3.11.3
 
 # Checking a report against schema/report.schema.json.
 jsonschema==4.26.0
+
+# Turning a report page into a PDF.
+#
+# The reports go to people outside the security team, so they have to look
+# like a document rather than a screenshot of a web page.  This lays out real
+# HTML and CSS, which means the report is written as a template beside every
+# other template and shares the palette and the type with the rest of the
+# product, rather than being drawn shape by shape in code that nobody can
+# preview.
+#
+# It needs pango, cairo and glib from the system, which the Dockerfile
+# installs.  Without them the import fails loudly at start rather than
+# producing a broken document later.
+weasyprint==69.0

@@ -627,6 +627,21 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     # apply_exceptions so a finding that arrives already waived never becomes
     # a message somebody has to read and dismiss.
     counts["new_findings"] = [f for f in new_findings if not f.excepted]
+
+    # Today's point on the trend, written after everything else has landed so
+    # it describes the state a scan left rather than the state halfway through
+    # one.  Re-running a scan on the same day replaces the day rather than
+    # adding to it.
+    #
+    # Wrapped, because a chart is not worth failing an ingest for.  A missing
+    # trend row is a gap somebody notices later; a failed ingest is a scan
+    # thrown away.
+    try:
+        from app.core import trends
+        trends.record(session)
+    except Exception:
+        log.exception("could not write the trend point, carrying on")
+
     return counts
 
 

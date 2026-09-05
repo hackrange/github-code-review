@@ -36,6 +36,19 @@ DEFAULTS = {
     "github.app_key":          ("", True, "The App private key, PEM. Stored encrypted."),
     "github.parallel_repos":   (4, False, "Repositories scanned at once."),
 
+    # ---- what the generated reports say they are ----
+    #
+    # These go outside the security team, to people who will read the covering
+    # page and not much else, so the document has to name whose assessment it
+    # is.  Left empty it says nothing rather than guessing, because a report
+    # branded with the wrong name is worse than one branded with none.
+    "report.organization_name": ("", False,
+                                 "The name on the cover of generated reports."),
+    "report.logo":              ("", False,
+                                 "A logo for the reports, as a data URI or an https link."),
+    "report.footer":            ("", False,
+                                 "A line at the foot of every page, for a classification marking or similar."),
+
     # ---- what to scan ----
     "scan.organizations":      ([], False,
                                 "Organizations to scan. Empty means every one the credential can see."),

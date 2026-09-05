@@ -19,6 +19,17 @@ from app.core.models import Finding, Repository, User, UserRole
 PERMISSIONS = {
     UserRole.ADMIN: {
         "findings.read", "findings.export",
+        # Looking at how the numbers have moved, and turning a view of that
+        # into a document somebody outside the security team can read.
+        #
+        # Both go to developers too.  A developer can already export every
+        # finding they can see as a file, so a chart of the same rows and a
+        # summary of them is not a wider disclosure, and a team that cannot
+        # see whether its own numbers are improving cannot be asked to improve
+        # them.  The report is built from the same scoped query as everything
+        # else, so it can never contain a repository the reader could not open
+        # directly.
+        "trend.read", "report.generate",
         "waiver.request", "waiver.approve", "waiver.revoke",
         "scan.run", "scan.history.delete",
         # Deleting findings outright.  Admin only, and deliberately not the
@@ -52,6 +63,7 @@ PERMISSIONS = {
     },
     UserRole.DEVELOPER: {
         "findings.read", "findings.export",
+        "trend.read", "report.generate",
         # A developer can ask for an exception.  Only an admin signs it off.
         "waiver.request",
         "scan.run",
@@ -67,6 +79,7 @@ PERMISSIONS = {
     },
     UserRole.READER: {
         "findings.read", "findings.export",
+        "trend.read", "report.generate",
         "repo.read", "schedule.read", "exclusion.read",
     },
 }
@@ -162,7 +175,7 @@ def in_scope(user: User, organization: str, repository: str,
     return False
 
 
-def _scope_filter(user: User, session=None):
+def _scope_filter(user: User, session=None, model=None):
     """A SQL condition matching only what this user may see.
 
     Two ways in, and either is enough.  An administrator can assign an
@@ -172,6 +185,12 @@ def _scope_filter(user: User, session=None):
     A developer with neither matches nothing.  That is deliberate: a new
     account should see an empty screen, not the whole company.
     """
+    # The same condition, over any table that names an organization and a
+    # repository.  Findings are one such table and the trend points are
+    # another, and writing the rule twice is how two tables end up disagreeing
+    # about who may see what.
+    model = model or Finding
+
     if sees_everything(user):
         return None
 
@@ -179,12 +198,12 @@ def _scope_filter(user: User, session=None):
     for org, repo in scope_pairs(user):
         if repo:
             clauses.append(
-                (Finding.organization == org)
-                & (or_(Finding.repository == repo,
-                       Finding.repository == f"{org}/{repo}"))
+                (model.organization == org)
+                & (or_(model.repository == repo,
+                       model.repository == f"{org}/{repo}"))
             )
         else:
-            clauses.append(Finding.organization == org)
+            clauses.append(model.organization == org)
 
     # One IN rather than a clause each.  Somebody with two hundred
     # repositories would otherwise build a query with two hundred branches in
@@ -192,11 +211,11 @@ def _scope_filter(user: User, session=None):
     if session is not None:
         reachable = repositories_on_the_host(session, user)
         if reachable:
-            clauses.append(Finding.repository.in_(reachable))
+            clauses.append(model.repository.in_(reachable))
 
     if not clauses:
         # Nothing assigned and nothing reachable means nothing visible.
-        return Finding.id.is_(None)
+        return model.id.is_(None)
     return or_(*clauses)
 
 
@@ -209,6 +228,23 @@ def visible_findings(session: OrmSession, user: User):
     """
     query = session.query(Finding)
     condition = _scope_filter(user, session)
+    if condition is not None:
+        query = query.filter(condition)
+    return query
+
+
+def visible_trends(session: OrmSession, user: User):
+    """The history this user may see, narrowed the same way the findings are.
+
+    Deliberately the same condition rather than a second one that looks like
+    it: a chart that showed a repository somebody cannot open would be a leak
+    that is harder to notice than a list, because nobody reads a chart looking
+    for a name they should not know.
+    """
+    from app.core.models import TrendPoint
+
+    query = session.query(TrendPoint)
+    condition = _scope_filter(user, session, model=TrendPoint)
     if condition is not None:
         query = query.filter(condition)
     return query

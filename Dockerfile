@@ -66,6 +66,18 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
         bash git jq curl openssl ca-certificates \
         coreutils findutils util-linux tzdata \
         subversion \
+        # Typesetting, for the generated reports.
+        #
+        # The reports are laid out as HTML and turned into PDF, which is what
+        # lets them use the same design as the rest of the product instead of
+        # being assembled shape by shape into something that looks like a
+        # different piece of software.  These are what does the text layout:
+        # glib and pango for shaping and line breaking, harfbuzz for the font
+        # itself, cairo for drawing, and one font so a report rendered on a
+        # machine with no fonts installed is still typeset rather than blank.
+        libglib2.0-0t64 libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
+        libfontconfig1 libcairo2 libgdk-pixbuf-2.0-0 \
+        fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # The clients the other two version control systems need are deliberately not

@@ -64,6 +64,16 @@
   <a class="stat bad" href="{{ base }}/findings?{{ same }}&malicious=1">
     <div class="n">{{ malicious }}</div><div class="l">Malicious packages</div>
   </a>
+  {# Branches somebody has reviewed and signed off.
+     Amber is shown beside green rather than added to it: a review that no
+     longer describes the code is the one that needs a person, and a single
+     number covering both would quietly report it as though it still held. #}
+  <a class="stat ok" href="{{ base }}/repositories?certified=active">
+    <div class="n">{{ certified.active }}</div><div class="l">Certified branches</div>
+    {% if certified.stale %}
+    <div class="l warn" style="font-size:.72rem">{{ certified.stale }} need re-checking</div>
+    {% endif %}
+  </a>
 </div>
 
 <div class="card">

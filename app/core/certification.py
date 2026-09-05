@@ -194,3 +194,26 @@ def revoke(session, repository: str, branch: str, actor: str,
     row.revoked_reason = (reason or "")[:2000]
     session.flush()
     return row, ""
+
+
+def counts(session, base=None) -> dict:
+    """-> {active, stale, lapsed, revoked, total}.  Where the sign offs stand.
+
+    Stale is reported separately from active rather than folded into it,
+    because a badge that has gone amber is the one that needs somebody.  A
+    single "certified" number would count a review that no longer describes
+    the code as though it still did, which is the exact failure the amber
+    state was added to prevent.
+
+    `base` narrows this to what a reader may see, the same as everywhere else.
+    """
+    from app.core.models import Certification
+
+    rows = (base if base is not None else session.query(Certification)).all()
+    out = {ACTIVE: 0, STALE: 0, LAPSED: 0, REVOKED: 0}
+    for row in rows:
+        state = status(session, row).get("state", "")
+        if state in out:
+            out[state] += 1
+    out["total"] = len(rows)
+    return out

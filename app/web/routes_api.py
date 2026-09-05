@@ -1441,6 +1441,24 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
             clean_int(form.get("intel.max_age_hours", 24) or 24,
                       "The feed age", low=1, high=720))
 
+        # What the generated reports say they are.
+        #
+        # The logo is checked for its scheme rather than trusted, because it
+        # is rendered into a document that gets forwarded outside the company.
+        # https or a data URI and nothing else: those are the two that carry
+        # an image, and anything else in that box is either a mistake or an
+        # attempt to make a report fetch something when it is opened.
+        logo = text("report.logo", 2000)
+        if logo and not (logo.lower().startswith("https://")
+                         or logo.lower().startswith("data:image/")):
+            raise HTTPException(
+                status_code=400,
+                detail="A report logo has to be an https link or a data URI "
+                       "holding the image itself.")
+        put("report.organization_name", text("report.organization_name", 200))
+        put("report.logo", logo)
+        put("report.footer", text("report.footer", 200))
+
         put("output.dir", out_dir)
         put("output.per_repo_files", _checked(form, "output.per_repo_files"))
         put("output.include_clean", _checked(form, "output.include_clean"))

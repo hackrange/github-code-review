@@ -815,6 +815,74 @@ class Waiver(Base):
         return self.status == WaiverStatus.REQUESTED
 
 
+class TrendPoint(Base):
+    """What one branch of one repository looked like on one day.
+
+    The grain is the finest thing anybody can filter to, and that is the whole
+    design.  Storing a row per scope instead, one for everything and one per
+    organization, reads faster and has to be rebuilt the first time somebody
+    wants a filter nobody thought of.  At this grain every filter is a sum:
+    an organization is the sum of its repositories, everything is the sum of
+    the lot, and a branch is one row.
+
+    Two kinds of row live here and the difference is on the row, because it
+    matters and is not visible otherwise.
+
+    A snapshot is written after a scan and is exactly what the database held.
+
+    A reconstruction is worked out afterwards from when findings were first
+    seen and when they were resolved, which is the only way to have any
+    history at all before this table existed.  Its counts are right.  Its
+    severities are today's severities applied backwards, so a finding regraded
+    this morning looks in a reconstruction as though it always had that grade.
+    The chart marks where reconstruction ends, because the bands either side
+    of that line do not mean quite the same thing and a continuous line would
+    say they do.
+    """
+
+    __tablename__ = "trend_points"
+    __table_args__ = (
+        UniqueConstraint("day", "repository", "branch", name="uq_trend_day"),
+        Index("ix_trend_day_org", "day", "organization"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    day = Column(DateTime, nullable=False, index=True)
+
+    organization = Column(String(255), default="", index=True)
+    repository = Column(String(320), default="", index=True)
+    branch = Column(String(255), default="", index=True)
+    connection = Column(String(120), default="", index=True)
+
+    # Advisories, which is one row per finding.
+    critical = Column(Integer, default=0)
+    high = Column(Integer, default=0)
+    medium = Column(Integer, default=0)
+    low = Column(Integer, default=0)
+    info = Column(Integer, default=0)
+    unknown = Column(Integer, default=0)
+    findings_total = Column(Integer, default=0)
+
+    # Actions, which is one row per upgrade, counted the same way the findings
+    # list and the dashboard count them.  Both are kept because the chart
+    # offers both and switching basis halfway through a history would be worse
+    # than not offering it.
+    actions_critical = Column(Integer, default=0)
+    actions_high = Column(Integer, default=0)
+    actions_medium = Column(Integer, default=0)
+    actions_low = Column(Integer, default=0)
+    actions_info = Column(Integer, default=0)
+    actions_unknown = Column(Integer, default=0)
+    actions_total = Column(Integer, default=0)
+
+    # Where the security sign off for this branch stood that day.
+    certification = Column(String(16), default="")
+
+    # snapshot or reconstructed.  See the note above.
+    source = Column(String(16), default="snapshot", index=True)
+    written_at = Column(DateTime, default=utcnow)
+
+
 class ScanRun(Base):
     __tablename__ = "scan_runs"
 

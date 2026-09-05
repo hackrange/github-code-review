@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}Trends &middot; Git Code Review{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Trends</h1>
+    <div class="faint small">
+      {{ scope_label }}, over the last {{ window }} days
+      {%- if chart and not chart.empty %}, {{ chart.change if chart.change >= 0 else -chart.change }}
+        {{ 'more' if chart.change > 0 else ('fewer' if chart.change < 0 else 'unchanged') }}
+        {{ 'things to do' if basis == 'actions' else 'advisories' }}
+        {%- if chart.change != 0 %} than at the start{% endif %}
+      {%- endif %}
+    </div>
+  </div>
+  {% if can_report and points %}
+  <div class="page-actions">
+    <a class="btn primary" href="{{ base }}/trends/report?{{ report_query }}">
+      Create a PDF report</a>
+  </div>
+  {% endif %}
+</div>
+
+{# The filters.  Every one of them narrows the same query, and the report
+   button above carries whatever is set here, so a document is always of the
+   thing somebody was looking at rather than a second view assembled
+   separately that could disagree with it. #}
+<form class="card filters" method="get" action="{{ base }}/trends">
+  <div class="filter-row">
+    <label>Connection
+      <select name="connection" onchange="this.form.submit()">
+        <option value="">All connections</option>
+        {% for c in options.connections %}
+        <option value="{{ c }}" {{ 'selected' if filters.connection == c }}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Organization
+      <select name="org" onchange="this.form.submit()">
+        <option value="">All organizations</option>
+        {% for o in options.organizations %}
+        <option value="{{ o }}" {{ 'selected' if filters.org == o }}>{{ o }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Repository
+      <select name="repo" onchange="this.form.submit()">
+        <option value="">All repositories</option>
+        {% for r in options.repositories %}
+        {% if not filters.org or r.startswith(filters.org + '/') %}
+        <option value="{{ r }}" {{ 'selected' if filters.repo == r }}>{{ r }}</option>
+        {% endif %}
+        {% endfor %}
+      </select>
+    </label>
+    <label>Branch
+      <select name="branch" onchange="this.form.submit()">
+        <option value="">All branches</option>
+        {% for b in options.branches %}
+        <option value="{{ b }}" {{ 'selected' if filters.branch == b }}>{{ b }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Period
+      <select name="days" onchange="this.form.submit()">
+        {% for d, name in [(7, 'Last 7 days'), (30, 'Last 30 days'),
+                           (90, 'Last 90 days'), (365, 'Last year')] %}
+        <option value="{{ d }}" {{ 'selected' if window == d }}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Counting
+      <select name="basis" onchange="this.form.submit()">
+        <option value="actions" {{ 'selected' if basis == 'actions' }}>Things to do</option>
+        <option value="advisories" {{ 'selected' if basis == 'advisories' }}>Advisories</option>
+      </select>
+    </label>
+    <noscript><button class="btn" type="submit">Apply</button></noscript>
+  </div>
+</form>
+
+{% if chart.empty %}
+<div class="card">
+  <div class="empty">
+    <p><strong>Nothing recorded for this yet.</strong></p>
+    <p class="faint">History is written after each scan. Run one, or widen the
+      filters above.</p>
+  </div>
+</div>
+{% else %}
+
+<div class="card">
+  <div class="card-head">
+    {{ 'Things to do' if basis == 'actions' else 'Advisories' }} over time
+    <span class="faint small">
+      {%- if basis == 'actions' %}One row per upgrade, the same way the findings
+        list counts them{% else %}One row per advisory{% endif -%}
+    </span>
+  </div>
+
+  {# Drawn as inline SVG so it needs nothing loaded and prints as part of the
+     page.  Color comes from the stylesheet, so the same markup works in
+     either theme and in the report. #}
+  <div class="chart-wrap">
+    <svg class="chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
+         preserveAspectRatio="none" role="img"
+         aria-label="{{ basis }} over the last {{ window }} days">
+      {% for line in chart.grid %}
+      <line class="grid" x1="{{ chart.pad_left }}" y1="{{ line.y }}"
+            x2="{{ chart.width - 12 }}" y2="{{ line.y }}"/>
+      <text class="axis" x="{{ chart.pad_left - 8 }}" y="{{ line.y + 4 }}"
+            text-anchor="end">{{ line.value }}</text>
+      {% endfor %}
+
+      {% for area in chart.areas %}
+      <polygon class="band band-{{ area.band }}" points="{{ area.points }}"/>
+      {% endfor %}
+
+      {# Where reconstruction ends and real records begin.  The bands either
+         side do not mean quite the same thing, so the line says so rather
+         than letting one continuous shape imply they do. #}
+      {% for mark in chart.marks %}
+        {% if loop.first or (mark.reconstructed != chart.marks[loop.index0 - 1].reconstructed) %}
+          {% if not mark.reconstructed and not loop.first %}
+          <line class="boundary" x1="{{ mark.x }}" y1="{{ chart.pad_top }}"
+                x2="{{ mark.x }}" y2="{{ chart.pad_top + chart.plot_h }}"/>
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+
+      {% for label in chart.labels %}
+      <text class="axis" x="{{ label.x }}" y="{{ chart.height - 8 }}"
+            text-anchor="{{ label.anchor }}">{{ label.text }}</text>
+      {% endfor %}
+    </svg>
+  </div>
+
+  <div class="legend">
+    {% for band in ['critical', 'high', 'medium', 'low', 'info'] %}
+    <span class="key"><i class="swatch band-{{ band }}"></i>{{ band }}</span>
+    {% endfor %}
+    {% if first_snapshot and points and points[0].source == 'reconstructed' %}
+    <span class="key faint" title="Counts before this point were worked out from when findings were first seen and resolved. They are accurate. The severities are today's grades applied backwards.">
+      <i class="swatch boundary-key"></i>recorded from {{ first_snapshot | dt('%d %b') }}, reconstructed before
+    </span>
+    {% endif %}
+  </div>
+</div>
+
+{# Where it is, rather than when.  The rows follow the filter, so this is the
+   same widget at every level and narrowing it is a drill down rather than a
+   different chart. #}
+<div class="card">
+  <div class="card-head">
+    By {{ heat.axis }}
+    <span class="faint small">
+      {%- if heat.day %}as at {{ heat.day | dt('%d %b %Y') }}{% endif -%}
+    </span>
+  </div>
+  {% if not heat_rows %}
+  <div class="empty"><p class="faint">Nothing to show at this scope.</p></div>
+  {% else %}
+  <div class="table-scroll">
+    <table class="heat">
+      <thead>
+        <tr>
+          <th>{{ heat.axis | capitalize }}</th>
+          <th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>Info</th>
+          <th>Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in heat_rows %}
+        <tr>
+          <td class="heat-name">
+            {% if heat.axis == 'organization' %}
+              <a href="{{ base }}/trends?org={{ row.name | urlencode }}&basis={{ basis }}&days={{ window }}">{{ row.name }}</a>
+            {% elif heat.axis == 'repository' %}
+              <a href="{{ base }}/trends?repo={{ row.name | urlencode }}&basis={{ basis }}&days={{ window }}">{{ row.name }}</a>
+            {% else %}
+              <a href="{{ base }}/trends?repo={{ filters.repo | urlencode }}&branch={{ row.name | urlencode }}&basis={{ basis }}&days={{ window }}">{{ row.name }}</a>
+            {% endif %}
+          </td>
+          {% for band in ['critical', 'high', 'medium', 'low', 'info'] %}
+          <td class="cell band-{{ band }} {{ 'is-zero' if not row[band] }}">{{ row[band] or '' }}</td>
+          {% endfor %}
+          <td class="cell total heat-{{ row.level }}">{{ row.total }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}

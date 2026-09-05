@@ -127,6 +127,27 @@ def web_url(value) -> str:
     return ""
 
 
+def sentence_spaced(value) -> str:
+    """Keep the gap between sentences that HTML would otherwise swallow.
+
+    The generated reports are written with two spaces after a full stop, which
+    is the house style for documents that leave the building.  HTML collapses
+    runs of whitespace to one, so that rule survives in the source and
+    disappears in the rendered page, which is the worst of both: the style is
+    followed and the reader never sees it.
+
+    A non breaking space followed by an ordinary one keeps the width and still
+    lets the line break where it should, because the break can happen at the
+    second space.  Doing it here rather than in the text means the sentences
+    stay ordinary strings that a test can read.
+    """
+    text = str(value or "")
+    for stop in (". ", "? ", "! "):
+        text = text.replace(stop + " ", stop[0] + "\u00a0 ")
+    return text
+
+
+env.filters["sentence_spaced"] = sentence_spaced
 env.filters["local_dt"] = local_dt
 env.filters["dt"] = fmt_dt
 env.filters["web_url"] = web_url

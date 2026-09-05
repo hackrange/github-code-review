@@ -590,3 +590,83 @@ table.audit-detail td { padding: .2rem 0; font-size: .9rem; }
 }
 .branch-chip .count { font-family: inherit; opacity: .65; margin-left: .35rem; }
 .branch-filter { margin-top: .4rem; width: 100%; max-width: 22rem; }
+
+/* ---------------------------------------------------------------------------
+   Trends: a chart and a heatmap.
+
+   Both are drawn as plain elements and inline SVG, so nothing is loaded to
+   render them, they print as part of the page, and the report can reuse the
+   same markup.  Every color comes from the variables at the top of this file
+   rather than being written out here, which is what lets one set of markup
+   work in both themes and on paper.
+   --------------------------------------------------------------------------- */
+
+.filters { padding: .85rem 1rem; }
+.filter-row { display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: flex-end; }
+.filter-row label { display: flex; flex-direction: column; gap: .25rem;
+  font-size: .78rem; color: var(--text-soft); font-weight: 500; }
+.filter-row select { min-width: 11rem; }
+
+.chart-wrap { padding: .5rem .25rem 0; }
+.chart { display: block; width: 100%; height: auto; }
+.chart .grid { stroke: var(--border); stroke-width: 1; }
+.chart .axis { fill: var(--text-faint); font-size: 11px;
+  font-family: inherit; }
+
+/* The bands.  Worst at the bottom of the stack, and the fill is the same hue
+   the badges use for that severity so a color means one thing everywhere. */
+.chart .band { stroke: none; }
+.band-critical { fill: var(--bad); }
+.band-high     { fill: var(--bad); opacity: .62; }
+.band-medium   { fill: var(--warn); opacity: .78; }
+.band-low      { fill: var(--info); opacity: .55; }
+.band-info     { fill: var(--text-faint); opacity: .35; }
+
+/* Where worked out history ends and recorded history begins. */
+.chart .boundary { stroke: var(--text-faint); stroke-width: 1;
+  stroke-dasharray: 3 3; }
+
+.legend { display: flex; flex-wrap: wrap; gap: .35rem 1rem;
+  padding: .6rem 1rem 0; font-size: .76rem; color: var(--text-soft); }
+.legend .key { display: inline-flex; align-items: center; gap: .35rem; }
+.legend .swatch { width: .7rem; height: .7rem; border-radius: 2px;
+  display: inline-block; }
+.legend .swatch.band-critical { background: var(--bad); }
+.legend .swatch.band-high { background: var(--bad); opacity: .62; }
+.legend .swatch.band-medium { background: var(--warn); opacity: .78; }
+.legend .swatch.band-low { background: var(--info); opacity: .55; }
+.legend .swatch.band-info { background: var(--text-faint); opacity: .35; }
+.legend .swatch.boundary-key { background: transparent;
+  border-left: 2px dashed var(--text-faint); border-radius: 0; width: .5rem; }
+
+/* The heatmap.  A table rather than a picture, because the numbers matter as
+   much as the shading and a table can be read out, copied and sorted. */
+table.heat { width: 100%; border-collapse: separate; border-spacing: 2px; }
+table.heat th { font-size: .74rem; color: var(--text-faint); font-weight: 600;
+  text-align: right; padding: .3rem .5rem; }
+table.heat th:first-child { text-align: left; }
+table.heat .heat-name { font-size: .82rem; padding: .3rem .5rem;
+  white-space: nowrap; }
+table.heat .cell { text-align: right; padding: .35rem .6rem; border-radius: 4px;
+  font-variant-numeric: tabular-nums; font-size: .82rem; min-width: 3.2rem;
+  color: var(--text); background: var(--bg-sunk); }
+table.heat .cell.is-zero { background: transparent; color: var(--text-faint); }
+table.heat .cell.band-critical:not(.is-zero) { background: var(--bad-bg); color: var(--bad); font-weight: 600; }
+table.heat .cell.band-high:not(.is-zero)     { background: var(--bad-bg); color: var(--bad); }
+table.heat .cell.band-medium:not(.is-zero)   { background: var(--warn-bg); color: var(--warn); }
+table.heat .cell.band-low:not(.is-zero)      { background: var(--info-bg); color: var(--info); }
+table.heat .cell.band-info:not(.is-zero)     { background: var(--bg-sunk); color: var(--text-soft); }
+
+/* The total column carries the shade, so the eye can find the worst row
+   without reading every number.  Five steps, against the busiest row rather
+   than an absolute scale: the question is which of these is worst, not how
+   this estate compares to somebody else's. */
+table.heat .cell.total { font-weight: 600; }
+.heat-0 { background: transparent; }
+.heat-1 { background: color-mix(in srgb, var(--bad) 8%, transparent); }
+.heat-2 { background: color-mix(in srgb, var(--bad) 18%, transparent); }
+.heat-3 { background: color-mix(in srgb, var(--bad) 30%, transparent); }
+.heat-4 { background: color-mix(in srgb, var(--bad) 44%, transparent); color: var(--bad); }
+
+.empty { padding: 1.5rem 1rem; text-align: center; }
+.empty p { margin: .25rem 0; }

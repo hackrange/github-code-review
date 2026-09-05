@@ -182,6 +182,25 @@ SECTIONS = [
                    "redacted credential previews.  Wherever this directory is "
                    "mounted is as sensitive as the app itself.",
     }),
+    ("reports", "Reports", {
+        "title": "Generated reports",
+        "what": [
+            "What goes on the cover of a report generated from the trends "
+            "page.  The organization name and the logo are printed there, and "
+            "the footer line appears at the foot of every page.",
+            "Left empty, the cover says nothing rather than guessing.  A "
+            "report carrying the wrong organization name is worse than one "
+            "carrying none.",
+            "A logo can be an https link or the image itself as a data URI.  "
+            "The data URI is the better of the two, because it travels inside "
+            "the document: a report opened next year still has its logo, and "
+            "nothing about reading one reaches out to a web server.",
+        ],
+        "caution": "These reports are meant to be forwarded, and they carry "
+                   "repository names and counts of what was found in them.  "
+                   "The footer line is where a classification marking goes if "
+                   "your organization uses one.",
+    }),
     ("display", "Display", {
         "title": "Display",
         "what": [
