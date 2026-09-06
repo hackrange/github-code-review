@@ -891,6 +891,15 @@ async def delete_scan_run(run_id: int, request: Request,
                 status_code=400,
                 detail="That scan is still running. Stop it first, then it can "
                        "be removed.")
+        # Stopped is not the same as done with.  A stop marks the row finished
+        # and then goes looking for the repositories that had completed, and
+        # those are on disk until it has read them.  Removing the row in that
+        # window used to throw the work away without saying so.
+        if _results_still_unread(run.id):
+            raise HTTPException(
+                status_code=400,
+                detail="That scan is still saving the repositories it "
+                       "finished. Give it a moment, then it can be removed.")
         started = run.started_at
         db.delete(run)
         record(db, "scan.history_deleted", actor=user.username,
@@ -899,6 +908,21 @@ async def delete_scan_run(run_id: int, request: Request,
                source_ip=client_ip(request))
 
     return redirect("/scans?msg=Removed+from+the+history.&kind=ok")
+
+
+def _results_still_unread(run_id) -> bool:
+    """Whether a stopped run still has results nobody has ingested.
+
+    The salvage removes the directory once it has read it, so its presence is
+    the honest answer to "is this run finished with".
+    """
+    try:
+        from app.config import settings as _settings
+        from pathlib import Path as _Path
+        d = _Path(_settings.work_dir) / f"gcr-results-{run_id}"
+        return d.is_dir() and any(d.iterdir())
+    except Exception:            # noqa: BLE001 - never block a delete on this
+        return False
 
 
 @router.post("/scans/clear")

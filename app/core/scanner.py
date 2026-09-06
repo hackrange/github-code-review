@@ -333,26 +333,46 @@ def _keep_what_finished(run_id, results_dir, why: str) -> dict:
     """
     from app.core.salvage import salvage
 
+    # The findings go in on their own, before any book-keeping touches the
+    # same transaction.
+    #
+    # They used to share one.  A run row that somebody removed from the history
+    # while the scan was still winding down left an update with nothing to
+    # update, that rolled the transaction back, and the repositories already
+    # scanned and sitting on disk were never read.  Fifty seven of them went
+    # that way in one evening.  The work is the part worth keeping; the row it
+    # is filed under is not.
+    kept = {"repositories": 0}
     try:
         with session_scope() as db:
             kept = salvage(db, results_dir)
-            if kept.get("repositories"):
-                run = db.query(ScanRun).filter(ScanRun.id == run_id).one_or_none()
-                if run is not None:
-                    run.repositories = kept["repositories"]
-                    run.findings_new = kept.get("new", 0)
-                    run.findings_updated = kept.get("updated", 0)
-                    # Deliberately not counted as resolved.  A repository this
-                    # run never reached still has whatever it had.
-                    run.findings_resolved = kept.get("resolved", 0)
-                record(db, "scan.partial", actor="system",
-                       detail=(f"{why}; kept {kept['repositories']} "
-                               f"repository(ies) that had finished"),
-                       outcome="warn")
-            return kept
     except Exception:            # noqa: BLE001 - salvage must never mask the failure
         log.exception("could not keep what the scan had already found")
         return {"repositories": 0}
+
+    if not kept.get("repositories"):
+        return kept
+
+    # Then say so.  Allowed to fail on its own without taking the findings
+    # with it: by here they are committed.
+    try:
+        with session_scope() as db:
+            run = db.query(ScanRun).filter(ScanRun.id == run_id).one_or_none()
+            if run is not None:
+                run.repositories = kept["repositories"]
+                run.findings_new = kept.get("new", 0)
+                run.findings_updated = kept.get("updated", 0)
+                # Deliberately not counted as resolved.  A repository this
+                # run never reached still has whatever it had.
+                run.findings_resolved = kept.get("resolved", 0)
+            record(db, "scan.partial", actor="system",
+                   detail=(f"{why}; kept {kept['repositories']} "
+                           f"repository(ies) that had finished"),
+                   outcome="warn")
+    except Exception:            # noqa: BLE001
+        log.warning("kept %d repository(ies) but could not record it against "
+                    "run %s", kept["repositories"], run_id, exc_info=True)
+    return kept
 
 
 def _drop_results(results_dir) -> None:
