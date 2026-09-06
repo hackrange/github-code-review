@@ -1256,7 +1256,23 @@ def _every_connection(triggered_by, trigger, only, connection_id) -> dict:
 
     total = {"ok": True, "connections": 0, "new": 0, "updated": 0,
              "resolved": 0, "repositories": 0, "failed": [], "empty_connections": []}
-    for row in chosen:
+    tally = threading.Lock()
+    # Set once any connection reports that somebody pressed stop.
+    #
+    # The event itself cannot be used for this: run_scan clears it as it
+    # handles the stop, so by the time the next connection looked it would be
+    # false again and the sweep would carry on.  This is the sweep's own record
+    # that a stop happened, and it only ever goes one way.
+    halt = threading.Event()
+
+    def _one(row):
+        """Scan one connection and fold its answer into the total."""
+        # Checked here rather than only at submission: with a pool every
+        # connection is queued before the first one finishes, so a stop has to
+        # be able to turn the ones still waiting into nothing.
+        if halt.is_set() or _stopped.is_set():
+            return {"ok": False, "reason": "The scan was stopped.",
+                    "stopped": True, "skipped": True}
         log.info("scanning connection %s", row.name)
         result = run_scan(triggered_by=triggered_by, trigger=trigger,
                           only=only, connection=row, _holds_lock=True)
@@ -1268,20 +1284,63 @@ def _every_connection(triggered_by, trigger, only, connection_id) -> dict:
             with session_scope() as db:
                 store.set_value(db, SWEEP_CURSOR, row.name,
                                 actor=triggered_by or trigger)
-        total["connections"] += 1
-        if result.get("ok"):
-            if result.get("empty"):
-                total["empty_connections"].append(row.name)
-            for key in ("new", "updated", "resolved", "repositories"):
-                total[key] += int(result.get(key) or 0)
-        else:
-            total["failed"].append({"connection": row.name,
-                                    "reason": result.get("reason", "")})
-            if result.get("stopped"):
-                # Somebody pressed stop.  That means stop, not "move on to the
-                # next account".
+        if result.get("stopped"):
+            halt.set()
+        # A connection that never ran because the sweep was stopping is not a
+        # connection that was scanned, and not a failure worth reporting.
+        if result.get("skipped"):
+            return result
+        with tally:
+            total["connections"] += 1
+            if result.get("ok"):
+                if result.get("empty"):
+                    total["empty_connections"].append(row.name)
+                for key in ("new", "updated", "resolved", "repositories"):
+                    total[key] += int(result.get(key) or 0)
+            else:
+                total["failed"].append({"connection": row.name,
+                                        "reason": result.get("reason", "")})
+        return result
+
+    # Connections at a time, rather than one after another.
+    #
+    # This was serial: twenty six accounts in a queue, on a machine with sixty
+    # four cores where four were busy.  Nothing about one connection depends on
+    # the one before it, and the limit that actually binds is GitHub's, which
+    # is counted per credential: every connection carries its own token and its
+    # own budget, so two at once is two separate limits rather than twice the
+    # pressure on one.  That is what makes this safe here and would not make it
+    # safe on a single credential.
+    #
+    # Bounded by the same setting that bounds scans, because that is what its
+    # name says.  One keeps exactly the old behavior for anybody who wants it.
+    width = max(1, min(concurrency(), len(chosen)))
+    if width == 1:
+        for row in chosen:
+            if halt.is_set() or _stopped.is_set():
                 log.info("stopped, so the remaining connections are skipped")
                 break
+            _one(row)
+    else:
+        log.info("scanning %d connection(s), %d at a time", len(chosen), width)
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=width,
+                                thread_name_prefix="gcr-conn") as pool:
+            futures = []
+            for row in chosen:
+                # Checked as we submit rather than only up front: a stop
+                # pressed part way through should not queue the rest.
+                if halt.is_set() or _stopped.is_set():
+                    log.info("stopped, so the remaining connections are skipped")
+                    break
+                futures.append(pool.submit(_one, row))
+            for future in futures:
+                try:
+                    future.result()
+                except Exception:            # noqa: BLE001
+                    # One account falling over is not the sweep falling over.
+                    # It is already counted as failed by run_scan itself.
+                    log.warning("a connection scan raised", exc_info=True)
 
     total["ok"] = total["connections"] > len(total["failed"])
     # Empty only describes the sweep when the sweep found nothing anywhere.  One
