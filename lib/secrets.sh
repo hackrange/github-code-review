@@ -87,6 +87,41 @@ derive_secret_facts() {
   maxmask=$(cfg_num '.redaction.max_mask_chars' 12)
   pp=$(cfg_json '.scan.secrets.triage.placeholder_patterns // []')
 
+  # The branch set is the same for every finding in this repository, so build
+  # it once.  It used to be rebuilt with two jq calls inside the loop, which on
+  # a repository with hundreds of candidates is hundreds of processes spent
+  # parsing a value that never changed.
+  local -a allbr=()
+  while IFS= read -r _b; do [[ -n "$_b" ]] && allbr+=("$_b"); done \
+    < <(printf '%s' "${GHSCAN_BRANCH_SET:-[]}" | jq -r '.[]?' 2>/dev/null)
+
+  # Buffered so the live-at-head question can be asked once for every secret
+  # rather than once per secret.  In this directory, which is shared memory and
+  # goes with the run: the value is already here in raw_findings, so nothing
+  # reaches a disk that was not there before.
+  local buffered
+  buffered=$(tmp_file secretsin)
+  cat > "$buffered"
+
+  if [[ -n "$dir" ]] && (( ${#allbr[@]} > 0 )); then
+    local patterns
+    patterns=$(tmp_file secretpat)
+    # Single line values only.  A PEM body is one secret spanning many lines,
+    # and a patterns file is line oriented: writing one in would turn it into a
+    # dozen separate patterns that match fragments of a key.  Multi line values
+    # keep the per secret path below, which is what they had before.
+    jq -r 'select(._secret != null and (._secret | contains("\n") | not))
+           | ._secret' "$buffered" 2>/dev/null | sort -u > "$patterns"
+    _prime_live_heads "$dir" "$patterns" "${allbr[@]}"
+    rm -f "$patterns"
+  fi
+
+  # Opened and unlinked, same as the rest: the loop reads a descriptor and the
+  # name is already gone, so there is no window where this sits in the temp
+  # root holding every secret in the repository.
+  local bfd
+  exec {bfd}< "$buffered"; rm -f "$buffered"
+
   local line secret fp merge redacted slen
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
@@ -105,11 +140,8 @@ derive_secret_facts() {
     # The finding's own branches are narrower than that, and the intersection
     # is taken later where they are known.
     local live='[]'
-    if [[ -n "$dir" ]]; then
-      local -a allbr=()
-      while IFS= read -r _b; do [[ -n "$_b" ]] && allbr+=("$_b"); done \
-        < <(printf '%s' "${GHSCAN_BRANCH_SET:-[]}" | jq -r '.[]?' 2>/dev/null)
-      (( ${#allbr[@]} > 0 )) && live=$(_live_at_head "$dir" "$secret" "${allbr[@]}")
+    if [[ -n "$dir" ]] && (( ${#allbr[@]} > 0 )); then
+      live=$(_live_at_head "$dir" "$secret" "${allbr[@]}")
     fi
 
     printf '%s' "$line" | jq -c \
@@ -212,7 +244,8 @@ derive_secret_facts() {
         }
       + ($s | jwt_facts)
       | del(._secret)'
-  done
+  done <&${bfd}
+  exec {bfd}<&-
 }
 
 # Engine: gitleaks

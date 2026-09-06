@@ -40,12 +40,84 @@ _branches_for_commit() {
   printf '%s' "$arr"
 }
 
+# Answers primed by _prime_live_heads, keyed on the secret itself.
+declare -gA _LIVE_CACHE=()
+_LIVE_PRIMED=0
+
+# The most expensive question in the scan, asked once for everything.
+#
+# git grep against a tree has to inflate every blob out of the pack before it
+# can match, so asking it one secret at a time inflates the same blobs once per
+# secret.  On a repository with 482 candidates and 200 branches that is the
+# difference between minutes and hours, and it is all repeated work: the trees
+# do not change between one secret and the next.
+#
+# git grep takes a file of patterns, so ask for all of them in one pass and
+# keep the answers.  The mapping back from a matched line to which secret was
+# on it is a substring test, and it only runs over lines that already matched.
+_prime_live_heads() {
+  local dir="$1" secrets_file="$2"; shift 2
+  local branches=("$@")
+  _LIVE_PRIMED=1
+  (( ${#branches[@]} == 0 )) && return 0
+  [[ -s "$secrets_file" ]] || return 0
+  (( ${#branches[@]} > 200 )) && branches=("${branches[@]:0:200}")
+
+  local hits
+  hits=$(tmp_file livehits)
+  git -C "$dir" grep -n -F -f "$secrets_file" "${branches[@]}" -- \
+      >"$hits" 2>/dev/null || true
+  [[ -s "$hits" ]] || return 0
+
+  # tree:file:line:content.  A secret is live on a tree when it appears in a
+  # line found on that tree.  Long lines are cut: a minified bundle on one line
+  # is not worth megabytes of substring tests, and the secret is near the match.
+  local mapped
+  mapped=$(tmp_file livemap)
+  awk -F: -v pf="$secrets_file" '
+    BEGIN { while ((getline p < pf) > 0) if (length(p)) pat[++n] = p }
+    {
+      tree = $1
+      line = substr($0, 1, 4000)
+      for (i = 1; i <= n; i++)
+        if (index(line, pat[i])) seen[pat[i] SUBSEP tree] = 1
+    }
+    END { for (k in seen) { split(k, a, SUBSEP); print a[1] "\t" a[2] } }
+  ' "$hits" >"$mapped" 2>/dev/null || true
+  rm -f "$hits"
+
+  # Both of these hold the value in the clear, so they are opened and then
+  # unlinked before a byte is read.  The descriptor stays valid, the name is
+  # gone, and a run that dies here leaves nothing behind holding a credential.
+  local secret tree
+  exec {mfd}< "$mapped"; rm -f "$mapped"
+  while IFS=$'\t' read -r secret tree; do
+    [[ -z "$secret" ]] && continue
+    _LIVE_CACHE["$secret"]+="$tree"$'\n'
+  done <&${mfd}
+  exec {mfd}<&-
+}
+
 # Which branch HEADs still contain this exact secret? Distinguishes "rotate and
 # rewrite history" from "rotate only - it is already out of the working tree".
 _live_at_head() {
   local dir="$1" secret="$2"; shift 2
   local branches=("$@")
   (( ${#branches[@]} == 0 )) && { echo '[]'; return; }
+
+  # Primed means the batched pass already asked about every secret it was
+  # given, so a miss here is a real "no branch has it" rather than "not looked
+  # at yet".  Without that distinction an empty cache would send every secret
+  # back down the slow path and buy nothing.
+  # A multi line value was never put in the patterns file, so the cache has
+  # nothing to say about it.  Ask the old way rather than answer "no branch".
+  if (( _LIVE_PRIMED )) && [[ "$secret" != *$'\n'* ]]; then
+    local rows="${_LIVE_CACHE[$secret]:-}"
+    [[ -z "$rows" ]] && { echo '[]'; return; }
+    printf '%s' "$(printf '%s' "$rows" | sed '/^$/d' | sort -u | jq -R . | jq -sc '.')"
+    return
+  fi
+
   (( ${#branches[@]} > 200 )) && branches=("${branches[@]:0:200}")
   local hits
   hits=$(git -C "$dir" grep -l -F -e "$secret" "${branches[@]}" -- 2>/dev/null \
