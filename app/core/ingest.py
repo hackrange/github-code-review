@@ -380,6 +380,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     new_findings = []
     touched_repos = set()
     seen_fingerprints = set()
+    # Repositories where the credential walk stopped short this run.  A run
+    # that only covered part of the history reports only what it covered, and
+    # the rest is not gone, it is unread.
+    partial_history = set()
 
     # Repositories first, so findings can hang off them.
     for entry in document.get("repositories", []) or []:
@@ -421,6 +425,11 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         if walked_from:
             repo.history_from = walked_from[:32]
             repo.history_complete = bool(history.get("complete"))
+        # Defaults to complete on purpose.  A scanner too old to say, or a run
+        # with the credential pass switched off, reports no history at all, and
+        # must go on behaving exactly as it did before this existed.
+        if history and not history.get("complete", True):
+            partial_history.add(full_name)
 
         branch_list = ((entry.get("access") or {}).get("branches")) or []
         wanted = meta.get("default_branch") or repo.default_branch
@@ -754,14 +763,25 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                     and finding.repository in partial_code):
                 counts["held_open"] = counts.get("held_open", 0) + 1
                 continue
+            # The same argument for credentials.  With a history window a run
+            # walks one slice and reports that slice, so a credential sitting
+            # in a commit nobody read this time is absent from the report and
+            # looks exactly like one that was cleaned up.  Closing it and
+            # opening it again on the run that reaches that slice is a finding
+            # that flaps, and a graph that cannot be read.
+            if (finding.kind == FindingKind.CREDENTIAL
+                    and finding.repository in partial_history):
+                counts["held_open"] = counts.get("held_open", 0) + 1
+                continue
             finding.state = FindingState.FIXED
             finding.resolved_at = seen_at
             counts["resolved"] += 1
-    if partial_code:
+    if partial_code or partial_history:
         log.warning(
-            "code pass incomplete on %d repository(ies); %d finding(s) held "
-            "open rather than counted as fixed",
-            len(partial_code), counts.get("held_open", 0))
+            "incomplete coverage: code pass on %d repository(ies), credential "
+            "history on %d; %d finding(s) held open rather than counted as "
+            "fixed",
+            len(partial_code), len(partial_history), counts.get("held_open", 0))
 
     # Who can reach what.  The scanner has always collected this and it was
     # always thrown away here, which meant every scan worked out the blast
