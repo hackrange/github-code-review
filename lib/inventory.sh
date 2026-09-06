@@ -186,18 +186,45 @@ repo_branches() {
     cutoff=$(( $(date +%s) - stale_days * 86400 ))
   fi
 
+  # The default branch is never dropped for being quiet, and never cut off by
+  # the cap.  A repository whose master has not moved in a year is still the
+  # branch everybody deploys, and a scan that skipped it while covering some
+  # feature branch would be worse than no scan: it would report on code nobody
+  # runs and say nothing about the code they do.
+  #
+  # Only the two filters that nobody asked for by name.  An explicit exclude
+  # pattern that matches the default branch is somebody saying what they want,
+  # and it is still obeyed below.
+  local default_br="${GHSCAN_DEFAULT_BRANCH:-}"
+
   local out=()
   local line br ts
   while IFS=$'\t' read -r br ts; do
     [[ -z "$br" ]] && continue
     branch_allowed "$br" || { log_trace "branch filtered out: $br"; continue; }
-    if (( cutoff > 0 )) && [[ -n "$ts" ]] && (( ts < cutoff )); then
+    if [[ "$br" != "$default_br" ]] \
+       && (( cutoff > 0 )) && [[ -n "$ts" ]] && (( ts < cutoff )); then
       log_trace "branch stale, skipping: $br"
       continue
     fi
     out+=("$br")
   done < <(git -C "$dir" for-each-ref --format='%(refname:strip=2)%09%(committerdate:unix)' \
              --sort=-committerdate refs/heads/ 2>/dev/null)
+
+  # Put it at the front, so the cap below takes its slice from everything else.
+  # Built by appending rather than by slicing, because an empty array expanded
+  # under set -u is an error on the bash some of these hosts still run.
+  if [[ -n "$default_br" ]] && (( ${#out[@]} > 1 )); then
+    local -a ordered=()
+    local b
+    for b in "${out[@]}"; do
+      [[ "$b" == "$default_br" ]] && ordered+=("$b")
+    done
+    for b in "${out[@]}"; do
+      [[ "$b" == "$default_br" ]] || ordered+=("$b")
+    done
+    out=("${ordered[@]}")
+  fi
 
   if (( max_per > 0 )) && (( ${#out[@]} > max_per )); then
     log_debug "limiting to $max_per of ${#out[@]} branches"

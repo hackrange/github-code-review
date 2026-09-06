@@ -43,6 +43,14 @@ _gate_lock = threading.Lock()
 # the only possible number.
 _running = {}
 
+# Connections with a scan already in flight, guarded by _process_lock.
+#
+# The gate counts scans, not accounts.  With more than one slot a manual scan
+# and the nightly sweep can land on the same connection at the same time, both
+# clone the same repositories and both ingest into the same rows.  That was
+# seen: one connection scanned twice at once, seventeen results written by each.
+_scanning_connections = set()
+
 # How many runs hold a permit right now, which is not the same as how many
 # have a process yet.  start_background returns as soon as the gate is taken,
 # and a page that asks "is a scan running" in that gap has to be told yes or
@@ -729,6 +737,27 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
             aimed_at = "everything the credential can see"
     aimed_at = aimed_at[:512]
 
+    # One scan per connection.  This has to sit outside the _holds_lock test,
+    # because the collision worth stopping is a sweep meeting a scan somebody
+    # started by hand, and those two arrive by different routes.
+    claimed = None
+    if connection is not None:
+        with _process_lock:
+            if connection.id in _scanning_connections:
+                if not _holds_lock:
+                    _gate.release()
+                    _gave_it_back()
+                log.warning("%s is already being scanned, so this one stops here",
+                            connection.name)
+                return {"ok": False,
+                        "reason": (f"{connection.name} is already being "
+                                   f"scanned.  Wait for that one to finish.")}
+            _scanning_connections.add(connection.id)
+            claimed = connection.id
+
+    # Claimed last, with nothing between here and the try that could raise.
+    # A claim left behind by an exception would lock this connection out of
+    # every future scan until a restart.
     run_id = None
     try:
         with session_scope() as db:
@@ -1062,6 +1091,9 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
                 "kept": kept.get("repositories", 0)}
 
     finally:
+        if claimed is not None:
+            with _process_lock:
+                _scanning_connections.discard(claimed)
         if not _holds_lock:
             _gate.release()
             _gave_it_back()
