@@ -623,6 +623,71 @@ def _explain_check(output: str, code: int) -> str:
     return tail[-1][:300] if tail else "The check produced no output at all."
 
 
+# The scanner talks to us on stderr while it runs.  Reading it only after it
+# exits, which is what communicate() does, means a connection that spends forty
+# minutes in a rate limit backoff says nothing at all until it is over, and the
+# whole time it looks like it has hung.  Pump both pipes on their own threads
+# instead, so every warning reaches the log the moment ghscan writes it.
+def _log_scanner_line(line: str) -> None:
+    if "[error]" in line:
+        log.error("ghscan: %s", line)
+    elif "[warn " in line:
+        log.warning("ghscan: %s", line)
+    else:
+        log.debug("ghscan: %s", line)
+
+
+def _pump(pipe, collected: list, sink=None) -> None:
+    """Read a pipe to the end, keeping every line and passing it on."""
+    try:
+        for line in pipe:
+            line = line.rstrip("\n")
+            collected.append(line)
+            if sink is not None and line:
+                try:
+                    sink(line)
+                except Exception:      # a bad log line must not kill the pump
+                    pass
+    except (OSError, ValueError):
+        pass
+    finally:
+        try:
+            pipe.close()
+        except (OSError, ValueError):
+            pass
+
+
+def _wait_streaming(process, timeout: int):
+    """Wait for the scanner, streaming its stderr, and hand back both streams.
+
+    Same contract as communicate(timeout=...): TimeoutExpired comes straight
+    back out for the caller to deal with, and the process is left alone.
+    """
+    out_lines: list = []
+    err_lines: list = []
+    pumps = [
+        threading.Thread(target=_pump, args=(process.stdout, out_lines),
+                         daemon=True),
+        threading.Thread(target=_pump, args=(process.stderr, err_lines,
+                                             _log_scanner_line), daemon=True),
+    ]
+    for pump in pumps:
+        pump.start()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Still running, so the readers will not finish.  Take what they have
+        # and let the caller deal with the timeout.
+        for pump in pumps:
+            pump.join(timeout=1)
+        raise
+    # Bounded, because a grandchild holding the pipe open past its parent must
+    # not take this thread down with it.
+    for pump in pumps:
+        pump.join(timeout=30)
+    return "\n".join(out_lines), "\n".join(err_lines)
+
+
 def run_scan(triggered_by: str = "", trigger: str = "manual",
              orgs=None, repos=None, only=None, connection=None,
              _holds_lock: bool = False) -> dict:
@@ -737,7 +802,7 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
                 _running[run_id] = process
 
             try:
-                stdout, stderr = process.communicate(timeout=_scan_ceiling())
+                stdout, stderr = _wait_streaming(process, _scan_ceiling())
             finally:
                 with _process_lock:
                     _running.pop(run_id, None)
@@ -1097,19 +1162,61 @@ def run_every_connection(triggered_by: str = "", trigger: str = "manual",
             _gave_it_back()
 
 
+# Where the last sweep got to.  Not in settings_store.DEFAULTS on purpose:
+# it is bookkeeping, not a preference, and the Settings page only renders keys
+# it knows about.
+SWEEP_CURSOR = "scan.sweep_cursor"
+
+
+def _rotate(chosen: list, cursor: str) -> list:
+    """Start the sweep after wherever the last one stopped.
+
+    Connections come back in name order, so a sweep that runs out of time, or
+    budget, or gets stopped, always gives up in the same place and the tail of
+    the alphabet is never reached.  Not scanned reads exactly like nothing
+    found, which is the failure this whole tool exists to avoid.  Rotating puts
+    the ones that missed out at the front of the next run.
+
+    Rotating beats shuffling here.  The order stays reproducible, and the
+    accounts that actually went without are guaranteed to lead rather than
+    being left to chance.
+    """
+    if not cursor or len(chosen) < 2:
+        return chosen
+    # Folded, because the database sorted these without regard to case and a
+    # plain > would put "IAT" before "actions" and rotate to the wrong place.
+    mark = cursor.lower()
+    for i, row in enumerate(chosen):
+        # Greater than, not equal to, so a connection renamed or deleted since
+        # the last run still lands us on whoever follows it.
+        if row.name.lower() > mark:
+            return chosen[i:] + chosen[:i]
+    # The cursor sits at or past the last name, so the next one round is the
+    # list as it stands.
+    return chosen
+
+
 def _every_connection(triggered_by, trigger, only, connection_id) -> dict:
     """The sweep itself, with the gate already held."""
     from app.core import connections as connection_store
 
     with session_scope() as db:
+        cursor = ""
         if connection_id is not None:
             wanted = connection_store.by_id(db, connection_id)
             chosen = [wanted] if wanted is not None else []
         else:
             chosen = connection_store.usable(db)
+            cursor = store.get(db, SWEEP_CURSOR, "") or ""
         # Detach: each scan opens its own session, and a row from a closed one
         # is no use to it.
         chosen = [_Detached(row) for row in chosen]
+
+    # One connection by name is somebody asking for that one, so leave the
+    # sweep's place alone.
+    if connection_id is None and len(chosen) > 1:
+        chosen = _rotate(chosen, cursor)
+        log.info("sweep order: %s", ", ".join(row.name for row in chosen))
 
     if not chosen:
         return run_scan(triggered_by=triggered_by, trigger=trigger, only=only,
@@ -1121,6 +1228,14 @@ def _every_connection(triggered_by, trigger, only, connection_id) -> dict:
         log.info("scanning connection %s", row.name)
         result = run_scan(triggered_by=triggered_by, trigger=trigger,
                           only=only, connection=row, _holds_lock=True)
+        # Move the mark as we go, not at the end.  A run that dies half way
+        # through is exactly the run this is here for, and one that saved
+        # nothing would start from the same place again.  A connection that
+        # was stopped never had its turn, so it keeps its place in the queue.
+        if connection_id is None and not result.get("stopped"):
+            with session_scope() as db:
+                store.set_value(db, SWEEP_CURSOR, row.name,
+                                actor=triggered_by or trigger)
         total["connections"] += 1
         if result.get("ok"):
             if result.get("empty"):

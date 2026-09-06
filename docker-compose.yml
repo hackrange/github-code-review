@@ -79,6 +79,15 @@ services:
     container_name: github-code-review
     restart: unless-stopped
 
+    # A real init as pid 1, so orphaned scanner processes get reaped.
+    #
+    # uvicorn is pid 1 without this, and it does not wait on children it never
+    # started.  ghscan fans out to a worker per repository and each of those
+    # runs git, curl and the scanners, so anything that outlives its parent
+    # lands on pid 1 and stays there as a zombie.  A couple of hours of scans
+    # left 125 of them behind.
+    init: true
+
     # A ceiling on what a scan can take.
     #
     # gitleaks reads a file whole.  Point it at a repository with one enormous
