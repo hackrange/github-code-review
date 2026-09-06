@@ -267,6 +267,18 @@ normalize_semgrep() {
         rule_name: (($r.check_id // "unknown") | split(".") | last | canon_detector($alias)),
         title: ($r.extra.message // "" | split("\n")[0]),
         message: ($r.triage.promote.message // $r.extra.message // ""),
+        # The line that matched, with anything credential shaped masked out
+        # first.  Several semgrep rules here are secret detectors, so the line
+        # they match on is the secret itself, and a report that carries it is
+        # worse than one that carries nothing.  A run of twenty or more token
+        # characters is masked keeping four at the front and three at the back,
+        # the same shape redact() uses.  Slashes and at signs are not token
+        # characters, so "actions/checkout@v4" survives and a JWT does not.
+        snippet: (($r.extra.lines // "")
+                  | gsub("[\r\n]+"; " ")
+                  | gsub("(?<t>[A-Za-z0-9_+=-]{20,})";
+                         (.t[0:4] + "************" + .t[-3:]))
+                  | .[0:400]),
         file: (($r.path // "") | sub("^\\./"; "")),
         start_line: ($r.start.line // 0),
         end_line: ($r.end.line // 0),

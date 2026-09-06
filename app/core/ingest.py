@@ -566,6 +566,9 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         finding.rule = row.get("detector") or ""
         finding.title = row.get("description") or ""
         finding.secret_preview = row.get("secret_redacted") or ""
+        # Already masked by the scanner.  Capped again here because a column
+        # with no ceiling is a column somebody eventually fills.
+        finding.snippet = (row.get("snippet") or "")[:2000]
         finding.verified = bool(row.get("verified"))
         finding.exposure = row.get("exposure") or ""
         finding.author_name = row.get("author_name") or ""

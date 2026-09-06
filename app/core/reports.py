@@ -37,7 +37,7 @@ CSV_COLUMNS = [
     "cvss_score", "known_exploited", "epss_score", "fixed_in", "reachability",
     "image", "malicious",
     "cwe", "owasp",
-    "secret_preview", "verified", "exposure",
+    "secret_preview", "snippet", "verified", "exposure",
     "author", "author_login", "committed_at",
     "commit", "url",
     "first_found", "last_found",
@@ -243,6 +243,12 @@ def as_row(finding: Finding) -> dict:
         "cwe": finding.cwe or "",
         "owasp": finding.owasp or "",
         "secret_preview": finding.secret_preview or "",
+        "snippet": finding.snippet or "",
+        # The line the engine matched, masked by the scanner.  Without it a
+        # reader has the address of a finding and not the thing itself, which
+        # for a rule like a mutable action tag means opening the file to learn
+        # which action it is even about.
+        "snippet": finding.snippet or "",
         "verified": "true" if finding.verified else "false",
         "exposure": finding.exposure or "",
         "author": finding.author_name or "",

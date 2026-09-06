@@ -519,6 +519,11 @@ class Finding(Base):
     # decision survive a rescan: ingest reapplies it after the engine and the
     # rule level overrides have had their say.
     custom_severity = Column(Enum(Severity))
+    # The line the engine matched, with anything that looks like a credential
+    # masked before it ever reaches here.  Text rather than String: it is never
+    # grouped, filtered or indexed, and the findings table has a row size
+    # ceiling that a wide varchar eats into whether or not anything is stored.
+    snippet = Column(Text, default="")
     custom_severity_reason = Column(Text, default="")
     custom_severity_by = Column(String(120), default="")
     custom_severity_at = Column(DateTime(timezone=True))
