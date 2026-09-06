@@ -1302,6 +1302,12 @@ class _Detached:
         self.provider = getattr(row, "provider", None) or "github"
 
 
+def connection_is_scanning(connection_id) -> bool:
+    """Whether a scan of this connection is in flight right now."""
+    with _process_lock:
+        return connection_id in _scanning_connections
+
+
 def start_background(triggered_by: str = "", trigger: str = "manual",
                      orgs=None, repos=None, only=None,
                      connection_id=None) -> bool:
@@ -1319,6 +1325,14 @@ def start_background(triggered_by: str = "", trigger: str = "manual",
     # together both saw nothing running, both were told "scanning", and only
     # one of them actually scanned.  Acquiring first means the answer we give
     # somebody is the answer that came true.
+    # Asked here, on the request thread, so the page can say which connection
+    # is busy rather than starting a scan that stops on its own two layers
+    # down.  Not the guarantee: two clicks landing together can both pass this,
+    # and the claim inside run_scan is what actually stops the second one.
+    # This is about telling somebody the truth, not about the promise.
+    if connection_id is not None and connection_is_scanning(connection_id):
+        return False
+
     if not _gate.acquire(blocking=False):
         return False
     # Counted here, before the thread exists.  This is the whole point: the

@@ -1281,6 +1281,8 @@ async def scan_connection(connection_id: int, request: Request,
             raise HTTPException(status_code=404, detail="No such connection.")
         name = row.name
 
+    if scanner.connection_is_scanning(connection_id):
+        return redirect(f"/connections?msg={name}+is+already+being+scanned.&kind=warn")
     if not scanner.start_background(triggered_by=user.username, trigger="manual",
                                     connection_id=connection_id):
         return redirect("/connections?msg=A+scan+is+already+running.&kind=warn")
