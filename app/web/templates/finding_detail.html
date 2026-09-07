@@ -1,5 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Finding &middot; Git Code Review
+{% block title %}Finding &middot; Git Code Review{% endblock %}
+{% block content %}
 {# What is known about this advisory, and where the rest of it is.
    Not an attempt to reproduce the advisory: the national databases and the
    distribution trackers do that, and doing it worse from a stale copy would
@@ -94,8 +95,8 @@
   </div>
 </div>
 {% endif %}
-{% endblock %}
-{% block content %}
+
+
 {% if f.triage and f.triage != 'review' %}
 <div class="notice info">
   <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
@@ -132,6 +133,17 @@
                      target="_blank">{% if f.kind.value == 'dependency' %}Read the advisory
                      {%- elif host_name %}Open on {{ host_name }}
                      {%- else %}Open the file{% endif %}</a>{% endif %}
+    {# Somewhere to go when there is no file.  "Read the advisory" sends the
+       reader to a security tracker, which answers what the vulnerability is
+       and not where it came from.  For a package pulled in by a base image the
+       next question is always the Dockerfile, and until this the page could
+       name the image and offer no way to reach the file that asks for it. #}
+    {% set repo_home = repo_info.html_url | web_url if repo_info else '' %}
+    {% if repo_home and not f.file_path %}
+    <a class="btn" href="{{ repo_home }}" rel="noopener noreferrer" target="_blank">
+      {%- if host_name %}Open the repository on {{ host_name }}
+      {%- else %}Open the repository{% endif %}</a>
+    {% endif %}
     {% if f.kind.value in ['credential', 'code'] and f.file_path %}
       {# Read only, and it does not take the scan lock, so it works while a
          scan is running.  It cannot change the finding: see the note it
@@ -333,7 +345,16 @@
         {% endif %}
         <tr><th>State</th><td>{{ f.state.value }}</td></tr>
         <tr><th>Organization</th><td>{{ f.organization }}</td></tr>
-        <tr><th>Repository</th><td>{{ f.repository }}</td></tr>
+        {# A link, not text.  Every scan records where the repository lives and
+           no page had ever offered it, which is only a small annoyance on a
+           finding that already has a file to open and the whole story on one
+           that does not: a dependency finding's only link led to an advisory
+           on somebody else's site, and nothing led to the code it is about. #}
+        <tr><th>Repository</th><td>
+          {%- set repo_home = repo_info.html_url | web_url if repo_info else '' -%}
+          {% if repo_home %}<a href="{{ repo_home }}" rel="noopener noreferrer"
+             target="_blank">{{ f.repository }}</a>{% else %}{{ f.repository }}{% endif %}
+        </td></tr>
         {# Which branch, and whether that is the one that ships.
            The same finding on the default branch and on a feature branch
            somebody abandoned in March are different problems, and a reader

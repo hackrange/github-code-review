@@ -47,6 +47,13 @@ def for_repository(session, full_name: str, *, with_people: bool = True) -> dict
         "visibility": repo.visibility or "",
         "archived": bool(repo.archived),
         "default_branch": repo.default_branch or "",
+        # Where it lives on the host.  Recorded by every scan and, until now,
+        # never handed to a page: the repository was printed as text on screens
+        # that had nothing else to offer as a way of getting to it.  That is
+        # most obvious on a dependency finding, which has no file to open, so
+        # the only link on the page led to an advisory on somebody else's site
+        # and none led to the code the advisory is about.
+        "html_url": repo.html_url or "",
         "protected": bool(repo.default_branch_protected),
         "last_scanned_at": repo.last_scanned_at,
         "connection": repo.connection or "",
