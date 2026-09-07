@@ -146,6 +146,34 @@ DEFAULTS = {
     # this pass.  A .har is a transcript of requests with every Authorization
     # header and cookie in it, and a .zip is a container whose contents cannot
     # be pointed at by line number even when something is found.
+    # A ceiling on how much diff a history walk may hand the engines.
+    #
+    # The clone size limit asks how big a repository is on disk, which is the
+    # wrong question for the pass that reads history.  Two hundred and fourteen
+    # megabytes of git, six hundred and ninety commits, and sixteen and a half
+    # gigabytes of diff on the way into the engine, because every commit
+    # rewrote generated artifacts whole.  It passed the size check and then
+    # spent nine hours and twenty eight gigabytes of memory not finishing.
+    #
+    # Over this and the credential pass reads branch heads instead of history:
+    # the current state of every branch, which is where a live credential is,
+    # without the walk back through commits that cannot be done at all.
+    "secrets.max_history_mb":  (8192, False,
+                                "Give up on walking a repository's history "
+                                "past this much diff. 0 is no limit."),
+
+    # How long a worker may read and write nothing while still using the
+    # processor before it is treated as stuck rather than slow.
+    #
+    # The per repository limit cannot tell those apart, so both get the whole
+    # of it.  An engine that has stopped consuming its input, stopped producing
+    # output and settled at a fixed amount of memory is not going to finish,
+    # and every one of those is visible from outside the process.
+    "scan.stall_minutes":      (30, False,
+                                "Stop a repository whose engines have gone "
+                                "quiet but are still burning processor. "
+                                "0 never does."),
+
     "secrets.exclude_paths":   (["result*/", "Blueprint/", "AppvanceScripts/",
                                  "reports/", "test-results/", "allure-results/",
                                  "coverage/", "screenshots/", "videos/",

@@ -217,6 +217,7 @@ scan_one_repo() {
     # collected so the repository can be told what was not looked at.
     SECRETS_DROPPED=$(tmp_file secrets_dropped)
     : > "$SECRETS_DROPPED"
+    HISTORY_TOO_BIG=0
     local engines; engines=$(cfg_json '.scan.secrets.engines // []')
 
     local want_gl want_th
@@ -286,7 +287,21 @@ scan_one_repo() {
     fi
     export GHSCAN_TH_SINCE_COMMIT
 
-    if cfg_bool '.github.branches.scan_full_history' true; then
+    # Too much history to hand an engine, decided before one is started.
+    #
+    # Not a skip.  Falling through here puts the credential pass on the branch
+    # head path instead: the current state of every branch in scope is still
+    # read, which is where a live credential actually is, and only the walk
+    # back through old commits is given up.  That is the half worth keeping
+    # when the other half cannot be done at all.
+    #
+    # And the history is never marked complete afterwards, so nothing later
+    # mistakes "we did not read it" for "there is nothing there".
+    if (( need_clone )) && history_is_too_big "$clone_dir" "$full_name"; then
+      HISTORY_TOO_BIG=1
+    fi
+
+    if (( ${HISTORY_TOO_BIG:-0} == 0 )) && cfg_bool '.github.branches.scan_full_history' true; then
       # One pass over `git log --all`: every commit on every ref.
       if (( want_gl )); then
         local gl range
@@ -439,6 +454,7 @@ scan_one_repo() {
   # which leaves the repository looking unwalked: the safe direction, since the
   # worst that costs is a pass that had nothing to do.
   if (( window_days == 0 )) && (( need_clone )) \
+     && (( ${HISTORY_TOO_BIG:-0} == 0 )) \
      && cfg_bool '.scan.secrets.enabled' true \
      && cfg_bool '.github.branches.scan_full_history' true; then
     HISTORY_COMPLETE="true"

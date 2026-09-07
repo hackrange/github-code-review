@@ -79,6 +79,52 @@ JWT_PRIVILEGE_CLAIMS='["roles","role","scope","scp","scopes","permissions",
   "perms","groups","grp","authorities","entitlements","admin","is_admin",
   "isadmin","tenant","tid","act","azp","client_id","appid"]'
 
+# How much diff a full history walk would hand the engines, roughly.
+#
+# The clone size limit above asks how big a repository is on disk.  That is the
+# wrong question for the pass that reads history, and one repository showed
+# exactly how wrong: two hundred and fourteen megabytes of git, six hundred and
+# ninety commits, and sixteen and a half gigabytes of diff on the way into the
+# engine, because every commit rewrote generated test artifacts wholesale.  It
+# passed the size check comfortably and then took nine hours and twenty eight
+# gigabytes of memory without finishing.
+#
+# Measured by sampling rather than by reading it all, since reading it all is
+# the thing being avoided.  A handful of commits gives the average diff, and
+# the commit count turns that into a projection.  It is an estimate and is
+# treated as one: the limit is a ceiling for the obviously impossible, not a
+# fine judgement about the merely large.
+history_volume_mb() {
+  local dir="$1" sample="${2:-40}"
+  local commits; commits=$(git -C "$dir" rev-list --all --count 2>/dev/null || echo 0)
+  [[ "$commits" =~ ^[0-9]+$ ]] || commits=0
+  (( commits == 0 )) && { printf '0'; return 0; }
+  local bytes
+  bytes=$(git -C "$dir" log -p -U0 --all --max-count="$sample" 2>/dev/null \
+          | head -c 400000000 | wc -c 2>/dev/null || echo 0)
+  [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
+  local seen=$(( commits < sample ? commits : sample ))
+  (( seen == 0 )) && { printf '0'; return 0; }
+  printf '%s' $(( bytes / seen * commits / 1048576 ))
+}
+
+# Is this repository's history too big to hand an engine.  -> 0 when it is fine.
+history_is_too_big() {
+  local dir="$1" full_name="$2"
+  local cap; cap=$(cfg_num '.scan.secrets.max_history_mb' 0)
+  (( cap <= 0 )) && return 1
+  local mb; mb=$(history_volume_mb "$dir")
+  if (( mb > cap )); then
+    # warn, not info: the product runs the scanner at the warn level, and a
+    # repository whose history went unread is the kind of thing that must not
+    # be discovered from a graph that quietly flattened.
+    log_warn "$full_name: history is about ${mb} MB of diff, over secrets.max_history_mb=${cap}; the credential pass will not read it"
+    return 0
+  fi
+  log_debug "$full_name: history is about ${mb} MB of diff, under the ${cap} MB limit"
+  return 1
+}
+
 # glob -> anchored regex for one path segment.
 #
 # The code pass hands its list to semgrep and lets semgrep decide what a glob

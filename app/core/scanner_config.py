@@ -242,6 +242,7 @@ def build(session, out_dir: Path, orgs=None, repos=None, connection=None,
     scan = document["scan"]
     scan["parallel_repos"] = _int(session, "github.parallel_repos", 4)
     scan["timeout_per_repo_sec"] = _int(session, "scan.timeout_per_repo", 3600)
+    scan["stall_sec"] = _int(session, "scan.stall_minutes", 0) * 60
 
     secrets = scan["secrets"]
     secrets["enabled"] = bool(store.get(session, "secrets.enabled"))
@@ -282,6 +283,7 @@ def build(session, out_dir: Path, orgs=None, repos=None, connection=None,
     # A list that half the pass ignores is worse than no list: it reads as
     # done and is not.
     secrets["exclude_paths"] = _list(session, "secrets.exclude_paths")
+    secrets["max_history_mb"] = _int(session, "secrets.max_history_mb", 0)
 
     secrets["gitleaks"]["config_path"] = str(RULES_DIR / "gitleaks-extra.toml")
     # The allowlist used to be a second file.  Exclusions cover the same ground

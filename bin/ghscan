@@ -341,6 +341,65 @@ if [[ "${1:-}" == "__supervise" ]]; then
     _watchdog_pid=$!
   fi
 
+  # A second watchdog, for the failure the first one cannot see.
+  #
+  # The deadline above answers "this took too long".  It cannot tell a
+  # repository that is genuinely enormous from one where an engine has stopped
+  # making progress, so both get the whole limit before anything happens.  On
+  # one repository that meant nine hours: the engine had stopped reading its
+  # input, so the git process feeding it sat blocked trying to write, it had
+  # produced five kilobytes of output, its memory had flattened at twenty eight
+  # gigabytes, and five threads stayed pinned at a hundred percent throughout.
+  # Every one of those is visible from outside.
+  #
+  # So this watches the bytes.  A worker whose whole process tree has neither
+  # read nor written anything for the stall window, while still burning
+  # processor, is not slow: it is stuck, and waiting out the deadline only buys
+  # more of the same.  Silence on both counters is the signal, because an
+  # engine doing real work moves at least one of them.
+  _stall_pid=""
+  if [[ "${GHSCAN_STALL_SEC:-0}" =~ ^[0-9]+$ ]] && (( ${GHSCAN_STALL_SEC:-0} > 0 )); then
+    (
+      _io_of() {
+        local total=0 p io
+        for p in $(_tree_of "$1"); do
+          io=$(awk '/^rchar:|^wchar:/{s+=$2} END{print s+0}' "/proc/$p/io" 2>/dev/null || echo 0)
+          total=$(( total + io ))
+        done
+        printf '%s' "$total"
+      }
+      _cpu_of() {
+        local total=0 p t
+        for p in $(_tree_of "$1"); do
+          t=$(awk '{print $14+$15}' "/proc/$p/stat" 2>/dev/null || echo 0)
+          total=$(( total + t ))
+        done
+        printf '%s' "$total"
+      }
+      _last_io=$(_io_of "$_worker_pid"); _last_cpu=$(_cpu_of "$_worker_pid")
+      while kill -0 "$_worker_pid" 2>/dev/null; do
+        sleep "${GHSCAN_STALL_SEC}"
+        kill -0 "$_worker_pid" 2>/dev/null || exit 0
+        _io=$(_io_of "$_worker_pid"); _cpu=$(_cpu_of "$_worker_pid")
+        # Moving on either counter is progress.  Only the combination of no
+        # bytes and real processor time means stuck rather than idle: a worker
+        # asleep on a rate limit backoff burns neither and must be left alone.
+        if (( _io > _last_io )) || (( _cpu <= _last_cpu + 100 )); then
+          _last_io=$_io; _last_cpu=$_cpu
+          continue
+        fi
+        _doomed=$(_tree_of "$_worker_pid")
+        printf '1' > "$_fired" 2>/dev/null || true
+        printf '%s\n' "worker read and wrote nothing for ${GHSCAN_STALL_SEC}s while still using the processor; treating it as stuck and stopping it" >&2
+        for _p in $_doomed; do kill -TERM "$_p" 2>/dev/null || true; done
+        sleep 20
+        for _p in $_doomed; do kill -KILL "$_p" 2>/dev/null || true; done
+        exit 0
+      done
+    ) &
+    _stall_pid=$!
+  fi
+
   # Never let this fail on the worker's exit status.  Under set -e a worker
   # that the watchdog just terminated would take this shell down with it at
   # 143, before the line below runs, and the watchdog would be left alive with
@@ -362,6 +421,13 @@ if [[ "${1:-}" == "__supervise" ]]; then
       { for _p in $(_tree_of "$_watchdog_pid"); do kill -KILL "$_p" 2>/dev/null || true; done
         wait "$_watchdog_pid" 2>/dev/null || true; } 2>/dev/null
     fi
+  fi
+  # The stall watch, the same way.  It sits in a sleep between samples, so left
+  # alone it announces itself on stderr once per repository and reads like a
+  # failure in the scan log.
+  if [[ -n "$_stall_pid" ]]; then
+    { for _p in $(_tree_of "$_stall_pid"); do kill -KILL "$_p" 2>/dev/null || true; done
+      wait "$_stall_pid" 2>/dev/null || true; } 2>/dev/null
   fi
   rm -f "$_fired" 2>/dev/null || true
   # Always zero: the parent decides what a missing result means, and a worker
@@ -649,8 +715,15 @@ main() {
 
   local timeout_sec; timeout_sec=$(cfg_num '.scan.timeout_per_repo_sec' 3600)
 
+  # How long a worker may go without reading or writing anything while still
+  # using the processor.  Read from the same place as the deadline, so both
+  # limits arrive by the same route and neither can be set in a way the other
+  # cannot see.
+  local stall_sec; stall_sec=$(cfg_num '.scan.stall_sec' 0)
+
   export GHSCAN_BIN="$GHSCAN_HOME/bin/ghscan"
   export GHSCAN_TIMEOUT_SEC="$timeout_sec"
+  export GHSCAN_STALL_SEC="$stall_sec"
 
   # The deadline is enforced by __supervise rather than by timeout(1), which
   # only ever signals the one process it started and leaves everything that
