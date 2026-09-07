@@ -1313,6 +1313,56 @@ async def scan_connection(connection_id: int, request: Request,
     return redirect(f"/connections?msg=Scanning+{name}.&kind=ok")
 
 
+@router.post("/repositories/{repo_id}/scan")
+async def scan_one_repository(repo_id: int, request: Request,
+                              user: User = Depends(current_user)):
+    """Scan one repository now, rather than the account it sits in.
+
+    The scanner has always been able to do this: run_scan takes a list of
+    repositories and turns it into the scope the shell reads.  Nothing in the
+    web application ever called it that way, so the smallest thing anybody
+    could ask for was an account, and on an account holding thirty one
+    repositories that is a long wait to re-read one file.
+
+    It still takes a scan slot, because it is a real scan with real clones and
+    real engines.  What it does not take is the other thirty.
+    """
+    await check_csrf(request)
+    rbac.require(user, "scan.run")
+
+    from urllib.parse import quote
+
+    from app.core import connections as connection_store, scanner
+    from app.core.models import Repository
+
+    with session_scope() as db:
+        # Scoped, so a repository this reader may not see is simply not there
+        # rather than refused.  Somebody who cannot read a repository's findings
+        # does not get to send the scanner to look at it on their behalf.
+        row = (rbac.visible_repositories(db, user)
+               .filter(Repository.id == repo_id).one_or_none())
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        full_name = row.full_name
+        connection = (connection_store.by_name(db, row.connection)
+                      if row.connection else None)
+        connection_id = getattr(connection, "id", None)
+
+    back = request.headers.get("referer") or "/repositories"
+    if "://" in back:
+        back = "/" + back.split("/", 3)[-1] if back.count("/") > 2 else "/repositories"
+
+    if not scanner.start_background(triggered_by=user.username, trigger="manual",
+                                    repos=[full_name],
+                                    connection_id=connection_id):
+        return redirect("%s%smsg=%s&kind=warn"
+                        % (back, "&" if "?" in back else "?",
+                           quote("Every scan slot is busy. Try again shortly.")))
+    return redirect("%s%smsg=%s&kind=ok"
+                    % (back, "&" if "?" in back else "?",
+                       quote("Scanning %s now." % full_name)))
+
+
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
@@ -3623,7 +3673,7 @@ async def recheck_finding(finding_id: int, request: Request,
         if row is None:
             raise HTTPException(status_code=404, detail="No such finding.")
 
-    result = recheck_mod.recheck(finding_id)
+    result = recheck_mod.recheck(finding_id, actor=user.username)
 
     if not result.get("ok"):
         kind = "error"
@@ -3633,11 +3683,18 @@ async def recheck_finding(finding_id: int, request: Request,
         message = result["detail"]
     else:
         kind = "ok"
-        message = (result["detail"] + " The finding stays open until a scan "
-                   "confirms it across every branch.")
+        # Only claim to have changed something when something changed.  The
+        # sentence used to say the finding stays open whatever happened, which
+        # was true then and would be a lie now that a complete recheck closes
+        # one.
+        message = result["detail"]
+        if result.get("wrote") != "closed":
+            message += (" The finding stays open until every branch it is on "
+                        "has been looked at.")
 
     with session_scope() as db:
-        record(db, "finding.rechecked", actor=user.username,
+        record(db, "finding.recheck.closed" if result.get("wrote") == "closed"
+               else "finding.rechecked", actor=user.username,
                target=str(finding_id), detail=message[:400],
                outcome="ok" if result.get("ok") else "error",
                source_ip=client_ip(request))

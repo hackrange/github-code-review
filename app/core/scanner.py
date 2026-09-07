@@ -1420,9 +1420,20 @@ def start_background(triggered_by: str = "", trigger: str = "manual",
     _took_a_slot()
 
     if orgs or repos:
+        # The account, when one was named.  Without this a scan of a single
+        # repository ran on whatever credential the settings hold rather than
+        # the one that owns the organization it is in, which on an estate with
+        # an account per organization is a scan that can see nothing.  Resolved
+        # here rather than passed as an id because run_scan wants the row.
+        named = None
+        if connection_id is not None:
+            from app.core import connections as connection_store
+            with session_scope() as db:
+                named = connection_store.by_id(db, connection_id)
         target, kwargs = run_scan, {
             "triggered_by": triggered_by, "trigger": trigger,
-            "orgs": orgs, "repos": repos, "only": only}
+            "orgs": orgs, "repos": repos, "only": only,
+            "connection": named}
     else:
         target, kwargs = run_every_connection, {
             "triggered_by": triggered_by, "trigger": trigger, "only": only,

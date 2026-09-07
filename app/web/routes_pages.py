@@ -976,6 +976,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        can_regrade=rbac.can(user, "finding.regrade"),
                        can_describe=rbac.can(user, "repo.describe"),
                        repo_info=about,
+                       can_scan=rbac.can(user, "scan.run"),
                        on_branches=on_branches,
                        certification=certification,
                        can_certify=rbac.can(user, "repo.certify"),
@@ -1106,6 +1107,7 @@ def repositories(request: Request, user: User = Depends(current_user)):
 
         context = _shared(db, user)
         context.update(active_page="repositories", rows=rows, counts=counts,
+                       can_scan=rbac.can(user, "scan.run"),
                        certified=badges, certified_filter=wanted)
         return page(request, "repositories.html", **context)
 

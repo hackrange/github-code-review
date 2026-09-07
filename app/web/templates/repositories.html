@@ -70,7 +70,8 @@
   <div class="table-scroll">
     <table id="repo-table">
       <thead><tr><th>Organization</th><th>Repository</th><th>Visibility</th>
-        <th>Default branch</th><th>Open findings</th><th class="nowrap">Last scanned</th></tr></thead>
+        <th>Default branch</th><th>Open findings</th><th class="nowrap">Last scanned</th>
+        {% if can_scan %}<th></th>{% endif %}</tr></thead>
       <tbody>
       {% for r in rows %}
         {% set c = counts.get(r.full_name, {}) %}
@@ -87,6 +88,19 @@
             {% if not c %}<span class="faint small">none</span>{% endif %}
           </td>
           <td class="small faint nowrap">{{ r.last_scanned_at | dt('%Y-%m-%d') if r.last_scanned_at else 'never' }}</td>
+          {% if can_scan %}
+          {# One repository, not the account it sits in.  The scanner could
+             always do this; nothing ever asked it to, so the smallest thing
+             anybody could scan was thirty one repositories to re-read one. #}
+          <td class="nowrap">
+            <form method="post" action="{{ base }}/repositories/{{ r.id }}/scan"
+                  style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm" type="submit"
+                      title="Scan just this repository now">Scan</button>
+            </form>
+          </td>
+          {% endif %}
         </tr>
       {% endfor %}
       </tbody>

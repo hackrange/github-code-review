@@ -71,6 +71,85 @@ def _shallow_clone(url: str, branch: str, dest: Path, cred: list) -> tuple:
     return True, ""
 
 
+def _english(names) -> str:
+    """A list of branches a sentence can contain."""
+    names = list(names)
+    if not names:
+        return "nothing"
+    if len(names) == 1:
+        return names[0]
+    if len(names) <= 4:
+        return ", ".join(names[:-1]) + " and " + names[-1]
+    return "%s and %d others" % (", ".join(names[:3]), len(names) - 3)
+
+
+def _record(finding_id: int, present: bool, actor: str, branches) -> bool:
+    """Write what the recheck proved.  -> whether the state moved.
+
+    Two directions and they are not symmetrical.  Finding it again is positive
+    evidence and only ever moves last_found_at, which cannot make anything look
+    better than it is.  Not finding it closes the finding, and that is only
+    reached from a caller that has looked at every branch on record.
+
+    A waived finding is left alone in both directions.  Somebody decided that,
+    and a recheck is not a decision.
+    """
+    from app.core.models import FindingState, utcnow
+
+    with session_scope() as db:
+        row = db.query(Finding).filter(Finding.id == finding_id).one_or_none()
+        if row is None:
+            return False
+        if getattr(row, "excepted", False):
+            return False
+        now = utcnow()
+        if present:
+            row.last_found_at = now
+            if row.state == FindingState.FIXED:
+                # It came back.  The same rule the ingest uses.
+                row.state = FindingState.OPEN
+                row.resolved_at = None
+            db.flush()
+            return True
+        if row.state != FindingState.OPEN:
+            return False
+        row.state = FindingState.FIXED
+        row.resolved_at = now
+        db.flush()
+        log.info("%s rechecked %s and it was gone from %s, so it is closed",
+                 actor or "somebody", row.fingerprint, ", ".join(branches))
+        return True
+
+
+def _fetch_branch(dest: Path, url: str, branch: str, cred: list) -> bool:
+    """Bring one more branch tip into a clone that already exists.
+
+    Cheaper than cloning again per branch, which is what checking a finding
+    across every branch it is on would otherwise cost: one connection, one
+    object store, one tip per branch.
+    """
+    command = ["git", "-C", str(dest)] + cred + [
+        "fetch", "--quiet", "--depth", "1", "--no-tags", url,
+        "+refs/heads/%s:refs/remotes/recheck/%s" % (branch, branch)]
+    try:
+        done = subprocess.run(command, capture_output=True, text=True,
+                              timeout=CLONE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False
+    return done.returncode == 0
+
+
+def _checkout(dest: Path, ref: str) -> bool:
+    """Put a fetched tip in the working tree so the engines can read it."""
+    command = ["git", "-C", str(dest), "checkout", "--quiet", "--force", ref]
+    try:
+        done = subprocess.run(command, capture_output=True, text=True,
+                              timeout=CLONE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return False
+    return done.returncode == 0
+
+
 def _gitleaks_hits(root: Path, rel_path: str) -> tuple:
     """Run the secret detector over the one file.  -> (ok, rules_found, detail)"""
     if shutil.which("gitleaks") is None:
@@ -147,18 +226,49 @@ def _semgrep_hits(root: Path, rel_path: str, configs: list) -> tuple:
     return True, names, ""
 
 
-def recheck(finding_id: int) -> dict:
-    """Look at one finding again.  Returns a verdict; stores nothing."""
+# How many branches a recheck will walk before it stops offering to decide.
+#
+# Every branch is a fetch of one tip and one engine run over one file, so the
+# cost is real but small, and the number of branches a finding sits on is
+# usually one.  The ones that are not usually sit on thirty, and a person
+# waiting on a page should not be made to wait for thirty of anything.  Past
+# this the recheck still answers, it just answers about the branch it was asked
+# about and does not offer to close anything.
+MAX_BRANCHES = 20
+
+
+def recheck(finding_id: int, actor: str = "") -> dict:
+    """Look at one finding again.  Returns a verdict.
+
+    Writes only when the evidence is as complete as a scan's would be, which
+    means having looked at every branch the finding is recorded on.  See
+    _recheck for why that line is where it is.
+    """
     if not _slots.acquire(blocking=False):
         return {"ok": False,
                 "detail": "Two rechecks are already running. Try again in a moment."}
     try:
-        return _recheck(finding_id)
+        return _recheck(finding_id, actor=actor)
     finally:
         _slots.release()
 
 
-def _recheck(finding_id: int) -> dict:
+def _recheck(finding_id: int, actor: str = "") -> dict:
+    """The work.  Reads the finding, looks again, and decides whether it may say so.
+
+    A scan decides a finding's state by walking every branch.  This used to
+    look at one and write nothing, on the argument that a partial answer must
+    not overwrite a complete one, which is right and was applied too widely: a
+    finding that lives on one branch is entirely covered by looking at that one
+    branch, and refusing to act on that is refusing evidence it has.
+
+    So the line is drawn at coverage rather than at method.  Every branch the
+    finding is recorded on gets looked at, and only if all of them come back
+    clean is it closed.  Anything less says so and changes nothing, because
+    "not on the branch I looked at" and "gone" are still different sentences.
+    """
+    import json as _json
+
     from app.core import connections as connection_store, scanner_config
 
     with session_scope() as db:
@@ -170,6 +280,16 @@ def _recheck(finding_id: int) -> dict:
         rel_path = row.file_path or ""
         branch = row.branch or ""
         rule = row.rule or ""
+        state = row.state
+        image_ref = getattr(row, "image_ref", "") or ""
+        base_upgraded = bool(getattr(row, "base_upgraded", False))
+        dockerfile = getattr(row, "dockerfile", "") or ""
+        try:
+            recorded = [b for b in (_json.loads(row.branches or "[]") or []) if b]
+        except (TypeError, ValueError):
+            recorded = []
+        if not recorded and branch:
+            recorded = [branch]
         connection = (connection_store.by_name(db, row.connection)
                       if row.connection else None)
         from app.core import settings_store as store
@@ -179,6 +299,23 @@ def _recheck(finding_id: int) -> dict:
             or "https://github.com"
 
     if kind == FindingKind.DEPENDENCY:
+        # Say which kind of dependency finding it is, because the honest answer
+        # differs and one refusal for both was reading as a shrug.
+        if image_ref and base_upgraded:
+            where = (" It is asked for by %s." % dockerfile) if dockerfile else ""
+            return {"ok": False,
+                    "detail": "This package came from a pinned base image, and "
+                              "the build upgrades it after pulling.  Reading "
+                              "the image again would report the version the "
+                              "digest ships, which is the one already named "
+                              "here, so it would keep confirming a finding the "
+                              "build has already dealt with." + where}
+        if image_ref:
+            return {"ok": False,
+                    "detail": "This package came from a base image rather than "
+                              "from this repository, so the fix is a newer "
+                              "base.  Reading the image again needs the image, "
+                              "which is a scan rather than a look at a file."}
         return {"ok": False,
                 "detail": "A dependency finding comes from the manifest and the "
                           "vulnerability feeds, not from a file on a branch. "
@@ -209,26 +346,74 @@ def _recheck(finding_id: int) -> dict:
         if not ok:
             return {"ok": False, "detail": "Could not fetch it: %s" % why}
 
-        target = dest / rel_path
-        if not target.exists():
-            return {"ok": True, "present": False,
-                    "detail": "The file is not on %s any more." % (branch or "that branch")}
+        # Every branch this finding is recorded on, or just the one it was
+        # filed against when the list is longer than a person should wait for.
+        walk = recorded if recorded and len(recorded) <= MAX_BRANCHES else \
+            ([branch] if branch else ["HEAD"])
+        complete = walk == recorded and bool(recorded)
 
-        if kind == FindingKind.CREDENTIAL:
-            ok, rules, why = _gitleaks_hits(dest, rel_path)
-        else:
-            ok, rules, why = _semgrep_hits(dest, rel_path, rulesets)
-        if not ok:
-            return {"ok": False, "detail": why}
+        def look(where: str) -> tuple:
+            """-> (ok, still_there, why).  One branch, already checked out."""
+            if not (dest / rel_path).exists():
+                return True, False, ""
+            if kind == FindingKind.CREDENTIAL:
+                good, rules, why = _gitleaks_hits(dest, rel_path)
+            else:
+                good, rules, why = _semgrep_hits(dest, rel_path, rulesets)
+            if not good:
+                return False, False, why
+            if not rules:
+                return True, False, ""
+            if rule and rule not in rules:
+                return True, False, ""
+            return True, True, ""
 
-        if not rules:
+        found_on, missed = [], []
+        for index, name in enumerate(walk):
+            if index:
+                if not (_fetch_branch(dest, url, name,
+                                      _credential_args(token_file, provider))
+                        and _checkout(dest, "recheck/" + name)):
+                    # A branch that could not be read is not a branch that came
+                    # back clean.  Recorded so the verdict below knows its own
+                    # coverage is short, rather than counting silence as good
+                    # news, which is the whole failure this guards against.
+                    missed.append(name)
+                    continue
+            good, still_there, why = look(name)
+            if not good:
+                return {"ok": False, "detail": why}
+            if still_there:
+                found_on.append(name)
+
+        if missed:
+            complete = False
+        looked_at = len(walk) - len(missed)
+
+        if found_on:
+            _record(finding_id, present=True, actor=actor, branches=found_on)
+            return {"ok": True, "present": True, "wrote": "confirmed",
+                    "detail": "Still there: %s in %s on %s."
+                              % (rule or "the finding", rel_path,
+                                 ", ".join(found_on))}
+
+        if complete:
+            closed = _record(finding_id, present=False, actor=actor,
+                             branches=walk)
+            if closed:
+                return {"ok": True, "present": False, "wrote": "closed",
+                        "detail": "Gone from %s, which is every branch this was "
+                                  "recorded on, so it is closed."
+                                  % _english(walk)}
             return {"ok": True, "present": False,
-                    "detail": "Nothing found in %s on %s." % (rel_path, branch or "that branch")}
-        if rule and rule not in rules:
-            return {"ok": True, "present": False,
-                    "detail": "%s is clean of %s, though other rules still match "
-                              "there." % (rel_path, rule)}
-        return {"ok": True, "present": True,
-                "detail": "Still there: %s in %s on %s." % (rule or "the finding",
-                                                            rel_path,
-                                                            branch or "that branch")}
+                    "detail": "Gone from every branch this was recorded on.  It "
+                              "was already closed or waived, so nothing changed."}
+
+        why_not = ("could not read %s" % _english(missed)) if missed else \
+            ("this was recorded on %d branches, more than a recheck will walk"
+             % len(recorded))
+        return {"ok": True, "present": False,
+                "detail": "Not in %s on %s.  Left open, because %s, and gone "
+                          "from one branch is not gone."
+                          % (rel_path, _english(walk[:len(walk)] if looked_at
+                                                else walk), why_not)}

@@ -154,6 +154,18 @@
       {%- if host_name %}Open the repository on {{ host_name }}
       {%- else %}Open the repository{% endif %}</a>
     {% endif %}
+    {# Scan this one repository.  A finding that needs re-reading needs one
+       repository re-read, and the smallest thing that could be asked for was
+       the whole account it sits in.  Offered on every kind, because the kinds
+       a recheck cannot answer are exactly the ones that need this. #}
+    {% if can_scan and repo_info and repo_info.id %}
+      <form method="post" action="{{ base }}/repositories/{{ repo_info.id }}/scan"
+            style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn" type="submit"
+                title="Scan this repository now, rather than the whole account">Scan this repository</button>
+      </form>
+    {% endif %}
     {% if f.kind.value in ['credential', 'code'] and f.file_path %}
       {# Read only, and it does not take the scan lock, so it works while a
          scan is running.  It cannot change the finding: see the note it
