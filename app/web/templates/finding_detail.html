@@ -140,6 +140,16 @@
        name the image and offer no way to reach the file that asks for it. #}
     {% set repo_home = repo_info.html_url | web_url if repo_info else '' %}
     {% if repo_home and not f.file_path %}
+    {# Straight to the Dockerfile where there is one.  A vulnerable package
+       that arrived in a base image is a question about one file, and landing
+       somebody on the front page of a repository to go and find it is most of
+       a link rather than a link.  The scanner already knew the path. #}
+    {% if f.dockerfile %}
+    <a class="btn" href="{{ repo_home }}/blob/{{ f.branch or repo_info.default_branch or 'HEAD' }}/{{ f.dockerfile }}"
+       rel="noopener noreferrer" target="_blank">
+      {%- if host_name %}Open the Dockerfile on {{ host_name }}
+      {%- else %}Open the Dockerfile{% endif %}</a>
+    {% endif %}
     <a class="btn" href="{{ repo_home }}" rel="noopener noreferrer" target="_blank">
       {%- if host_name %}Open the repository on {{ host_name }}
       {%- else %}Open the repository{% endif %}</a>
@@ -401,6 +411,15 @@
         <tr><th>Image</th><td class="mono small">{{ f.image_ref }}
           <div class="faint small">found in the base image, so the fix is a
             newer base rather than a change in this repository</div>
+          {% if f.dockerfile %}
+          {# Named, and linked, because every sentence on this row is about
+             what that file does and the reader has to be able to check it. #}
+          {% set repo_home = repo_info.html_url | web_url if repo_info else '' %}
+          <div class="faint small">asked for by
+            {% if repo_home %}<a href="{{ repo_home }}/blob/{{ f.branch or repo_info.default_branch or 'HEAD' }}/{{ f.dockerfile }}"
+               rel="noopener noreferrer" target="_blank"><span class="mono">{{ f.dockerfile }}</span></a>
+            {%- else %}<span class="mono">{{ f.dockerfile }}</span>{% endif %}</div>
+          {% endif %}
           {% if f.base_upgraded %}
           {# The scanner reads the image the registry publishes, because it
              builds nothing.  Where the Dockerfile patches that image

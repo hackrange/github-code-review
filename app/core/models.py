@@ -600,6 +600,15 @@ class Finding(Base):
     # read, and an upgrade only moves packages as far as the archive had got on
     # the day of the build.  It moves the finding down the queue and says why.
     base_upgraded = Column(Boolean, default=False, nullable=False)
+    # Which Dockerfile asked for that image.
+    #
+    # The scanner has walked the repository for Dockerfiles since images were
+    # first read, has to know which one a base came from to decide whether the
+    # build patches it, and writes the path into every one of these findings.
+    # It was thrown away here.  So the page could say a vulnerable package
+    # arrived in a base image, say that the build upgrades it, and offer no way
+    # to reach the file doing either, which is the first thing anybody asks.
+    dockerfile = Column(String(320), default="")
 
     reachability = Column(String(16), default="", index=True)
     reachability_reason = Column(Text, default="")

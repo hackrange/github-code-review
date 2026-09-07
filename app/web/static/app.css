@@ -557,6 +557,27 @@ textarea { min-height: 5rem; resize: vertical; }
               font-weight: 600; display: flex; justify-content: space-between;
               flex: 0 0 auto; }
 .modal-body { padding: 1rem; overflow-y: auto; min-height: 0; flex: 1 1 auto; }
+
+/* Values with nothing to break on.
+ *
+ * An image reference is a name, a tag and a sha256 digest run together, which
+ * is eighty odd characters containing no space and no hyphen a browser is
+ * willing to break at.  A table cell will happily grow wider than the box
+ * around it, and the modal clips what overflows, so the end of the digest was
+ * not merely ugly, it could not be read at all and could not be scrolled to.
+ *
+ * Breaking anywhere is right for these specifically.  They are identifiers
+ * read left to right until they stop matching, not prose, so a break mid token
+ * costs nothing.  Scoped to the modal because that is the narrow box; the
+ * table on the page behind it has room. */
+.modal-body table { width: 100%; max-width: 100%; }
+.modal-body th, .modal-body td { overflow-wrap: anywhere; }
+.modal-body .mono, .modal-body code { overflow-wrap: anywhere; }
+
+/* The same values on the page behind it.  The card is wider than the modal,
+   so this clips later rather than never: a narrow window, a side by side, or
+   a longer registry path and the digest walks off the card the same way. */
+.card-body table td { overflow-wrap: anywhere; }
 .modal-foot { padding: .85rem 1rem; border-top: 1px solid var(--border);
               display: flex; justify-content: flex-end; gap: .5rem;
               flex: 0 0 auto; }

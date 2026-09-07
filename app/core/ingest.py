@@ -715,6 +715,7 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         finding.fixed_in = row.get("fixed_in") or ""
         finding.known_exploited = bool(row.get("known_exploited"))
         finding.base_upgraded = bool(row.get("base_upgraded"))
+        finding.dockerfile = (row.get("dockerfile") or "")[:320]
         # The weakness class, which the code path has always kept and this one
         # dropped on the floor.  Every dependency finding in the database had
         # an empty cwe, and it read as "the advisories do not say", when what
