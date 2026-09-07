@@ -111,7 +111,12 @@ provider_bitbucket_list_repos() {
     local _want _one _tmp; _tmp=$(tmp_file onlymerge)
     while IFS= read -r _want; do
       [[ -z "$_want" ]] && continue
-      log_info "scanning only: $_want"
+      # warn, not info: the product runs this scanner with -q, which is the
+      # warn level, so an info line here is one nobody can read.  A scan that
+      # has been narrowed to one repository is the case where a reader most
+      # needs the run to say what it covered, because the whole worry is that
+      # it covered more.
+      log_warn "scanning only: $_want"
       _one=$(api_get "/repos/${_want}") || {
         log_warn "cannot access repo '$_want'"; continue; }
       printf '%s' "$_one" | jq -c '[.]' > "$_tmp"

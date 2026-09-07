@@ -71,7 +71,11 @@
     <table id="repo-table">
       <thead><tr><th>Organization</th><th>Repository</th><th>Visibility</th>
         <th>Default branch</th><th>Open findings</th><th class="nowrap">Last scanned</th>
-        {% if can_scan %}<th></th>{% endif %}</tr></thead>
+        {# Named in the header as well as in the tooltip.  A tooltip is a
+           hover, which is nothing at all on a touch screen, and the difference
+           between this button and the one on a finding is worth more than a
+           hover. #}
+        {% if can_scan %}<th class="nowrap">Scan<span class="faint small"> all branches</span></th>{% endif %}</tr></thead>
       <tbody>
       {% for r in rows %}
         {% set c = counts.get(r.full_name, {}) %}
@@ -104,8 +108,15 @@
             <form method="post" action="{{ base }}/repositories/{{ r.id }}/scan"
                   style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              {# "every branch", said here rather than left to be discovered.
+                 The same button on a finding scans the one branch that finding
+                 is on, because there the question is about one thing in one
+                 place.  Here there is no finding in hand and the honest
+                 reading of Scan is the whole repository, which on this estate
+                 can be hundreds of branches.  Two buttons that look alike and
+                 cost very differently should say which is which. #}
               <button class="btn sm" type="submit"
-                      title="Scan just this repository now">Scan</button>
+                      title="Scan this repository now, every branch, rather than the whole account">Scan</button>
             </form>
             {% endif %}
           </td>
