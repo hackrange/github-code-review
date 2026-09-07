@@ -216,8 +216,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         if not self._allowed(key, limit):
             log.warning("rate limited %s on %s", ip, path)
-            raise HTTPException(status_code=429,
-                                detail="Slow down and try again in a minute.")
+            # Returned, not raised.  The handler that turns an HTTPException
+            # into a response lives inside the app, underneath this middleware,
+            # so one raised here sails straight past it and reaches the caller
+            # as a 500.  That is wrong twice over.  The client is told the
+            # server broke rather than to slow down, so nothing backs off, and
+            # every throttled request writes a full traceback to the log.  A
+            # scanner walking a list of backup filenames turned that into
+            # hundreds of tracebacks and buried everything else in them.
+            return JSONResponse(
+                status_code=429,
+                headers={"Retry-After": str(self.window)},
+                content={"detail": "Slow down and try again in a minute."})
         return await call_next(request)
 
 

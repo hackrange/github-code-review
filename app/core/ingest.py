@@ -29,6 +29,21 @@ log = logging.getLogger("gcr.ingest")
 # and the names are kept to offer a choice, not to be an inventory.
 MAX_BRANCH_NAMES = 2000
 
+# Which pass produces which kind of finding, by the names the scanner
+# checkpoints under `passes_complete`.
+#
+# This is the whole basis for deciding that something has been fixed.  A
+# finding is absent from a report either because it is gone or because nothing
+# looked for it, and only the scanner knows which.  Any kind missing from this
+# map is never held open, so a new kind behaves as it did before it was added
+# rather than sticking open forever with nobody noticing.
+KIND_PASS = {
+    FindingKind.CODE: "code",
+    FindingKind.CREDENTIAL: "secrets",
+    FindingKind.DEPENDENCY: "vulnerabilities",
+    FindingKind.MISCONFIGURATION: "misconfigurations",
+}
+
 
 def _sev(value) -> Severity:
     text = str(value or "unknown").strip().lower()
@@ -384,6 +399,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     # that only covered part of the history reports only what it covered, and
     # the rest is not gone, it is unread.
     partial_history = set()
+    # Which passes actually finished, per repository, as the scanner reported
+    # them.  A finding is only ever closed by the pass that would have found
+    # it, so this is what decides that.
+    passes_done = {}
 
     # Repositories first, so findings can hang off them.
     for entry in document.get("repositories", []) or []:
@@ -405,7 +424,17 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         repo.archived = bool(meta.get("archived", repo.archived))
         repo.size_kb = int(meta.get("size_kb") or repo.size_kb or 0)
         repo.html_url = meta.get("html_url") or repo.html_url
-        repo.last_scanned_at = seen_at
+        # A worker that timed out or crashed still gets an entry, so that the
+        # repository does not vanish from the report.  It did not look at
+        # anything, so it does not get to claim a scan date: stamping one made
+        # a repository nobody had ever read look freshly scanned and clean,
+        # which is how four of them stayed invisible for a week.
+        if str(entry.get("status", "ok")) != "failed":
+            repo.last_scanned_at = seen_at
+        declared = entry.get("passes_complete")
+        if isinstance(declared, list):
+            passes_done[full_name] = {str(name).strip() for name in declared
+                                      if str(name).strip()}
         # What the scan actually walked.  Kept so the branch box on a
         # connection can offer real names, and so there is still a record of
         # the coverage once the report itself has gone.  Capped because one
@@ -762,6 +791,28 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         for finding in stale:
             if finding.fingerprint in seen_fingerprints:
                 continue
+            # The pass that would have found this one has to have finished.
+            #
+            # Absence from a report only means "fixed" if somebody looked.  A
+            # pass that did not run, or ran and was cut off, reports nothing,
+            # which on the way in is indistinguishable from a repository that
+            # was cleaned up.  Two kinds were already guarded here by hand and
+            # the other two were not, so a run whose dependency pass produced
+            # nothing closed every dependency finding in the repository: 81 in
+            # one repository in one second, and 329 in a night across an
+            # estate.  Reading the scanner's own account of which passes
+            # finished covers all four kinds by the same rule.
+            #
+            # A pass switched off in the settings never reports itself
+            # finished, so its findings stay as they are.  That is the
+            # intended reading.  Turning a pass off is not evidence that
+            # anything was remediated.
+            done = passes_done.get(finding.repository)
+            if done is not None:
+                need = KIND_PASS.get(finding.kind)
+                if need is not None and need not in done:
+                    counts["held_open"] = counts.get("held_open", 0) + 1
+                    continue
             if (finding.kind == FindingKind.CODE
                     and finding.repository in partial_code):
                 counts["held_open"] = counts.get("held_open", 0) + 1

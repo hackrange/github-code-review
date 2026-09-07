@@ -603,6 +603,14 @@ scan_one_repo() {
   WORKFLOW_JSON=$(workflows_add_admins "$WORKFLOW_JSON" "$ACCESS_JSON")
   MISCONFIG_JSON=$(printf '%s\n%s' "$MISCONFIG_JSON" "$WORKFLOW_JSON" | jq -c -s 'add // []')
 
+  # The misconfiguration list is only whole here, once the workflow findings
+  # have been folded into it, so this is the earliest honest place to say the
+  # pass finished.  It matters beyond the checkpoint: the app closes a finding
+  # only when the pass that produces its kind is named here, and a kind that
+  # never names itself would have every finding of that kind closed by the
+  # first run that reported none.
+  _checkpoint misconfigurations
+
   # Everything the default-branch passes produced now says which branches it
   # speaks for.  Done here, in one place, because the workflow findings are
   # merged into the misconfigurations just above and stamping earlier would
