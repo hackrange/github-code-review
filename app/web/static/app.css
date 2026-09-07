@@ -459,6 +459,47 @@ textarea { min-height: 5rem; resize: vertical; }
            margin-bottom: 1rem; }
 .filters .field { margin: 0; min-width: 150px; }
 
+/* ---- grouped filters ----------------------------------------------------
+   Thirteen controls in one run of boxes is a wall.  They are four short
+   questions, so they are drawn as four.  The border is faint on purpose: it
+   is there to group, not to compete with the rows underneath. */
+.filter-group {
+    display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-end;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: .5rem .75rem .65rem; margin: 0;
+}
+.filter-group > legend {
+    font-size: .7rem; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--text-soft); padding: 0 .35rem;
+}
+.filter-group-wide { flex: 1; min-width: 280px; }
+.filter-actions { display: flex; gap: .4rem; align-items: flex-end; }
+
+/* ---- how the list is arranged -------------------------------------------
+   The grouping control used to be a faint sentence under the heading, which
+   is where people put things they expect nobody to read.  It changes what
+   every row on the page means, so it sits with the filters and looks like a
+   control. */
+.arrange-bar {
+    display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
+    padding: .55rem .85rem; margin-bottom: 1rem;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg-soft);
+}
+.arrange-bar .arrange-label {
+    font-size: .7rem; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--text-soft);
+}
+.arrange-choice { display: inline-flex; border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden; }
+.arrange-choice a {
+    padding: .3rem .7rem; font-size: .82rem; text-decoration: none;
+    color: var(--text-soft); background: var(--bg);
+}
+.arrange-choice a + a { border-left: 1px solid var(--border); }
+.arrange-choice a.on { background: var(--header); color: var(--text-invert); font-weight: 600; }
+.arrange-note { font-size: .8rem; color: var(--text-soft); }
+
 /* ---- sign in ----------------------------------------------------------- */
 .login-wrap {
     min-height: 100vh; display: flex; align-items: center;

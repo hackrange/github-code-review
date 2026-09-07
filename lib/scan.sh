@@ -624,7 +624,13 @@ scan_one_repo() {
   if [[ -n "${SECRETS_DROPPED:-}" && -s "${SECRETS_DROPPED:-/dev/null}" ]]; then
     SKIPPED_JSON=$(secrets_skipped_findings "$SECRETS_DROPPED" "$full_name" \
                      "$default_branch" "$(cfg '.github.web_url' 'https://github.com')")
-    log_info "[$full_name] credential pass skipped $(wc -l < "$SECRETS_DROPPED") path(s) on the skip list"
+    # warn, not info.  The product runs this scanner with -q, which is the
+    # warn level, so an info line here is one nobody will ever read.  That
+    # matters more for this than for most: the whole argument for a skip list
+    # is that what it skipped gets said out loud, and the counts beside it,
+    # "N secret finding(s), 0 verified live", are warn lines for the same
+    # reason.  It only fires when something was actually dropped.
+    log_warn "[$full_name] credential pass skipped $(wc -l < "$SECRETS_DROPPED") path(s) on the skip list"
   fi
 
   MISCONFIG_JSON=$(printf '%s\n%s\n%s' "$MISCONFIG_JSON" "$WORKFLOW_JSON" "$SKIPPED_JSON" \

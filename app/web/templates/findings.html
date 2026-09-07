@@ -15,22 +15,6 @@
        A shorter list is only honest if it says what it did.  This is a count
        of findings folded into the rows on this page, with the way back beside
        it, so the number can always be checked rather than trusted. #}
-    {% if grouped == 'action' %}
-    <div class="faint small">
-      {% if folded %}{{ folded }} more folded into these rows, one row per
-        package upgrade rather than one per advisory.
-      {% else %}Grouped by the upgrade that fixes them; nothing on this page
-        needed folding.{% endif %}
-      <a href="{{ base }}/findings?{{ page_query }}{% if page_query %}&{% endif %}group=none">Show every advisory</a></div>
-    {% elif filters.group == 'none' and filters.sort == 'priority' %}
-    <div class="faint small">One row per advisory.
-      <a href="{{ base }}/findings?{{ page_query }}{% if page_query %}&{% endif %}group=action">Group by the upgrade</a></div>
-    {% endif %}
-    {% if hidden_unreachable %}
-    <div class="faint small">{{ hidden_unreachable }} more in packages the code does not reach,
-      left out of this list.
-      <a href="{{ base }}/findings?{{ page_query }}{% if page_query %}&{% endif %}reach=any">Include them</a></div>
-    {% endif %}
   </div>
   {# Delete-all stays reachable even when the filters match nothing, since a
      filter matching nothing is not a reason to hide the estate-wide action. #}
@@ -47,107 +31,201 @@
   {% endif %}
 </div>
 
-<form method="get" action="{{ base }}/findings" class="filters">
-  <div class="field">
-    <label for="severity">Severity</label>
-    <select id="severity" name="severity" data-autosubmit>
-      <option value="">Any</option>
-      {% for s in severities %}
-        <option value="{{ s }}" {{ 'selected' if filters.severity == s }}>{{ s }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="field">
-    <label for="kind">Kind</label>
-    <select id="kind" name="kind" data-autosubmit>
-      <option value="">Any</option>
-      {% for k in kinds %}
-        <option value="{{ k }}" {{ 'selected' if filters.kind == k }}>{{ k }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="field">
-    <label for="state">State</label>
-    <select id="state" name="state" data-autosubmit>
-      {% for s in states %}
-        <option value="{{ s }}" {{ 'selected' if filters.state == s }}>{{ s }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  {% if connections|length > 1 %}
-  <div class="field">
-    <label for="connection">Account</label>
-    <select id="connection" name="connection" data-autosubmit>
-      <option value="">Any</option>
-      {% for c in connections %}
-      <option value="{{ c }}" {{ 'selected' if filters.connection == c }}>{{ c }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  {% endif %}
-  <div class="field">
-    <label for="org">Organization</label>
-    <select id="org" name="org" data-autosubmit>
-      <option value="">Any</option>
-      {% for o in orgs %}
-        <option value="{{ o }}" {{ 'selected' if filters.org == o }}>{{ o }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="field">
-    <label for="exception">Exceptions</label>
-    <select id="exception" name="exception" data-autosubmit>
-      <option value="without" {{ 'selected' if filters.exception == 'without' }}>Without an exception</option>
-      <option value="with" {{ 'selected' if filters.exception == 'with' }}>With an exception ({{ excepted_total }})</option>
-      <option value="any" {{ 'selected' if filters.exception == 'any' }}>Both</option>
-    </select>
-  </div>
-  <div class="field">
-    <label for="triage">Triage</label>
-    <select id="triage" name="triage" data-autosubmit>
-      <option value="work" {{ 'selected' if filters.triage == 'work' }}>The work list{% if set_aside %} ({{ set_aside }} set aside){% endif %}</option>
-      <option value="any" {{ 'selected' if filters.triage == 'any' }}>Everything</option>
-      <option value="third_party" {{ 'selected' if filters.triage == 'third_party' }}>Third party code</option>
-      <option value="advisory" {{ 'selected' if filters.triage == 'advisory' }}>Advisory rules</option>
-      <option value="not_applicable" {{ 'selected' if filters.triage == 'not_applicable' }}>Set aside as not applicable</option>
-    </select>
-  </div>
-  <div class="field">
-    <label for="reach">Reachable</label>
-    <select id="reach" name="reach" data-autosubmit>
-      <option value="" {{ 'selected' if not filters.reach }}>Anything the code may reach</option>
-      <option value="any" {{ 'selected' if filters.reach == 'any' }}>Everything, reached or not</option>
-      <option value="reachable" {{ 'selected' if filters.reach == 'reachable' }}>The code imports it</option>
-      <option value="unlikely" {{ 'selected' if filters.reach == 'unlikely' }}>Does not ship, or unused</option>
-      <option value="unknown" {{ 'selected' if filters.reach == 'unknown' }}>Could not tell</option>
-      <option value="unrated" {{ 'selected' if filters.reach == 'unrated' }}>Not worked out yet</option>
-    </select>
-  </div>
-  <div class="field">
-    <label for="baseline">Since</label>
-    <select id="baseline" name="baseline" data-autosubmit>
-      <option value="new" {{ 'selected' if filters.baseline == 'new' }}>The work{% if backlog_total %} ({{ backlog_total }} in the backlog){% endif %}</option>
-      <option value="backlog" {{ 'selected' if filters.baseline == 'backlog' }}>The backlog</option>
-      <option value="any" {{ 'selected' if filters.baseline == 'any' }}>Everything</option>
-    </select>
-  </div>
-  <div class="field">
-    <label for="confidence">Confidence</label>
-    <select id="confidence" name="confidence" data-autosubmit>
-      <option value="">Any</option>
-      <option value="high" {{ 'selected' if filters.confidence == 'high' }}>High</option>
-      <option value="medium" {{ 'selected' if filters.confidence == 'medium' }}>Medium</option>
-      <option value="low" {{ 'selected' if filters.confidence == 'low' }}>Low</option>
-      <option value="unrated" {{ 'selected' if filters.confidence == 'unrated' }}>Unrated</option>
-    </select>
-  </div>
-  <div class="field" style="flex:1;min-width:200px">
-    <label for="q">Search</label>
-    <input type="text" id="q" name="q" value="{{ filters.q }}"
-           placeholder="id, repository, branch, file, rule, package, CVE, or who committed it">
-  </div>
-  <button type="submit" class="btn">Filter</button>
+{# The filter bar, in four groups.
+   Thirteen controls in one run of boxes is a wall.  They are not thirteen
+   unrelated questions though: they answer where a finding is, what it is, what
+   is being done about it, and how the page is arranged.  Grouped under those
+   headings the same controls read as four short questions.
+
+   The "where" group cascades.  Picking an account narrows the organizations,
+   an organization narrows the repositories, a repository narrows the branches.
+   That is what makes a drill down usable on an estate with three hundred
+   repositories: the alternative is a select with every repository in it,
+   ordered alphabetically, which is a list nobody can find anything in. #}
+<form method="get" action="{{ base }}/findings" class="filters" id="finding-filters">
+  <fieldset class="filter-group">
+    <legend>Where</legend>
+    {% if connections|length > 1 %}
+    <div class="field">
+      <label for="connection">Account</label>
+      <select id="connection" name="connection" data-autosubmit data-cascade>
+        <option value="">Any account</option>
+        {% for c in connections %}
+        <option value="{{ c }}" {{ 'selected' if filters.connection == c }}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    <div class="field">
+      <label for="org">Organization</label>
+      <select id="org" name="org" data-autosubmit data-cascade>
+        <option value="">Any organization</option>
+        {% for o in orgs %}
+          <option value="{{ o }}" {{ 'selected' if filters.org == o }}>{{ o }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="repo">Repository</label>
+      <select id="repo" name="repo" data-autosubmit data-cascade>
+        <option value="">{{ 'Any repository' if not filters.org else 'Any in this organization' }}</option>
+        {% for r in repo_choices %}
+          <option value="{{ r }}" {{ 'selected' if filters.repo == r }}>{{ r.split('/')[-1] if '/' in r else r }}</option>
+        {% endfor %}
+      </select>
+      {% if repo_choices|length > 40 and not filters.org %}
+      <span class="faint small">{{ repo_choices|length }} repositories.  Pick an
+        organization to shorten this.</span>
+      {% endif %}
+    </div>
+    <div class="field">
+      <label for="branch">Branch</label>
+      <select id="branch" name="branch" data-autosubmit>
+        <option value="">{{ 'Any branch' if not filters.repo else 'Any branch in this repository' }}</option>
+        {% for b in branch_choices %}
+          <option value="{{ b }}" {{ 'selected' if filters.branch == b }}>{{ b }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </fieldset>
+
+  <fieldset class="filter-group">
+    <legend>What</legend>
+    <div class="field">
+      <label for="severity">Severity</label>
+      <select id="severity" name="severity" data-autosubmit>
+        <option value="">Any severity</option>
+        {% for s in severities %}
+          <option value="{{ s }}" {{ 'selected' if filters.severity == s }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="kind">Kind</label>
+      <select id="kind" name="kind" data-autosubmit>
+        <option value="">Any kind</option>
+        {% for k in kinds %}
+          <option value="{{ k }}" {{ 'selected' if filters.kind == k }}>{{ k }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="confidence">Confidence</label>
+      <select id="confidence" name="confidence" data-autosubmit>
+        <option value="">Any confidence</option>
+        <option value="high" {{ 'selected' if filters.confidence == 'high' }}>High</option>
+        <option value="medium" {{ 'selected' if filters.confidence == 'medium' }}>Medium</option>
+        <option value="low" {{ 'selected' if filters.confidence == 'low' }}>Low</option>
+        <option value="unrated" {{ 'selected' if filters.confidence == 'unrated' }}>Unrated</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="reach">Reachable</label>
+      <select id="reach" name="reach" data-autosubmit>
+        <option value="" {{ 'selected' if not filters.reach }}>Anything the code may reach</option>
+        <option value="any" {{ 'selected' if filters.reach == 'any' }}>Everything, reached or not</option>
+        <option value="reachable" {{ 'selected' if filters.reach == 'reachable' }}>The code imports it</option>
+        <option value="unlikely" {{ 'selected' if filters.reach == 'unlikely' }}>Does not ship, or unused</option>
+        <option value="unknown" {{ 'selected' if filters.reach == 'unknown' }}>Could not tell</option>
+        <option value="unrated" {{ 'selected' if filters.reach == 'unrated' }}>Not worked out yet</option>
+      </select>
+    </div>
+  </fieldset>
+
+  <fieldset class="filter-group">
+    <legend>Status</legend>
+    <div class="field">
+      <label for="state">State</label>
+      <select id="state" name="state" data-autosubmit>
+        {% for s in states %}
+          <option value="{{ s }}" {{ 'selected' if filters.state == s }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="triage">Triage</label>
+      <select id="triage" name="triage" data-autosubmit>
+        <option value="work" {{ 'selected' if filters.triage == 'work' }}>The work list{% if set_aside %} ({{ set_aside }} set aside){% endif %}</option>
+        <option value="any" {{ 'selected' if filters.triage == 'any' }}>Everything</option>
+        <option value="third_party" {{ 'selected' if filters.triage == 'third_party' }}>Third party code</option>
+        <option value="advisory" {{ 'selected' if filters.triage == 'advisory' }}>Advisory rules</option>
+        <option value="not_applicable" {{ 'selected' if filters.triage == 'not_applicable' }}>Set aside as not applicable</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="exception">Exceptions</label>
+      <select id="exception" name="exception" data-autosubmit>
+        <option value="without" {{ 'selected' if filters.exception == 'without' }}>Without an exception</option>
+        <option value="with" {{ 'selected' if filters.exception == 'with' }}>With an exception ({{ excepted_total }})</option>
+        <option value="any" {{ 'selected' if filters.exception == 'any' }}>Both</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="baseline">Since</label>
+      <select id="baseline" name="baseline" data-autosubmit>
+        <option value="new" {{ 'selected' if filters.baseline == 'new' }}>The work{% if backlog_total %} ({{ backlog_total }} in the backlog){% endif %}</option>
+        <option value="backlog" {{ 'selected' if filters.baseline == 'backlog' }}>The backlog</option>
+        <option value="any" {{ 'selected' if filters.baseline == 'any' }}>Everything</option>
+      </select>
+    </div>
+  </fieldset>
+
+  <fieldset class="filter-group filter-group-wide">
+    <legend>Search</legend>
+    <div class="field" style="flex:1;min-width:220px">
+      <label for="q">Anything on a finding</label>
+      <input type="text" id="q" name="q" value="{{ filters.q }}"
+             placeholder="id, repository, branch, file, rule, package, CVE, or who committed it">
+    </div>
+    <div class="field filter-actions">
+      <button type="submit" class="btn primary">Filter</button>
+      {# Only offered when there is something to clear.  A dead button next to
+         a live one is a small lie about what the page can do. #}
+      {% if filters.severity or filters.kind or filters.org or filters.repo
+            or filters.branch or filters.connection or filters.q
+            or filters.confidence or filters.reach
+            or filters.state != 'open' or filters.triage != 'work'
+            or filters.exception != 'without' or filters.baseline != 'new' %}
+      <a class="btn" href="{{ base }}/findings">Clear filters</a>
+      {% endif %}
+    </div>
+  </fieldset>
 </form>
+
+{# How the list is arranged.
+   This was two faint sentences under the page heading, which is where things
+   go when nobody expects them to be read.  It decides whether a row means one
+   advisory or one upgrade, which is the difference between fifty six rows and
+   one, so it is a control and it looks like one.  Only offered where it
+   applies: sorting by a column is a statement about individual rows and turns
+   the folding off, so on those views there is nothing to choose. #}
+{% if filters.sort == 'priority' %}
+<div class="arrange-bar">
+  <span class="arrange-label">Rows</span>
+  <span class="arrange-choice">
+    <a href="{{ base }}/findings?{{ page_query }}{% if page_query %}&{% endif %}group=action"
+       class="{{ 'on' if grouped == 'action' }}">One per upgrade</a>
+    <a href="{{ base }}/findings?{{ page_query }}{% if page_query %}&{% endif %}group=none"
+       class="{{ 'on' if grouped != 'action' }}">One per advisory</a>
+  </span>
+  <span class="arrange-note">
+    {% if grouped == 'action' %}
+      {% if folded %}{{ folded }} advisor{{ 'y' if folded == 1 else 'ies' }} folded
+        into the rows below, counted once as the upgrade that fixes them.
+      {% else %}Nothing on this page needed folding.{% endif %}
+    {% else %}Every advisory on its own row.{% endif %}
+  </span>
+</div>
+{% endif %}
+
+{% if hidden_unreachable %}
+<div class="arrange-bar">
+  <span class="arrange-label">Hidden</span>
+  <span class="arrange-note">{{ hidden_unreachable }} in packages the code does
+    not reach, left out of this list.
+    <a href="{{ base }}/findings?{{ page_query }}{% if page_query %}&{% endif %}reach=any">Include them</a></span>
+</div>
+{% endif %}
 
 {# Drawing the line is a per organization decision, so it only appears once
    one is picked.  Without that it would either apply to everything at once,

@@ -178,10 +178,32 @@
   });
 
   /* Filters submit as you change them, no Apply button to forget. */
+  /* A drill down clears what it has just made meaningless.
+   *
+   * The where filters narrow each other: an account narrows organizations, an
+   * organization narrows repositories, a repository narrows branches.  Change
+   * one near the top and the choices below it are answers to a question nobody
+   * is asking any more.  Left alone they stay in the query string, so the page
+   * comes back filtered to a repository that is not in the organization on
+   * screen, showing nothing, with no visible reason why.
+   *
+   * So each of these clears the ones downstream of it before submitting.
+   * Order matters and is the order of the boxes on the page.
+   */
+  var CASCADE = ["connection", "org", "repo", "branch"];
+
   document.querySelectorAll("[data-autosubmit]").forEach(function (field) {
     field.addEventListener("change", function () {
       var form = field.closest("form");
-      if (form) { form.submit(); }
+      if (!form) { return; }
+      var at = CASCADE.indexOf(field.name);
+      if (at !== -1) {
+        CASCADE.slice(at + 1).forEach(function (name) {
+          var downstream = form.querySelector("[name=" + name + "]");
+          if (downstream) { downstream.value = ""; }
+        });
+      }
+      form.submit();
     });
   });
 

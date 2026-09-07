@@ -740,13 +740,47 @@ def findings(request: Request, user: User = Depends(current_user)):
             hidden_unreachable = max(
                 0, _filtered_findings(db, user, wider).count() - query.count())
 
-        orgs = [r[0] for r in rbac.visible_findings(db, user)
-                .with_entities(Finding.organization).distinct().all() if r[0]]
+        # The lists behind the four "where" dropdowns.
+        #
+        # Each one is narrowed by the choices above it and not by itself.  Not
+        # by itself, because a dropdown that only offers what is already
+        # selected is a dropdown you cannot change your mind with.  Narrowed by
+        # the ones above, because the whole point of a drill down is that
+        # picking an organization stops offering the four hundred repositories
+        # in the other twenty five.
+        #
+        # These deliberately ignore severity, state, triage and the rest.  A
+        # repository whose findings are all waived should still be pickable, or
+        # the filter that would show you them is the one that hid it.
+        def _choices(column, **fixed):
+            picked = rbac.visible_findings(db, user)
+            if fixed.get("connection"):
+                picked = picked.filter(Finding.connection == fixed["connection"])
+            if fixed.get("org"):
+                picked = picked.filter(Finding.organization == fixed["org"])
+            if fixed.get("repo"):
+                picked = picked.filter(Finding.repository == fixed["repo"])
+            return sorted({r[0] for r in
+                           picked.with_entities(column).distinct().all() if r[0]})
+
+        orgs = _choices(Finding.organization, connection=connection)
+        repo_choices = _choices(Finding.repository, connection=connection, org=org)
+        branch_choices = _choices(Finding.branch, connection=connection,
+                                  org=org, repo=repo_filter)
+        # A selection that the narrowing has made unavailable still has to be
+        # in its own list, or the box would show something other than what is
+        # actually being filtered on and the page would be lying about itself.
+        for chosen, options in ((org, orgs), (repo_filter, repo_choices),
+                                (branch_filter, branch_choices)):
+            if chosen and chosen not in options:
+                options.append(chosen)
+                options.sort()
 
         context = _shared(db, user)
         context.update(
             active_page="findings", rows=rows, total=total, offset=offset,
-            limit=limit, orgs=sorted(orgs), severities=SEVERITIES,
+            limit=limit, orgs=orgs, repo_choices=repo_choices,
+            branch_choices=branch_choices, severities=SEVERITIES,
             kinds=[k.value for k in FindingKind],
             states=[s.value for s in FindingState],
             filters={"severity": severity, "kind": kind, "state": state,
