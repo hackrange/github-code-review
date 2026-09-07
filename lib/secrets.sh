@@ -79,6 +79,158 @@ JWT_PRIVILEGE_CLAIMS='["roles","role","scope","scp","scopes","permissions",
   "perms","groups","grp","authorities","entitlements","admin","is_admin",
   "isadmin","tenant","tid","act","azp","client_id","appid"]'
 
+# glob -> anchored regex for one path segment.
+#
+# The code pass hands its list to semgrep and lets semgrep decide what a glob
+# means.  There is no engine to hand this one to: the filtering happens after
+# both engines have reported, because that is where the cost is.  So the
+# meaning is defined here, and it is deliberately the plain reading somebody
+# writing the box would expect: a pattern matches if any single segment of the
+# path matches it whole.
+#
+#   result*/   matches  a/result1/b.txt      (the directory, and all under it)
+#   *.har      matches  traffic/session.har  (the file)
+#   Blueprint/ matches  Blueprint/x/y.json
+#
+# A trailing slash is stripped rather than honoured, so "coverage" and
+# "coverage/" are the same thing.  Somebody writing one and meaning the other
+# is not a distinction worth failing on.
+_glob_to_regex() {
+  local g="${1%/}" out="" i c
+  for (( i=0; i<${#g}; i++ )); do
+    c="${g:i:1}"
+    case "$c" in
+      '*') out+='[^/]*' ;;
+      '?') out+='[^/]' ;;
+      '.'|'+'|'('|')'|'['|']'|'^'|'$'|'{'|'}'|'|'|'\\') out+="\\$c" ;;
+      *)   out+="$c" ;;
+    esac
+  done
+  printf '^%s$' "$out"
+}
+
+# The configured globs as a JSON array of segment regexes.
+_secrets_exclude_regexes() {
+  local g out=()
+  while IFS= read -r g; do
+    [[ -z "$g" ]] && continue
+    out+=("$(_glob_to_regex "$g")")
+  done < <(cfg_arr '.scan.secrets.exclude_paths')
+  printf '%s\n' "${out[@]+"${out[@]}"}" | jq -R . | jq -sc '[ .[] | select(. != "") ]'
+}
+
+# Drop findings under an excluded path, before anything expensive touches them.
+#
+# This sits between normalization and derive_secret_facts on purpose.  Every
+# candidate that gets past here is fingerprinted twice, entropy scored, JWT
+# decoded and checked against the branch heads, and on a repository of recorded
+# test traffic that is tens of thousands of candidates that were never going to
+# be a credential.  Dropping them at the engine would have been tidier and is
+# not possible: the two engines take different flags and one of them takes
+# none, so the honest place is here, where the report is one shape.
+#
+# What was dropped is written out rather than forgotten, so the scan can say so
+# and so the repository gets one finding about it.  A filter nobody can see is
+# how a scanner starts quietly missing things.
+secrets_drop_excluded() {
+  local dropped_out="${1:-/dev/null}"
+  : > "$dropped_out"
+  local res; res=$(_secrets_exclude_regexes)
+  if [[ -z "$res" || "$res" == "[]" ]]; then cat; return 0; fi
+
+  # One pass, no temporary file.  The obvious shape is to buffer, ask which
+  # rows are dropped, then ask which are kept, and that would put every secret
+  # in the repository on disk in cleartext for the length of two jq runs.  So
+  # the decision is tagged onto each row as it goes past and split downstream,
+  # and the values stay in the pipe.  tojson keeps a row on one line whatever
+  # is in it, which is what makes the split safe.
+  jq -r --argjson res "$res" '
+    ((.file // "") | split("/")) as $segs
+    | if any($res[]?; . as $re | any($segs[]?; test($re)))
+      then "D\t" + (.file // "")
+      else "K\t" + tojson
+      end' 2>/dev/null \
+  | awk -v drop="$dropped_out" -F'\t' '
+      $1 == "D" { print substr($0, 3) >> drop; next }
+      $1 == "K" { print substr($0, 3) }'
+}
+
+# One finding per repository per file type the credential pass skipped.
+#
+# Not one per file.  A repository of recorded test traffic holds hundreds of
+# them, and a finding per file would rebuild the flood this exclusion exists to
+# stop, one category down.  A single row saying "forty seven session recordings
+# are committed here", with the paths on it, is the actionable version of what
+# those thousands of candidates were trying to say.
+#
+# Medium, and the reason is the interesting part.  Not high, because the pass
+# deliberately did not open these files, and claiming a severity about contents
+# nobody inspected would be asserting evidence this scan declined to collect.
+# Not low, because a session recording holds Authorization headers and cookies
+# as they were sent, and low is the band that gets filtered out of every report
+# by default, which would leave the reader worse off than the noise did.
+secrets_skipped_findings() {
+  local dropped="$1" full_name="$2" branch="$3" web="${4:-https://github.com}"
+  [[ -s "$dropped" ]] || { echo '[]'; return 0; }
+
+  # Grouped by extension, falling back to the top directory for paths with no
+  # extension, because "what kind of thing was skipped" is the question a
+  # reader has and a list of four hundred paths is not an answer to it.
+  sort -u "$dropped" \
+  | jq -R -s -c \
+      --arg repo "$full_name" --arg br "$branch" --arg web "$web" \
+      --arg org "${full_name%%/*}" '
+    def kind:
+      if test("\\.[A-Za-z0-9]+$") then (capture("\\.(?<e>[A-Za-z0-9]+)$").e | ascii_downcase)
+      else (split("/") | .[0]) end;
+    # How to name the group in a sentence.  An extension reads as ".har file";
+    # a directory does not, and ".Blueprint file" is the sort of wording that
+    # makes a reader distrust the rest of the report.
+    def phrase: if test("\\.[A-Za-z0-9]+$") then "." + kind + " file(s)" else "file(s) under " + kind + "/" end;
+    split("\n") | map(select(length > 0))
+    | group_by(kind)
+    | map({
+        organization: $org,
+        repository: $repo,
+        branch: $br,
+        file: (.[0]),
+        start_line: 0,
+        category: "misconfiguration",
+        finding_type: "skipped_by_credential_scan",
+        rule_id: ("GCR-SECRETS-SKIPPED-" + (.[0] | kind | ascii_upcase)),
+        rule_name: ("committed " + (.[0] | phrase)),
+        severity: "medium",
+        severity_reason:
+          ("a file type that routinely carries credentials is committed here, "
+           + "and the credential pass is configured to skip it, so nothing "
+           + "has read what is inside"),
+        title: ((length | tostring) + " " + (.[0] | phrase)
+                + " committed, not read by the credential pass"),
+        description:
+          ("The credential pass skipped " + (length | tostring) + " "
+           + (.[0] | phrase) + " in this repository because the skip "
+           + "list covers them.  Recorded traffic and archives are excluded "
+           + "by default: a single one can hold tens of thousands of "
+           + "candidate values, none of which a person can act on, and "
+           + "reading them is what stops a scan finishing.  That is a "
+           + "reasonable trade and it is not free, so it is reported rather "
+           + "than done quietly.  If these files should not be in version "
+           + "control, remove them.  If they should, and you want them read, "
+           + "take the pattern out of Skip these paths under Credentials."),
+        remediation:
+          ("Remove the files from version control, or narrow the skip list "
+           + "under Settings, Credentials, Skip these paths."),
+        paths: (.[0:50]),
+        occurrences: length,
+        triage: "review",
+        url: ($web + "/" + $repo + "/blob/" + $br + "/" + .[0])
+      })
+  ' || {
+    log_warn "$full_name: could not build the skipped-file finding, so this run does not say what the credential pass left out"
+    echo '[]'
+  }
+}
+
 derive_secret_facts() {
   local dir="${1:-}"
   local pre suf maxmask pp
@@ -122,6 +274,10 @@ derive_secret_facts() {
   local bfd
   exec {bfd}< "$buffered"; rm -f "$buffered"
 
+  # Asked once.  This is the run's clock, not the finding's, and it was being
+  # forked per finding to answer the same question every time.
+  local now_epoch; now_epoch=$(date -u +%s)
+
   local line secret fp merge redacted slen
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
@@ -147,7 +303,7 @@ derive_secret_facts() {
     printf '%s' "$line" | jq -c \
       --arg fp "$fp" --arg merge "$merge" --arg redacted "$redacted" \
       --argjson slen "$slen" --argjson pp "$pp" --argjson live "$live" \
-      --argjson now "$(date -u +%s)" --argjson idc "$JWT_IDENTITY_CLAIMS" \
+      --argjson now "$now_epoch" --argjson idc "$JWT_IDENTITY_CLAIMS" \
       --argjson prc "$JWT_PRIVILEGE_CLAIMS" '
       # A JSON web token is not opaque.  Two of its three parts are base64 of
       # plain JSON and anybody holding the token can read them without the

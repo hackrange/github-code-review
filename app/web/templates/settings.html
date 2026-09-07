@@ -141,6 +141,18 @@
       <input type="checkbox" name="secrets.resolve_authors" value="1"
              {{ 'checked' if values['secrets.resolve_authors'] }}> Find who committed it
     </label>
+    <label class="wide">Skip these paths
+      <input type="text" name="secrets.exclude_paths"
+             value="{{ values['secrets.exclude_paths'] | join(', ') }}"
+             placeholder="result*/, *.har, *.zip">
+      <span class="faint small">The same idea as the box under Code analysis,
+        and a separate list because the two passes cost differently.  Reading a
+        recorded browser session or an archive produces thousands of candidate
+        values that never verify, and checking them one at a time is what stops
+        a scan finishing.  Whatever is skipped here is reported as a finding
+        against the repository, so a file nobody read is still a file somebody
+        hears about.</span>
+    </label>
     <label>Placeholder threshold
       <input type="number" name="secrets.min_entropy" min="0" max="8" step="0.1"
              value="{{ values['secrets.min_entropy'] }}">

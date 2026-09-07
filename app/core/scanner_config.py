@@ -247,6 +247,10 @@ def build(session, out_dir: Path, orgs=None, repos=None, connection=None) -> Pat
     # one enormous file, and reading it whole is what took the scanner to 28 GB
     # and got it killed by the kernel.
     secrets["gitleaks"]["max_target_megabytes"] = _int(session, "secrets.max_file_mb", 25)
+    # Read by both engines rather than one, unlike the code pass equivalent.
+    # A list that half the pass ignores is worse than no list: it reads as
+    # done and is not.
+    secrets["exclude_paths"] = _list(session, "secrets.exclude_paths")
 
     secrets["gitleaks"]["config_path"] = str(RULES_DIR / "gitleaks-extra.toml")
     # The allowlist used to be a second file.  Exclusions cover the same ground

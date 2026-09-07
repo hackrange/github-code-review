@@ -133,6 +133,26 @@ DEFAULTS = {
                                 "Paths the code pass skips. Generated output, "
                                 "not source."),
 
+    # The same idea for credentials, and it needed saying separately because
+    # the two passes cost very differently.  A generated directory turns one
+    # low confidence code rule into thousands of findings, which is annoying.
+    # It turns a credential scan into one that does not finish at all: every
+    # candidate is fingerprinted, entropy scored and checked against the branch
+    # heads one at a time, so a repository of recorded test traffic can spend
+    # nine hours and report nothing.
+    #
+    # Session recordings and archives are here by default and the two other
+    # lists do not carry them, because they are the shapes that only hurt on
+    # this pass.  A .har is a transcript of requests with every Authorization
+    # header and cookie in it, and a .zip is a container whose contents cannot
+    # be pointed at by line number even when something is found.
+    "secrets.exclude_paths":   (["result*/", "Blueprint/", "AppvanceScripts/",
+                                 "reports/", "test-results/", "allure-results/",
+                                 "coverage/", "screenshots/", "videos/",
+                                 "*.har", "*.zip", "*.log", "*.bak"], False,
+                                "Paths the credential pass skips. Generated "
+                                "output and recorded traffic, not source."),
+
     # ---- branches ----
     "branches.mode":           ("all", False, "all, default, or list."),
     "branches.include":        ([], False, "Branch globs to include when the mode is list."),
@@ -332,7 +352,8 @@ SECTIONS = [
                   "branches.full_history", "branches.max_per_repo",
                   "branches.stale_days"]),
     ("Detection", ["secrets.enabled", "secrets.verify", "secrets.min_entropy",
-                   "secrets.resolve_authors", "code.enabled", "code.rulesets",
+                   "secrets.resolve_authors", "secrets.exclude_paths",
+                   "code.enabled", "code.rulesets",
                    "sbom.enabled", "sbom.enrich", "sbom.scan_branches",
                    "sbom.denied_licenses", "sbom.flagged_licenses",
                    "vulns.enabled", "vulns.min_severity", "access.enabled",

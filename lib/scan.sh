@@ -212,6 +212,11 @@ scan_one_repo() {
   if cfg_bool '.scan.secrets.enabled' true; then
     local raw; raw=$(tmp_file raw_findings)
     : > "$raw"
+    # Paths the exclude list kept out of this pass.  Only paths, never values,
+    # so unlike the raw findings beside it this one is not sensitive.  It is
+    # collected so the repository can be told what was not looked at.
+    SECRETS_DROPPED=$(tmp_file secrets_dropped)
+    : > "$SECRETS_DROPPED"
     local engines; engines=$(cfg_json '.scan.secrets.engines // []')
 
     local want_gl want_th
@@ -293,7 +298,9 @@ scan_one_repo() {
           export GHSCAN_LOG_OPTS="$range"
           log_info "[$full_name] gitleaks ($range)"
           run_gitleaks "$clone_dir" "$full_name" "$gl"
-          normalize_gitleaks "$gl" "$full_name" | derive_secret_facts "$clone_dir" >> "$raw"
+          normalize_gitleaks "$gl" "$full_name" \
+            | secrets_drop_excluded "$SECRETS_DROPPED" \
+            | derive_secret_facts "$clone_dir" >> "$raw"
           # The engine report is every credential it found, in full and
           # unmasked.  It has been read, so it goes now rather than sitting
           # there until the run ends.
@@ -304,7 +311,9 @@ scan_one_repo() {
         local th; th=$(tmp_file trufflehog_out)
         log_info "[$full_name] trufflehog (full history, all refs)$verify_note"
         run_trufflehog "$clone_dir" "$full_name" "$th"
-        normalize_trufflehog "$th" "$full_name" | derive_secret_facts "$clone_dir" >> "$raw"
+        normalize_trufflehog "$th" "$full_name" \
+          | secrets_drop_excluded "$SECRETS_DROPPED" \
+          | derive_secret_facts "$clone_dir" >> "$raw"
         wipe_file "$th"
       fi
     else
@@ -319,13 +328,17 @@ scan_one_repo() {
         if (( want_gl )); then
           local glb; glb=$(tmp_file gitleaks_wt)
           run_gitleaks_worktree "$clone_dir" "$full_name" "$glb"
-          normalize_gitleaks "$glb" "$full_name" | derive_secret_facts "$clone_dir" | tag_branch "$b" "$clone_dir" >> "$raw"
+          normalize_gitleaks "$glb" "$full_name" \
+            | secrets_drop_excluded "$SECRETS_DROPPED" \
+            | derive_secret_facts "$clone_dir" | tag_branch "$b" "$clone_dir" >> "$raw"
           wipe_file "$glb"
         fi
         if (( want_th )); then
           local thb; thb=$(tmp_file trufflehog_wt)
           run_trufflehog_worktree "$clone_dir" "$full_name" "$thb"
-          normalize_trufflehog "$thb" "$full_name" | derive_secret_facts "$clone_dir" | tag_branch "$b" "$clone_dir" >> "$raw"
+          normalize_trufflehog "$thb" "$full_name" \
+            | secrets_drop_excluded "$SECRETS_DROPPED" \
+            | derive_secret_facts "$clone_dir" | tag_branch "$b" "$clone_dir" >> "$raw"
           wipe_file "$thb"
         fi
       done
@@ -336,7 +349,9 @@ scan_one_repo() {
       local gh; gh=$(tmp_file gh_alerts)
       run_github_secret_scanning "$full_name" "$gh"
       local ghnd; ghnd=$(tmp_file gh_nd)
-      normalize_github_alerts "$gh" "$full_name" | derive_secret_facts "" > "$ghnd"
+      normalize_github_alerts "$gh" "$full_name" \
+        | secrets_drop_excluded "$SECRETS_DROPPED" \
+        | derive_secret_facts "" > "$ghnd"
       wipe_file "$gh"
       if [[ -s "$ghnd" ]]; then
         enrich_github_alert_locations "$full_name" "$ghnd"
@@ -601,7 +616,19 @@ scan_one_repo() {
   # the people who own the repository.  Then both sets of misconfigurations
   # become one list, because that is what they are.
   WORKFLOW_JSON=$(workflows_add_admins "$WORKFLOW_JSON" "$ACCESS_JSON")
-  MISCONFIG_JSON=$(printf '%s\n%s' "$MISCONFIG_JSON" "$WORKFLOW_JSON" | jq -c -s 'add // []')
+
+  # What the credential pass was told not to read.  A skip list that reports
+  # nothing is a scanner quietly getting smaller, so the repository gets one
+  # row per file type rather than silence.
+  local SKIPPED_JSON='[]'
+  if [[ -n "${SECRETS_DROPPED:-}" && -s "${SECRETS_DROPPED:-/dev/null}" ]]; then
+    SKIPPED_JSON=$(secrets_skipped_findings "$SECRETS_DROPPED" "$full_name" \
+                     "$default_branch" "$(cfg '.github.web_url' 'https://github.com')")
+    log_info "[$full_name] credential pass skipped $(wc -l < "$SECRETS_DROPPED") path(s) on the skip list"
+  fi
+
+  MISCONFIG_JSON=$(printf '%s\n%s\n%s' "$MISCONFIG_JSON" "$WORKFLOW_JSON" "$SKIPPED_JSON" \
+                   | jq -c -s 'add // []')
 
   # The misconfiguration list is only whole here, once the workflow findings
   # have been folded into it, so this is the earliest honest place to say the

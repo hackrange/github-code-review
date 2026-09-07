@@ -1497,6 +1497,7 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
 
         put("secrets.enabled", _checked(form, "secrets.enabled"))
         put("secrets.verify", _checked(form, "secrets.verify"))
+        put("secrets.exclude_paths", _csv_list(text("secrets.exclude_paths")))
         put("secrets.resolve_authors", _checked(form, "secrets.resolve_authors"))
         put("secrets.min_entropy", entropy)
         put("code.enabled", _checked(form, "code.enabled"))

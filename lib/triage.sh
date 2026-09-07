@@ -114,7 +114,43 @@ _live_at_head() {
   if (( _LIVE_PRIMED )) && [[ "$secret" != *$'\n'* ]]; then
     local rows="${_LIVE_CACHE[$secret]:-}"
     [[ -z "$rows" ]] && { echo '[]'; return; }
-    printf '%s' "$(printf '%s' "$rows" | sed '/^$/d' | sort -u | jq -R . | jq -sc '.')"
+    # Built here rather than by piping through sed, sort and two jq processes.
+    # This is the hit path, so those four ran for every cached secret in the
+    # repository, and on a repository with tens of thousands of candidates
+    # four processes each is most of the run.  Branch names cannot contain a
+    # quote, a backslash or a control character, so the only escaping a name
+    # could need is escaping git would have refused in the first place.
+    local -A seen=()
+    local -a uniq=()
+    local r
+    while IFS= read -r r; do
+      [[ -z "$r" ]] && continue
+      [[ -n "${seen[$r]:-}" ]] && continue
+      seen[$r]=1
+      uniq+=("$r")
+    done <<< "$rows"
+    (( ${#uniq[@]} == 0 )) && { echo '[]'; return; }
+    # Sorted, because the pipeline this replaces ended in sort -u and the
+    # report is compared against itself between runs.  An insertion sort is
+    # the right shape here: the list is one entry per branch holding the
+    # value, it is capped at two hundred, and the alternative is the process
+    # this change exists to remove.
+    # [[ > ]] and not (( > )): the second is arithmetic, and on branch names
+    # it does not compare them, it tries to evaluate them.  Both this and
+    # sort read LC_COLLATE, so the order is the same one the pipeline gave.
+    local i j key
+    for (( i = 1; i < ${#uniq[@]}; i++ )); do
+      key="${uniq[i]}"
+      j=$(( i - 1 ))
+      while (( j >= 0 )) && [[ "${uniq[j]}" > "$key" ]]; do
+        uniq[j+1]="${uniq[j]}"
+        j=$(( j - 1 ))
+      done
+      uniq[j+1]="$key"
+    done
+    local out="" n
+    for n in "${uniq[@]}"; do out+=",\"$n\""; done
+    printf '[%s]' "${out:1}"
     return
   fi
 
