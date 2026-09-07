@@ -421,7 +421,29 @@ scan_one_repo() {
 
   # Where the walk reached, for the next run to carry on from.
   HISTORY_FROM=""; HISTORY_COMPLETE="false"
-  if (( window_days > 0 )) && (( need_clone )); then
+  # A full walk, and only when one actually happened.
+  #
+  # No window means this run read every commit on every ref, which is the
+  # strongest evidence a history can be complete, and it was the one case that
+  # recorded nothing: the marker logic below only ran for windowed runs, so an
+  # estate scanned end to end came out of it with every repository still saying
+  # nobody had walked anything.  Turn a window on afterwards and the catch up
+  # pass starts from nothing and spends its nights walking backwards through
+  # history that had already been read.
+  #
+  # Three conditions and not one, because claiming a history is complete is a
+  # claim that stops anything ever looking again.  The clone has to have
+  # happened, the credential pass has to be the thing that reads history and
+  # has to be switched on, and the run has to have been walking history rather
+  # than checking out branch heads.  Any of those false and this stays silent,
+  # which leaves the repository looking unwalked: the safe direction, since the
+  # worst that costs is a pass that had nothing to do.
+  if (( window_days == 0 )) && (( need_clone )) \
+     && cfg_bool '.scan.secrets.enabled' true \
+     && cfg_bool '.github.branches.scan_full_history' true; then
+    HISTORY_COMPLETE="true"
+    HISTORY_FROM=$(date -u +%Y-%m-%d)
+  elif (( window_days > 0 )) && (( need_clone )); then
     if [[ "$history_done" == "true" ]]; then
       # Already at the far end; keep it that way and move the marker forward so
       # the next run only looks at what is newer still.
