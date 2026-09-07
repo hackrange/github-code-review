@@ -93,12 +93,21 @@
              always do this; nothing ever asked it to, so the smallest thing
              anybody could scan was thirty one repositories to re-read one. #}
           <td class="nowrap">
+            {# Grayed out while that account has a scan in flight, because the
+               scanner claims a connection for the length of a run and would
+               refuse this anyway.  A button that is going to be refused is
+               worse than no button: it reads as broken rather than as busy. #}
+            {% if r.connection and r.connection in scanning_now %}
+            <button class="btn sm" type="button" disabled
+                    title="{{ r.connection }} is being scanned now">Scanning</button>
+            {% else %}
             <form method="post" action="{{ base }}/repositories/{{ r.id }}/scan"
                   style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn sm" type="submit"
                       title="Scan just this repository now">Scan</button>
             </form>
+            {% endif %}
           </td>
           {% endif %}
         </tr>

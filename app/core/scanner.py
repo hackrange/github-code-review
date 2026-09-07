@@ -718,7 +718,7 @@ def _wait_streaming(process, timeout: int):
 
 def run_scan(triggered_by: str = "", trigger: str = "manual",
              orgs=None, repos=None, only=None, connection=None,
-             _holds_lock: bool = False) -> dict:
+             branch_names=None, _holds_lock: bool = False) -> dict:
     """Do a scan, start to finish.
 
     Blocks until it is done, so call it on a worker thread.  Returns a summary
@@ -740,7 +740,7 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
         log.warning("reports directory problem: %s", problem)
 
     scope = json.dumps({"orgs": list(orgs or []), "repos": list(repos or []),
-                        "only": only or ""})
+                        "branches": list(branch_names or []), "only": only or ""})
 
     # What this scan is aimed at, in the audit log's own words.  "scan.started"
     # with nothing beside it says a scan started, which nobody needed telling.
@@ -817,7 +817,8 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
                     live_connection = connection_store.by_id(db, connection.id)
                 config_path = scanner_config.build(db, Path(tmp), orgs=orgs,
                                                    repos=repos,
-                                                   connection=live_connection)
+                                                   connection=live_connection,
+                                                   branch_names=branch_names)
                 env = scanner_config.scanner_env(db, _scanner_env(),
                                                  connection=live_connection)
                 method = (live_connection.auth_method if live_connection is not None
@@ -1387,9 +1388,28 @@ def connection_is_scanning(connection_id) -> bool:
         return connection_id in _scanning_connections
 
 
+def connections_scanning_now() -> set:
+    """The names of every account with a scan in flight.
+
+    Named rather than numbered because the pages that ask this hold a
+    repository, and a repository records the account by name.  Read from the
+    same set the claim uses, so what a button says and what the scanner would
+    actually do cannot drift apart.
+    """
+    from app.core import connections as connection_store
+
+    with _process_lock:
+        ids = set(_scanning_connections)
+    if not ids:
+        return set()
+    with session_scope() as db:
+        return {row.name for row in connection_store.all_connections(db)
+                if row.id in ids}
+
+
 def start_background(triggered_by: str = "", trigger: str = "manual",
                      orgs=None, repos=None, only=None,
-                     connection_id=None) -> bool:
+                     connection_id=None, branch_names=None) -> bool:
     """Kick a scan off and come straight back.
 
     The web request should not sit there for an hour waiting.
@@ -1433,7 +1453,7 @@ def start_background(triggered_by: str = "", trigger: str = "manual",
         target, kwargs = run_scan, {
             "triggered_by": triggered_by, "trigger": trigger,
             "orgs": orgs, "repos": repos, "only": only,
-            "connection": named}
+            "connection": named, "branch_names": branch_names}
     else:
         target, kwargs = run_every_connection, {
             "triggered_by": triggered_by, "trigger": trigger, "only": only,

@@ -1348,19 +1348,38 @@ async def scan_one_repository(repo_id: int, request: Request,
                       if row.connection else None)
         connection_id = getattr(connection, "id", None)
 
+    # One branch, when the caller named one.  A finding lives on a branch, and
+    # re-reading it means reading that branch; walking the other thirty six is
+    # the same waste as scanning the other thirty repositories.  Validated as a
+    # branch name rather than trusted, because it reaches a scanner config.
+    wanted = clean_text((await request.form()).get("branch", ""), "Branch",
+                        limit=255, required=False)
+    branches = [wanted] if wanted else None
+
     back = request.headers.get("referer") or "/repositories"
     if "://" in back:
         back = "/" + back.split("/", 3)[-1] if back.count("/") > 2 else "/repositories"
 
+    # Two different refusals, and saying which is the whole value of saying
+    # anything.  "That account is mid scan" is a wait of minutes and the
+    # repository is probably being read anyway; "every slot is busy" is a wait
+    # on unrelated work.  One message for both taught people to ignore it.
+    if connection_id is not None and scanner.connection_is_scanning(connection_id):
+        return redirect("%s%smsg=%s&kind=warn"
+                        % (back, "&" if "?" in back else "?",
+                           quote("That account is being scanned right now, so "
+                                 "this repository is already in hand.")))
     if not scanner.start_background(triggered_by=user.username, trigger="manual",
-                                    repos=[full_name],
+                                    repos=[full_name], branch_names=branches,
                                     connection_id=connection_id):
         return redirect("%s%smsg=%s&kind=warn"
                         % (back, "&" if "?" in back else "?",
                            quote("Every scan slot is busy. Try again shortly.")))
     return redirect("%s%smsg=%s&kind=ok"
                     % (back, "&" if "?" in back else "?",
-                       quote("Scanning %s now." % full_name)))
+                       quote("Scanning %s%s now."
+                             % (full_name,
+                                (" on " + wanted) if wanted else ""))))
 
 
 # ---------------------------------------------------------------------------

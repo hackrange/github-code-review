@@ -11,9 +11,22 @@
 {% if f.vulnerability_id %}
 <div class="modal-backdrop" id="advisory-modal" data-sticky hidden>
   <div class="modal">
-    <div class="modal-head">{{ f.vulnerability_id }}
+    {# "on this system", because five of the seven rows below are this
+       install's judgments about this estate and only two came from the
+       advisory.  Everything framing this panel said otherwise: it opens from a
+       button labeled with the CVE, in a row headed Advisory, and ends with a
+       link to the real advisory, so a row reading "could not tell" looked like
+       the tracker hedging about its own vulnerability rather than this scanner
+       saying it could not analyze the code. #}
+    <div class="modal-head">{{ f.vulnerability_id }} on this system
       <button type="button" class="modal-close" data-close-modal>&times;</button></div>
     <div class="modal-body">
+      <p class="faint small">What this advisory means here: how it was graded on
+        this estate, whether the code reaches it, and whether the build already
+        deals with it.  The advisory itself is
+        {% set source = f.url | web_url %}
+        {% if source %}at <span class="mono">{{ source.split('/')[2] }}</span>,
+        linked below{% else %}published by whoever issued it{% endif %}.</p>
       {% if f.title %}<p>{{ f.title }}</p>{% endif %}
 
       <table class="small">
@@ -159,12 +172,25 @@
        the whole account it sits in.  Offered on every kind, because the kinds
        a recheck cannot answer are exactly the ones that need this. #}
     {% if can_scan and repo_info and repo_info.id %}
+      {% if repo_info.connection and repo_info.connection in scanning_now %}
+      {# Not offered while that account is mid scan.  The scanner holds a
+         connection for the length of a run and would turn this down, and a
+         button that gets refused reads as broken rather than as busy. #}
+      <button class="btn" type="button" disabled
+              title="{{ repo_info.connection }} is being scanned now">Scanning now</button>
+      {% else %}
       <form method="post" action="{{ base }}/repositories/{{ repo_info.id }}/scan"
             style="display:inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {# The branch this finding is on, not every branch in the repository.
+           A finding lives on a branch and re-reading it means reading that
+           branch. #}
+        <input type="hidden" name="branch" value="{{ f.branch or '' }}">
         <button class="btn" type="submit"
-                title="Scan this repository now, rather than the whole account">Scan this repository</button>
+                title="Scan {{ f.repository }}{% if f.branch %} on {{ f.branch }}{% endif %} now, rather than the whole account">
+          Scan this repository{% if f.branch %} on {{ f.branch }}{% endif %}</button>
       </form>
+      {% endif %}
     {% endif %}
     {% if f.kind.value in ['credential', 'code'] and f.file_path %}
       {# Read only, and it does not take the scan lock, so it works while a

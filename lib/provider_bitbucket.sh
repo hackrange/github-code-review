@@ -92,6 +92,35 @@ provider_bitbucket_no_groups_warning() {
 }
 
 provider_bitbucket_list_repos() {
+  # Named repositories, and nothing else.
+  #
+  # include_repos adds to whatever discovery finds, which is right for the
+  # setting it comes from: somebody names a repository outside the
+  # organizations they scan and wants it as well.  It is wrong for a scan of
+  # one repository.  Asking for one, in an account whose scope is an
+  # organization, enumerated the organization and then added the one back,
+  # which is every repository in it and exactly what naming one was meant to
+  # avoid.
+  #
+  # So this is a separate key and it returns early.  No organizations, no
+  # users, no affiliation sweep: the named repositories are the inventory.
+  local _only; _only=$(cfg_json '.github.scope.only_repos // []' | jq 'length')
+  if (( _only > 0 )); then
+    local _raw; _raw=$(tmp_file onlyrepos)
+    echo '[]' > "$_raw"
+    local _want _one _tmp; _tmp=$(tmp_file onlymerge)
+    while IFS= read -r _want; do
+      [[ -z "$_want" ]] && continue
+      log_info "scanning only: $_want"
+      _one=$(api_get "/repos/${_want}") || {
+        log_warn "cannot access repo '$_want'"; continue; }
+      printf '%s' "$_one" | jq -c '[.]' > "$_tmp"
+      jq -c --slurpfile c "$_tmp" '. + $c[0]' "$_raw" > "${_raw}.n" && mv -f "${_raw}.n" "$_raw"
+    done < <(cfg_arr '.github.scope.only_repos')
+    provider_bitbucket_normalize "$_raw"
+    return 0
+  fi
+
   local raw; raw=$(tmp_file bbrepos); echo '[]' > "$raw"
   local merge_f; merge_f=$(tmp_file bbmerge)
 

@@ -100,7 +100,8 @@ def _write_resume_state(session, out_dir: Path, connection) -> Path:
     return path
 
 
-def build(session, out_dir: Path, orgs=None, repos=None, connection=None) -> Path:
+def build(session, out_dir: Path, orgs=None, repos=None, connection=None,
+          branch_names=None) -> Path:
     """Write a scanner config and give back the path.
 
     orgs and repos override what is stored, which is how a scan of one
@@ -156,6 +157,20 @@ def build(session, out_dir: Path, orgs=None, repos=None, connection=None) -> Pat
         scope["include_repos"] = widen(connection.scope_repos())
     else:
         scope["include_repos"] = _list(session, "scan.repositories")
+
+    # Named repositories, and nothing else.
+    #
+    # include_repos adds to what discovery finds; it does not replace it.  That
+    # is right for the setting it comes from, where somebody names a repository
+    # outside the organizations they scan and wants it as well.  It is wrong
+    # for a scan of one repository: asking for one repository in an account
+    # whose scope is an organization enumerated the organization and added the
+    # one, which is every repository in it.
+    #
+    # So a separate key rather than a change of meaning.  Set only when a
+    # caller named repositories on purpose, and the providers skip every kind
+    # of discovery when it is there.
+    scope["only_repos"] = widen(repos) if repos else []
     scope["exclude_repos"] = _list(session, "scan.exclude_repos")
     scope["exclude_repo_regex"] = ""
     scope["include_archived"] = bool(store.get(session, "scan.include_archived"))
@@ -179,6 +194,22 @@ def build(session, out_dir: Path, orgs=None, repos=None, connection=None) -> Pat
     # branch and giving up everything else.
     branches["max_per_repo"] = _int(session, "branches.max_per_repo", 0)
     branches["stale_days"] = _int(session, "branches.stale_days", 0)
+
+    # One branch, when a caller asked about one branch.
+    #
+    # A finding is on a branch, and re-reading it means reading that branch.
+    # Walking the other thirty six to answer about one is the same shape of
+    # waste as scanning thirty other repositories to answer about one, and it
+    # is the reason this was slow enough to be worth a button in the first
+    # place.  The stale and per repository limits are lifted with it: they
+    # exist to keep a sweep bounded, and a caller naming a branch has already
+    # bounded it.
+    if branch_names:
+        branches["mode"] = "list"
+        branches["include"] = list(branch_names)
+        branches["exclude"] = []
+        branches["max_per_repo"] = 0
+        branches["stale_days"] = 0
 
     # A connection can name its own branches, and when it does they win.
     #

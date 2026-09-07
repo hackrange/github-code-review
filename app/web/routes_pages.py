@@ -38,6 +38,20 @@ SEVERITIES = ["critical", "high", "medium", "low", "info", "unknown"]
 PAGE_SIZES = [100, 500, 1000]
 
 
+def _scanning_now() -> set:
+    """Accounts with a scan in flight, for the buttons that must not offer one.
+
+    Imported here rather than at the top because the scanner pulls in the whole
+    engine stack, and the pages that need this are otherwise cheap.
+    """
+    from app.core import scanner
+
+    try:
+        return scanner.connections_scanning_now()
+    except Exception:            # noqa: BLE001 - a button is not worth a 500
+        return set()
+
+
 def _shared(db, user: User) -> dict:
     """The handful of things the shell needs on every page."""
     pending = 0
@@ -977,6 +991,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        can_describe=rbac.can(user, "repo.describe"),
                        repo_info=about,
                        can_scan=rbac.can(user, "scan.run"),
+                       scanning_now=_scanning_now(),
                        on_branches=on_branches,
                        certification=certification,
                        can_certify=rbac.can(user, "repo.certify"),
@@ -1108,6 +1123,7 @@ def repositories(request: Request, user: User = Depends(current_user)):
         context = _shared(db, user)
         context.update(active_page="repositories", rows=rows, counts=counts,
                        can_scan=rbac.can(user, "scan.run"),
+                       scanning_now=_scanning_now(),
                        certified=badges, certified_filter=wanted)
         return page(request, "repositories.html", **context)
 
