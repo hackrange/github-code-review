@@ -134,7 +134,16 @@ _secrets_exclude_regexes() {
 # how a scanner starts quietly missing things.
 secrets_drop_excluded() {
   local dropped_out="${1:-/dev/null}"
-  : > "$dropped_out"
+  # Appended to, never truncated here.  This runs once per engine and per
+  # branch pass, five times over for a repository scanned across its history,
+  # and truncating at the top meant each pass wiped what the one before it had
+  # recorded.  The file then held only whatever the last pass happened to drop,
+  # which for a repository whose generated output is all on one earlier pass is
+  # nothing at all, and the finding that reports what was skipped said nothing
+  # while the filter was busy removing thirty thousand candidates.
+  #
+  # The one truncation that should happen is per repository, and the caller
+  # does it when it makes the file.
   local res; res=$(_secrets_exclude_regexes)
   if [[ -z "$res" || "$res" == "[]" ]]; then cat; return 0; fi
 
