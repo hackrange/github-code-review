@@ -819,6 +819,61 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         for finding in stale:
             if finding.fingerprint in seen_fingerprints:
                 continue
+            # A credential somebody proved was live is not closed by silence.
+            #
+            # Every other guard here reasons about coverage: did the pass run,
+            # did the walk finish, was this repository looked at.  Get any of
+            # those wrong and a finding is closed that should not have been.
+            # This one does not reason.  A verified credential was confirmed
+            # live by asking the provider that issued it, which is the
+            # strongest evidence this product ever holds about anything, and
+            # the only thing that should retire it is equally positive
+            # evidence: a run that looked and found it gone, or a person
+            # deciding.
+            #
+            # It is the difference in consequence that earns the exception.  A
+            # dependency finding closed by mistake is a number that is briefly
+            # wrong.  A live credential closed by mistake is an all clear on a
+            # working key, and the people who would have rotated it read the
+            # all clear and do nothing.  Twenty of them went that way in one
+            # night, four AWS tokens and two GitHub tokens among them, while
+            # every coverage guard in this loop was working as designed and
+            # simply had the wrong answer about coverage.
+            #
+            # So this sits above the coverage checks rather than beside them.
+            # Being sure the pass ran is a good reason to close most things and
+            # is not, on its own, a good enough reason to close this.
+            if (finding.kind == FindingKind.CREDENTIAL
+                    and getattr(finding, "verified", False)):
+                # Only a run that read everything may retire one, and it says
+                # so out loud when it does.
+                #
+                # Refusing outright was the first instinct and it is wrong: a
+                # credential that really was rotated would then stay open for
+                # ever, and findings that cannot close become the noise people
+                # learn to scroll past, which is how a real one gets missed.
+                # The bar is raised instead of removed.  A full walk with the
+                # credential pass finished genuinely looked everywhere this
+                # product can look, and that is positive evidence.  Anything
+                # less is not.
+                fully_read = (not windowed_run
+                              and finding.repository not in partial_history
+                              and "secrets" in (passes_done.get(
+                                  finding.repository) or {"secrets"}))
+                if not fully_read:
+                    counts["held_open"] = counts.get("held_open", 0) + 1
+                    counts["verified_held"] = counts.get("verified_held", 0) + 1
+                    continue
+                # Closing anyway, and never quietly.  Twenty of these were
+                # retired in one night by runs that had not looked, and the
+                # only reason anybody found out is that somebody read a
+                # dashboard and disbelieved it.  One line each, by name, so
+                # the next time it is in the log before it is on a screen.
+                log.warning("a credential that was verified live is being "
+                            "closed: %s in %s, rule %s, last seen %s",
+                            finding.vuln_id or finding.fingerprint,
+                            finding.repository, finding.rule or "?",
+                            finding.last_found_at)
             # The pass that would have found this one has to have finished.
             #
             # Absence from a report only means "fixed" if somebody looked.  A
