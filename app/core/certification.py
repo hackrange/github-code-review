@@ -39,6 +39,7 @@ ACTIVE = "active"        # reviewed, in date, and nothing has changed since
 STALE = "stale"          # in date, but the code has moved on
 LAPSED = "lapsed"        # the date has passed
 REVOKED = "revoked"      # somebody took it back
+NOT_APPLICABLE = "not_applicable"   # nobody is expected to review this
 NONE = "none"            # nobody has reviewed this
 
 
@@ -196,6 +197,63 @@ def revoke(session, repository: str, branch: str, actor: str,
     return row, ""
 
 
+def exemption(session, repository: str, branch: str):
+    """The record saying this branch is not expected to be signed off."""
+    from app.core.models import CertificationExemption
+
+    if not repository:
+        return None
+    return (session.query(CertificationExemption)
+            .filter(CertificationExemption.repository == repository)
+            .filter(CertificationExemption.branch == (branch or ""))
+            .one_or_none())
+
+
+def mark_not_applicable(session, repository: str, branch: str, reason: str,
+                        actor: str) -> tuple:
+    """Say no sign off is expected on this branch.  -> (row, why not).
+
+    A reason is required and held to the same length as a certification note.
+    This one removes work from somebody's list permanently, so it has to be
+    reviewable by whoever finds it later and wonders why the branch was never
+    looked at.
+    """
+    from app.core.models import CertificationExemption
+
+    if not repository:
+        return None, "There is no repository to mark."
+    reason = (reason or "").strip()
+    if len(reason) < 20:
+        return None, ("Say why no review is expected here.  Somebody is going "
+                      "to find this later and have to take it on trust.")
+
+    row = exemption(session, repository, branch)
+    if row is None:
+        row = CertificationExemption(repository=repository,
+                                     branch=(branch or ""))
+        session.add(row)
+    row.reason = reason[:4000]
+    row.marked_by = actor or ""
+    row.marked_at = utcnow()
+    session.flush()
+    log.info("%s marked %s on %s as not applicable for certification",
+             actor, repository, branch or "(default)")
+    return row, ""
+
+
+def clear_not_applicable(session, repository: str, branch: str,
+                         actor: str) -> tuple:
+    """Put the branch back among the ones a sign off is expected on."""
+    row = exemption(session, repository, branch)
+    if row is None:
+        return None, "That branch is not marked as not applicable."
+    session.delete(row)
+    session.flush()
+    log.info("%s put %s on %s back among the branches expecting a review",
+             actor, repository, branch or "(default)")
+    return row, ""
+
+
 def all_certifications(session, base=None) -> list:
     """Every sign off on record, newest first.
 
@@ -207,6 +265,95 @@ def all_certifications(session, base=None) -> list:
 
     query = base if base is not None else session.query(Certification)
     return query.order_by(Certification.certified_at.desc()).all()
+
+
+def coverage(session, repos, certifications=None, exemptions=None) -> dict:
+    """How much of what could be signed off has been.  -> a dict of counts.
+
+    The denominator is branches, not repositories and not certifications.  A
+    count of certifications answers "how many reviews exist", which is a number
+    that only ever goes up and tells nobody how much is left.  Branches answer
+    "how much of this has been read", which is the question somebody looking at
+    a coverage figure is actually asking.
+
+    Branches come from what the scanner recorded walking each repository, so
+    the denominator is the branches this product has actually looked at rather
+    than every ref that has ever existed on the host.  A repository nobody has
+    scanned yet contributes nothing to either side, which is right: it is not
+    coverage somebody owes, it is a scan somebody owes.
+
+    Exempted branches come out of the denominator entirely.  They are not
+    counted as done and they are not counted as outstanding, because a total
+    that includes branches nobody intends to review measures the wrong thing,
+    and a percentage nobody believes gets ignored rather than argued with.
+
+    Every argument is a query so the caller can narrow all three the same way.
+    Narrowing one and not the others is how a reader ends up being shown a
+    percentage of somebody else's estate.
+    """
+    import json as _json
+
+    from app.core.models import Certification, CertificationExemption, Repository
+
+    rows = (repos if repos is not None else session.query(Repository))
+    population = set()
+    default_branch = {}
+    for full_name, default, names in rows.with_entities(
+            Repository.full_name, Repository.default_branch,
+            Repository.branch_names).all():
+        default_branch[full_name] = default or ""
+        try:
+            walked = _json.loads(names or "[]")
+        except (ValueError, TypeError):
+            walked = []
+        for branch in walked:
+            if branch:
+                population.add((full_name, branch))
+
+    def _resolve(repository, branch):
+        """A certification names the branch a finding was on, and a finding on
+        the default branch may carry no branch at all."""
+        return (repository, branch or default_branch.get(repository, ""))
+
+    exempt = set()
+    marks = (exemptions if exemptions is not None
+             else session.query(CertificationExemption))
+    for repository, branch in marks.with_entities(
+            CertificationExemption.repository,
+            CertificationExemption.branch).all():
+        key = _resolve(repository, branch)
+        # Only counted when the branch is one this install has walked.  An
+        # exemption on something outside the population would otherwise shrink
+        # the denominator below the branches it is made of.
+        if key in population:
+            exempt.add(key)
+
+    certified = 0
+    for row in (certifications if certifications is not None
+                else session.query(Certification)).all():
+        key = _resolve(row.repository, row.branch)
+        if key not in population or key in exempt:
+            continue
+        if status(session, row).get("state") == ACTIVE:
+            certified += 1
+
+    certifiable = len(population) - len(exempt)
+    return {
+        "certified": certified,
+        "certifiable": certifiable,
+        "exempt": len(exempt),
+        "branches": len(population),
+        "percent": (round(100 * certified / certifiable)
+                    if certifiable else 0),
+    }
+
+
+def all_exemptions(session, base=None) -> list:
+    """Every branch marked as not expecting a sign off, newest first."""
+    from app.core.models import CertificationExemption
+
+    query = base if base is not None else session.query(CertificationExemption)
+    return query.order_by(CertificationExemption.marked_at.desc()).all()
 
 
 def counts(session, base=None) -> dict:

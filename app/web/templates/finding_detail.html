@@ -692,7 +692,7 @@
    score and the reasoning wants those uninterrupted, and the badge at
    the top already tells them whether a review exists.  Somebody who has
    come here to sign the branch off can scroll. #}
-{% if can_certify %}
+{% if can_certify or can_exempt %}
 <div class="card">
   <div class="card-head">
     {%- if certification and certification.state == 'active' %}This branch is certified
@@ -727,6 +727,42 @@
       <input type="text" name="reason" maxlength="2000" placeholder="Why withdraw it">
       <button class="btn" type="submit">Withdraw the certification</button>
     </form>
+    {% endif %}
+
+    {# A branch nobody is expected to sign off.
+       Kept below the sign off and worded so the two cannot be confused.  This
+       one certifies nothing: no badge turns green, the finding above keeps its
+       grade and its state, and it stays in every report.  All it changes is
+       that the branch stops being counted as coverage somebody still owes.
+       Administrators only, because it removes work from a list permanently
+       rather than recording that the work was done. #}
+    {% if can_exempt %}
+    <div class="exempt">
+    {% if exemption %}
+    <p class="faint small">Marked <strong>not applicable</strong> by
+      {{ exemption.marked_by or 'somebody' }} on
+      {{ exemption.marked_at.strftime('%Y-%m-%d') if exemption.marked_at else 'an unknown date' }}:
+      &ldquo;{{ exemption.reason }}&rdquo;<br>
+      This branch is left out of the coverage figure. It is not certified, and
+      every finding on it is reported exactly as it would be otherwise.</p>
+    <form method="post" action="{{ base }}/findings/{{ f.id }}/certify/applicable">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit">Expect a review on this branch again</button>
+    </form>
+    {% else %}
+    <p class="faint small">If no sign off is ever going to be asked for on this
+      branch, say so and it stops counting towards coverage. It is not a
+      certification: nothing here turns green and nothing is hidden.</p>
+    <form method="post" action="{{ base }}/findings/{{ f.id }}/certify/not-applicable">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Why no review is expected here
+        <textarea name="reason" rows="2" required minlength="20" maxlength="4000"
+                  placeholder="Somebody is going to find this later and have to take it on trust."></textarea>
+      </label>
+      <button class="btn" type="submit">Not applicable for certification</button>
+    </form>
+    {% endif %}
+    </div>
     {% endif %}
   </div>
 </div>

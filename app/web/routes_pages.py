@@ -378,7 +378,31 @@ def dashboard(request: Request, user: User = Depends(current_user)):
         # report it as though it still held.
         from app.core import certification as _cert
 
+        # Coverage, not a tally.  How many of the branches somebody could sign
+        # off have been, out of how many there are to do.  A count of
+        # certifications only ever goes up and says nothing about what is
+        # left, which is the number anybody looking at this tile wants.
+        #
+        # All three queries are narrowed the same way, so a developer sees
+        # coverage of their own branches and an administrator sees coverage of
+        # the estate.
+        #
+        # Somebody who sees everything is shown the plain number they have
+        # always been shown, because for them the tile has always meant the
+        # whole estate and changing what a familiar number counts is worse
+        # than leaving it.
         certified = _cert.counts(db)
+        certified["scoped"] = not rbac.sees_everything(user)
+        if certified["scoped"]:
+            mine = _cert.counts(db, rbac.visible_certifications(db, user))
+            certified["mine_stale"] = mine["stale"]
+            certified.update(_cert.coverage(
+                db,
+                rbac.visible_repositories(db, user),
+                rbac.visible_certifications(db, user),
+                rbac.visible_certification_exemptions(db, user)))
+            certified["visible_repositories"] = (
+                rbac.visible_repositories(db, user).count())
 
         worst = (query.order_by(_priority_order(), Finding.last_found_at.desc())
                  .limit(15).all())
@@ -975,6 +999,10 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
 
         certification = certification_store.status(
             db, certification_store.for_branch(db, row.repository, row.branch))
+        # And whether anybody has said a sign off is not expected here.  Read
+        # separately because it is a separate claim: it does not certify the
+        # branch, it takes it out of the count of branches still owed one.
+        exemption = certification_store.exemption(db, row.repository, row.branch)
 
         about = repo_context.for_repository(db, row.repository)
         risk_context = {"sensitivity": about.get("sensitivity"),
@@ -994,7 +1022,9 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        scanning_now=_scanning_now(),
                        on_branches=on_branches,
                        certification=certification,
+                       exemption=exemption,
                        can_certify=rbac.can(user, "repo.certify"),
+                       can_exempt=rbac.can(user, "repo.certify.exempt"),
                        # Both halves of what the grade is standing in for.
                        # Worked out here rather than read off the finding so
                        # that a repository tagged since the last scan reads
@@ -1085,7 +1115,8 @@ def repositories(request: Request, user: User = Depends(current_user)):
     # did not exist, so the number opened a list of everything.  A count that
     # cannot be opened is a count somebody has to take on trust.
     wanted = (request.query_params.get("certified", "") or "").strip().lower()
-    if wanted not in {"", "active", "stale", "lapsed", "revoked"}:
+    if wanted not in {"", "active", "stale", "lapsed", "revoked",
+                      "not_applicable"}:
         wanted = ""
 
     with session_scope() as db:
@@ -1106,6 +1137,21 @@ def repositories(request: Request, user: User = Depends(current_user)):
                            "state": state["state"], "why": state.get("why", ""),
                            "by": row.certified_by, "at": row.certified_at,
                            "expires": row.expires_at, "note": row.note})
+        # Branches nobody is expected to sign off, listed beside the sign
+        # offs.  They belong on the same page: this is the only place an
+        # administrator can find what has been marked, and a decision that
+        # cannot be found again is one nobody can review.  A branch with no
+        # findings on it has no other route back.
+        for row in _cert.all_exemptions(db,
+                                        rbac.visible_certification_exemptions(
+                                            db, user)):
+            if row.repository not in seen:
+                continue
+            badges.append({"repository": row.repository, "branch": row.branch,
+                           "state": _cert.NOT_APPLICABLE,
+                           "why": row.reason, "by": row.marked_by,
+                           "at": row.marked_at, "expires": None,
+                           "note": row.reason})
         badges.sort(key=lambda b: (b["repository"], b["branch"]))
         if wanted:
             badges = [b for b in badges if b["state"] == wanted]

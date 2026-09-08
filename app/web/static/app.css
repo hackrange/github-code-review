@@ -212,6 +212,26 @@ a.stat:hover .l { color: var(--text); }
 .stat.warn .n { color: var(--warn); }
 .stat.ok .n   { color: var(--ok); }
 
+/* Saying a branch is not one anybody will sign off.  Set apart from the sign
+   off above it by a line and some space, because the two are opposite claims
+   and the cost of reading one as the other is somebody believing a branch was
+   reviewed when the record says it never will be. */
+.exempt { margin-top: .9rem; padding-top: .9rem;
+          border-top: 1px solid var(--border); }
+
+/* "4 of 12".  The second number is the estate, and it is deliberately quieter
+   than the first: the reader's own count is the one they can act on, and two
+   figures at the same weight read as one long number. */
+.stat .n .of { font-size: .95rem; font-weight: 500; color: var(--text-faint); }
+
+/* How much of the estate the reader has signed off.  Thin on purpose.  A bar
+   this size is a sense of direction, not a measurement, and the figures above
+   and below it are what anybody should be reading. */
+.stat .bar { height: 4px; border-radius: 2px; background: var(--border);
+             margin-top: .45rem; overflow: hidden; }
+.stat .bar > span { display: block; height: 100%; background: var(--ok);
+                    border-radius: 2px; min-width: 0; }
+
 table { width: 100%; border-collapse: collapse; font-size: .95rem; }
 th, td { padding: .5rem .7rem; text-align: left; border-bottom: 1px solid var(--border);
          vertical-align: top; }

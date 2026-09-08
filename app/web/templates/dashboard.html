@@ -68,12 +68,39 @@
      Amber is shown beside green rather than added to it: a review that no
      longer describes the code is the one that needs a person, and a single
      number covering both would quietly report it as though it still held. #}
+  {# Somebody who cannot see the whole estate is shown their share of it.
+     Their own number first, because it is the one they can do something
+     about, and the estate total behind it so the share has something to be
+     read against.
+
+     An administrator gets the tile exactly as it was.  For them the two
+     counts are the same number, and "12 of 12" over a full bar is decoration
+     that says nothing: a share only means something when part of the estate
+     is out of the reader's reach.  The two are written out separately rather
+     than switched inside one block, so the unscoped markup is the markup that
+     was always there. #}
+  {% if certified.scoped %}
+  <a class="stat ok" href="{{ base }}/repositories?certified=active"
+     title="{{ certified.certified }} of {{ certified.certifiable }} branch{{ '' if certified.certifiable == 1 else 'es' }} you can see have been signed off, across {{ certified.visible_repositories }} repositor{{ 'y' if certified.visible_repositories == 1 else 'ies' }}.{% if certified.exempt %} {{ certified.exempt }} more {{ 'is' if certified.exempt == 1 else 'are' }} marked not applicable and left out of both numbers.{% endif %}">
+    <div class="n">{{ certified.certified }} <span class="of">of {{ certified.certifiable }}</span></div>
+    <div class="l">Certified branches</div>
+    <div class="bar" role="img"
+         aria-label="{{ certified.percent }} percent of the branches you can see are certified">
+      <span style="width:{{ certified.percent }}%"></span>
+    </div>
+    <div class="l" style="font-size:.72rem">{{ certified.percent }}%</div>
+    {% if certified.mine_stale %}
+    <div class="l warn" style="font-size:.72rem">{{ certified.mine_stale }} need re-checking</div>
+    {% endif %}
+  </a>
+  {% else %}
   <a class="stat ok" href="{{ base }}/repositories?certified=active">
     <div class="n">{{ certified.active }}</div><div class="l">Certified branches</div>
     {% if certified.stale %}
     <div class="l warn" style="font-size:.72rem">{{ certified.stale }} need re-checking</div>
     {% endif %}
   </a>
+  {% endif %}
 </div>
 
 <div class="card">

@@ -42,6 +42,12 @@ PERMISSIONS = {
         # override moves every finding that rule ever produced.
         "finding.regrade",
         "repo.certify",
+        # Saying a branch is not one anybody is expected to sign off.  A
+        # separate permission from certifying, and administrators only,
+        # because it removes work from a list permanently rather than
+        # recording that the work was done.  Certifying may reasonably move to
+        # a reviewer role one day; this should not go with it.
+        "repo.certify.exempt",
         # Looking at the product as somebody else, to see what they see.
         # Read only: see the note on Session.impersonating_id.
         "user.impersonate",
@@ -304,6 +310,54 @@ def visible_components(session: OrmSession, user: User):
     query = session.query(Component)
     condition = component_scope(session, user)
     return query if condition is None else query.filter(condition)
+
+
+def visible_certifications(session: OrmSession, user: User):
+    """The sign offs on repositories this user may see.
+
+    A certification names a repository by its full name and carries no
+    organization of its own, so the scope cannot be spelled out again here the
+    way it is for findings.  It is taken from the repositories instead, as a
+    subquery, so there is one rule about who may see a repository rather than
+    two that have to be kept saying the same thing.
+
+    Certifications are the one place where the count is read as reassurance.
+    An unscoped number on a dashboard tells somebody with four repositories
+    that four hundred branches elsewhere have been reviewed, which is true and
+    is not an answer to the question they were asking.
+    """
+    from app.core.models import Certification
+
+    return _by_visible_repository(session, user, Certification)
+
+
+def visible_certification_exemptions(session: OrmSession, user: User):
+    """The branches marked as not expecting a sign off, scoped the same way.
+
+    Narrowed with the certifications rather than left whole, because the two
+    are read together: a coverage figure built from one reader's branches and
+    everybody's exemptions is a percentage of nothing anybody can check.
+    """
+    from app.core.models import CertificationExemption
+
+    return _by_visible_repository(session, user, CertificationExemption)
+
+
+def _by_visible_repository(session: OrmSession, user: User, model):
+    """Narrow a table that names a repository by full name and nothing else.
+
+    Certifications and their exemptions both do.  Neither carries an
+    organization, so the scope cannot be spelled out again the way it is for
+    findings; it is taken from the repositories instead, as a subquery, so
+    there is one rule about who may see a repository rather than several that
+    have to be kept saying the same thing.
+    """
+    query = session.query(model)
+    if sees_everything(user):
+        return query
+    names = (visible_repositories(session, user)
+             .with_entities(Repository.full_name).scalar_subquery())
+    return query.filter(model.repository.in_(names))
 
 
 def visible_repositories(session: OrmSession, user: User):

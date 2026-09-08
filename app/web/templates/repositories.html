@@ -14,7 +14,8 @@
   <div class="card-head">
     {% if certified_filter %}{{ certified_filter | capitalize }} certifications
     {% else %}Certified branches{% endif %}
-    <span class="faint small">reviewed by a person and signed off</span>
+    <span class="faint small">reviewed by a person and signed off, and the
+      branches nobody is expected to review</span>
   </div>
   <div class="table-scroll">
     <table class="small">
@@ -34,6 +35,10 @@
             {% elif row.state == 'lapsed' %}<span class="badge unknown">expired</span>
             {% elif row.state == 'revoked' %}<span class="badge waived"
               title="{{ row.why }}">withdrawn</span>
+            {# Gray, and worded as a statement about the branch rather than
+               about anybody having read it.  Nothing here is a sign off. #}
+            {% elif row.state == 'not_applicable' %}<span class="badge unknown"
+              title="{{ row.why }}">not applicable</span>
             {% else %}<span class="faint">{{ row.state }}</span>{% endif %}
           </td>
           <td class="nowrap">{{ row.at | dt('%d %b %Y') if row.at }}</td>

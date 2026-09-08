@@ -782,6 +782,42 @@ class Certification(Base):
         return bool(expires and expires > now)
 
 
+class CertificationExemption(Base):
+    """A branch nobody is expected to sign off, and why.
+
+    Separate from Certification on purpose.  A certification is a review: it
+    names a commit, it expires, and it goes stale when somebody pushes.  This
+    is none of those things.  It says a sign off was never going to be asked
+    for here, which is a statement about the branch rather than about anybody
+    having read it, and folding it into the other table would leave four of
+    that table's columns meaningless and every rule in `status` needing to be
+    skipped before it ran.
+
+    It is deliberately not a way to make a branch look reviewed.  Nothing here
+    certifies anything, nothing turns green, and a finding on an exempted
+    branch is reported exactly as it would be otherwise.  All it changes is
+    that the branch stops being counted as coverage somebody still owes, which
+    is the whole reason for it: a denominator that includes branches nobody
+    intends to review measures the wrong thing and gets ignored.
+
+    A reason is required.  "Not applicable" with nothing after it is the kind
+    of record that is impossible to review later, and this one is written by
+    an administrator about work that will now never be done.
+    """
+
+    __tablename__ = "certification_exemptions"
+    __table_args__ = (
+        UniqueConstraint("repository", "branch", name="uq_cert_exempt"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    repository = Column(String(320), nullable=False, index=True)
+    branch = Column(String(255), nullable=False, default="")
+    reason = Column(Text, nullable=False, default="")
+    marked_by = Column(String(120), default="")
+    marked_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class Waiver(Base):
     """An exception on a finding.
 

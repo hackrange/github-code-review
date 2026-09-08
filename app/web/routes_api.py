@@ -2942,6 +2942,77 @@ async def revoke_certification(finding_id: int, request: Request,
         "taken back, stays.") + "&kind=warn")
 
 
+@router.post("/findings/{finding_id}/certify/not-applicable")
+async def exempt_from_certification(finding_id: int, request: Request,
+                                    user: User = Depends(current_user)):
+    """Say this branch is not one anybody is expected to sign off.
+
+    Done from a finding for the same reason certifying is: the repository and
+    the branch are already in front of whoever decided it.
+
+    It certifies nothing.  The finding keeps its grade and its state, it stays
+    in every report, and no badge turns green.  The only thing it changes is
+    that the branch stops counting as coverage somebody still owes, which is
+    what makes the coverage figure worth reading at all.
+    """
+    await check_csrf(request)
+    rbac.require(user, "repo.certify.exempt")
+
+    from urllib.parse import quote
+
+    from app.core import certification
+
+    form = await request.form()
+    reason = clean_text(form.get("reason"), "Reason", limit=4000, required=True)
+
+    with session_scope() as db:
+        finding = (rbac.visible_findings(db, user)
+                   .filter(Finding.id == finding_id).one_or_none())
+        if finding is None:
+            raise HTTPException(status_code=404, detail="No such finding.")
+        _row, problem = certification.mark_not_applicable(
+            db, finding.repository, finding.branch, reason, user.username)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        record(db, "repo.certification_not_applicable", actor=user.username,
+               target=f"{finding.repository}@{finding.branch or 'default'}",
+               detail=reason[:200], source_ip=client_ip(request))
+
+    return redirect(f"/findings/{finding_id}?msg=" + quote(
+        "Marked as not applicable.  This branch is left out of the coverage "
+        "figure entirely, and every finding on it is reported as before.")
+        + "&kind=ok")
+
+
+@router.post("/findings/{finding_id}/certify/applicable")
+async def unexempt_from_certification(finding_id: int, request: Request,
+                                      user: User = Depends(current_user)):
+    """Put the branch back among the ones a sign off is expected on."""
+    await check_csrf(request)
+    rbac.require(user, "repo.certify.exempt")
+
+    from urllib.parse import quote
+
+    from app.core import certification
+
+    with session_scope() as db:
+        finding = (rbac.visible_findings(db, user)
+                   .filter(Finding.id == finding_id).one_or_none())
+        if finding is None:
+            raise HTTPException(status_code=404, detail="No such finding.")
+        _row, problem = certification.clear_not_applicable(
+            db, finding.repository, finding.branch, user.username)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        record(db, "repo.certification_applicable", actor=user.username,
+               target=f"{finding.repository}@{finding.branch or 'default'}",
+               detail="expected to be reviewed again",
+               source_ip=client_ip(request))
+
+    return redirect(f"/findings/{finding_id}?msg=" + quote(
+        "This branch counts towards coverage again.") + "&kind=ok")
+
+
 @router.post("/findings/regrade-bulk")
 async def regrade_many(request: Request, user: User = Depends(current_user)):
     """What a set of findings is worth here, decided once.
