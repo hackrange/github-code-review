@@ -322,6 +322,13 @@ if [[ "${1:-}" == "__supervise" ]]; then
   # moment the escalation to KILL is still pending: anything that ignored the
   # first signal then outlives both of them.
   _fired=$(mktemp 2>/dev/null || printf '%s' "/tmp/ghscan-deadline-$$")
+  # One marker per watch, never one between them.  They mean different things:
+  # the deadline's says "let it finish its escalation", the stall's says "the
+  # deadline is now pointless, take it down".  Shared, a stall kill read as a
+  # deadline mid clean up, and this shell waited out the whole limit it had
+  # just been saved from.  One repository sat idle for four hours that way,
+  # holding a scan slot with nothing running in it.
+  _stall_fired=$(mktemp 2>/dev/null || printf '%s' "/tmp/ghscan-stall-$$")
   if [[ "$_deadline" =~ ^[0-9]+$ ]] && (( _deadline > 0 )); then
     (
       sleep "$_deadline"
@@ -389,7 +396,7 @@ if [[ "${1:-}" == "__supervise" ]]; then
           continue
         fi
         _doomed=$(_tree_of "$_worker_pid")
-        printf '1' > "$_fired" 2>/dev/null || true
+        printf '1' > "$_stall_fired" 2>/dev/null || true
         printf '%s\n' "worker read and wrote nothing for ${GHSCAN_STALL_SEC}s while still using the processor; treating it as stuck and stopping it" >&2
         for _p in $_doomed; do kill -TERM "$_p" 2>/dev/null || true; done
         sleep 20
@@ -422,14 +429,20 @@ if [[ "${1:-}" == "__supervise" ]]; then
         wait "$_watchdog_pid" 2>/dev/null || true; } 2>/dev/null
     fi
   fi
-  # The stall watch, the same way.  It sits in a sleep between samples, so left
-  # alone it announces itself on stderr once per repository and reads like a
+  # The stall watch.  If it fired, it is mid escalation over a tree that
+  # ignored the first signal, so let it finish the way the deadline is let
+  # finish.  Otherwise take it and the sleep it sits in: left alone the shell
+  # announces the killed job on stderr once per repository and reads like a
   # failure in the scan log.
   if [[ -n "$_stall_pid" ]]; then
-    { for _p in $(_tree_of "$_stall_pid"); do kill -KILL "$_p" 2>/dev/null || true; done
-      wait "$_stall_pid" 2>/dev/null || true; } 2>/dev/null
+    if [[ -s "$_stall_fired" ]]; then
+      wait "$_stall_pid" 2>/dev/null || true
+    else
+      { for _p in $(_tree_of "$_stall_pid"); do kill -KILL "$_p" 2>/dev/null || true; done
+        wait "$_stall_pid" 2>/dev/null || true; } 2>/dev/null
+    fi
   fi
-  rm -f "$_fired" 2>/dev/null || true
+  rm -f "$_fired" "$_stall_fired" 2>/dev/null || true
   # Always zero: the parent decides what a missing result means, and a worker
   # that failed has already written one saying so.
   exit 0
