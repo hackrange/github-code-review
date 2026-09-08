@@ -82,6 +82,7 @@ scan_one_repo() {
       --argjson code_ok "${CODE_PASS_COMPLETE:-true}" \
       --arg code_why "${CODE_PASS_INCOMPLETE:-}" \
       --arg secrets_why "${SECRETS_PASS_INCOMPLETE:-}" \
+      --arg hist_mb "${HISTORY_VOLUME_MB:-}" \
       --argjson sso "${GHSCAN_SSO_TRUNCATED:-0}" \
       --arg passes "$PASSES_DONE" \
       --arg hist_from "${HISTORY_FROM:-}" \
@@ -122,7 +123,13 @@ scan_one_repo() {
         passes_complete: ($passes | split(" ") | map(select(. != ""))),
         # How far back the credential engines have walked here, so the next run
         # continues instead of starting at the newest commit again.
-        history: {walked_from: $hist_from, complete: $hist_done},
+        history: {walked_from: $hist_from, complete: $hist_done,
+                  # Roughly how much diff a full walk of this repository would
+                  # hand an engine.  Sampled, not exact.  Recorded so the
+                  # ceiling above it can be chosen from what the estate really
+                  # holds rather than from a number somebody picked.
+                  volume_mb: (if $hist_mb == "" then null
+                              else ($hist_mb | tonumber? // null) end)},
         # Could a dynamic pass run against this repository at all.  Reading
         # only: nothing is built and nothing is started.  Three answers, and
         # they are three different things, so a declined and an unknown are
@@ -306,8 +313,16 @@ scan_one_repo() {
     #
     # And the history is never marked complete afterwards, so nothing later
     # mistakes "we did not read it" for "there is nothing there".
-    if (( need_clone )) && history_is_too_big "$clone_dir" "$full_name"; then
-      HISTORY_TOO_BIG=1
+    # Measured once, used twice: to decide, and to report.  Nothing used to
+    # record what any repository actually measured, so the ceiling could only
+    # ever be set by guessing at it.  The number goes in the result, where
+    # somebody choosing the limit can see what the estate really looks like.
+    HISTORY_VOLUME_MB=""
+    if (( need_clone )); then
+      HISTORY_VOLUME_MB=$(history_volume_mb "$clone_dir")
+      if history_is_too_big "$clone_dir" "$full_name" "$HISTORY_VOLUME_MB"; then
+        HISTORY_TOO_BIG=1
+      fi
     fi
 
     if (( ${HISTORY_TOO_BIG:-0} == 0 )) && cfg_bool '.github.branches.scan_full_history' true; then

@@ -99,21 +99,63 @@ history_volume_mb() {
   local commits; commits=$(git -C "$dir" rev-list --all --count 2>/dev/null || echo 0)
   [[ "$commits" =~ ^[0-9]+$ ]] || commits=0
   (( commits == 0 )) && { printf '0'; return 0; }
-  local bytes
-  bytes=$(git -C "$dir" log -p -U0 --all --max-count="$sample" 2>/dev/null \
-          | head -c 400000000 | wc -c 2>/dev/null || echo 0)
-  [[ "$bytes" =~ ^[0-9]+$ ]] || bytes=0
-  local seen=$(( commits < sample ? commits : sample ))
+
+  # Spread across the whole history, not the newest end of it.
+  #
+  # This used to take the newest forty commits and scale their mean up.  That
+  # reads a repository backwards.  The commits that make a history expensive
+  # are almost always old: somebody imported a pile of generated artifacts
+  # years ago, or a build wrote its output into the tree for a while and then
+  # stopped.  The recent commits are ordinary work, so the mean came out near
+  # nothing and the estimate with it.
+  #
+  # Measured on a repository built to that shape: two hundred commits, ten of
+  # them early ones rewriting a five megabyte artifact whole, the rest one line
+  # each.  A hundred and twenty four megabytes of real diff, and the estimate
+  # said zero.  The same blind spot let a four hundred and sixty megabyte
+  # repository through the ceiling and cost seventeen hundred credentials when
+  # the engine was killed part way and its silence read as a clean sweep.
+  #
+  # So take every stride'th commit instead.  Same number of samples, same cost,
+  # and the old artifacts are now in the sample rather than behind it.
+  # Counted from zero, not from one.  A repository with fewer commits than the
+  # sample size has a stride of one, and `NR % 1 == 1` is never true, so every
+  # small repository would measure zero and pass any ceiling.
+  local stride=$(( (commits + sample - 1) / sample ))
+  (( stride < 1 )) && stride=1
+
+  # Two bounds, because measuring must never become the expensive thing it is
+  # there to avoid.  One commit is read up to PER, and the walk stops once
+  # TOTAL has been read: by then the answer is already "far too big", and
+  # reading more of it only confirms that more slowly.
+  local PER=$(( 64 * 1048576 )) TOTAL=$(( 1024 * 1048576 ))
+  local bytes=0 seen=0 sha n
+  while IFS= read -r sha; do
+    [[ -n "$sha" ]] || continue
+    n=$(git -C "$dir" show -U0 --format= "$sha" 2>/dev/null \
+        | head -c "$PER" | wc -c 2>/dev/null || echo 0)
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    bytes=$(( bytes + n ))
+    seen=$(( seen + 1 ))
+    (( bytes >= TOTAL )) && break
+  done < <(git -C "$dir" rev-list --all 2>/dev/null \
+           | awk -v s="$stride" '(NR - 1) % s == 0')
+
   (( seen == 0 )) && { printf '0'; return 0; }
   printf '%s' $(( bytes / seen * commits / 1048576 ))
 }
 
 # Is this repository's history too big to hand an engine.  -> 0 when it is fine.
 history_is_too_big() {
-  local dir="$1" full_name="$2"
+  local dir="$1" full_name="$2" measured="${3:-}"
   local cap; cap=$(cfg_num '.scan.secrets.max_history_mb' 0)
   (( cap <= 0 )) && return 1
-  local mb; mb=$(history_volume_mb "$dir")
+  # The caller may already have measured it, and measuring is the expensive
+  # part.  Doing it twice to answer one question would be its own small
+  # version of the problem this exists to prevent.
+  local mb
+  if [[ "$measured" =~ ^[0-9]+$ ]]; then mb="$measured"
+  else mb=$(history_volume_mb "$dir"); fi
   if (( mb > cap )); then
     # warn, not info: the product runs the scanner at the warn level, and a
     # repository whose history went unread is the kind of thing that must not
