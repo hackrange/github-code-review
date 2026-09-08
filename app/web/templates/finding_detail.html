@@ -135,6 +135,18 @@
       asks a person to look, rather than asserting a bug. Worth reading before
       writing an exception for it.</div>
     {% endif %}
+    {# The repository has been archived on the host.
+       Said here because this is where somebody has arrived intending to fix
+       it, and they cannot: the code is read only and the scan no longer
+       reaches it. The finding is left open rather than closed, since nothing
+       showed it was fixed, and it is kept out of the dashboard's counts of
+       outstanding work. #}
+    {% if repo_info and repo_info.archived %}
+    <div class="faint small">This repository is archived, so the scan no longer
+      reaches it and the code cannot be changed. The finding stays open,
+      because nothing showed it was fixed, and it is not counted on the
+      dashboard as work still to do.</div>
+    {% endif %}
   </div>
   <div class="page-actions">
     {# A dependency finding has no file to open: its url is the advisory, and

@@ -103,6 +103,21 @@
   {% endif %}
 </div>
 
+{# What was left out of the numbers above, said plainly.
+   These findings are still open and still in the findings list, the reports
+   and the export.  They are kept out of the counts because nobody can act on
+   them: the code is archived.  A number quietly missing from a total is worse
+   than a larger total, so it is named here with a link to it. #}
+{% if archived_set_aside %}
+<div class="small faint" style="margin:-.75rem 0 1.25rem">
+  {{ archived_set_aside }} open finding{{ '' if archived_set_aside == 1 else 's' }}
+  on {{ archived_repositories }} archived repositor{{ 'y' if archived_repositories == 1 else 'ies' }}
+  {{ 'is' if archived_set_aside == 1 else 'are' }} not counted above, because the
+  code can no longer be changed.
+  <a href="{{ base }}/findings?archived=1">Show them</a>.
+</div>
+{% endif %}
+
 <div class="card">
   <div class="card-head">
     What kind of problem

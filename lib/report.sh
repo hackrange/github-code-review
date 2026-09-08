@@ -178,6 +178,14 @@ report_build() {
 
         code_findings: ( $code | sort_by([ -( .severity | rank ), .repository, .file ]) ),
 
+        # Repositories this run left out because they are archived.
+        #
+        # Carried at the top level because it is a statement about the scan
+        # rather than about any repository in it: these are precisely the ones
+        # that are not in the list below, and without this the reader cannot
+        # tell them apart from a repository that was simply never reached.
+        archived_repositories: (($meta.scan.archived_repositories // []) | unique),
+
         # Repositories whose code pass was cut short. Nothing missing
         # from these may be counted as fixed: it was never looked at.
         partial_code_repositories:

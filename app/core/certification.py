@@ -295,7 +295,12 @@ def coverage(session, repos, certifications=None, exemptions=None) -> dict:
 
     from app.core.models import Certification, CertificationExemption, Repository
 
+    # Archived repositories are left out entirely.  A branch on code that can
+    # no longer be changed is not coverage anybody owes, and counting it means
+    # the figure gets worse every time a repository is retired, which is the
+    # opposite of what retiring one should do.
     rows = (repos if repos is not None else session.query(Repository))
+    rows = rows.filter(Repository.archived.is_(False))
     population = set()
     default_branch = {}
     for full_name, default, names in rows.with_entities(

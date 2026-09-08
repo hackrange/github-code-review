@@ -101,6 +101,26 @@ inventory_repos() {
   max_repos=$(cfg_num '.github.scope.max_repos' 0)
   excl_list=$(cfg_json '.github.scope.exclude_repos // []')
 
+  # The archived ones this run is dropping, written down rather than dropped
+  # silently.
+  #
+  # A repository that gets archived stops appearing in every report from that
+  # moment.  Nothing then updates the flag that says it is archived, because
+  # only a report can, and nothing closes its findings, because a repository
+  # nobody looked at is a repository nobody looked at.  So it sits in the
+  # product forever: last scanned on some date months ago, its findings open
+  # and counted as work somebody owes on code that can no longer be changed.
+  #
+  # Only the archived ones.  A fork or a repository on the exclude list was
+  # left out because somebody decided the scan should not cover it, which is a
+  # scope decision and can be reversed by editing a setting.  Archived is a
+  # fact about the code.
+  if [[ "$inc_arch" == "false" && -n "${GHSCAN_TMPROOT:-}" ]]; then
+    jq -c '[ .[] | select((.archived // false) == true) | .full_name ]
+           | unique' "$normalized" \
+      > "$GHSCAN_TMPROOT/archived-skipped.json" 2>/dev/null || true
+  fi
+
   local picked
   picked=$(jq -c \
     --argjson inc_arch "$inc_arch" \

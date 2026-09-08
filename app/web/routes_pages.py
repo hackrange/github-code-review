@@ -210,6 +210,19 @@ def _filtered_findings(db, user, params):
         query = query.filter(Finding.known_exploited.is_(True))
     if str(params.get("verified", "")) == "1":
         query = query.filter(Finding.verified.is_(True))
+    # Findings on repositories that have been archived.  Kept out of the
+    # dashboard's counts because nobody can act on them, and reachable here so
+    # that the number set aside is a number somebody can open.  Never filtered
+    # out of this list by default: the findings are open, they are real, and
+    # the record of what a repository held when it was retired is the part
+    # somebody asks about later.
+    archived_want = str(params.get("archived", ""))
+    if archived_want in ("0", "1"):
+        _archived = (db.query(Repository.full_name)
+                     .filter(Repository.archived.is_(True)).scalar_subquery())
+        query = (query.filter(Finding.repository.in_(_archived))
+                 if archived_want == "1"
+                 else query.filter(Finding.repository.notin_(_archived)))
 
     # The engine's own confidence.  A rule from an audit ruleset says "somebody
     # should look at this", not "this is a bug", and being able to set those
@@ -340,8 +353,32 @@ def _ago(when) -> str:
 @router.get("/")
 def dashboard(request: Request, user: User = Depends(current_user)):
     with session_scope() as db:
-        query = rbac.visible_findings(db, user).filter(
+        everything_open = rbac.visible_findings(db, user).filter(
             Finding.state == FindingState.OPEN)
+
+        # Findings on archived repositories are set aside, not hidden.
+        #
+        # The dashboard answers "how much is there to do".  Code that can no
+        # longer be changed is not work anybody can do, and leaving it in means
+        # a number that never goes down however much gets fixed, which is how a
+        # dashboard stops being read.
+        #
+        # Set aside rather than removed.  They are still open, they are still
+        # in the findings list, in every report and in the export, and the
+        # count that was left out is shown below so nothing goes quiet.  The
+        # record of what a repository held when it was retired is the part
+        # somebody asks about later.
+        archived_names = [name for (name,) in
+                          rbac.visible_repositories(db, user)
+                          .filter(Repository.archived.is_(True))
+                          .with_entities(Repository.full_name).all()]
+        query = everything_open
+        set_aside = 0
+        if archived_names:
+            query = query.filter(Finding.repository.notin_(archived_names))
+            set_aside = (everything_open
+                         .filter(Finding.repository.in_(archived_names))
+                         .count())
 
         # Two counts, and the headline is the one somebody can act on.
         #
@@ -424,6 +461,8 @@ def dashboard(request: Request, user: User = Depends(current_user)):
                        certified=certified,
                        advisory_counts=advisory_counts,
                        advisory_total=sum(advisory_counts.values()),
+                       archived_set_aside=set_aside,
+                       archived_repositories=len(archived_names),
                        total=sum(counts.values()))
         return page(request, "dashboard.html", **context)
 

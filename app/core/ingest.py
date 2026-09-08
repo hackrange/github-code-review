@@ -465,6 +465,40 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         log.exception("could not tell whether this run used a history window; "
                       "treating it as windowed, which holds findings open")
         windowed_run = True
+
+    # Repositories this run left out because they are archived.
+    #
+    # An archived repository stops appearing in reports from the moment it is
+    # archived.  Nothing then updated the flag saying so, because only a report
+    # could, and nothing closed its findings, because a repository nobody
+    # looked at is a repository nobody looked at.  So it stayed in the product
+    # forever: last scanned months ago, its findings open, counted as work
+    # somebody owed on code that can no longer be changed.
+    #
+    # The findings are still not closed.  They were never shown to be fixed and
+    # deleting the record of what a repository held when it was retired is the
+    # part an auditor asks about.  What changes is that the product can now say
+    # which they are, and stop counting them as outstanding work.
+    #
+    # Read defensively, the same as the partial-code list beside it and for the
+    # same reason: an app is upgraded before the scanners feeding it are, so a
+    # field of the wrong shape must never be able to take an ingest down.
+    archived_now = set()
+    for name in (document.get("archived_repositories") or []):
+        if isinstance(name, dict):
+            name = name.get("full_name")
+        if isinstance(name, str) and name.strip():
+            archived_now.add(name.strip())
+    if archived_now:
+        marked = (session.query(Repository)
+                  .filter(Repository.full_name.in_(sorted(archived_now)))
+                  .all())
+        for repo_row in marked:
+            repo_row.archived = True
+        log.info("%d repositor%s archived on the host and left out of this "
+                 "scan; %d of them known here and marked",
+                 len(archived_now), "y" if len(archived_now) == 1 else "ies",
+                 len(marked))
     # Which paths the credential pass was told not to open.  Built once: it
     # compiles the skip list, and the closing loop asks it per finding.
     skipped_path = _skipped_by_credential_pass(session)

@@ -793,7 +793,8 @@ main() {
     --argjson sbom_sources "$(cfg_json '.scan.sbom.sources // []')" \
     --argjson vuln_sources "$(cfg_json '.scan.vulnerabilities.sources // []')" \
     --argjson tools "$(engine_versions)" \
-    --argjson sso "$GHSCAN_SSO_TRUNCATED" '
+    --argjson sso "$GHSCAN_SSO_TRUNCATED" \
+    --argjson archived "$(cat "${GHSCAN_TMPROOT:-/nonexistent}/archived-skipped.json" 2>/dev/null || echo '[]')" '
     ($orgs_in[0]) as $orgs
     | ($org_profiles_in[0]) as $org_profiles
     | ($org_members_in[0]) as $org_members
@@ -808,7 +809,11 @@ main() {
              config_file: $cfg, host: $host,
              live_verification_enabled: $verify,
              branch_policy: $bmode,
-             sso_results_truncated: ($sso == 1)},
+             sso_results_truncated: ($sso == 1),
+             # Repositories left out because they are archived.  Carried so
+             # the reader can say so, rather than showing code nobody can
+             # change as work somebody still owes.
+             archived_repositories: $archived},
       target: {api_url: $api, orgs: $orgs, auth_method: $authm},
       organizations: [ $org_profiles[] | . as $o | $o + {
         members: [ $org_members[] | select((.organization // "") == $o.login) ],
