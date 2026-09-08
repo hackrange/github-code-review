@@ -399,6 +399,16 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     # that only covered part of the history reports only what it covered, and
     # the rest is not gone, it is unread.
     partial_history = set()
+    # Did this run walk a window rather than the whole history.  One question,
+    # asked once, because the answer decides whether absence from this report
+    # means anything at all for credentials.
+    try:
+        from app.core import settings_store as _store
+        windowed_run = int(_store.get(session, "secrets.history_window_days") or 0) > 0
+    except Exception:            # noqa: BLE001 - a setting must not fail an ingest
+        log.exception("could not tell whether this run used a history window; "
+                      "treating it as windowed, which holds findings open")
+        windowed_run = True
     # Which passes actually finished, per repository, as the scanner reported
     # them.  A finding is only ever closed by the pass that would have found
     # it, so this is what decides that.
@@ -454,10 +464,27 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         if walked_from:
             repo.history_from = walked_from[:32]
             repo.history_complete = bool(history.get("complete"))
-        # Defaults to complete on purpose.  A scanner too old to say, or a run
-        # with the credential pass switched off, reports no history at all, and
-        # must go on behaving exactly as it did before this existed.
-        if history and not history.get("complete", True):
+        # Two different claims, and conflating them cost three thousand
+        # findings.
+        #
+        # `complete` says the walk has reached the first commit.  It does not
+        # say this run reported everything in that history, and with a window
+        # set it certainly did not: the run read one slice and said nothing
+        # about the rest.  Absence from a windowed report is not evidence.
+        #
+        # So a windowed run makes every repository in it partial for
+        # credentials, whatever the marker says.  Read from the setting rather
+        # than from anything the scanner sends, because the failure this
+        # prevents came from believing a report about its own completeness.
+        #
+        # What went wrong: an install with no markers had this latent, since
+        # nothing was ever marked complete.  Crediting repositories with the
+        # full walks they had genuinely had then turned the flag on, the next
+        # windowed run reported "complete" honestly by its own meaning, this
+        # read it as "nothing unwalked", and every credential older than the
+        # window was marked fixed.  Two thousand nine hundred and sixty five of
+        # them in one night.
+        if windowed_run or (history and not history.get("complete", True)):
             partial_history.add(full_name)
 
         branch_list = ((entry.get("access") or {}).get("branches")) or []
