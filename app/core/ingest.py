@@ -45,6 +45,62 @@ KIND_PASS = {
 }
 
 
+def _segment_glob(pattern: str):
+    """One `secrets.exclude_paths` glob, as a regex for a single path segment.
+
+    The meaning has to be the scanner's, exactly, because the whole point is to
+    know which paths its credential pass declined to read.  `lib/secrets.sh`
+    defines it: a trailing slash is stripped, `*` and `?` stop at a separator,
+    everything else is literal, and the pattern has to match a whole segment.
+    Two implementations of one rule is a liability, and the alternative was
+    worse.  Making the scanner list every dropped path in the report puts tens
+    of thousands of lines into a document that already strains the row limit,
+    to say something both sides can work out from a setting they both read.
+    """
+    out = []
+    for c in pattern.rstrip("/"):
+        if c == "*":
+            out.append("[^/]*")
+        elif c == "?":
+            out.append("[^/]")
+        else:
+            out.append(re.escape(c))
+    return re.compile("^" + "".join(out) + "$")
+
+
+def _skipped_by_credential_pass(session):
+    """A test for "the credential pass was configured not to open this file".
+
+    Nothing read those paths, so their findings must not be closed for silence.
+    This is the same mistake as an unfinished pass and an unwalked history, in
+    the one place that looked like a deliberate choice rather than a gap: the
+    skip list is there so tens of thousands of recorded-traffic candidates do
+    not drown the report, and it worked, and then the next run read the quiet
+    it had created as the repository being clean.  Two private keys confirmed
+    live were retired that way, out of a `.zip` the list says to skip.
+
+    Returns a callable, and one that answers False when the list is empty or
+    unreadable, so a broken setting cannot hold the whole estate open.
+    """
+    try:
+        from app.core import settings_store as _store
+        globs = _store.get(session, "secrets.exclude_paths") or []
+    except Exception:            # noqa: BLE001 - a setting must not fail an ingest
+        log.exception("could not read the credential skip list; "
+                      "no path will be treated as skipped")
+        return lambda path: False
+    res = [_segment_glob(g) for g in globs if str(g).strip()]
+    if not res:
+        return lambda path: False
+
+    def skipped(path: str) -> bool:
+        if not path:
+            return False
+        return any(r.match(seg) for seg in str(path).split("/") for r in res)
+
+    return skipped
+
+
 def _sev(value) -> Severity:
     text = str(value or "unknown").strip().lower()
     if text in ("moderate",):
@@ -409,6 +465,9 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         log.exception("could not tell whether this run used a history window; "
                       "treating it as windowed, which holds findings open")
         windowed_run = True
+    # Which paths the credential pass was told not to open.  Built once: it
+    # compiles the skip list, and the closing loop asks it per finding.
+    skipped_path = _skipped_by_credential_pass(session)
     # Which passes actually finished, per repository, as the scanner reported
     # them.  A finding is only ever closed by the pass that would have found
     # it, so this is what decides that.
@@ -464,6 +523,21 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         if walked_from:
             repo.history_from = walked_from[:32]
             repo.history_complete = bool(history.get("complete"))
+        # A walk whose engine died is not a walk.
+        #
+        # The rule above is that a run which walked nothing leaves the marker
+        # where the last one put it, which is right for a repository this run
+        # simply did not get to.  It is wrong for one where the engine that
+        # reads history was killed part way through: the repository keeps a
+        # marker saying its history has been read end to end, and the catch up
+        # pass, whose whole job is to find histories nobody has finished,
+        # skips it for ever after.
+        #
+        # Only ever cleared, never set, and only on a report that names the
+        # engine that died.  So this can lose a repository a marker it had
+        # earned, which costs one more walk, and can never award one.
+        elif str(entry.get("secrets_incomplete_reason") or "").strip():
+            repo.history_complete = False
         # Two different claims, and conflating them cost three thousand
         # findings.
         #
@@ -843,6 +917,28 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             # So this sits above the coverage checks rather than beside them.
             # Being sure the pass ran is a good reason to close most things and
             # is not, on its own, a good enough reason to close this.
+            # A file the credential pass is configured to skip was not read,
+            # so its silence says nothing.
+            #
+            # This one hid behind looking intentional.  Every other gap in this
+            # loop is a pass that broke or a walk that ran out of time, and
+            # this is a list somebody wrote on purpose, which is why it went
+            # unexamined for so long: of course the scanner skips recorded
+            # traffic and build output, that is what the box is for.  It is
+            # still an unread file.  The pass drops those candidates before
+            # anything expensive touches them, reports nothing about them, and
+            # the next ingest read that nothing as remediation.  Two private
+            # keys confirmed live went out of a repository that way, inside a
+            # `.zip`, and the list has `*.zip` on it.
+            #
+            # Above the verified check on purpose: this is not about how strong
+            # the evidence for the finding was, it is that there is no evidence
+            # either way this run.
+            if (finding.kind == FindingKind.CREDENTIAL
+                    and skipped_path(finding.file_path)):
+                counts["held_open"] = counts.get("held_open", 0) + 1
+                counts["skipped_held"] = counts.get("skipped_held", 0) + 1
+                continue
             if (finding.kind == FindingKind.CREDENTIAL
                     and getattr(finding, "verified", False)):
                 # Only a run that read everything may retire one, and it says

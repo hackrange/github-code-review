@@ -105,17 +105,34 @@ def build_document(entries: list) -> dict:
 
 
 def scanned_names(entries: list) -> set:
-    """Which repositories this run actually reached.
+    """Which repositories this run actually finished.
 
     Everything downstream keys resolution off this.  A repository the scan
     never got to must not have its findings closed, and passing the set rather
     than letting ingest infer it is what makes that true.
+
+    Finished, not merely present.  The scanner writes a result file after each
+    expensive pass so a repository killed later still reports the work it did,
+    and a worker that timed out gets a stub so it does not vanish from the
+    report.  Both of those are entries.  Neither is a repository that was read.
+    Counting them here told the ingest that a half scanned repository had been
+    fully examined, so everything the half it never reached would have reported
+    was absent, and absent is closed: one stopped run retired one thousand
+    seven hundred and forty four findings that way, most of them critical.
+
+    The run's normal path has always excluded them, with a comment saying that
+    calling them fixed would be the scanner inventing good news.  This is the
+    same rule, on the path that runs when a scan does not get to the end, which
+    is exactly when it matters most.
     """
     out = set()
     for entry in entries:
         meta = entry.get("repository") or {}
-        if isinstance(meta, dict) and meta.get("full_name"):
-            out.add(meta["full_name"])
+        if not isinstance(meta, dict) or not meta.get("full_name"):
+            continue
+        if str(entry.get("status", "ok")) != "ok":
+            continue
+        out.add(meta["full_name"])
     return out
 
 

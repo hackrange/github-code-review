@@ -259,6 +259,12 @@ report_build() {
           status, error,
           passes_complete: (.passes_complete // []),
           history: (.history // null),
+          # Which engine in the credential pass died, if one did.  Carried
+          # rather than dropped because the reader acts on it: a history whose
+          # engine was killed must not keep a marker saying it has been read
+          # end to end.  Computed and discarded here, that decision would be
+          # made on the wrong evidence.
+          secrets_incomplete_reason: (.secrets_incomplete_reason // null),
           branches_scanned: .branches_scanned,
           branch_count,
           # Where each branch actually was, and whether a dynamic pass could

@@ -81,6 +81,7 @@ scan_one_repo() {
       --argjson dur "$(( $(date +%s) - started ))" \
       --argjson code_ok "${CODE_PASS_COMPLETE:-true}" \
       --arg code_why "${CODE_PASS_INCOMPLETE:-}" \
+      --arg secrets_why "${SECRETS_PASS_INCOMPLETE:-}" \
       --argjson sso "${GHSCAN_SSO_TRUNCATED:-0}" \
       --arg passes "$PASSES_DONE" \
       --arg hist_from "${HISTORY_FROM:-}" \
@@ -106,6 +107,11 @@ scan_one_repo() {
         # report is missing rather than fixed.
         code_complete: $code_ok,
         code_incomplete_reason: (if $code_why == "" then null else $code_why end),
+        # Which engine died, for whoever has to work out afterwards why a
+        # repository went quiet.  This file is the only record that survives
+        # the run, and it is what the diagnosis was missing.
+        secrets_incomplete_reason:
+          (if $secrets_why == "" then null else $secrets_why end),
         misconfigurations: $misconfigurations[0],
         pull_history: $pulls[0],
         clone_traffic: $clone_traffic[0],
@@ -217,6 +223,9 @@ scan_one_repo() {
     # collected so the repository can be told what was not looked at.
     SECRETS_DROPPED=$(tmp_file secrets_dropped)
     : > "$SECRETS_DROPPED"
+    # Any engine in this pass that did not finish.  Cleared per repository,
+    # because a failure on the last one must not follow the next one around.
+    SECRETS_PASS_INCOMPLETE=""
     HISTORY_TOO_BIG=0
     local engines; engines=$(cfg_json '.scan.secrets.engines // []')
 
@@ -478,7 +487,24 @@ scan_one_repo() {
     fi
   fi
 
-  _checkpoint secrets
+  # A pass is complete when the engines that make it up finished, not when the
+  # code reached the end of the block.  An engine that was killed writes an
+  # empty report and the pass carries on, which is right, but declaring the
+  # pass complete on the strength of it tells the reader that everything that
+  # engine used to find has been remediated.
+  #
+  # Two things are withheld, and they are withheld together.  The pass, so
+  # credential findings here are held open rather than closed for silence.
+  # And the history marker, because a walk whose engine died is not a history
+  # that has been read, and a marker saying otherwise stops anything ever
+  # looking again.
+  if [[ -n "${SECRETS_PASS_INCOMPLETE:-}" ]]; then
+    HISTORY_COMPLETE="false"
+    HISTORY_FROM=""
+    _emit "partial" "still running; finished so far: ${PASSES_DONE:-none}"
+  else
+    _checkpoint secrets
+  fi
 
   # --- static analysis of the code ------------------------------------------
   if cfg_bool '.scan.code_analysis.enabled' true; then

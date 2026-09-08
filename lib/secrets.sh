@@ -465,6 +465,33 @@ _gitleaks_subcommand() {
   if gitleaks git --help >/dev/null 2>&1; then echo "git"; else echo "detect"; fi
 }
 
+# An engine that died is not an engine that found nothing.
+#
+# Every one of these writes an empty report when it fails, because the pass has
+# to carry on and report what the other engines did find.  That is right.  What
+# was missing is any record that it happened, so an empty report from a killed
+# engine reached the reader as "this repository is clean now" and every finding
+# that engine used to report was closed as fixed.  One repository lost one
+# thousand seven hundred and forty three credentials that way, in one pass, on
+# a history nobody had actually read.
+#
+# So a death is written down here, the pass is not declared complete, and the
+# reader holds those findings open instead.  Absence of evidence, again.
+secrets_engine_died() {
+  local engine="$1" rc="$2" full_name="$3" logf="${4:-}"
+  local why
+  if (( rc > 128 )); then
+    why="$engine was stopped by signal $(( rc - 128 ))"
+  else
+    why="$engine exited $rc"
+  fi
+  if [[ -n "$logf" && -s "$logf" ]]; then
+    why="$why: $(tail -2 "$logf" | tr '\n' ' ' | cut -c1-200)"
+  fi
+  SECRETS_PASS_INCOMPLETE="${SECRETS_PASS_INCOMPLETE:+$SECRETS_PASS_INCOMPLETE; }$why"
+  log_warn "[$full_name] $why, so the credential pass is not complete"
+}
+
 run_gitleaks() {
   local dir="$1" full_name="$2" out="$3"
   have_cmd gitleaks || { log_debug "gitleaks not installed, skipping"; echo '[]' > "$out"; return 0; }
@@ -487,9 +514,13 @@ run_gitleaks() {
   (( maxmb > 0 )) && args+=(--max-target-megabytes "$maxmb")
 
   log_debug "$full_name: gitleaks ${args[*]}"
-  gitleaks "${args[@]}" >"$GHSCAN_TMPROOT/gitleaks.log" 2>&1 || {
-    log_warn "$full_name: gitleaks exited non-zero: $(tail -2 "$GHSCAN_TMPROOT/gitleaks.log" | tr '\n' ' ')"
-  }
+  # --exit-code 0 above means a leak found is not a failure, so anything
+  # non-zero here is the engine going wrong rather than the repository being
+  # dirty.  A signal shows up as 128 plus the number.
+  local rc=0
+  gitleaks "${args[@]}" >"$GHSCAN_TMPROOT/gitleaks.log" 2>&1 || rc=$?
+  (( rc == 0 )) || secrets_engine_died gitleaks "$rc" "$full_name" \
+    "$GHSCAN_TMPROOT/gitleaks.log"
   [[ -s "$out" ]] || echo '[]' > "$out"
   jq -e . "$out" >/dev/null 2>&1 || echo '[]' > "$out"
 }
@@ -527,9 +558,21 @@ run_trufflehog() {
     < <(cfg_arr '.scan.secrets.trufflehog.exclude_detectors')
 
   log_debug "$full_name: trufflehog ${args[*]}"
-  trufflehog "${args[@]}" 2>"$GHSCAN_TMPROOT/trufflehog.log" \
-    | grep -E '^\{' > "$out" || true
+  # The status that matters is the engine's, not grep's, and grep matching
+  # nothing is an ordinary quiet repository.  A pipeline reports the wrong one
+  # and `|| true` throws away even that, so the engine writes its own.
+  # In the root itself, not through tmp_file: that calls tmp_init, and in a
+  # command substitution tmp_init runs in a subshell, so the root it creates
+  # belongs to a shell that exits at once and the trap that would remove it
+  # never runs.  A directory of cleartext credentials stays behind per call.
+  local rcfile="$GHSCAN_TMPROOT/trufflehog.rc"; : > "$rcfile"
+  { trufflehog "${args[@]}" 2>"$GHSCAN_TMPROOT/trufflehog.log" \
+      || printf '%s' "$?" > "$rcfile"; } | grep -E '^\{' > "$out" || true
   [[ -f "$out" ]] || : > "$out"
+  if [[ -s "$rcfile" ]]; then
+    secrets_engine_died trufflehog "$(cat "$rcfile")" "$full_name" \
+      "$GHSCAN_TMPROOT/trufflehog.log"
+  fi
 }
 
 # Used when scan_full_history is off. Caller checks out each branch, these scan
@@ -545,7 +588,10 @@ run_gitleaks_worktree() {
   local gl_cfg; gl_cfg=$(cfg '.scan.secrets.gitleaks.config_path' '')
   [[ -n "$gl_cfg" && -r "$gl_cfg" ]] && args+=(--config "$gl_cfg")
 
-  gitleaks "${args[@]}" >"$GHSCAN_TMPROOT/gitleaks.log" 2>&1 || true
+  local rc=0
+  gitleaks "${args[@]}" >"$GHSCAN_TMPROOT/gitleaks.log" 2>&1 || rc=$?
+  (( rc == 0 )) || secrets_engine_died gitleaks "$rc" "$full_name" \
+    "$GHSCAN_TMPROOT/gitleaks.log"
   [[ -s "$out" ]] || echo '[]' > "$out"
   jq -e . "$out" >/dev/null 2>&1 || echo '[]' > "$out"
 }
@@ -560,8 +606,14 @@ run_trufflehog_worktree() {
     args+=(--no-verification)
   fi
   args+=(--concurrency "$(cfg_num '.scan.secrets.trufflehog.concurrency' 8)")
-  trufflehog "${args[@]}" 2>"$GHSCAN_TMPROOT/trufflehog.log" | grep -E '^\{' > "$out" || true
+  local rcfile="$GHSCAN_TMPROOT/trufflehog.rc"; : > "$rcfile"
+  { trufflehog "${args[@]}" 2>"$GHSCAN_TMPROOT/trufflehog.log" \
+      || printf '%s' "$?" > "$rcfile"; } | grep -E '^\{' > "$out" || true
   [[ -f "$out" ]] || : > "$out"
+  if [[ -s "$rcfile" ]]; then
+    secrets_engine_died trufflehog "$(cat "$rcfile")" "$full_name" \
+      "$GHSCAN_TMPROOT/trufflehog.log"
+  fi
 }
 
 # Stamp a branch onto findings that have no commit to attribute them by, and
