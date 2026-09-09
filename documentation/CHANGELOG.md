@@ -6,6 +6,41 @@ moved.
 
 ## 2026-09-09
 
+**Archived repositories stop inflating the risk matrix.**  Code that can no
+longer be changed is not work anybody can do, and a grid that counts it has
+cells that never empty however much gets fixed.  The matrix and the branch
+table now set those findings aside, the way the dashboard already did.  Set
+aside is not hidden: the count is on the page with a link to the rows, the
+findings stay open, and they stay in the findings list, in both report files
+and in the export.  The report is built from the same scoped query, so the
+document and the screen cannot drift apart.
+
+**The trends chart says when it is out of date.**  The daily rollup only writes
+a row where something is open, so a scope that emptied and a scope that stopped
+being scanned both just stop having rows.  The chart then drew whatever days it
+had across the full width, and three days of a seven day window looked like
+seven.  It now names the date of the newest reading and how far back it is,
+which is what the PDF report has said all along.  The empty panels say which of
+three things happened as well: nothing is open here, findings are open but not
+yet assessed on both axes, or everything here is set aside on a retired
+repository.  Each offers the rows, because being told a scope is empty by a
+page that will not show you what is in it is a dead end.
+
+**A period of one day.**  The rollup is kept per day, so this covers one row
+and the chart is a single point rather than a line.  It is offered as Today,
+which is what it is.
+
+**Fixed: changing the repository on the trends page kept the branch.**  The
+filter boxes cascade, so picking a different repository clears the branch that
+was chosen for the last one.  The trends page marks the whole form rather than
+each box, and that path was submitting the stale value.  The scope then matched
+nothing, and the page came back with an empty matrix and an empty table and no
+reason on screen for either.
+
+**Fixed: a heatmap cell could open more rows than it counted.**  The panels set
+archived repositories aside and the list the cells linked to did not, so the
+number on screen and the number behind it disagreed by whatever was archived.
+
 **The line a code finding is about.**  A code finding used to give you a file
 and a line number and nothing else, so the first question anybody asks of one,
 whether the string was built from a request or from a constant, meant cloning
