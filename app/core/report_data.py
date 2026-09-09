@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from sqlalchemy import func
 
+from app.core import branch_scope
 from app.core.models import Finding, FindingKind, FindingState, Severity
 
 # How many rows a section prints before it stops being a list somebody reads
@@ -42,7 +43,8 @@ def _scoped(query, organization="", repository="", branch="", connection=""):
     if repository:
         query = query.filter(Finding.repository == repository)
     if branch:
-        query = query.filter(Finding.branch == branch)
+        # Both readings of what branch a finding is on.  See branch_scope.
+        query = query.filter(branch_scope.matches(branch))
     return query
 
 
@@ -64,7 +66,7 @@ def resolved_since(base_query, organization="", repository="", branch="",
     if repository:
         query = query.filter(Finding.repository == repository)
     if branch:
-        query = query.filter(Finding.branch == branch)
+        query = query.filter(branch_scope.matches(branch))
     return query.count()
 
 

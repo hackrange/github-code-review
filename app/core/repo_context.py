@@ -57,6 +57,10 @@ def for_repository(session, full_name: str, *, with_people: bool = True) -> dict
         "protected": bool(repo.default_branch_protected),
         "last_scanned_at": repo.last_scanned_at,
         "connection": repo.connection or "",
+        # Both halves of the same answer.  The name is what the row was
+        # written with and what most screens print; the id is the one that
+        # survives somebody renaming the account.
+        "connection_id": repo.connection_id,
         "note": repo.note or "",
         "note_by": repo.note_by or "",
         "note_at": repo.note_at,

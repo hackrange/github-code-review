@@ -1407,6 +1407,19 @@ def connections_scanning_now() -> set:
                 if row.id in ids}
 
 
+def connection_ids_scanning_now() -> set:
+    """The same accounts, by id.
+
+    The id is what the scanner actually holds, so asking this way asks the
+    question the refusal will ask.  A name can go stale: a repository records
+    the account name it was last read under, and renaming an account leaves
+    every row written before that pointing at a name nothing answers to.  The
+    name answer stays for rows that never recorded an id.
+    """
+    with _process_lock:
+        return set(_scanning_connections)
+
+
 def start_background(triggered_by: str = "", trigger: str = "manual",
                      orgs=None, repos=None, only=None,
                      connection_id=None, branch_names=None) -> bool:

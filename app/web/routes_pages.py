@@ -20,6 +20,7 @@ from sqlalchemy import case, func, or_ as sa_or
 
 from app.config import APP_NAME, VERSION, settings
 from app.core import baseline as baseline_filter
+from app.core import branch_scope
 from app.core import rbac, recommendation, repo_context, risk
 from app.core.db import session_scope
 from app.core.models import (
@@ -48,6 +49,21 @@ def _scanning_now() -> set:
 
     try:
         return scanner.connections_scanning_now()
+    except Exception:            # noqa: BLE001 - a button is not worth a 500
+        return set()
+
+
+def _scanning_now_ids() -> set:
+    """The same accounts by id, which is the answer that cannot go stale.
+
+    Handed to the pages alongside the names.  A repository row written before
+    somebody renamed its account still carries the old name, and matching on
+    that alone leaves the button live during a scan that already covers it.
+    """
+    from app.core import scanner
+
+    try:
+        return scanner.connection_ids_scanning_now()
     except Exception:            # noqa: BLE001 - a button is not worth a 500
         return set()
 
@@ -316,7 +332,10 @@ def _filtered_findings(db, user, params):
     branch = clean_text(params.get("branch", ""), "Branch", limit=255,
                         required=False)
     if branch:
-        query = query.filter(Finding.branch == branch)
+        # Every branch the finding sits on, not the one name it happens to be
+        # filed under.  A finding on develop and master is one finding on two
+        # branches, and asking for master has to return it.
+        query = query.filter(branch_scope.matches(branch))
     # The two axes of the risk matrix, so a cell in it opens its own rows.
     # An allowlist rather than the value as it arrives, because these go
     # straight into a comparison and the list of legal answers is four words
@@ -339,6 +358,7 @@ def _filtered_findings(db, user, params):
             | Finding.organization.ilike(like)
             | Finding.repository.ilike(like)
             | Finding.branch.ilike(like)
+            | Finding.branches.ilike(like)
             | Finding.file_path.ilike(like)
             | Finding.rule.ilike(like)
             | Finding.title.ilike(like)
@@ -917,7 +937,7 @@ def findings(request: Request, user: User = Depends(current_user)):
         # These deliberately ignore severity, state, triage and the rest.  A
         # repository whose findings are all waived should still be pickable, or
         # the filter that would show you them is the one that hid it.
-        def _choices(column, **fixed):
+        def _narrowed(**fixed):
             picked = rbac.visible_findings(db, user)
             if fixed.get("connection"):
                 picked = picked.filter(Finding.connection == fixed["connection"])
@@ -925,13 +945,20 @@ def findings(request: Request, user: User = Depends(current_user)):
                 picked = picked.filter(Finding.organization == fixed["org"])
             if fixed.get("repo"):
                 picked = picked.filter(Finding.repository == fixed["repo"])
+            return picked
+
+        def _choices(column, **fixed):
+            picked = _narrowed(**fixed)
             return sorted({r[0] for r in
                            picked.with_entities(column).distinct().all() if r[0]})
 
         orgs = _choices(Finding.organization, connection=connection)
         repo_choices = _choices(Finding.repository, connection=connection, org=org)
-        branch_choices = _choices(Finding.branch, connection=connection,
-                                  org=org, repo=repo_filter)
+        # Not the primary branch column: a branch that only ever comes second
+        # in a finding's list still has findings on it, and a box that cannot
+        # offer it reads as a branch nobody has scanned.
+        branch_choices = branch_scope.names(
+            _narrowed(connection=connection, org=org, repo=repo_filter))
         # A selection that the narrowing has made unavailable still has to be
         # in its own list, or the box would show something other than what is
         # actually being filtered on and the page would be lying about itself.
@@ -1148,6 +1175,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        repo_info=about,
                        can_scan=rbac.can(user, "scan.run"),
                        scanning_now=_scanning_now(),
+                       scanning_now_ids=_scanning_now_ids(),
                        on_branches=on_branches,
                        certification=certification,
                        exemption=exemption,
@@ -1302,6 +1330,7 @@ def repositories(request: Request, user: User = Depends(current_user)):
         context.update(active_page="repositories", rows=rows, counts=counts,
                        can_scan=rbac.can(user, "scan.run"),
                        scanning_now=_scanning_now(),
+                       scanning_now_ids=_scanning_now_ids(),
                        certified=badges, certified_filter=wanted)
         return page(request, "repositories.html", **context)
 

@@ -456,6 +456,7 @@ def _apply_finding_filters(query, form):
             | Finding.organization.ilike(like)
             | Finding.repository.ilike(like)
             | Finding.branch.ilike(like)
+            | Finding.branches.ilike(like)
             | Finding.file_path.ilike(like)
             | Finding.rule.ilike(like)
             | Finding.title.ilike(like)
@@ -1344,9 +1345,15 @@ async def scan_one_repository(repo_id: int, request: Request,
         if row is None:
             raise HTTPException(status_code=404, detail="No such repository.")
         full_name = row.full_name
-        connection = (connection_store.by_name(db, row.connection)
-                      if row.connection else None)
-        connection_id = getattr(connection, "id", None)
+        # The id the row already stores, before the name it was written with.
+        # Resolving the name is a lookup that comes back empty the moment
+        # somebody renames the account, and an empty answer here does not
+        # refuse the scan, it starts a second one.  The name is still tried
+        # for rows written before the id was recorded.
+        connection_id = row.connection_id
+        if connection_id is None and row.connection:
+            connection_id = getattr(
+                connection_store.by_name(db, row.connection), "id", None)
 
     # One branch, when the caller named one.  A finding lives on a branch, and
     # re-reading it means reading that branch; walking the other thirty six is

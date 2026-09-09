@@ -125,9 +125,13 @@
                scanner claims a connection for the length of a run and would
                refuse this anyway.  A button that is going to be refused is
                worse than no button: it reads as broken rather than as busy. #}
-            {% if r.connection and r.connection in scanning_now %}
+            {# By id first, for the same reason the finding page does it: a
+               renamed account leaves every repository row carrying a name
+               that no longer matches anything. #}
+            {% if (r.connection_id and r.connection_id in scanning_now_ids)
+                  or (r.connection and r.connection in scanning_now) %}
             <button class="btn sm" type="button" disabled
-                    title="{{ r.connection }} is being scanned now">Scanning</button>
+                    title="{{ r.connection or 'That account' }} is being scanned now">Scanning</button>
             {% else %}
             <form method="post" action="{{ base }}/repositories/{{ r.id }}/scan"
                   style="display:inline">

@@ -24,7 +24,8 @@ same reason triage runs where it does.
   release into everybody's problem.
 
   A name one edit away from a popular one.  Typosquatting, checked against the
-  packages actually worth squatting rather than against the whole registry.
+  packages actually worth squatting rather than against the whole registry, and
+  minus the real packages that happen to live next door to a famous one.
 
 Nothing here is certain, and none of it is graded critical on its own.  A
 finding says which signal fired and what the evidence was, so somebody can look
@@ -87,6 +88,30 @@ POPULAR = {
 }
 
 
+# The neighbors that are not squatting anybody.  Each of these is a real
+# package that happens to sit one edit from a famous name, usually because the
+# same people published both.  Keyed by the famous name, so an entry says who
+# the package was being mistaken for.
+KNOWN_GOOD = {
+    "npm": {
+        "vue": {"vuex"},
+        "react": {"preact"},
+        "next": {"nuxt", "nest"},
+        "colors": {"color"},
+        "uuid": {"uid"},
+        # Two letters is too short for one edit to mean anything, and a lot of
+        # the small names in a node tree land next to ws.
+        "ws": {"ms", "qs", "fs", "os", "js", "es", "vs", "cs", "bs"},
+    },
+    "python": {
+        "scipy": {"scapy"},
+        "psycopg2": {"psycopg"},
+        "boto3": {"boto"},
+        "pandas": {"panda"},
+    },
+}
+
+
 def _read(path: str) -> str:
     try:
         if os.path.getsize(path) > MAX_FILE_BYTES:
@@ -139,6 +164,24 @@ def edit_distance_one(a: str, b: str) -> bool:
     return False
 
 
+def typosquat_of(name: str, ecosystem: str) -> str:
+    """The popular name this one is a single edit from, or "" for nothing.
+
+    Sitting next to something famous is not proof on its own.  Vuex is one
+    character off vue because the Vue team named it that, and reporting it
+    every scan costs more than it ever finds.
+    """
+    lowered = name.lower()
+    safe = KNOWN_GOOD.get(ecosystem, {})
+    for popular in POPULAR.get(ecosystem, []):
+        if not edit_distance_one(lowered, popular):
+            continue
+        if lowered in safe.get(popular, ()):
+            continue
+        return popular
+    return ""
+
+
 def _finding(name, version, eco, signal, confidence, reason, evidence, where):
     return {
         "package": name, "version": version or "", "ecosystem": eco,
@@ -181,14 +224,13 @@ def check_npm(document: dict, rel: str) -> list:
                     "the version floats, so the next install takes whatever "
                     "was published most recently",
                     f"{name}: {spec} ({scope})", rel))
-            for popular in POPULAR["npm"]:
-                if edit_distance_one(name.lower(), popular):
-                    out.append(_finding(
-                        name, spec, "npm", "typosquat", SUSPICIOUS,
-                        f"one character away from {popular}, which is what a "
-                        "typosquat looks like",
-                        f"{name} against {popular}", rel))
-                    break
+            popular = typosquat_of(name, "npm")
+            if popular:
+                out.append(_finding(
+                    name, spec, "npm", "typosquat", SUSPICIOUS,
+                    f"one character away from {popular}, which is what a "
+                    "typosquat looks like",
+                    f"{name} against {popular}", rel))
     return out
 
 
@@ -215,14 +257,13 @@ def check_python(text: str, rel: str) -> list:
         if not spec or spec in ("*",):
             # Unpinned is normal in python and not worth a finding on its own.
             pass
-        for popular in POPULAR["python"]:
-            if edit_distance_one(name.lower(), popular):
-                out.append(_finding(
-                    name, spec, "python", "typosquat", SUSPICIOUS,
-                    f"one character away from {popular}, which is what a "
-                    "typosquat looks like",
-                    f"{name} against {popular}", rel))
-                break
+        popular = typosquat_of(name, "python")
+        if popular:
+            out.append(_finding(
+                name, spec, "python", "typosquat", SUSPICIOUS,
+                f"one character away from {popular}, which is what a "
+                "typosquat looks like",
+                f"{name} against {popular}", rel))
     return out
 
 

@@ -184,12 +184,19 @@
        the whole account it sits in.  Offered on every kind, because the kinds
        a recheck cannot answer are exactly the ones that need this. #}
     {% if can_scan and repo_info and repo_info.id %}
-      {% if repo_info.connection and repo_info.connection in scanning_now %}
       {# Not offered while that account is mid scan.  The scanner holds a
          connection for the length of a run and would turn this down, and a
-         button that gets refused reads as broken rather than as busy. #}
+         button that gets refused reads as broken rather than as busy.
+
+         Asked by id first.  The name on a repository row is the one it was
+         last read under, so renaming an account leaves every row written
+         before that matching nothing, and the button stayed live through a
+         scan that already covered it.  The name is still asked for rows old
+         enough to have no id on them. #}
+      {% if (repo_info.connection_id and repo_info.connection_id in scanning_now_ids)
+            or (repo_info.connection and repo_info.connection in scanning_now) %}
       <button class="btn" type="button" disabled
-              title="{{ repo_info.connection }} is being scanned now">Scanning now</button>
+              title="{{ repo_info.connection or 'That account' }} is being scanned now">Scanning now</button>
       {% else %}
       <form method="post" action="{{ base }}/repositories/{{ repo_info.id }}/scan"
             style="display:inline">
