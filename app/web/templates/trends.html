@@ -338,8 +338,15 @@
   {% if heat_pages > 1 %}
   {% set sorting = ('&sort=' ~ heat_sort ~ '&dir=' ~ heat_dir) if heat_sort else '' %}
   <div class="flex-between" style="margin:.6rem 1rem 0">
+    {# Named properly.  An "s" on the end of the axis reads "repositorys",
+       which is the kind of thing a reader trusts a product slightly less
+       for. #}
+    {% set plural = {'organization': 'organizations',
+                     'repository': 'repositories',
+                     'branch': 'branches'} %}
     <div class="small faint">{{ heat_first }} to {{ heat_last }} of
-      {{ heat_total }} {{ heat.axis }}{{ '' if heat_total == 1 else 's' }},
+      {{ heat_total }}
+      {{ heat.axis if heat_total == 1 else plural.get(heat.axis, heat.axis ~ 's') }},
       page {{ heat_page_no }} of {{ heat_pages }}</div>
     <div class="page-actions">
       {% if heat_page_no > 1 %}

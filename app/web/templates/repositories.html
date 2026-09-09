@@ -61,7 +61,7 @@
           {# Said in the column rather than left to the author's name.  The
              two claims are different sizes and the reader is entitled to know
              which one they are looking at. #}
-          <td>{% if row.automatic %}<span class="faint">a scan</span>
+          <td class="nowrap">{% if row.automatic %}<span class="faint">a scan</span>
             {%- else %}{{ row.by }}{% endif %}</td>
           <td class="small faint">{{ row.note }}</td>
         </tr>

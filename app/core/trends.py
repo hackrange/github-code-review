@@ -131,8 +131,17 @@ def record(session, day: datetime = None) -> int:
     certified = _certification_by_branch(session)
 
     # Replace the day rather than add to it.
+    #
+    # Every row for the day goes, not just the snapshot ones.  A reconstruction
+    # of today can exist: backfill writes one for any day that has no snapshot
+    # yet, and on a fresh install that runs before the first scan of the day.
+    # Leaving it there would put two rows on the same branch on the same day
+    # and the chart adds them up, so the last point on the line reads as
+    # roughly double and looks like an overnight disaster.  A real record of a
+    # day beats a reconstruction of it, which is the rule backfill already
+    # follows in the other direction.
     (session.query(TrendPoint)
-     .filter(TrendPoint.day == day, TrendPoint.source == SNAPSHOT)
+     .filter(TrendPoint.day == day)
      .delete(synchronize_session=False))
 
     written = 0

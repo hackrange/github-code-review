@@ -9,6 +9,11 @@ Three of them, and the gaps between them are on purpose.
 | Ask for an exception | yes | yes | no |
 | Approve an exception | yes | no | no |
 | Revoke an exception | yes | no | no |
+| Certify a branch | yes | no | no |
+| Withdraw a certification | yes | no | no |
+| Mark a branch not applicable | yes | no | no |
+| Write a custom severity rule | yes | no | no |
+| Write an exclusion | yes | no | no |
 | Start a scan | yes | yes | no |
 | Edit schedules | yes | no | no |
 | Manage users | yes | no | no |
@@ -38,3 +43,21 @@ an exception they asked for themselves.
 
 Every exception has an expiration date, up to a year out. When it passes, the
 finding comes back into both files on the next write.
+
+## Exclusions and grades are admin only
+
+Writing an exclusion is the same decision as approving an exception: it takes a
+finding out of the files another tool reads.  A developer can see the exclusions
+covering their own repositories and cannot write one, and neither can a reader.
+Every route that adds, edits, imports, purges or deletes an exclusion checks the
+same permission, and there is a test that posts to each of them as a developer
+and as a reader and expects to be refused.
+
+Custom severity is the same argument.  A grade is a statement about what the
+whole organization means by a number, so writing one is an administrator's job.
+Regrading a single finding is separate and also an administrator's.
+
+Certifying a branch is administrator only for the same reason, and marking a
+branch as not applicable is a further permission again, because it removes work
+from a list permanently rather than recording that the work was done.  See
+[certification.md](certification.md).
