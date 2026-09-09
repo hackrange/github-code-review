@@ -32,6 +32,15 @@ PERMISSIONS = {
         "trend.read", "report.generate",
         "waiver.request", "waiver.approve", "waiver.revoke",
         "scan.run", "scan.history.delete",
+        # Seeing every scan, and stopping any of them.  A developer keeps
+        # "scan.run" so they can re-read a repository of their own, and with it
+        # they see and may stop the runs they started.  Somebody else's nightly
+        # sweep is not theirs to end.
+        "scan.read.any", "scan.stop.any",
+        # The report files on disk.  Generating a report is scoped to what the
+        # reader may see and stays with everybody; the files a scan left behind
+        # are the whole estate's, whoever asked for them.
+        "report.files",
         # Deleting findings outright.  Admin only, and deliberately not the
         # same thing as waiving: a waiver is a decision with a reason and an
         # expiry, this just removes the rows.  The next scan finds them again
@@ -74,19 +83,20 @@ PERMISSIONS = {
         "waiver.request",
         "scan.run",
         "repo.read",
-        "schedule.read",
         # A developer can ask for a noisy rule to be set aside.  Somebody else
         # has to agree, the same as an exception.
         "rule.mute.request",
-        # A developer can see the exclusions covering their own repositories.
-        # Writing one is the same decision as approving a waiver, so it stays
-        # with the admins.
-        "exclusion.read",
+        # Deliberately not here: the schedules, the exclusions and the report
+        # files.  Each of those is a statement about the whole estate rather
+        # than about this person's repositories, and a page that shows one
+        # team when every account is on it is a leak whichever way it is read.
+        # "exclusion.read" in particular was here so a developer could see the
+        # rules covering their own repositories, and it showed them all of them.
     },
     UserRole.READER: {
         "findings.read", "findings.export",
         "trend.read", "report.generate",
-        "repo.read", "schedule.read", "exclusion.read",
+        "repo.read",
     },
 }
 

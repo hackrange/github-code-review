@@ -1109,6 +1109,36 @@ async def stop_scan(request: Request, user: User = Depends(current_user)):
     wanted = str(form.get("run_id", "")).strip()
     run_id = int(wanted) if wanted.isdigit() else None
 
+    # Whose run this is.
+    #
+    # The id arrives in the form and was acted on without asking whether the
+    # person sending it had anything to do with that run.  Anybody who could
+    # re-scan one repository of their own could therefore end the nightly
+    # sweep over the whole estate, by posting a number.
+    #
+    # A developer keeps the ability to stop what they started, because they
+    # can start it.  Everything else needs the permission an administrator
+    # has.  Naming no run at all means "stop whatever is running", which is a
+    # claim over somebody else's work by definition, so that stays with the
+    # administrators too.
+    if not rbac.can(user, "scan.stop.any"):
+        from app.core.models import ScanRun
+
+        if run_id is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Say which scan to stop.  Only an administrator can "
+                       "stop whichever one happens to be running.")
+        with session_scope() as db:
+            row = (db.query(ScanRun)
+                   .filter(ScanRun.id == run_id).one_or_none())
+            owner = (row.triggered_by or "") if row else ""
+        # A run that is not there and a run that is somebody else's answer the
+        # same way.  Telling them apart is how an id becomes a way to find out
+        # what exists.
+        if row is None or owner != user.username:
+            raise HTTPException(status_code=404, detail="No such scan.")
+
     result = scanner.stop_scan(run_id)
     with session_scope() as db:
         record(db, "scan.stop_requested", actor=user.username,

@@ -86,6 +86,13 @@ def _shared(db, user: User) -> dict:
         # The shell decides whether to offer the link, so a role without the
         # permission is not shown a page it would be refused at.
         "can_see_trends": rbac.can(user, "trend.read"),
+        # The navigation asks the same questions the routes do, so it stops
+        # offering pages that will refuse.  Hiding a link is not the guard:
+        # the address still works, and the guard is on the route.
+        "can_see_scans": rbac.can(user, "scan.run"),
+        "can_see_schedules": rbac.can(user, "schedule.read"),
+        "can_see_exclusions": rbac.can(user, "exclusion.read"),
+        "can_see_report_files": rbac.can(user, "report.files"),
     }
 
 
@@ -1290,6 +1297,16 @@ def waivers(request: Request, q: str = "", status: str = "", page_no: int = 1,
         base = (db.query(Waiver)
                 .filter(Waiver.finding_id.in_(visible_ids) if visible_ids
                         else Waiver.id.is_(None)))
+        # And, for anybody who cannot approve one, only their own.
+        #
+        # The repository scope above is the wrong test on its own.  Two
+        # developers on the same team see the same repositories, so it showed
+        # each of them the other's requests: what they asked to set aside, the
+        # reason they gave, and whether somebody agreed.  An exception is an
+        # argument a person made and had judged, which is nearer to their
+        # review than to the finding it sits on.
+        if not rbac.can(user, "waiver.approve"):
+            base = base.filter(Waiver.requested_by == user.username)
 
         now = datetime.now(timezone.utc)
         if wanted == "expired":
@@ -1413,8 +1430,20 @@ def scans(request: Request, msg: str = "", kind: str = "",
           user: User = Depends(current_user)):
     from app.core import scanner
 
+    # Somebody else's scans are somebody else's business.
+    #
+    # This page had no permission check at all, so every signed in account saw
+    # every run over every organization in the estate: what was scanned, when,
+    # by whom and how it went.  A developer keeps the runs they started,
+    # because they can start them and need to see how they went.
+    rbac.require(user, "scan.run")
+    mine_only = not rbac.can(user, "scan.read.any")
+
     with session_scope() as db:
-        rows = (db.query(ScanRun).order_by(ScanRun.started_at.desc())
+        query = db.query(ScanRun)
+        if mine_only:
+            query = query.filter(ScanRun.triggered_by == user.username)
+        rows = (query.order_by(ScanRun.started_at.desc())
                 .limit(100).all())
 
         # Runs that failed before there was a column to put the reason in
@@ -1444,6 +1473,7 @@ def scans(request: Request, msg: str = "", kind: str = "",
 
 @router.get("/schedules")
 def schedules(request: Request, user: User = Depends(current_user)):
+    rbac.require(user, "schedule.read")
     from app.core import scheduler as scheduler_mod
 
     with session_scope() as db:
@@ -1457,6 +1487,7 @@ def schedules(request: Request, user: User = Depends(current_user)):
 
 @router.get("/reports")
 def reports(request: Request, user: User = Depends(current_user)):
+    rbac.require(user, "report.files")
     from app.core.reports import output_dir
 
     with session_scope() as db:
@@ -1631,6 +1662,7 @@ def export_tagging(request: Request, user: User = Depends(current_user)):
 
 @router.get("/exclusions/export")
 def export_exclusions(request: Request, user: User = Depends(current_user)):
+    rbac.require(user, "exclusion.read")
     """The exclusions as a CSV, in the same shape the import takes.
 
     Whatever the search box is showing is what comes out, so a filtered set
@@ -1691,6 +1723,13 @@ def export_scans(request: Request, user: User = Depends(current_user)):
 
     from fastapi.responses import StreamingResponse
 
+    # Narrowed the same way the page is.  A developer's own history is theirs
+    # to take away; everybody else's is not, and a file is the one place a
+    # scope is easiest to forget, because nothing on screen shows what came
+    # out of it.
+    rbac.require(user, "scan.run")
+    mine_only = not rbac.can(user, "scan.read.any")
+
     wants = "json" if request.query_params.get("format", "csv").lower() == "json" else "csv"
 
     columns = ["run_id", "status", "trigger", "triggered_by", "started_at",
@@ -1707,7 +1746,10 @@ def export_scans(request: Request, user: User = Depends(current_user)):
         return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     with session_scope() as db:
-        rows = (db.query(ScanRun).order_by(ScanRun.started_at.desc())
+        _q = db.query(ScanRun)
+        if mine_only:
+            _q = _q.filter(ScanRun.triggered_by == user.username)
+        rows = (_q.order_by(ScanRun.started_at.desc())
                 .limit(5000).all())
         buffer = io_module.StringIO()
         writer = csv_module.DictWriter(buffer, fieldnames=columns,
