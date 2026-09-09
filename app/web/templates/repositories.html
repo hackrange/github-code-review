@@ -14,8 +14,9 @@
   <div class="card-head">
     {% if certified_filter %}{{ certified_filter | capitalize }} certifications
     {% else %}Certified branches{% endif %}
-    <span class="faint small">reviewed by a person and signed off, and the
-      branches nobody is expected to review</span>
+    <span class="faint small">signed off by a person, or by a scan that found
+      nothing to read on the branch, and the branches nobody is expected to
+      review</span>
   </div>
   {# Every state reachable by clicking, rather than by knowing the query
      string.  The dashboard could only ever send somebody to the current ones,
@@ -57,7 +58,11 @@
           </td>
           <td class="nowrap">{{ row.at | dt('%d %b %Y') if row.at }}</td>
           <td class="nowrap">{{ row.expires | dt('%d %b %Y') if row.expires }}</td>
-          <td>{{ row.by }}</td>
+          {# Said in the column rather than left to the author's name.  The
+             two claims are different sizes and the reader is entitled to know
+             which one they are looking at. #}
+          <td>{% if row.automatic %}<span class="faint">a scan</span>
+            {%- else %}{{ row.by }}{% endif %}</td>
           <td class="small faint">{{ row.note }}</td>
         </tr>
         {% endfor %}

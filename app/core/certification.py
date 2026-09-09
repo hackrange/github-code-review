@@ -16,6 +16,29 @@ somebody not to look.
   code has not been read.  "Our engines found nothing in it" is not the claim a
   sign off makes.
 
+Most of these are written by a person.  Some are written by a scan: a branch
+a completed scan found nothing worth reading on gets one on its own, because
+asking somebody to click a button on every empty branch in an estate is asking
+for a queue nobody works through, and an unreviewed branch that nobody could
+ever have anything to say about is not the branch anyone wants attention on.
+
+An automatic one is marked as automatic and says so wherever it is shown.  It
+claims a great deal less than a person's, and the wording is deliberately
+about the search rather than about the code: our engines looked and came back
+with nothing anybody has to read.  Three rules keep that honest.
+
+  It waits for the passes to finish.  A pass that did not run reports nothing,
+  and nothing is exactly what a clear branch looks like from here, so silence
+  from a dead engine would otherwise be handed a green badge.
+
+  It never touches a person's.  A scan may refresh or leave behind a badge it
+  wrote itself, and may not overwrite, revive or re-date one somebody signed,
+  including one they withdrew.
+
+  It holds to the same grades a reader would.  Anything above low is a finding
+  somebody has to look at, and a branch holding one is not signed off by a
+  machine.
+
 Both of those are shown rather than enforced.  Nothing in this file removes a
 finding, changes a grade, or keeps anything out of a report.  A certified
 repository that starts producing criticals shows every one of them, beside a
@@ -30,7 +53,8 @@ import logging
 
 from datetime import timezone
 
-from app.core.models import Certification, Finding, FindingState, utcnow
+from app.core.models import (Certification, Finding, FindingState,
+                            Severity, utcnow)
 
 log = logging.getLogger("gcr.certification")
 
@@ -41,6 +65,30 @@ LAPSED = "lapsed"        # the date has passed
 REVOKED = "revoked"      # somebody took it back
 NOT_APPLICABLE = "not_applicable"   # nobody is expected to review this
 NONE = "none"            # nobody has reviewed this
+
+# An automatic sign off, in the words it has to say it in.
+AUTOMATIC_NOTE = ("This branch is automatically certified because there were "
+                  "no observable findings or credentials in our discovery.")
+
+# The name one is written under.  Not a person's name, and it is shown as the
+# author everywhere a certification is listed, so a scan finding nothing is
+# never read as somebody having looked.
+AUTOMATIC_ACTOR = "automatic"
+
+# How long one lasts.  The same ninety days the sign off form offers, so an
+# automatic badge never outlives what a person would have been given.
+AUTOMATIC_DAYS = 90
+
+# The grades that leave a branch clear.  Anything above these is a finding
+# somebody has to read, and a branch holding one is not signed off by a scan.
+AUTOMATIC_CLEAR = (Severity.LOW, Severity.INFO)
+
+# The passes that have to have finished first.  This is the rule the whole
+# feature rests on: a pass that did not run reports nothing, and nothing is
+# exactly what a clear branch looks like from here.  Without this an engine
+# that died would hand out green badges, which is the one failure this file
+# was written to prevent.
+AUTOMATIC_PASSES = ("code", "secrets", "vulnerabilities", "misconfigurations")
 
 
 def _aware(value):
@@ -146,8 +194,14 @@ def status(session, row, head_sha: str = "") -> dict:
 
 
 def certify(session, repository: str, branch: str, note: str, expires_at,
-            actor: str, commit_sha: str = "") -> tuple:
-    """Record a review, or replace the one that is there.  -> (row, why not)."""
+            actor: str, commit_sha: str = "", automatic: bool = False) -> tuple:
+    """Record a review, or replace the one that is there.  -> (row, why not).
+
+    `automatic` says a scan wrote this rather than a person.  It is stored
+    rather than guessed at from the author, because every later decision about
+    the row turns on it: what a scan may overwrite, and what the pages showing
+    the badge tell a reader it means.
+    """
     repository = (repository or "").strip()
     if not repository:
         return None, "Which repository."
@@ -167,6 +221,7 @@ def certify(session, repository: str, branch: str, note: str, expires_at,
         session.add(row)
 
     row.note = note[:4000]
+    row.automatic = bool(automatic)
     row.commit_sha = (commit_sha or "")[:64]
     row.certified_by = actor or ""
     row.certified_at = utcnow()
@@ -180,6 +235,158 @@ def certify(session, repository: str, branch: str, note: str, expires_at,
     log.info("%s certified %s on %s until %s", actor, repository,
              branch or "(default)", expires_at)
     return row, ""
+
+
+def blocking_branches(session, repository: str, default_branch: str = "") -> set:
+    """Which branches of this repository hold a finding somebody has to read.
+
+    Only the grades that stop a sign off are fetched, so a repository carrying
+    thousands of low findings costs the same here as an empty one.
+
+    A finding remembers every branch it was seen on, and one on the default
+    branch may name no branch at all, so both readings are followed.  Guessing
+    the other way would sign off a branch because the finding on it was filed
+    under a name this loop did not recognize.
+    """
+    import json
+
+    blocked = set()
+    rows = (session.query(Finding.branch, Finding.branches)
+            .filter(Finding.repository == repository)
+            .filter(Finding.state == FindingState.OPEN)
+            .filter(Finding.excepted.is_(False))
+            .filter(Finding.severity.notin_(AUTOMATIC_CLEAR))
+            .all())
+    for branch, listed in rows:
+        try:
+            names = [str(name) for name in (json.loads(listed or "[]") or [])
+                     if name]
+        except (TypeError, ValueError):
+            names = []
+        for name in (names or [branch or default_branch]):
+            blocked.add(name or default_branch)
+    return blocked
+
+
+def _written_by_a_scan(session, repository: str, branch: str,
+                       default_branch: str):
+    """The certification a scan may write over here, if there is one.
+
+    -> (row, whether to leave the branch alone).
+
+    The default branch can be certified under its name or under no name at
+    all, because a certification written from a finding uses the branch the
+    finding named and a finding on the default branch often names none.  Both
+    are the same branch, so both are looked at.  Missing that would put a
+    second badge on a branch a person had already signed, and coverage counts
+    badges.
+    """
+    row = for_branch(session, repository, branch)
+    if row is None and branch and branch == default_branch:
+        row = for_branch(session, repository, "")
+    if row is None:
+        return None, False
+    # A person's sign off is never touched by a scan, in any state.  Not
+    # refreshed, not re-dated, and least of all revived after they withdrew it.
+    if not row.automatic:
+        return row, True
+    if row.revoked_at is not None:
+        return row, True
+    return row, False
+
+
+def auto_certify(session, repositories, actor: str = AUTOMATIC_ACTOR) -> dict:
+    """Sign off the branches a completed scan found nothing to read on.
+
+    -> {certified, refreshed, considered, blocked}.
+
+    Callers pass only repositories whose passes all finished this run.  That
+    check belongs with whoever read the scan, because the report is the only
+    thing that knows it, and it is not optional: without it the badge means
+    "our engines said nothing", which is what a dead engine says too.
+
+    What it will not do, in order of how much damage each would be:
+
+      Overwrite a person.  Their note, their date and their withdrawal all
+      stand, and the branch is left alone.
+
+      Sign off a branch holding a finding above low.  Low and informational
+      are the grades a reader would pass over, and they are the only ones
+      passed over here.
+
+      Sign off a branch somebody marked as not applicable.  They said no
+      review was expected there; a green badge is not a way of agreeing.
+
+      Repeat itself.  A badge that is already current is left where it is, so
+      an estate that has settled writes nothing on every scan.
+    """
+    import json
+
+    from datetime import timedelta
+
+    from app.core.models import Repository
+
+    named = sorted({str(name) for name in (repositories or []) if name})
+    out = {"certified": 0, "refreshed": 0, "considered": 0, "blocked": 0}
+    if not named:
+        return out
+
+    expires_at = utcnow() + timedelta(days=AUTOMATIC_DAYS)
+    for repo in (session.query(Repository)
+                 .filter(Repository.full_name.in_(named)).all()):
+        # Archived code cannot be changed, so a badge on it is not coverage
+        # anybody wanted.  The coverage figure leaves these out entirely and
+        # this follows it rather than inventing a second rule.
+        if repo.archived:
+            continue
+        default_branch = repo.default_branch or ""
+        try:
+            walked = [str(name) for name in
+                      (json.loads(repo.branch_names or "[]") or []) if name]
+        except (TypeError, ValueError):
+            walked = []
+        # A scan that recorded no branch names still walked the default one.
+        if not walked and default_branch:
+            walked = [default_branch]
+        try:
+            heads = json.loads(repo.branch_heads or "{}") or {}
+        except (TypeError, ValueError):
+            heads = {}
+
+        blocked = blocking_branches(session, repo.full_name, default_branch)
+        for branch in walked:
+            out["considered"] += 1
+            if branch in blocked:
+                out["blocked"] += 1
+                continue
+            if exemption(session, repo.full_name, branch) is not None:
+                continue
+
+            row, leave_alone = _written_by_a_scan(
+                session, repo.full_name, branch, default_branch)
+            if leave_alone:
+                continue
+            head = str(heads.get(branch, "") or "")
+            if row is not None and status(session, row, head).get("state") == ACTIVE:
+                continue
+
+            # Refreshing writes back under the name the row already has, so a
+            # branch ends up with one badge rather than one per spelling.
+            where = row.branch if row is not None else branch
+            fresh, problem = certify(session, repo.full_name, where,
+                                     AUTOMATIC_NOTE, expires_at, actor, head,
+                                     automatic=True)
+            if problem:
+                log.warning("could not certify %s on %s automatically: %s",
+                            repo.full_name, branch or "(default)", problem)
+                continue
+            out["refreshed" if row is not None else "certified"] += 1
+
+    if out["certified"] or out["refreshed"]:
+        log.info("automatically certified %d branch(es) and refreshed %d, "
+                 "out of %d looked at",
+                 out["certified"], out["refreshed"], out["considered"])
+    return out
 
 
 def revoke(session, repository: str, branch: str, actor: str,
@@ -371,14 +578,22 @@ def counts(session, base=None) -> dict:
     state was added to prevent.
 
     `base` narrows this to what a reader may see, the same as everywhere else.
+
+    "automatic" counts how many of the current ones were written by a scan
+    rather than by a person.  It is a subset of active, not another state, and
+    it is here because the sentence a report writes about these numbers has to
+    be able to tell the two apart.  "Reviewed by the security team" is not a
+    thing to say about a badge nobody read anything for.
     """
     from app.core.models import Certification
 
     rows = (base if base is not None else session.query(Certification)).all()
-    out = {ACTIVE: 0, STALE: 0, LAPSED: 0, REVOKED: 0}
+    out = {ACTIVE: 0, STALE: 0, LAPSED: 0, REVOKED: 0, "automatic": 0}
     for row in rows:
         state = status(session, row).get("state", "")
         if state in out:
             out[state] += 1
+        if state == ACTIVE and row.automatic:
+            out["automatic"] += 1
     out["total"] = len(rows)
     return out

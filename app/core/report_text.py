@@ -194,13 +194,26 @@ def certified_note(counts: dict) -> str:
     """What the review badges say, and what amber means."""
     active = counts.get("active", 0)
     stale = counts.get("stale", 0)
+    # The ones a scan signed off rather than a person.  Counted out of the
+    # sentence below rather than folded into it: a report that tells a reader
+    # the security team reviewed a branch nobody opened is the kind of claim
+    # that costs the rest of the document its credibility.
+    automatic = min(counts.get("automatic", 0), active)
+    reviewed = active - automatic
     if not (active or stale):
         return ""
     parts = []
-    if active:
+    if reviewed:
         parts.append(
             "%d %s been reviewed by the security team and signed off as safe."
-            % (active, _plural(active, "branch has", "branches have")))
+            % (reviewed, _plural(reviewed, "branch has", "branches have")))
+    if automatic:
+        parts.append(
+            "%d %s certified automatically, because the last completed scan "
+            "found nothing on %s above a low grade.  That is a record of what "
+            "the scan found, not of anybody having read the code."
+            % (automatic, _plural(automatic, "branch was", "branches were"),
+               _plural(automatic, "it", "them")))
     if stale:
         parts.append(
             "%d previously signed off %s changed since that review and %s to "

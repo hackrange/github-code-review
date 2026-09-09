@@ -2535,6 +2535,17 @@ async def add_severity_rule(request: Request, user: User = Depends(current_user)
     from app.core import settings_store as sev_store, severity_rules
 
     form = await request.form()
+    # The conditions after the first.  Three slots, posted whether they were
+    # filled in or not, and an empty pair is somebody not using that slot
+    # rather than a mistake.
+    extra = []
+    for slot in (2, 3, 4):
+        field = str(form.get(f"field{slot}", "") or "").strip()
+        value = clean_text(form.get(f"value{slot}"), "Value", limit=200,
+                           required=False)
+        if field or value:
+            extra.append({"field": field, "value": value})
+
     with session_scope() as db:
         row, why = severity_rules.add(
             db,
@@ -2546,14 +2557,24 @@ async def add_severity_rule(request: Request, user: User = Depends(current_user)
                               required=False),
             unless_sensitivity=", ".join(
                 label for label in sev_store.sensitivity_labels(db)
-                if _checked(form, f"unless:{label}")))
+                if _checked(form, f"unless:{label}")),
+            conditions=extra,
+            combine=str(form.get("combine", "all") or "all"))
         if row is None:
             return redirect(f"/severity?msg={quote(why)}&kind=error")
+        described = severity_rules.describe(row)
+        covers = severity_rules.matching_count(
+            db, row, base=rbac.visible_findings(db, user))
         record(db, "severity.override.set", actor=user.username,
-               target=f"{row.match_type}:{row.pattern}",
+               target=described,
                detail=f"{row.severity.value}: {row.reason[:200]}",
                source_ip=client_ip(request))
-        message = (f"{row.pattern} is {row.severity.value} here. "
+        # How much this covers, said back straight away.  A rule is a decision
+        # about a set somebody cannot see, and two findings and two hundred
+        # are the same sentence.
+        message = (f"{described} is {row.severity.value} here, "
+                   f"which covers {covers} finding"
+                   f"{'' if covers == 1 else 's'} today. "
                    "It applies from the next scan.")
     return redirect(f"/severity?msg={quote(message)}&kind=ok")
 

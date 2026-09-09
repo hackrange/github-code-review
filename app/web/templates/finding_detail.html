@@ -272,7 +272,9 @@
   <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
   <div>
     <strong>
-      {%- if certification.state == 'active' %}Certified app
+      {%- if certification.state == 'active'
+             and certification.certification.automatic %}Certified automatically
+      {%- elif certification.state == 'active' %}Certified app
       {%- elif certification.state == 'stale' %}Certification needs re-evaluating
       {%- elif certification.state == 'lapsed' %}Certification has lapsed
       {%- else %}Certification withdrawn{% endif -%}
@@ -281,7 +283,11 @@
     <div class="small" style="margin-top:.25rem">
       {{ certification.certification.repository }}
       on {{ certification.certification.branch or 'the default branch' }},
+      {% if certification.certification.automatic -%}
+      certified by a scan that found nothing to read there
+      {%- else -%}
       reviewed by {{ certification.certification.certified_by }}
+      {%- endif %}
       on {{ certification.certification.certified_at | dt('%Y-%m-%d') }},
       expires {{ certification.certification.expires_at | dt('%Y-%m-%d') }}.
     </div>
@@ -715,10 +721,18 @@
 {% if can_certify or can_exempt %}
 <div class="card">
   <div class="card-head">
-    {%- if certification and certification.state == 'active' %}This branch is certified
+    {%- if certification and certification.state == 'active'
+           and certification.certification.automatic %}This branch is certified by a scan
+    {%- elif certification and certification.state == 'active' %}This branch is certified
     {%- else %}Certify this branch{% endif -%}
   </div>
   <div class="card-body">
+    {% if certification and certification.certification
+          and certification.certification.automatic %}
+    <p class="faint small">The badge on this branch was written by a scan that
+      found nothing to read there, not by a person. Signing off here replaces
+      it with your own review, and a scan never writes over that.</p>
+    {% endif %}
     <p class="faint small">A record that somebody in security read this code and
       found nothing they considered unsafe. It covers
       <strong>{{ f.repository }}</strong> on
@@ -728,7 +742,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>What you reviewed, and what you concluded
         <textarea name="note" rows="3" required minlength="20" maxlength="4000"
-                  placeholder="What you read, what you checked for, and why you are satisfied.">{{ certification.certification.note if certification and certification.certification else '' }}</textarea>
+                  placeholder="What you read, what you checked for, and why you are satisfied.">{{ certification.certification.note if certification and certification.certification and not certification.certification.automatic else '' }}</textarea>
       </label>
       <label>Expires
         <input type="date" name="expires" required value="{{ default_expiry }}">

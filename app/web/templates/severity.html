@@ -29,17 +29,18 @@
       <div class="field">
         <label for="match_type">Match on</label>
         <select id="match_type" name="match_type">
-          <option value="rule">A rule (the What column)</option>
-          <option value="cwe">A CWE</option>
+          {% for name, label, hint in fields %}
+          <option value="{{ name }}" title="{{ hint }}">{{ label }}</option>
+          {% endfor %}
         </select>
       </div>
       <div class="field" style="flex:1;min-width:200px">
-        <label for="pattern">Which one</label>
+        <label for="pattern">Value</label>
         {# Filled in when the page that shows which rule is making the noise
            hands one over, so the name does not have to be retyped. #}
         <input type="text" id="pattern" name="pattern" required
                value="{{ prefill_rule | default('', true) }}"
-               placeholder="plaintext-http-link  or  CWE-319">
+               placeholder="plaintext-http-link  or  CWE-319  or  credential">
       </div>
       <div class="field">
         <label for="severity">Is worth</label>
@@ -55,6 +56,51 @@
                placeholder="links to images and stylesheets, no session on them">
       </div>
       <button class="btn primary" type="submit">Save</button>
+
+      {# The conditions after the first.
+         A grade is usually a statement about a combination.  "A credential
+         that is still open and only ever existed in git history is a medium"
+         is three conditions and one decision, and written as three separate
+         overrides it would be a different thing: each one would fire on its
+         own and regrade findings nobody meant to touch.
+
+         Three spare rows rather than a button that adds them.  A rule with
+         four conditions is rare and a page that needs scripting to be filled
+         in is one that breaks quietly, and an empty row is simply ignored. #}
+      <div class="field" style="flex-basis:100%">
+        <label for="combine">And also</label>
+        <div class="small faint" style="margin-bottom:.4rem">
+          Leave these empty for a rule about one thing.  Filled in, they
+          narrow it: a finding has to satisfy
+          <select id="combine" name="combine" style="width:auto;display:inline-block">
+            <option value="all">all of the conditions</option>
+            <option value="any">any one of the conditions</option>
+          </select>
+          before this grade applies.
+        </div>
+        {% for slot in [2, 3, 4] %}
+        <div class="filters" style="margin:0 0 .3rem">
+          <div class="field">
+            <select id="field{{ slot }}" name="field{{ slot }}"
+                    aria-label="Match on, condition {{ slot }}">
+              <option value="">(not used)</option>
+              {% for name, label, hint in fields %}
+              <option value="{{ name }}" title="{{ hint }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field" style="flex:1;min-width:200px">
+            <input type="text" id="value{{ slot }}" name="value{{ slot }}"
+                   aria-label="Value, condition {{ slot }}"
+                   placeholder="credential   open   git_history_only   somebody@example.com">
+          </div>
+        </div>
+        {% endfor %}
+        <span class="faint small">A star stands for anything, so
+          <span class="mono">*@example.com</span> on Committed by covers
+          everybody there.</span>
+      </div>
+
       <div class="field" style="flex-basis:100%">
         <label>This will not be applied on</label>
         <div class="check-grid">
@@ -77,13 +123,27 @@
   {% if rules %}
   <div class="table-scroll">
     <table>
-      <thead><tr><th>Match</th><th>Is worth</th><th>Because</th><th>Set by</th><th></th></tr></thead>
+      <thead><tr><th>Match</th><th>Covers</th><th>Is worth</th><th>Because</th>
+        <th>Set by</th><th></th></tr></thead>
       <tbody>
       {% for r in rules %}
         <tr>
           <td class="stack">
-            <span class="mono">{{ r.pattern }}</span>
-            <span class="sub">{{ 'rule' if r.match_type == 'rule' else 'CWE' }}</span>
+            <span class="mono">{{ described[r.id] }}</span>
+            <span class="sub">
+              {%- if r.combine == 'any' %}any of these{% else %}all of these{% endif -%}
+            </span>
+          </td>
+          {# How many findings it covers today, which is what the next scan
+             will regrade.  A rule is a decision about a set somebody cannot
+             see from here, and two findings and two hundred are the same
+             sentence. #}
+          <td class="nowrap">
+            {% if not covers[r.id] %}<span class="faint">none</span>
+            {%- elif covers_query[r.id] %}
+            <a href="{{ base }}/findings?{{ covers_query[r.id] }}"
+               title="The findings this rule covers today">{{ covers[r.id] }}</a>
+            {%- else %}<span title="The findings list cannot filter on every part of this rule, so the number is not a link">{{ covers[r.id] }}</span>{% endif %}
           </td>
           <td><span class="badge {{ r.severity.value }}">{{ r.severity.value }}</span></td>
           <td class="small">{{ r.reason }}

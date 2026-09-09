@@ -225,6 +225,10 @@ def hotspots(query, axis="repository", limit=TOP_N) -> list:
     Built here rather than read from the trend table because a report drills
     to a branch and the rollup only goes that far by day.  Same shape either
     way, so the page and the report show the same picture.
+
+    `limit` of None returns every row.  A report shows the busiest handful
+    because a document has a page size; a screen that sorts and pages has to
+    be given the whole set or it would be paging over a truncation.
     """
     column = {"organization": Finding.organization,
               "repository": Finding.repository,
@@ -250,7 +254,7 @@ def hotspots(query, axis="repository", limit=TOP_N) -> list:
                          + entry["medium"] * 10 + entry["low"])
         rows.append(row)
     rows.sort(key=lambda r: r["weight"], reverse=True)
-    return rows[:limit]
+    return rows if limit is None else rows[:limit]
 
 
 def themes(query) -> list:

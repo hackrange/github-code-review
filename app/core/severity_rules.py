@@ -6,20 +6,62 @@ marketing page and a plain HTTP link carrying a session are the same rule and
 very different risks, and only the people who own the system can say which one
 they have.
 
-So an override is a first class thing here, matched on the rule or on a CWE the
-finding carries.  The engine's own grade is not thrown away: what changes is
-what the number means to the people reading it.
+So an override is a first class thing here, matched on any of the fields a
+person can read off a finding: the rule that fired, a CWE it carries, the kind
+of thing it is, the state it is in, the value a credential leaked, and how it
+was exposed.  The engine's own grade is not thrown away: what changes is what
+the number means to the people reading it.
+
+A rule can also ask about more than one of those at once, and that is usually
+what somebody means.  "A credential that only ever existed in git history is a
+medium" is three conditions and one decision.  Written as three separate
+overrides it would be a different thing entirely, because each one would fire
+on its own and regrade findings nobody meant to touch.  So conditions are
+joined, either all of them or any of them, and the whole set is one rule with
+one reason attached to it.
 """
 
 from __future__ import annotations
 
+import fnmatch
+import json
 import logging
 
 from app.core.models import Severity, SeverityRule
 
 log = logging.getLogger("gcr.severity_rules")
 
-MATCH_TYPES = ("rule", "cwe")
+# The fields a condition can read, and what they are called on a finding page.
+# The labels are the labels: somebody writing a rule is looking at a finding
+# and typing what they see, so the words have to be the same words.
+FIELDS = (
+    ("rule", "What", "The rule that fired, by name"),
+    ("cwe", "CWE", "A CWE the finding carries"),
+    ("kind", "Kind", "credential, code, dependency or misconfiguration"),
+    ("state", "State", "open, waived or fixed"),
+    ("value", "Value", "The masked value of a leaked credential"),
+    ("exposure", "Exposure", "current_and_history or git_history_only"),
+    ("author", "Committed by", "The name, login or email on the commit"),
+)
+
+MATCH_TYPES = tuple(name for name, _label, _help in FIELDS)
+
+FIELD_LABELS = {name: label for name, label, _help in FIELDS}
+
+# How specific a field is, when two rules both match and only one grade can
+# win.  A rule name names one thing somebody wrote; a kind names a quarter of
+# the database.
+FIELD_RANK = {"rule": 5, "value": 4, "author": 4, "cwe": 3, "exposure": 2,
+              "kind": 1, "state": 1}
+
+# The values that are not free text.  A typo in one of these is a rule that
+# silently never fires, which is worse than an error message.
+ALLOWED = {
+    "kind": ("credential", "code", "dependency", "misconfiguration"),
+    "state": ("open", "waived", "fixed"),
+}
+
+COMBINE = ("all", "any")
 
 # What this tool thinks some rules are worth, before anybody says otherwise.
 #
@@ -75,32 +117,116 @@ def all_rules(session) -> list:
             .order_by(SeverityRule.match_type, SeverityRule.pattern).all())
 
 
+def _clean_condition(field: str, value: str) -> tuple:
+    """One condition, checked.  -> ((field, value), why not)."""
+    field = (field or "").strip().lower()
+    value = (value or "").strip()
+    if field not in MATCH_TYPES:
+        return None, "Match on one of: %s." % ", ".join(
+            FIELD_LABELS[name] for name in MATCH_TYPES)
+    if not value:
+        return None, "Give %s something to match." % FIELD_LABELS[field]
+    allowed = ALLOWED.get(field)
+    if allowed and value.lower() not in allowed:
+        # Named rather than hinted at.  A rule that quietly never fires is
+        # worse than one that would not save, because nobody goes back to
+        # check whether the grade they wrote ever applied to anything.
+        return None, "%s is one of: %s." % (FIELD_LABELS[field],
+                                            ", ".join(allowed))
+    return (field, value[:200]), ""
+
+
 def add(session, match_type: str, pattern: str, severity, actor: str = "",
-        reason: str = "", unless_sensitivity: str = "") -> tuple:
-    """-> (row, why not).  One override per pattern, so editing is replacing."""
-    match_type = (match_type or "rule").strip().lower()
-    if match_type not in MATCH_TYPES:
-        return None, "Match on a rule name or a CWE."
-    pattern = (pattern or "").strip()
-    if not pattern:
-        return None, "Give it something to match."
+        reason: str = "", unless_sensitivity: str = "",
+        conditions=None, combine: str = "all") -> tuple:
+    """-> (row, why not).  One override per set of conditions.
+
+    `conditions` are the ones after the first, as (field, value) pairs or as
+    {"field": ..., "value": ...}.  `combine` is "all" or "any" and decides
+    whether a finding has to satisfy every one of them or just one.
+    """
+    first, why = _clean_condition(match_type, pattern)
+    if first is None:
+        return None, why
+    match_type, pattern = first
+
+    combine = (combine or "all").strip().lower()
+    if combine not in COMBINE:
+        combine = "all"
+
+    extra = []
+    for item in (conditions or []):
+        if isinstance(item, dict):
+            field, value = item.get("field"), item.get("value")
+        else:
+            field, value = item
+        # An empty row in the form is somebody not using it, not an error.
+        if not str(field or "").strip() and not str(value or "").strip():
+            continue
+        pair, why = _clean_condition(field, value)
+        if pair is None:
+            return None, why
+        if pair == (match_type, pattern) or pair in extra:
+            continue
+        extra.append(pair)
+
     try:
         severity = severity if isinstance(severity, Severity) else Severity(str(severity).lower())
     except ValueError:
         return None, "That is not a severity."
 
-    row = (session.query(SeverityRule)
-           .filter(SeverityRule.match_type == match_type,
-                   SeverityRule.pattern == pattern).one_or_none())
+    # One override per set of conditions, so saving the same set again edits
+    # it rather than leaving two rules disagreeing about the same findings.
+    encoded = json.dumps([{"field": f, "value": v} for f, v in extra])
+    row = None
+    for candidate in (session.query(SeverityRule)
+                      .filter(SeverityRule.match_type == match_type,
+                              SeverityRule.pattern == pattern).all()):
+        if _conditions_of(candidate) == extra:
+            row = candidate
+            break
     if row is None:
         row = SeverityRule(match_type=match_type, pattern=pattern)
         session.add(row)
+    row.conditions = encoded
+    row.combine = combine
     row.severity = severity
     row.reason = (reason or "")[:2000]
     row.unless_sensitivity = (unless_sensitivity or "")[:400]
     row.created_by = actor or ""
     session.flush()
     return row, ""
+
+
+def _conditions_of(row) -> list:
+    """Everything after the first condition, as (field, value) pairs."""
+    try:
+        listed = json.loads(getattr(row, "conditions", "") or "[]") or []
+    except (TypeError, ValueError):
+        log.warning("severity rule %s has conditions that are not readable",
+                    getattr(row, "id", "?"))
+        return []
+    out = []
+    for item in listed:
+        if not isinstance(item, dict):
+            continue
+        field = str(item.get("field") or "").strip().lower()
+        value = str(item.get("value") or "").strip()
+        if field in MATCH_TYPES and value:
+            out.append((field, value))
+    return out
+
+
+def conditions_of(row) -> list:
+    """Every condition on this rule, first one included."""
+    return [(row.match_type, row.pattern)] + _conditions_of(row)
+
+
+def describe(row) -> str:
+    """The rule as a sentence, for a table somebody has to read quickly."""
+    joiner = " and " if (row.combine or "all") == "all" else " or "
+    return joiner.join("%s = %s" % (FIELD_LABELS.get(field, field), value)
+                       for field, value in conditions_of(row))
 
 
 def remove(session, rule_id: int) -> bool:
@@ -116,23 +242,257 @@ def _tags(value) -> set:
 
 
 def as_map(session) -> dict:
-    """Loaded once per ingest rather than queried per finding."""
-    out = {"rule": {}, "cwe": {}}
+    """Loaded once per ingest rather than queried per finding.
+
+    Two things in one, because they answer two different questions.  The
+    "rule" and "cwe" maps are the old lookup, kept because a rule name or a
+    CWE is all most overrides are about and a dictionary answers that in one
+    step.  "rows" is every override compiled into conditions, which is the
+    only way to answer a rule about the kind, the state, the value or the
+    exposure, and the only way to answer one about several at once.
+    """
+    out = {"rule": {}, "cwe": {}, "rows": []}
     # The tool's own opinion first, so a decision somebody actually made
     # overwrites it below rather than the other way round.
     for pattern, (level, _why, unless) in SHIPPED.items():
         try:
             out["rule"][pattern] = (Severity(level), _tags(unless))
+            out["rows"].append({"conditions": [("rule", pattern)],
+                                "combine": "all", "severity": Severity(level),
+                                "unless": _tags(unless), "shipped": True})
         except ValueError:          # a typo here must not take a scan down
             log.warning("shipped severity for %s is not a severity", pattern)
     for row in all_rules(session):
-        out.setdefault(row.match_type, {})[row.pattern.strip().lower()] = (
-            row.severity, _tags(row.unless_sensitivity))
+        if row.match_type in ("rule", "cwe") and not _conditions_of(row):
+            out.setdefault(row.match_type, {})[row.pattern.strip().lower()] = (
+                row.severity, _tags(row.unless_sensitivity))
+        out["rows"].append({"conditions": conditions_of(row),
+                            "combine": (row.combine or "all"),
+                            "severity": row.severity,
+                            "unless": _tags(row.unless_sensitivity),
+                            "shipped": False})
     return out
 
 
-def apply(overrides: dict, rule: str, cwe: str, sensitivity: str = ""):
+def _field_of(finding, field: str) -> str:
+    """What this finding says in that field, as plain lowercase text."""
+    if field == "rule":
+        return str(getattr(finding, "rule", "") or "").strip().lower()
+    if field == "cwe":
+        return str(getattr(finding, "cwe", "") or "").strip().lower()
+    if field == "value":
+        return str(getattr(finding, "secret_preview", "") or "").strip().lower()
+    if field == "exposure":
+        return str(getattr(finding, "exposure", "") or "").strip().lower()
+    if field in ("kind", "state"):
+        raw = getattr(finding, field, "")
+        return str(getattr(raw, "value", raw) or "").strip().lower()
+    return ""
+
+
+def _author_of(finding) -> list:
+    """The three ways the blame pass can name whoever wrote the line.
+
+    All three are checked, because somebody writing a rule types the one they
+    happen to know.  A login is what the host shows, a name is what the commit
+    carries, and an email is the only one of the three that is reliably there
+    on a repository whose commits were never linked to an account.
+    """
+    return [str(getattr(finding, name, "") or "").strip().lower()
+            for name in ("author_login", "author_name", "author_email")]
+
+
+def _one_matches(field: str, pattern: str, finding) -> bool:
+    """Does this finding satisfy one condition."""
+    pattern = (pattern or "").strip().lower()
+    if not pattern:
+        return False
+    if field == "cwe":
+        # A finding can carry several, and CWE-79 and 79 are the same thing to
+        # a person.
+        bare = pattern.replace("cwe-", "")
+        for item in _field_of(finding, "cwe").split(","):
+            item = item.strip()
+            if item and (item == pattern or item.replace("cwe-", "") == bare):
+                return True
+        return False
+    if field == "author":
+        for actual in _author_of(finding):
+            if not actual:
+                continue
+            if ("*" in pattern or "?" in pattern):
+                if fnmatch.fnmatch(actual, pattern):
+                    return True
+            elif actual == pattern:
+                return True
+        return False
+    actual = _field_of(finding, field)
+    if not actual:
+        return False
+    # A star is what somebody reaches for when they mean "any of these", and a
+    # masked credential is unreadable without one.
+    if "*" in pattern or "?" in pattern:
+        return fnmatch.fnmatch(actual, pattern)
+    return actual == pattern
+
+
+def matches(compiled: dict, finding) -> bool:
+    """Does this finding satisfy the whole rule."""
+    conditions = compiled.get("conditions") or []
+    if not conditions:
+        return False
+    results = (_one_matches(field, value, finding)
+               for field, value in conditions)
+    return all(results) if compiled.get("combine", "all") == "all" \
+        else any(results)
+
+
+def _specificity(compiled: dict) -> tuple:
+    """How much of a claim this rule is, so the narrower one wins.
+
+    More conditions first, because a rule naming three things was written
+    about a smaller set than one naming a single thing.  Then by the narrowest
+    field it names: a rule name is one thing somebody wrote, a kind is a
+    quarter of the database.  "all" beats "any" on a tie for the same reason.
+
+    Ties beyond that go to whichever came out of the query first, which is by
+    match type and pattern.  A tie here means two rules that cover exactly the
+    same ground disagree, and that is a thing to decide in the page rather
+    than to resolve by silently preferring one.
+    """
+    conditions = compiled.get("conditions") or []
+    return (len(conditions),
+            max((FIELD_RANK.get(field, 0) for field, _v in conditions),
+                default=0),
+            1 if compiled.get("combine", "all") == "all" else 0,
+            0 if compiled.get("shipped") else 1)
+
+
+def _sql_for(field: str, pattern: str):
+    """One condition as something the database can count.  -> a filter clause.
+
+    The same reading as `_one_matches` above, in the other language.  The two
+    have to agree: a count that disagrees with what the rule actually does is
+    worse than no count, because it is the number somebody decides on.
+    """
+    from sqlalchemy import func, literal, or_
+
+    from app.core.models import Finding, FindingKind, FindingState
+
+    pattern = (pattern or "").strip().lower()
+    wild = "*" in pattern or "?" in pattern
+
+    def text_clause(column):
+        actual = func.lower(func.coalesce(column, ""))
+        if wild:
+            return (actual != "") & actual.like(
+                pattern.replace("*", "%").replace("?", "_"))
+        return actual == pattern
+
+    if field == "kind":
+        try:
+            return Finding.kind == FindingKind(pattern)
+        except ValueError:
+            return literal(False)
+    if field == "state":
+        try:
+            return Finding.state == FindingState(pattern)
+        except ValueError:
+            return literal(False)
+    if field == "cwe":
+        # A finding carries a list.  Wrapped in separators and stripped of
+        # spaces so that cwe-79 cannot match cwe-798, which is a different
+        # weakness and would quietly inflate the count.
+        listed = (literal(",")
+                  + func.replace(func.lower(func.coalesce(Finding.cwe, "")),
+                                 " ", "")
+                  + literal(","))
+        bare = pattern.replace("cwe-", "")
+        return or_(listed.like("%,{},%".format(pattern)),
+                   listed.like("%,cwe-{},%".format(bare)),
+                   listed.like("%,{},%".format(bare)))
+    if field == "author":
+        return or_(text_clause(Finding.author_login),
+                   text_clause(Finding.author_name),
+                   text_clause(Finding.author_email))
+    column = {"rule": Finding.rule, "value": Finding.secret_preview,
+              "exposure": Finding.exposure}.get(field)
+    if column is None:
+        return literal(False)
+    return text_clause(column)
+
+
+def matching_count(session, row, base=None) -> int:
+    """How many findings this rule would grade.  -> a number.
+
+    Somebody writing "kind = credential and state = open is a medium" is
+    making a decision about a set they cannot see.  Two hundred findings and
+    two are the same sentence and very different decisions, so the page says
+    which one it is before they save it and after.
+
+    It counts what is in the database now, which is what the next scan will
+    regrade.  `base` narrows it to what the reader may see, so nobody is told
+    a number made of somebody else's repositories.
+    """
+    from sqlalchemy import and_, or_
+
+    from app.core.models import Finding
+
+    clauses = [_sql_for(field, value) for field, value in conditions_of(row)]
+    if not clauses:
+        return 0
+    joined = (and_(*clauses) if (getattr(row, "combine", "all") or "all") == "all"
+              else or_(*clauses))
+    query = base if base is not None else session.query(Finding)
+    try:
+        return query.filter(joined).count()
+    except Exception:      # a count is not worth failing the page for
+        log.exception("could not count what severity rule %s covers",
+                      getattr(row, "id", "?"))
+        return 0
+
+
+def findings_query(row) -> str:
+    """The findings list holding exactly what this rule covers, or "".
+
+    A number somebody can see and cannot reach is a number they have to take
+    on trust, so the count is a link where it can be.  It is empty rather than
+    approximate everywhere else: the findings list can filter on the kind and
+    the state and not on the exposure, the value or who committed the line, so
+    a link for those rules would open a longer list than the number beside it
+    and the reader would be right to stop believing both.
+    """
+    if (getattr(row, "combine", "all") or "all") != "all":
+        return ""      # a list cannot say "or"
+    kind = ""
+    state = "any"
+    for field, value in conditions_of(row):
+        if field == "kind" and not kind:
+            kind = value.lower()
+        elif field == "state" and state == "any":
+            state = value.lower()
+        else:
+            return ""
+    # The same extra filters the heatmap cells carry.  The count is every
+    # finding the rule covers, so the list it opens has to hold every one of
+    # them rather than the ones on somebody's work list.
+    return ("state=%s&kind=%s&exception=any&triage=any&baseline=any&group=none"
+            % (state, kind))
+
+
+def counts_for(session, rows, base=None) -> dict:
+    """-> {rule id: how many findings it covers}."""
+    return {row.id: matching_count(session, row, base=base) for row in rows}
+
+
+def apply(overrides: dict, rule: str, cwe: str, sensitivity: str = "",
+          finding=None):
     """The severity this organization gives it, or None to leave it alone.
+
+    Given a finding, every override is checked against it and the narrowest
+    one that matches wins: more conditions beat fewer, and among equals a rule
+    name beats a kind.  Without one this falls back to the rule name and CWE
+    it was handed, which is all the older callers ever had.
 
     A rule name is the more specific statement, so it wins over a CWE.  A
     finding can carry several CWEs; the first one anybody wrote a rule for
@@ -146,6 +506,21 @@ def apply(overrides: dict, rule: str, cwe: str, sensitivity: str = ""):
     if not overrides:
         return None
     carried = _tags(sensitivity)
+
+    if finding is not None:
+        best = None
+        for compiled in overrides.get("rows") or []:
+            if not matches(compiled, finding):
+                continue
+            if compiled["unless"] and (carried & compiled["unless"]):
+                # Not this system.  Nothing less specific gets to stand in for
+                # it either: the exception was taken away here, and falling
+                # through to a broader rule would put it back by another name.
+                continue
+            rank = _specificity(compiled)
+            if best is None or rank > best[0]:
+                best = (rank, compiled["severity"])
+        return best[1] if best is not None else None
 
     def usable(entry):
         severity, unless = entry

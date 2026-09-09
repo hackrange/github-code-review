@@ -240,13 +240,33 @@
   {% if not heat_rows %}
   <div class="empty"><p class="faint">Nothing to show at this scope.</p></div>
   {% else %}
+  {# Every column head is a link that sorts on it.
+     The rows arrive worst first by grade, which is the right default and the
+     wrong answer to "who has the most lows".  Clicking a head asks that
+     question instead, and clicking the same one again turns it around.  It is
+     done here rather than in the browser so that it sorts the whole set
+     rather than the page somebody happens to be looking at. #}
+  {% macro sortable(key, label) %}
+    {%- set flipped = 'asc' if (heat_sort == key and heat_dir == 'desc') else 'desc' -%}
+    <th class="{{ 'sorted' if heat_sort == key }}">
+      <a href="{{ base }}/trends?{{ scope_query }}&amp;sort={{ key }}&amp;dir={{ flipped }}"
+         title="Sort by {{ label | lower }}">{{ label }}
+        {%- if heat_sort == key %} {{ '▼' if heat_dir == 'desc' else '▲' }}{% endif -%}
+      </a>
+    </th>
+  {% endmacro %}
   <div class="table-scroll">
     <table class="heat">
       <thead>
         <tr>
-          <th>{{ heat.axis | capitalize }}</th>
-          <th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>Info</th>
-          <th>Total</th>
+          {{ sortable('name', heat.axis | capitalize) }}
+          {{ sortable('critical', 'Critical') }}
+          {{ sortable('high', 'High') }}
+          {{ sortable('medium', 'Medium') }}
+          {{ sortable('low', 'Low') }}
+          {{ sortable('info', 'Info') }}
+          {{ sortable('total', 'Total') }}
+          <th class="heat-actions"></th>
         </tr>
       </thead>
       <tbody>
@@ -258,9 +278,12 @@
              should not have to.  The name opens the findings for that scope
              and each figure opens the same list narrowed to that severity.
 
-             These go to the findings list rather than deeper into the trends
-             page: at this point somebody has finished asking how much and
-             started asking which ones. #}
+             The numbers go to the findings list, because a number is a
+             count of findings and that is what somebody clicking one is
+             asking to see.  The name goes down a level instead, to the same
+             page narrowed to that row, which is what clicking a name on a
+             chart means.  At branch level there is nothing below, so the name
+             opens the findings there too. #}
           {% set scope = ('org=' ~ (row.name | urlencode)) if heat.axis == 'organization'
              else (('repo=' ~ (row.name | urlencode)) if heat.axis == 'repository'
              else ('repo=' ~ (filters.repo | urlencode) ~ '&branch=' ~ (row.name | urlencode))) %}
@@ -276,7 +299,13 @@
              arrive as four rows.  This cell counts findings, so the list it
              opens has to count them the same way. #}
           {% set findings_url = base ~ '/findings?state=open&exception=any&triage=any&baseline=any&group=none&' ~ scope %}
-          <td class="heat-name"><a href="{{ findings_url }}">{{ row.name }}</a></td>
+          {% set drill = ('org=' ~ (row.name | urlencode)) if heat.axis == 'organization'
+             else (('repo=' ~ (row.name | urlencode)) if heat.axis == 'repository' else '') %}
+          {% set drill_url = (base ~ '/trends?' ~ drill ~ '&basis=' ~ filters.basis ~ '&days=' ~ filters.days
+             ~ ('&connection=' ~ (filters.connection | urlencode) if filters.connection else ''))
+             if (drill and row.name != '(none)') else '' %}
+          <td class="heat-name">
+            <a href="{{ drill_url or findings_url }}">{{ row.name }}</a></td>
           {% for band in ['critical', 'high', 'medium', 'low', 'info'] %}
           <td class="cell band-{{ band }} {{ 'is-zero' if not row[band] }}">
             {%- if row[band] %}<a href="{{ findings_url }}&severity={{ band }}">{{ row[band] }}</a>{% endif -%}
@@ -284,11 +313,44 @@
           {% endfor %}
           <td class="cell total heat-{{ row.level }}">
             <a href="{{ findings_url }}">{{ row.total }}</a></td>
+          {# Two ways on from a row, said out loud rather than left to be
+             guessed at from where the underlines are.  Drilling down keeps
+             the chart and the risk matrix and narrows them to this row, which
+             is still the question "how much".  Findings is the other
+             question, "which ones", and it leaves this page.
+
+             There is no drill down at branch level because there is nothing
+             below a branch, and none on a row with no name to filter by. #}
+          <td class="heat-actions">
+            {% if drill_url %}
+            <a class="btn sm" href="{{ drill_url }}">Drill down</a>
+            {% endif %}
+            <a class="btn sm" href="{{ findings_url }}">Findings</a>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  {# One page of rows at a time, and it says which page of what.  The count
+     is every row at this scope rather than the ones on screen, so a reader
+     can tell the difference between a short list and a long one. #}
+  {% if heat_pages > 1 %}
+  {% set sorting = ('&sort=' ~ heat_sort ~ '&dir=' ~ heat_dir) if heat_sort else '' %}
+  <div class="flex-between" style="margin:.6rem 1rem 0">
+    <div class="small faint">{{ heat_first }} to {{ heat_last }} of
+      {{ heat_total }} {{ heat.axis }}{{ '' if heat_total == 1 else 's' }},
+      page {{ heat_page_no }} of {{ heat_pages }}</div>
+    <div class="page-actions">
+      {% if heat_page_no > 1 %}
+      <a class="btn sm" href="{{ base }}/trends?{{ scope_query }}{{ sorting | safe }}&amp;hpage={{ heat_page_no - 1 }}">Back</a>
+      {% endif %}
+      {% if heat_page_no < heat_pages %}
+      <a class="btn sm" href="{{ base }}/trends?{{ scope_query }}{{ sorting | safe }}&amp;hpage={{ heat_page_no + 1 }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
   {% endif %}
 </div>
 {% endif %}

@@ -455,6 +455,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     # that only covered part of the history reports only what it covered, and
     # the rest is not gone, it is unread.
     partial_history = set()
+    # Repositories whose worker died or timed out.  They still get an entry so
+    # they do not vanish from the report, and nothing they did not say about
+    # themselves counts for anything.
+    failed_repos = set()
     # Did this run walk a window rather than the whole history.  One question,
     # asked once, because the answer decides whether absence from this report
     # means anything at all for credentials.
@@ -534,6 +538,8 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         # which is how four of them stayed invisible for a week.
         if str(entry.get("status", "ok")) != "failed":
             repo.last_scanned_at = seen_at
+        else:
+            failed_repos.add(full_name)
         declared = entry.get("passes_complete")
         if isinstance(declared, list):
             passes_done[full_name] = {str(name).strip() for name in declared
@@ -686,9 +692,14 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                                            or finding.severity.value)
                 finding.severity = Severity.INFO
 
+            # The whole finding, not just its rule name.  An override can ask
+            # about the kind, the state, the leaked value, the exposure or who
+            # committed the line, and about several of those at once, so it
+            # has to be able to read them.
             override = severity_rules.apply(
                 overrides, finding.rule, finding.cwe,
-                getattr(connection, "sensitivity", "") if connection is not None else "")
+                getattr(connection, "sensitivity", "") if connection is not None else "",
+                finding=finding)
             if override is not None and override != finding.severity:
                 finding.engine_severity = (finding.engine_severity
                                            or finding.severity.value)
@@ -1069,6 +1080,45 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     # apply_exceptions so a finding that arrives already waived never becomes
     # a message somebody has to read and dismiss.
     counts["new_findings"] = [f for f in new_findings if not f.excepted]
+
+    # Branches a completed scan found nothing to read on, signed off without
+    # anybody having to click.  Last, because every rule it applies is about
+    # what is in the database now: the findings from this report have landed,
+    # what an exclusion covers has been marked, and what was really fixed has
+    # been closed.
+    #
+    # Only repositories this run covered end to end are offered.  A pass that
+    # did not finish reports nothing and nothing is what a clear branch looks
+    # like, so a dead engine would otherwise hand out green badges, which is
+    # the exact shape of every finding this file has ever lost.  A repository
+    # whose worker died, whose code pass was cut short, or whose credential
+    # walk only covered a window is not offered at all.
+    #
+    # Wrapped for the same reason the trend point below is.  A badge is not
+    # worth throwing a scan away for, and the savepoint keeps a failure here
+    # from taking down whatever the caller does next.
+    try:
+        from app.core import certification
+
+        complete = set()
+        for full_name in touched_repos:
+            if (full_name in failed_repos or full_name in partial_code
+                    or full_name in partial_history):
+                continue
+            done = passes_done.get(full_name)
+            # A scanner too old to say which passes finished is not read as
+            # having finished them.  Everywhere else that reading protects an
+            # upgrade from freezing an estate; here it would be the difference
+            # between a badge somebody can rely on and one nobody can.
+            if not done or not set(certification.AUTOMATIC_PASSES) <= done:
+                continue
+            complete.add(full_name)
+        with session.begin_nested():
+            counts["auto_certified"] = certification.auto_certify(
+                session, complete)
+    except Exception:
+        log.exception("could not certify the clear branches, carrying on")
+        counts["auto_certified"] = {}
 
     # Today's point on the trend, written after everything else has landed so
     # it describes the state a scan left rather than the state halfway through

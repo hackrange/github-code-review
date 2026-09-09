@@ -805,3 +805,15 @@ table.matrix td.mcell.is-empty span { display: flex; align-items: center;
 .m-low      { background: var(--info-bg); color: var(--info); }
 .m-info     { background: var(--bg-sunk); color: var(--text-soft); }
 .m-unknown  { background: var(--bg-sunk); color: var(--text-faint); }
+
+/* The heatmap table sorts and pages now.  A column head is a link, and the
+   one being sorted on says so rather than leaving somebody to work it out
+   from the order of the rows. */
+table.heat th a { color: inherit; text-decoration: none; }
+table.heat th a:hover { text-decoration: underline; }
+table.heat th.sorted { color: var(--text); }
+/* The two ways on from a row, kept to the right so the numbers stay in one
+   block and the actions in another. */
+table.heat .heat-actions { text-align: right; white-space: nowrap;
+  padding: .2rem 0 .2rem .6rem; }
+table.heat .heat-actions .btn { margin-left: .3rem; }

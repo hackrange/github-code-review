@@ -764,6 +764,15 @@ class Certification(Base):
     certified_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=False)
 
+    # Written by a scan rather than by a person.  A branch a completed scan
+    # found nothing worth reading on gets one of these, and it says so
+    # everywhere it is shown, because "nobody has anything to report" and
+    # "somebody read this" are two different claims and only one of them is a
+    # review.  It also decides what the next scan may touch: an automatic one
+    # is refreshed or left behind as the code moves, and a person's is never
+    # overwritten by a machine.
+    automatic = Column(Boolean, default=False, nullable=False)
+
     # Withdrawing one is not deleting it.  The record that somebody certified
     # this in March, and that somebody else took it back in June, is the part
     # an auditor asks about.
@@ -1014,11 +1023,27 @@ class SeverityRule(Base):
     __tablename__ = "severity_rules"
 
     id = Column(Integer, primary_key=True)
-    # "rule" or "cwe"
-    match_type = Column(String(8), default="rule", nullable=False)
+    # Which field the first condition reads: rule, cwe, kind, state, value or
+    # exposure.  Named match_type since before there were others.
+    match_type = Column(String(16), default="rule", nullable=False)
     pattern = Column(String(200), nullable=False, index=True)
     severity = Column(Enum(Severity), nullable=False)
     reason = Column(Text, default="")
+
+    # The rest of the conditions, as [{"field": "state", "value": "open"}].
+    #
+    # A grade is often a statement about a combination rather than about one
+    # field.  "A credential that only ever existed in git history is a medium"
+    # is three conditions and one decision, and written as three separate
+    # overrides it is not the same rule: each of them would fire on its own
+    # and regrade findings nobody meant to touch.
+    #
+    # The first condition stays in match_type and pattern.  Splitting it out
+    # would mean rewriting every row that already exists, and this way a rule
+    # with nothing in here behaves exactly as it did before.
+    conditions = Column(LONG_JSON, default="[]")
+    # "all" means every condition has to hold, "any" means one of them does.
+    combine = Column(String(8), default="all", nullable=False)
 
     # Where this override stops applying.
     #

@@ -550,10 +550,15 @@ def trends_page(request: Request, user: User = Depends(current_user)):
 
         axis = ("branch" if repository else
                 "repository" if organization else "organization")
-        grid = {"axis": axis, "rows": report_data.hotspots(
+        # Every row at this scope, not the busiest handful.  The table sorts
+        # and pages now, and paging over a list that was already cut to twelve
+        # would offer a second page of a truncation: the rows nobody can reach
+        # are exactly the ones somebody sorting by a column is looking for.
+        every_row = report_data.hotspots(
             report_data._scoped(rbac.visible_findings(db, user),
                                 organization, repository, branch, connection),
-            axis=axis)}
+            axis=axis, limit=None)
+        grid = {"axis": axis, "rows": every_row}
         matrix = report_data.risk_matrix(
             report_data._scoped(rbac.visible_findings(db, user),
                                 organization, repository, branch, connection))
@@ -573,12 +578,64 @@ def trends_page(request: Request, user: User = Depends(current_user)):
 
         from app.core import charts
 
+        # The shade on a cell is worked out against every row at this scope,
+        # before any of it is cut into pages.  Doing it per page would make
+        # the darkest row on page four look as bad as the worst in the
+        # estate, which is a picture that changes meaning when you turn a
+        # page.
+        shaded = charts.heat_levels(every_row)
+
+        # Which column somebody asked to sort on, and which way.  Nothing
+        # means the order the rows arrive in, which is worst first by grade
+        # rather than by volume: two hundred informational findings should
+        # not outrank three criticals unless somebody asks for that.
+        sort = (params.get("sort", "") or "").strip().lower()
+        if sort not in ("name", "critical", "high", "medium", "low", "info",
+                        "total"):
+            sort = ""
+        direction = (params.get("dir", "") or "").strip().lower()
+        if direction not in ("asc", "desc"):
+            direction = "asc" if sort == "name" else "desc"
+        if sort == "name":
+            shaded.sort(key=lambda row: str(row.get("name", "")).lower(),
+                        reverse=(direction == "desc"))
+        elif sort:
+            # A stable sort over a list that is already worst first, so rows
+            # tied on the chosen column stay in a sensible order rather than
+            # in whatever order the database handed them over.
+            shaded.sort(key=lambda row: row.get(sort, 0),
+                        reverse=(direction == "desc"))
+
+        per_rows = 25
+        try:
+            heat_page_no = int(params.get("hpage", "1"))
+        except ValueError:
+            heat_page_no = 1
+        heat_pages = max(1, (len(shaded) + per_rows - 1) // per_rows)
+        heat_page_no = min(max(1, heat_page_no), heat_pages)
+        first_row = (heat_page_no - 1) * per_rows
+        page_rows = shaded[first_row:first_row + per_rows]
+
+        # The scope this page is at, as a query string, so every link on it
+        # carries the filters instead of rebuilding them where they could be
+        # read differently.
+        scope_query = urlencode({name: value for name, value in (
+            ("org", organization), ("repo", repository),
+            ("branch", branch), ("connection", connection),
+            ("basis", basis), ("days", window)) if value})
+
         context = _shared(db, user)
         context.update(
             active_page="trends", points=points, heat=grid,
             matrix=matrix,
             chart=charts.stacked_area(points),
-            heat_rows=charts.heat_levels(grid["rows"]),
+            heat_rows=page_rows,
+            heat_sort=sort, heat_dir=direction,
+            heat_total=len(shaded), heat_page_no=heat_page_no,
+            heat_pages=heat_pages, heat_per=per_rows,
+            heat_first=first_row + 1 if page_rows else 0,
+            heat_last=first_row + len(page_rows),
+            scope_query=scope_query,
             basis=basis, window=window, options=options,
             first_snapshot=first_snapshot,
             filters={"org": organization, "repo": repository,
@@ -671,7 +728,13 @@ def trends_report(request: Request, user: User = Depends(current_user)):
             row = _cert.for_branch(db, repository, branch)
             if row is not None:
                 state = _cert.status(db, row)
-                if state["state"] == _cert.ACTIVE:
+                # Only a person's.  The seal on the cover says somebody read
+                # this branch and put their name to it, which is not what a
+                # scan finding nothing says, and the cover of a report is the
+                # last place to blur that.  An automatic badge is still shown
+                # on every page in the app, and the sentence further down this
+                # report counts it separately.
+                if state["state"] == _cert.ACTIVE and not row.automatic:
                     seal = {"repository": repository, "branch": branch,
                             "by": row.certified_by, "at": row.certified_at,
                             "expires": row.expires_at, "note": row.note}
@@ -1201,7 +1264,11 @@ def repositories(request: Request, user: User = Depends(current_user)):
             badges.append({"repository": row.repository, "branch": row.branch,
                            "state": state["state"], "why": state.get("why", ""),
                            "by": row.certified_by, "at": row.certified_at,
-                           "expires": row.expires_at, "note": row.note})
+                           "expires": row.expires_at, "note": row.note,
+                           # Shown, not implied by the author's name.  A
+                           # reader scanning this list has to be able to tell
+                           # a scan finding nothing from somebody reading it.
+                           "automatic": bool(row.automatic)})
         # Branches nobody is expected to sign off, listed beside the sign
         # offs.  They belong on the same page: this is the only place an
         # administrator can find what has been marked, and a decision that
@@ -1216,7 +1283,7 @@ def repositories(request: Request, user: User = Depends(current_user)):
                            "state": _cert.NOT_APPLICABLE,
                            "why": row.reason, "by": row.marked_by,
                            "at": row.marked_at, "expires": None,
-                           "note": row.reason})
+                           "note": row.reason, "automatic": False})
         badges.sort(key=lambda b: (b["repository"], b["branch"]))
         if wanted:
             badges = [b for b in badges if b["state"] == wanted]
@@ -1929,11 +1996,23 @@ def severity_page(request: Request, msg: str = "", kind: str = "",
         return severity_settings.sensitivity_labels(db)
 
     with session_scope() as db:
+        rules = severity_rules.all_rules(db)
         context = _shared(db, user)
         context.update(active_page="severity",
                        prefill_rule=clean_text(rule, "Rule", limit=200,
                                                required=False),
-                       rules=severity_rules.all_rules(db),
+                       rules=rules,
+                       # What each rule is, as a sentence, and how much of the
+                       # estate it covers.  A rule is a decision about a set
+                       # nobody can see from the page it is written on.
+                       described={row.id: severity_rules.describe(row)
+                                  for row in rules},
+                       covers=severity_rules.counts_for(
+                           db, rules, base=rbac.visible_findings(db, user)),
+                       covers_query={row.id: severity_rules.findings_query(row)
+                                     for row in rules},
+                       fields=severity_rules.FIELDS,
+                       combines=severity_rules.COMBINE,
                        severities=[s.value for s in Severity],
                        sensitivity_labels=severity_labels_for(db),
                        can_write=rbac.can(user, "settings.write"),
