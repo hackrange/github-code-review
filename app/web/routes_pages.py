@@ -585,6 +585,16 @@ def trends_page(request: Request, user: User = Depends(current_user)):
         options = trends.choices(db, base=base, connection=connection,
                                  organization=organization,
                                  repository=repository)
+        # The daily rollup files each finding under one branch name, so a
+        # branch that only ever comes second in a finding's list is missing
+        # from that box even though the table below counts it.  Offer it, or
+        # the reader is told master has nothing on it by a filter that cannot
+        # name master.
+        options["branches"] = sorted(
+            set(options.get("branches") or [])
+            | set(branch_scope.names(report_data._scoped(
+                rbac.visible_findings(db, user), organization, repository,
+                "", connection))))
 
         # Where the recorded history starts.  Everything before it was worked
         # out from when findings were first seen and resolved, and its

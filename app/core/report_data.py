@@ -20,6 +20,8 @@ the totals are the point.
 
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import func
 
 from app.core import branch_scope
@@ -221,6 +223,36 @@ def worst_findings(query, limit=TOP_N) -> list:
     return scored
 
 
+def _by_branch(query) -> dict:
+    """Severity counts per branch, with a finding counted on every branch.
+
+    The one stamped branch is only the first name git handed back, so counting
+    by it alone leaves master reading zero while develop carries the lot, and
+    the developer looking at master concludes there is nothing to fix there.
+    There is: it is the same code on both.
+
+    Counted row by row rather than grouped in the database.  The branch list is
+    a text column, and grouping on a long one truncates it, which would quietly
+    fold two different sets of branches into a single row.  The branch axis
+    only ever covers one repository, so this reads a few hundred rows.
+    """
+    counts = {}
+    for listed, primary, severity in query.with_entities(
+            Finding.branches, Finding.branch, Finding.severity).all():
+        try:
+            names = [str(name) for name in (json.loads(listed or "[]") or [])
+                     if name]
+        except (TypeError, ValueError):
+            names = []
+        level = getattr(severity, "value", str(severity))
+        for name in (names or [primary or ""]):
+            entry = counts.setdefault(
+                name or "(none)",
+                {grade.value: 0 for grade in SEVERITY_ORDER})
+            entry[level] = entry.get(level, 0) + 1
+    return counts
+
+
 def hotspots(query, axis="repository", limit=TOP_N) -> list:
     """The heatmap, from the findings rather than from the daily rollup.
 
@@ -232,17 +264,20 @@ def hotspots(query, axis="repository", limit=TOP_N) -> list:
     because a document has a page size; a screen that sorts and pages has to
     be given the whole set or it would be paging over a truncation.
     """
-    column = {"organization": Finding.organization,
-              "repository": Finding.repository,
-              "branch": Finding.branch}.get(axis, Finding.repository)
-
-    counts = {}
-    for name, severity, total in (query.with_entities(
-            column, Finding.severity, func.count(Finding.id))
-            .group_by(column, Finding.severity).all()):
-        entry = counts.setdefault(name or "(none)",
-                                  {level.value: 0 for level in SEVERITY_ORDER})
-        entry[getattr(severity, "value", str(severity))] = total
+    if axis == "branch":
+        counts = _by_branch(query)
+    else:
+        column = {"organization": Finding.organization,
+                  "repository": Finding.repository}.get(axis,
+                                                        Finding.repository)
+        counts = {}
+        for name, severity, total in (query.with_entities(
+                column, Finding.severity, func.count(Finding.id))
+                .group_by(column, Finding.severity).all()):
+            entry = counts.setdefault(
+                name or "(none)",
+                {level.value: 0 for level in SEVERITY_ORDER})
+            entry[getattr(severity, "value", str(severity))] = total
 
     rows = []
     for name, entry in counts.items():
