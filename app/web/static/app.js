@@ -192,17 +192,20 @@
    */
   var CASCADE = ["connection", "org", "repo", "branch"];
 
+  function clearDownstream(form, name) {
+    var at = CASCADE.indexOf(name);
+    if (at === -1) { return; }
+    CASCADE.slice(at + 1).forEach(function (downstream) {
+      var box = form.querySelector("[name=" + downstream + "]");
+      if (box) { box.value = ""; }
+    });
+  }
+
   document.querySelectorAll("[data-autosubmit]").forEach(function (field) {
     field.addEventListener("change", function () {
       var form = field.closest("form");
       if (!form) { return; }
-      var at = CASCADE.indexOf(field.name);
-      if (at !== -1) {
-        CASCADE.slice(at + 1).forEach(function (name) {
-          var downstream = form.querySelector("[name=" + name + "]");
-          if (downstream) { downstream.value = ""; }
-        });
-      }
+      clearDownstream(form, field.name);
       form.submit();
     });
   });
@@ -236,6 +239,16 @@
   document.querySelectorAll("form[data-autosubmit]").forEach(function (form) {
     form.addEventListener("change", function (event) {
       if (event.target.matches("select, input[type=date], input[type=radio]")) {
+        /* The same cascade the individual boxes get.
+         *
+         * A form that carries the whole set of filters gets this handler
+         * rather than one per box, and it was submitting whatever the boxes
+         * to the right still held.  So picking a different repository kept
+         * the branch chosen for the last one, the scope matched nothing, and
+         * the page came back with an empty matrix and an empty table and no
+         * reason on screen for either.  Clearing downstream first is what the
+         * boxes elsewhere already do. */
+        clearDownstream(form, event.target.name);
         form.submit();
       }
     });

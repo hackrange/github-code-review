@@ -22,10 +22,11 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from app.core import branch_scope
-from app.core.models import Finding, FindingKind, FindingState, Severity
+from app.core.models import (Finding, FindingKind, FindingState, Repository,
+                             Severity)
 
 # How many rows a section prints before it stops being a list somebody reads
 # and becomes an appendix nobody does.
@@ -35,9 +36,37 @@ SEVERITY_ORDER = [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM,
                   Severity.LOW, Severity.INFO, Severity.UNKNOWN]
 
 
-def _scoped(query, organization="", repository="", branch="", connection=""):
-    """The same narrowing the page did, applied to findings."""
+def _archived_names():
+    """The repositories the host has retired, as something to filter against.
+
+    A select rather than a list of names, so this needs no session of its own
+    and the database does the work in one statement instead of shipping a few
+    thousand names back to be sent straight out again.
+    """
+    return select(Repository.full_name).where(
+        Repository.archived.is_(True),
+        Repository.full_name.isnot(None))
+
+
+def _scoped(query, organization="", repository="", branch="", connection="",
+            include_archived=False):
+    """The same narrowing the page did, applied to findings.
+
+    Archived repositories are set aside here, the same way the dashboard sets
+    them aside.  Code that can no longer be changed is not work anybody can
+    do, and a risk matrix that counts it is a picture of a problem nobody is
+    allowed to solve.  Left in, those cells never empty however much gets
+    fixed, which is how a chart stops being read.
+
+    Set aside is not hidden.  The findings stay open, stay in the findings
+    list, stay in both report files and stay in the export, and every caller
+    of this can ask for the count that was left out through `archived_aside`
+    so that the page can say so out loud.  Pass include_archived to get the
+    unfiltered set, which is what that count is worked out from.
+    """
     query = query.filter(Finding.state == FindingState.OPEN)
+    if not include_archived:
+        query = query.filter(Finding.repository.notin_(_archived_names()))
     if connection:
         query = query.filter(Finding.connection == connection)
     if organization:
@@ -48,6 +77,18 @@ def _scoped(query, organization="", repository="", branch="", connection=""):
         # Both readings of what branch a finding is on.  See branch_scope.
         query = query.filter(branch_scope.matches(branch))
     return query
+
+
+def archived_aside(query, organization="", repository="", branch="",
+                   connection="") -> int:
+    """How many open findings this scope left out because the host retired them.
+
+    Shown wherever the scoped figures are, because a number that quietly got
+    smaller is the thing nobody notices and later cannot explain.
+    """
+    scoped = _scoped(query, organization, repository, branch, connection,
+                     include_archived=True)
+    return scoped.filter(Finding.repository.in_(_archived_names())).count()
 
 
 def resolved_since(base_query, organization="", repository="", branch="",

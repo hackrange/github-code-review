@@ -801,6 +801,18 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         if (_grade(row.get("confidence")) == "low"
                 and finding.severity in (Severity.LOW, Severity.INFO)):
             finding.severity = Severity.INFO
+        # The line the engine matched, already masked by the scanner.
+        #
+        # Without it a code finding is an address and nothing else, and the
+        # question people actually ask of one - is this string built from a
+        # request or from a constant - can only be answered by cloning the
+        # repository and opening the file.  The scanner has computed this on
+        # every scan since there were code findings; only the credential path
+        # was reading it, so 22,224 rows carried an empty column.
+        #
+        # Capped again here for the same reason it is capped there: a column
+        # with no ceiling is a column somebody eventually fills.
+        finding.snippet = (row.get("snippet") or "")[:2000]
         # Who last touched the line, from the blame pass.  The commit itself is
         # set in _apply_common, which every kind goes through.
         finding.author_name = row.get("author_name") or ""

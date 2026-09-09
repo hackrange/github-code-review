@@ -266,7 +266,7 @@
     <span>No line drawn for <strong>{{ filters.org }}</strong>, so all
       {{ total }} of these count as work.</span>
     <label class="small">From
-      <input type="date" name="at" value="">
+      <input type="date" name="at" value="" max="{{ today }}">
     </label>
     <button class="btn" type="submit">Draw the line</button>
     <span class="faint small">Leave the date blank for today.  Nothing is
@@ -570,6 +570,7 @@
       </label>
       <label>Expires
         <input type="date" name="expires" required value="{{ default_expiry }}"
+               min="{{ expiry_min }}" max="{{ expiry_max }}"
                form="bulk-form">
         <span class="faint small">They all come back on this date.</span>
       </label>
@@ -696,6 +697,7 @@
         <div class="field">
           <label for="expires">Expires</label>
           <input type="date" id="expires" name="expires" required
+                 min="{{ expiry_min }}" max="{{ expiry_max }}"
                  value="{{ default_expiry }}">
           <div class="help">The finding comes back on this date. A year is the
             most you can set.</div>

@@ -651,6 +651,15 @@ table.audit-detail td { padding: .2rem 0; font-size: .9rem; }
     font-family: var(--mono, ui-monospace, monospace); font-size: .82rem;
 }
 
+/* ---- the line an engine matched ----------------------------------------- */
+/* A matched line can be a whole formatted query, so it wraps instead of
+   stretching the details table sideways. */
+.snippet-line {
+    display: block; white-space: pre-wrap; word-break: break-word;
+    max-width: 80ch; padding: .35rem .5rem; border-radius: 4px;
+    background: var(--bg-soft); font-size: .85rem;
+}
+
 /* ---- the branch picker on a connection ---------------------------------- */
 /* Names past scans found, offered as something to click.  Scrollable and
    capped in height: an account can hold hundreds of branches, and a list that

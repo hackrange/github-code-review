@@ -453,6 +453,19 @@
         </td></tr>
         {% endif %}
         {% if f.file_path %}<tr><th>File</th><td class="mono">{{ f.file_path }}{% if f.line %}:{{ f.line }}{% endif %}</td></tr>{% endif %}
+        {% if f.snippet %}
+        {# The line the engine matched, as the scanner read it, with anything
+           credential shaped masked before it was ever stored.  A file and a
+           line number is an address; the first question anybody asks of a code
+           finding is whether the string was built from a request or from a
+           constant, and until this was here the only way to answer it was to
+           clone the repository. #}
+        <tr><th>Code</th><td>
+          <code class="snippet-line">{{ f.snippet }}</code>
+          <span class="faint small">The line as the last scan read it, not as
+            the file reads now.</span>
+        </td></tr>
+        {% endif %}
         {% if f.package_name %}<tr><th>Package</th><td>{{ f.package_name }} {{ f.package_version }}</td></tr>{% endif %}
         {% if f.malicious %}
         {# Not a vulnerability in a package.  The package is the attack, and
@@ -752,7 +765,8 @@
                   placeholder="What you read, what you checked for, and why you are satisfied.">{{ certification.certification.note if certification and certification.certification and not certification.certification.automatic else '' }}</textarea>
       </label>
       <label>Expires
-        <input type="date" name="expires" required value="{{ default_expiry }}">
+        <input type="date" name="expires" required value="{{ default_expiry }}"
+               min="{{ expiry_min }}" max="{{ expiry_max }}">
         <span class="faint small">Required. It also turns amber the moment
           anybody pushes to this branch, whichever comes first.</span>
       </label>
@@ -822,7 +836,9 @@
         </div>
         <div class="field">
           <label for="expires">Expires</label>
-          <input type="date" id="expires" name="expires" required value="{{ default_expiry }}">
+          <input type="date" id="expires" name="expires" required
+                 min="{{ expiry_min }}" max="{{ expiry_max }}"
+                 value="{{ default_expiry }}">
         </div>
         <div class="field">
           <label for="ticket">Ticket</label>

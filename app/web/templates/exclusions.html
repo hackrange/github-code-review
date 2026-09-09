@@ -233,7 +233,8 @@
           <input type="text" name="ticket" placeholder="SEC-1234">
         </label>
         <label>Expires
-          <input type="date" name="expires" value="{{ default_expiry }}">
+          <input type="date" name="expires" value="{{ default_expiry }}"
+                 min="{{ expiry_min }}" max="{{ expiry_max }}">
           <span class="faint small">Empty means no end date.  Past the date the
             rule stops and the finding comes back.</span>
         </label>
@@ -292,7 +293,8 @@
           <input type="text" name="ticket" placeholder="SEC-1234">
         </label>
         <label>Expires
-          <input type="date" name="expires" value="{{ default_expiry }}">
+          <input type="date" name="expires" value="{{ default_expiry }}"
+                 min="{{ expiry_min }}" max="{{ expiry_max }}">
           <span class="faint small">Empty means no end date.  A date is better:
             a whole batch set aside forever is a decision nobody revisits.</span>
         </label>

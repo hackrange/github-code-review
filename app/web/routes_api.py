@@ -2665,11 +2665,11 @@ async def add_severity_rule(request: Request, user: User = Depends(current_user)
     from app.core import settings_store as sev_store, severity_rules
 
     form = await request.form()
-    # The conditions after the first.  Three slots, posted whether they were
+    # The conditions after the first.  Four slots, posted whether they were
     # filled in or not, and an empty pair is somebody not using that slot
     # rather than a mistake.
     extra = []
-    for slot in (2, 3, 4):
+    for slot in (2, 3, 4, 5):
         field = str(form.get(f"field{slot}", "") or "").strip()
         value = clean_text(form.get(f"value{slot}"), "Value", limit=200,
                            required=False)

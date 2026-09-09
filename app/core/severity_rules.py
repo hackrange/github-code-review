@@ -8,9 +8,10 @@ they have.
 
 So an override is a first class thing here, matched on any of the fields a
 person can read off a finding: the rule that fired, a CWE it carries, the kind
-of thing it is, the state it is in, the value a credential leaked, and how it
-was exposed.  The engine's own grade is not thrown away: what changes is what
-the number means to the people reading it.
+of thing it is, the state it is in, the value a credential leaked, how it was
+exposed, how sure the engine was, which engine said so, and the line of code
+itself.  The engine's own grade is not thrown away: what changes is what the
+number means to the people reading it.
 
 A rule can also ask about more than one of those at once, and that is usually
 what somebody means.  "A credential that only ever existed in git history is a
@@ -42,6 +43,9 @@ FIELDS = (
     ("value", "Value", "The masked value of a leaked credential"),
     ("exposure", "Exposure", "current_and_history or git_history_only"),
     ("author", "Committed by", "The name, login or email on the commit"),
+    ("confidence", "Confidence", "How sure the engine was: low, medium or high"),
+    ("engine", "Found by", "The engine that reported it, such as semgrep or trivy"),
+    ("snippet", "Code", "Text in the line the engine matched"),
 )
 
 MATCH_TYPES = tuple(name for name, _label, _help in FIELDS)
@@ -51,14 +55,19 @@ FIELD_LABELS = {name: label for name, label, _help in FIELDS}
 # How specific a field is, when two rules both match and only one grade can
 # win.  A rule name names one thing somebody wrote; a kind names a quarter of
 # the database.
-FIELD_RANK = {"rule": 5, "value": 4, "author": 4, "cwe": 3, "exposure": 2,
-              "kind": 1, "state": 1}
+# A line of code ranks with a credential value: both name a particular thing
+# somebody wrote.  An engine names a third of the database and confidence names
+# most of it, so both sit at the bottom with kind and state.
+FIELD_RANK = {"rule": 5, "value": 4, "author": 4, "snippet": 4, "cwe": 3,
+              "exposure": 2, "engine": 2, "kind": 1, "state": 1,
+              "confidence": 1}
 
 # The values that are not free text.  A typo in one of these is a rule that
 # silently never fires, which is worse than an error message.
 ALLOWED = {
     "kind": ("credential", "code", "dependency", "misconfiguration"),
     "state": ("open", "waived", "fixed"),
+    "confidence": ("low", "medium", "high"),
 }
 
 COMBINE = ("all", "any")
@@ -284,6 +293,14 @@ def _field_of(finding, field: str) -> str:
         return str(getattr(finding, "secret_preview", "") or "").strip().lower()
     if field == "exposure":
         return str(getattr(finding, "exposure", "") or "").strip().lower()
+    if field == "confidence":
+        return str(getattr(finding, "confidence", "") or "").strip().lower()
+    if field == "engine":
+        # A comma joined list, because two engines landing on the same line is
+        # kept rather than blended into one name.
+        return str(getattr(finding, "engines", "") or "").strip().lower()
+    if field == "snippet":
+        return str(getattr(finding, "snippet", "") or "").strip().lower()
     if field in ("kind", "state"):
         raw = getattr(finding, field, "")
         return str(getattr(raw, "value", raw) or "").strip().lower()
@@ -316,6 +333,31 @@ def _one_matches(field: str, pattern: str, finding) -> bool:
             if item and (item == pattern or item.replace("cwe-", "") == bare):
                 return True
         return False
+    if field == "engine":
+        # The same reading as a CWE: a list, and satisfying it means any one
+        # of them matches.
+        for actual in _field_of(finding, "engine").split(","):
+            actual = actual.strip()
+            if not actual:
+                continue
+            if ("*" in pattern or "?" in pattern):
+                if fnmatch.fnmatch(actual, pattern):
+                    return True
+            elif actual == pattern:
+                return True
+        return False
+    if field == "snippet":
+        # Contains, not equals, and no wildcards.
+        #
+        # Nobody writing a rule about code types a whole line back, so this
+        # matches anywhere in the line.  A star is a star here rather than a
+        # wildcard, because "SELECT * FROM orders" is exactly the sort of
+        # thing somebody pastes in, and reading that star as "anything" turns
+        # a rule about one query into a rule that matches nothing at all.
+        actual = _field_of(finding, "snippet")
+        if not actual:
+            return False
+        return pattern in actual
     if field == "author":
         for actual in _author_of(finding):
             if not actual:
@@ -415,8 +457,27 @@ def _sql_for(field: str, pattern: str):
         return or_(text_clause(Finding.author_login),
                    text_clause(Finding.author_name),
                    text_clause(Finding.author_email))
+    if field == "engine":
+        # Wrapped in separators the same way a CWE list is, so semgrep cannot
+        # match a hypothetical semgrep-pro and inflate the count.
+        listed = (literal(",")
+                  + func.replace(func.lower(func.coalesce(Finding.engines, "")),
+                                 " ", "")
+                  + literal(","))
+        return listed.like("%,{},%".format(
+            pattern.replace("*", "%").replace("?", "_") if wild else pattern))
+    if field == "snippet":
+        # Contains and nothing else, matching `_one_matches` above.  The two
+        # have to agree or the number beside the rule is not the rule.
+        #
+        # autoescape, because a percent sign is ordinary punctuation in code
+        # and a wildcard in SQL, and "%s" is exactly the kind of line somebody
+        # writes a rule about.
+        actual = func.lower(func.coalesce(Finding.snippet, ""))
+        return (actual != "") & actual.contains(pattern, autoescape=True)
     column = {"rule": Finding.rule, "value": Finding.secret_preview,
-              "exposure": Finding.exposure}.get(field)
+              "exposure": Finding.exposure,
+              "confidence": Finding.confidence}.get(field)
     if column is None:
         return literal(False)
     return text_clause(column)

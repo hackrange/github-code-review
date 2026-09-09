@@ -6,6 +6,30 @@ moved.
 
 ## 2026-09-09
 
+**The line a code finding is about.**  A code finding used to give you a file
+and a line number and nothing else, so the first question anybody asks of one,
+whether the string was built from a request or from a constant, meant cloning
+the repository and opening the file.  The scanner has always read that line and
+masked anything credential shaped in it.  It is now kept, and it sits under the
+file name on the finding page.  It arrives with the next scan: findings already
+in the database show it once they are seen again.
+
+**Custom severity can read confidence, the engine and the code.**  A grade can
+now be written about how sure the engine was, which engine reported it, or text
+in the matched line, alone or alongside the conditions that were already there.
+"Anything semgrep is unsure about is a low" and "a formatted query built from an
+environment variable is informational" are each one rule.  Confidence is one of
+low, medium or high and a typo is refused rather than saved as a rule that never
+fires.  Code matches anywhere in the line, and a star in it is a star rather than
+a wildcard, because "SELECT *" is the sort of thing people paste in.  There is
+also a fifth condition row, since five conditions no longer needs a second rule.
+
+**Expiration pickers stop where the rules do.**  The calendar on an exception,
+a sign off and an exclusion now opens on tomorrow and stops a year out, which is
+what the server was already enforcing.  Picking a date that had already passed
+used to be a rejected form and a retyped reason.  The baseline date runs the
+other way and stops today, since a line drawn through the future is not a line.
+
 **Approving and rejecting exceptions in bulk.**  The exceptions page already
 let an admin take back a batch of approved ones.  It now decides a batch of
 requests the same way: tick the rows, approve them or reject them in one go,

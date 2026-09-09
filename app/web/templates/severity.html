@@ -68,8 +68,8 @@
          overrides it would be a different thing: each one would fire on its
          own and regrade findings nobody meant to touch.
 
-         Three spare rows rather than a button that adds them.  A rule with
-         four conditions is rare and a page that needs scripting to be filled
+         Four spare rows rather than a button that adds them.  A rule with
+         five conditions is rare and a page that needs scripting to be filled
          in is one that breaks quietly, and an empty row is simply ignored. #}
       <div class="field" style="flex-basis:100%">
         <label for="combine">And also</label>
@@ -82,7 +82,7 @@
           </select>
           before this grade applies.
         </div>
-        {% for slot in [2, 3, 4] %}
+        {% for slot in [2, 3, 4, 5] %}
         <div class="filters" style="margin:0 0 .3rem">
           <div class="field">
             <select id="field{{ slot }}" name="field{{ slot }}"
@@ -102,7 +102,9 @@
         {% endfor %}
         <span class="faint small">A star stands for anything, so
           <span class="mono">*@example.com</span> on Committed by covers
-          everybody there.</span>
+          everybody there.  Code is the exception: it matches anywhere in the
+          line and a star in it is a star, so
+          <span class="mono">SELECT *</span> means that and nothing wider.</span>
       </div>
 
       <div class="field" style="flex-basis:100%">

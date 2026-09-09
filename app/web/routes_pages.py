@@ -123,6 +123,34 @@ def _sort_order(sort: str, direction: str):
     return [ordered, Finding.id.asc()]
 
 
+def _expiry_window(days: int) -> dict:
+    """What an expiry picker may offer: the default, and both ends of it.
+
+    The rule about which dates are allowed lived only on the server, so the
+    calendar offered every date there is and a waiver dated yesterday came
+    back as a 400 after the reason had been typed out.  Now the picker cannot
+    reach a date the server will refuse.
+
+    Worked out in UTC, because UTC is what the server compares against.  A
+    browser doing this locally would rule out a date the server accepts, or
+    offer one it does not, depending on which side of midnight the reader is.
+    """
+    from app.web.routes_api import MAX_WAIVER_DAYS
+
+    now = datetime.now(timezone.utc)
+    return {
+        "default_expiry": (now + timedelta(days=days)).strftime("%Y-%m-%d"),
+        # Tomorrow.  Today is a date that has already passed by the time the
+        # server reads it, which is a rejection rather than a same day waiver.
+        "expiry_min": (now + timedelta(days=1)).strftime("%Y-%m-%d"),
+        "expiry_max": (now + timedelta(days=MAX_WAIVER_DAYS)).strftime("%Y-%m-%d"),
+        # For the pickers that run the other way.  A baseline is a line drawn
+        # through dates that have already happened, so its calendar stops
+        # today rather than starting tomorrow.
+        "today": now.strftime("%Y-%m-%d"),
+    }
+
+
 def _labels(db) -> list:
     """The sensitivity labels this install uses."""
     from app.core import settings_store as _store
@@ -538,7 +566,7 @@ def trends_page(request: Request, user: User = Depends(current_user)):
         window = int(params.get("days", "30"))
     except ValueError:
         window = 30
-    if window not in (7, 30, 90, 365):
+    if window not in (1, 7, 30, 90, 365):
         window = 30
 
     # A repository names its own organization, so picking one and then a
@@ -582,6 +610,12 @@ def trends_page(request: Request, user: User = Depends(current_user)):
         matrix = report_data.risk_matrix(
             report_data._scoped(rbac.visible_findings(db, user),
                                 organization, repository, branch, connection))
+        # What the two panels above left out because the host retired the
+        # repository.  Said on the page rather than left to be noticed: a
+        # figure that quietly got smaller is the one nobody can explain later.
+        set_aside = report_data.archived_aside(
+            rbac.visible_findings(db, user),
+            organization, repository, branch, connection)
         options = trends.choices(db, base=base, connection=connection,
                                  organization=organization,
                                  repository=repository)
@@ -605,6 +639,23 @@ def trends_page(request: Request, user: User = Depends(current_user)):
             if point["source"] == trends.SNAPSHOT:
                 first_snapshot = point["day"]
                 break
+
+        # How old the newest reading is.
+        #
+        # The rollup writes a row per branch and severity out of what is open,
+        # so a scope with nothing open writes no row at all.  There is no zero
+        # row, which means a scope that emptied and a scope that stopped being
+        # scanned draw the same picture: a line that ends and says nothing.
+        # The chart then stretches whatever days it has across the full width,
+        # so three days of a seven day window look like seven.
+        #
+        # The document already says this.  The screen did not, so somebody
+        # reading a flat line that stopped two days ago had no way to tell it
+        # was not today's answer.
+        newest = points[-1]["day"] if points else None
+        stale_days = 0
+        if newest is not None:
+            stale_days = (datetime.now(timezone.utc).date() - newest.date()).days
 
         from app.core import charts
 
@@ -668,6 +719,8 @@ def trends_page(request: Request, user: User = Depends(current_user)):
             scope_query=scope_query,
             basis=basis, window=window, options=options,
             first_snapshot=first_snapshot,
+            newest_reading=newest, stale_days=stale_days,
+            archived_aside=set_aside,
             filters={"org": organization, "repo": repository,
                      "branch": branch, "connection": connection,
                      "basis": basis, "days": window},
@@ -716,7 +769,7 @@ def trends_report(request: Request, user: User = Depends(current_user)):
         window = int(params.get("days", "30"))
     except ValueError:
         window = 30
-    if window not in (7, 30, 90, 365):
+    if window not in (1, 7, 30, 90, 365):
         window = 30
 
     now = datetime.now(timezone.utc)
@@ -1043,8 +1096,7 @@ def findings(request: Request, user: User = Depends(current_user)):
             # screen.
             all_total=(rbac.visible_findings(db, user).count()
                        if rbac.can(user, "findings.delete") else 0),
-            default_expiry=(datetime.now(timezone.utc)
-                            + timedelta(days=90)).strftime("%Y-%m-%d"),
+            **_expiry_window(90),
         )
         return page(request, "findings.html", **context)
 
@@ -1201,8 +1253,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        flash=clean_text(msg, "message", limit=300,
                                         required=False),
                        flash_kind=notice_class(kind),
-                       default_expiry=(datetime.now(timezone.utc)
-                                       + timedelta(days=90)).strftime("%Y-%m-%d"))
+                       **_expiry_window(90))
         return page(request, "finding_detail.html", **context)
 
 
@@ -1992,8 +2043,7 @@ def exclusions_page(request: Request, msg: str = "", kind: str = "",
             filters={"q": search, "type": of_kind, "status": status},
             prefill_fingerprint=prefill,
             prefill_kind=prefill_kind,
-            default_expiry=(datetime.now(timezone.utc)
-                            + timedelta(days=180)).strftime("%Y-%m-%d"),
+            **_expiry_window(180),
             can_write=rbac.can(user, "exclusion.write"),
             message=clean_text(msg, "message", limit=300, required=False),
             message_kind="error" if kind == "error" else "ok",

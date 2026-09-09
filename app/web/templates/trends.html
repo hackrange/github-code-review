@@ -6,7 +6,7 @@
   <div>
     <h1>Trends</h1>
     <div class="faint small">
-      {{ scope_label }}, over the last {{ window }} days
+      {{ scope_label }}{% if window == 1 %}, today{% else %}, over the last {{ window }} days{% endif %}
       {%- if chart and not chart.empty %}, {{ chart.change if chart.change >= 0 else -chart.change }}
         {{ 'more' if chart.change > 0 else ('fewer' if chart.change < 0 else 'unchanged') }}
         {{ 'things to do' if basis == 'actions' else 'advisories' }}
@@ -69,7 +69,11 @@
     </label>
     <label>Period
       <select name="days">
-        {% for d, name in [(7, 'Last 7 days'), (30, 'Last 30 days'),
+        {# One day is today's reading on its own.  The rollup is kept per day,
+           so a window of one covers one row, and the chart is a single point
+           rather than a line.  It is here because "what does it say right
+           now" is a real question, and the honest label for it is Today. #}
+        {% for d, name in [(1, 'Today'), (7, 'Last 7 days'), (30, 'Last 30 days'),
                            (90, 'Last 90 days'), (365, 'Last year')] %}
         <option value="{{ d }}" {{ 'selected' if window == d }}>{{ name }}</option>
         {% endfor %}
@@ -107,13 +111,31 @@
     </span>
   </div>
 
+  {# When the newest reading is older than yesterday, say so.
+     The rollup only writes a row where something is open, so a scope that
+     emptied and a scope that stopped being scanned both just stop having
+     rows.  The chart then stretches the days it does have across the full
+     width, and a three day fragment of a seven day window is drawn like a
+     full one.  Without this line a flat edge that ended on Sunday reads as
+     today's answer.  The document has said this all along. #}
+  {% if stale_days > 1 and newest_reading %}
+  <div class="notice warn">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+    <div>The newest reading here is from {{ newest_reading | dt('%d %B') }},
+      {{ stale_days }} days ago, and the line is drawn across the days that
+      have readings rather than across the whole period. A scope stops being
+      recorded when nothing is open on it or when it stops being scanned, so
+      this is history and not where things stand today.</div>
+  </div>
+  {% endif %}
+
   {# Drawn as inline SVG so it needs nothing loaded and prints as part of the
      page.  Color comes from the stylesheet, so the same markup works in
      either theme and in the report. #}
   <div class="chart-wrap">
     <svg class="chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}"
          preserveAspectRatio="none" role="img"
-         aria-label="{{ basis }} over the last {{ window }} days">
+         aria-label="{{ basis }} {% if window == 1 %}today{% else %}over the last {{ window }} days{% endif %}">
       {% for line in chart.grid %}
       <line class="grid" x1="{{ chart.pad_left }}" y1="{{ line.y }}"
             x2="{{ chart.width - 12 }}" y2="{{ line.y }}"/>
@@ -167,6 +189,15 @@
 
    The cell color comes from the same matrix that decides the grade, so the
    picture and the number cannot disagree. #}
+{# The scope this page is at, as findings list filters.  Used by the empty
+   states below, which have to be able to send somebody to the rows rather
+   than leave them at a dead end. #}
+{% set find_scope = 'state=open&exception=any&triage=any&baseline=any&group=none'
+   ~ ('&org=' ~ (filters.org | urlencode) if filters.org else '')
+   ~ ('&repo=' ~ (filters.repo | urlencode) if filters.repo else '')
+   ~ ('&branch=' ~ (filters.branch | urlencode) if filters.branch else '')
+   ~ ('&connection=' ~ (filters.connection | urlencode) if filters.connection else '') %}
+
 <div class="card">
   <div class="card-head">
     Risk matrix
@@ -174,9 +205,32 @@
   </div>
 
   {% if not matrix.placed %}
+  {# Three different things used to read as one sentence about rescanning.
+     Nothing open here is a result and a good one.  Findings that are open but
+     carry no impact or likelihood are waiting on a rescan.  Everything set
+     aside on a retired repository is neither.  Each says which, and each
+     offers the rows, because being told a scope is empty by a page that will
+     not show you what is in it is how somebody stops believing the page. #}
   <div class="empty">
-    <p class="faint">Nothing in this scope has been assessed on both axes yet.
-      Findings are placed here as each repository is rescanned.</p>
+    {% if matrix.unplaced %}
+    <p class="faint">{{ matrix.unplaced }} open finding{{ '' if matrix.unplaced == 1 else 's' }}
+      here {{ 'does' if matrix.unplaced == 1 else 'do' }} not carry both an
+      impact and a likelihood yet, so {{ 'it has' if matrix.unplaced == 1 else 'they have' }}
+      nowhere to sit on this grid. They are placed as each repository is
+      rescanned.</p>
+    <p><a class="btn sm" href="{{ base }}/findings?{{ find_scope }}&archived=0">See the
+      {{ matrix.unplaced }} finding{{ '' if matrix.unplaced == 1 else 's' }}</a></p>
+    {% elif archived_aside %}
+    <p class="faint">Nothing open here that anybody can act on.
+      {{ archived_aside }} finding{{ '' if archived_aside == 1 else 's' }}
+      {{ 'is' if archived_aside == 1 else 'are' }} set aside because the host
+      has archived the repository, so the code cannot be changed.</p>
+    <p><a class="btn sm" href="{{ base }}/findings?{{ find_scope }}&archived=1">See
+      what was set aside</a></p>
+    {% else %}
+    <p class="faint">Nothing open in this scope. That is the result, not a
+      gap: there is nothing here to place on the grid.</p>
+    {% endif %}
   </div>
   {% else %}
   <div class="table-scroll">
@@ -238,7 +292,17 @@
     </span>
   </div>
   {% if not heat_rows %}
-  <div class="empty"><p class="faint">Nothing to show at this scope.</p></div>
+  <div class="empty">
+    <p class="faint">Nothing open at this scope.
+      {%- if archived_aside %} {{ archived_aside }} finding{{ '' if archived_aside == 1 else 's' }}
+      {{ 'is' if archived_aside == 1 else 'are' }} set aside on an archived
+      repository.{% endif %}</p>
+    {% if points %}
+    <p class="faint small">The chart above is history. It shows what was open
+      on the days it has readings for, which is not the same question as what
+      is open now.</p>
+    {% endif %}
+  </div>
   {% else %}
   {# Every column head is a link that sorts on it.
      The rows arrive worst first by grade, which is the right default and the
@@ -298,7 +362,10 @@
              advisories into one row per upgrade by default, so seven findings
              arrive as four rows.  This cell counts findings, so the list it
              opens has to count them the same way. #}
-          {% set findings_url = base ~ '/findings?state=open&exception=any&triage=any&baseline=any&group=none&' ~ scope %}
+          {# archived=0 because the panels on this page set archived
+             repositories aside, and a cell that opens a list counting them
+             would land on a bigger number than the one just clicked. #}
+          {% set findings_url = base ~ '/findings?state=open&exception=any&triage=any&baseline=any&group=none&archived=0&' ~ scope %}
           {% set drill = ('org=' ~ (row.name | urlencode)) if heat.axis == 'organization'
              else (('repo=' ~ (row.name | urlencode)) if heat.axis == 'repository' else '') %}
           {% set drill_url = (base ~ '/trends?' ~ drill ~ '&basis=' ~ filters.basis ~ '&days=' ~ filters.days
