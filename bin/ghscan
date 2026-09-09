@@ -407,6 +407,50 @@ if [[ "${1:-}" == "__supervise" ]]; then
     _stall_pid=$!
   fi
 
+  # The memory watch.
+  #
+  # Nothing bounded a single engine before this.  The container limit was the
+  # only backstop, so one repository could take every other scan on the
+  # machine with it, and one did: a worker reached ninety three gigabytes and
+  # the kernel killed it, twice, an hour in each time, on a repository whose
+  # whole history measures thirty six megabytes.  The size was in five files,
+  # recorded traffic captures that an engine decompresses before reading.
+  #
+  # It stops the engine, not the worker, and that distinction is the whole
+  # design.  A killed engine exits above 128, the pass it belonged to is
+  # recorded as incomplete, its findings are held open rather than counted as
+  # fixed, and every other pass on that repository still finishes and reports.
+  # Killing the worker instead would lose all of that and report the
+  # repository as failed.
+  #
+  # Only the engines are eligible.  git, jq and the shell around them are the
+  # scaffolding, and killing one of those mid pipeline produces a truncated
+  # report that looks like a complete one.
+  _mem_pid=""
+  if [[ "${GHSCAN_ENGINE_MB:-0}" =~ ^[0-9]+$ ]] && (( ${GHSCAN_ENGINE_MB:-0} > 0 )); then
+    (
+      _cap_kb=$(( GHSCAN_ENGINE_MB * 1024 ))
+      while kill -0 "$_worker_pid" 2>/dev/null; do
+        sleep 15
+        for _p in $(_tree_of "$_worker_pid"); do
+          _name=$(cat "/proc/$_p/comm" 2>/dev/null) || continue
+          case "$_name" in
+            gitleaks|trufflehog|semgrep|semgrep-core|trivy|syft|grype) ;;
+            *) continue ;;
+          esac
+          _rss=$(awk '/^VmRSS:/{print $2}' "/proc/$_p/status" 2>/dev/null)
+          [[ "$_rss" =~ ^[0-9]+$ ]] || continue
+          (( _rss <= _cap_kb )) && continue
+          printf '%s\n' "$_name reached $(( _rss / 1024 ))MB, over the ${GHSCAN_ENGINE_MB}MB limit for one engine; stopping it so the rest of this repository still reports" >&2
+          kill -TERM "$_p" 2>/dev/null || true
+          sleep 5
+          kill -KILL "$_p" 2>/dev/null || true
+        done
+      done
+    ) &
+    _mem_pid=$!
+  fi
+
   # Never let this fail on the worker's exit status.  Under set -e a worker
   # that the watchdog just terminated would take this shell down with it at
   # 143, before the line below runs, and the watchdog would be left alive with
@@ -441,6 +485,12 @@ if [[ "${1:-}" == "__supervise" ]]; then
       { for _p in $(_tree_of "$_stall_pid"); do kill -KILL "$_p" 2>/dev/null || true; done
         wait "$_stall_pid" 2>/dev/null || true; } 2>/dev/null
     fi
+  fi
+  # The memory watch never escalates past the engine it stopped, so there is
+  # nothing to let finish: the worker it was watching has already exited.
+  if [[ -n "$_mem_pid" ]]; then
+    { for _p in $(_tree_of "$_mem_pid"); do kill -KILL "$_p" 2>/dev/null || true; done
+      wait "$_mem_pid" 2>/dev/null || true; } 2>/dev/null
   fi
   rm -f "$_fired" "$_stall_fired" 2>/dev/null || true
   # Always zero: the parent decides what a missing result means, and a worker
@@ -733,10 +783,23 @@ main() {
   # limits arrive by the same route and neither can be set in a way the other
   # cannot see.
   local stall_sec; stall_sec=$(cfg_num '.scan.stall_sec' 0)
+  # And the most one engine may hold before it is stopped.  By the same route
+  # again: three limits on one worker, all arriving where the supervisor can
+  # see them together.
+  local engine_mb; engine_mb=$(cfg_num '.scan.max_engine_mb' 0)
 
   export GHSCAN_BIN="$GHSCAN_HOME/bin/ghscan"
   export GHSCAN_TIMEOUT_SEC="$timeout_sec"
   export GHSCAN_STALL_SEC="$stall_sec"
+  export GHSCAN_ENGINE_MB="$engine_mb"
+  # The Go engines are asked first, before anything has to be taken away from
+  # them.  GOMEMLIMIT is a target the runtime collects against rather than a
+  # wall, so it does not stop a genuine need for memory, it stops the garbage
+  # a decompressed archive leaves behind from accumulating until the kernel
+  # notices.  Set below the hard cap so the polite limit is reached first.
+  if (( engine_mb > 0 )); then
+    export GOMEMLIMIT="$(( engine_mb * 3 / 4 ))MiB"
+  fi
 
   # The deadline is enforced by __supervise rather than by timeout(1), which
   # only ever signals the one process it started and leaves everything that

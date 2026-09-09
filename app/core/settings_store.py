@@ -79,6 +79,16 @@ DEFAULTS = {
                                 "holding up the rest of the night; scans on the same "
                                 "connection still share one rate limit budget."),
     "clone.max_repo_size_mb":  (4096, False, "Skip repositories bigger than this. 0 means no limit."),
+    # Nothing bounded a single engine before this.  The container limit was
+    # the only backstop, so one repository could take every other scan on the
+    # machine down with it, and one did: ninety three gigabytes in a worker,
+    # killed by the kernel, twice.
+    "scan.max_engine_mb":      (16384, False,
+                                "Stop one scanning engine that uses more memory than this. "
+                                "It applies to each engine on each repository, not to the "
+                                "whole scan. The pass it belonged to is reported as "
+                                "incomplete and its findings are held open rather than "
+                                "counted as fixed. 0 means no limit."),
     "secrets.max_file_mb":     (25, False,
                                 "Skip files bigger than this when looking for credentials. "
                                 "Different from the repository limit above: this one applies "
@@ -402,7 +412,8 @@ SECTIONS = [
     ("Sensitivity labels", ["sensitivity.labels"]),
     ("Limits", ["github.parallel_repos", "scan.max_concurrent",
                 "secrets.history_window_days",
-                "scan.timeout_per_repo", "scan.max_hours", "code.jobs",
+                "scan.timeout_per_repo", "scan.max_hours",
+                "scan.max_engine_mb", "code.jobs",
                 "secrets.concurrency", "clone.max_repo_size_mb",
                 "rate.min_remaining", "rate.adaptive_pacing",
                 "rate.max_sleep_sec", "rate.retries"]),

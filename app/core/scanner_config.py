@@ -243,6 +243,11 @@ def build(session, out_dir: Path, orgs=None, repos=None, connection=None,
     scan["parallel_repos"] = _int(session, "github.parallel_repos", 4)
     scan["timeout_per_repo_sec"] = _int(session, "scan.timeout_per_repo", 3600)
     scan["stall_sec"] = _int(session, "scan.stall_minutes", 0) * 60
+    # The most one engine may take before it is stopped.  Beside the stall
+    # watch rather than inside a pass, because it is the same kind of thing:
+    # a limit on one repository's worker, enforced from outside by something
+    # the engine cannot talk its way past.
+    scan["max_engine_mb"] = _int(session, "scan.max_engine_mb", 0)
 
     secrets = scan["secrets"]
     secrets["enabled"] = bool(store.get(session, "secrets.enabled"))
