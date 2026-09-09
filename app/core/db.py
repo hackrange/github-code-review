@@ -167,81 +167,31 @@ def init_db() -> None:
         extended = _extend_enums()
         if extended:
             log.info("taught %d column(s) a new value", extended)
-        credited = _credit_full_history_walks()
-        if credited:
-            log.info("credited %d repositor(y/ies) with a history already "
-                     "walked to its end", credited)
+        # Nothing credits a history walk on the reader's side any more.
+        #
+        # There was a backfill here that set the "walked to its first commit"
+        # marker on every repository, on an install where not one carried it,
+        # reasoning that a marker can only come from a windowed run so their
+        # absence proved every completed scan had been a full walk.  The
+        # reasoning was wrong in the one way that mattered: the reports it read
+        # said "complete" about the run, not about the walk.
+        #
+        # It credited two hundred and sixty one repositories.  The next
+        # windowed run then read only new commits, found nothing older, and the
+        # silence was taken for remediation: two thousand nine hundred and
+        # seventy six findings closed, including every one of the twenty
+        # credentials that had been proved live against the provider that
+        # issued them.
+        #
+        # The marker is written by the scanner, which is the only thing that
+        # knows where a walk actually reached.  A reader that infers it is
+        # guessing, and this is not a thing worth guessing about.
 
     if settings.uses_sqlite:
         try:
             Path(settings.db_path).chmod(0o600)
         except OSError:
             pass
-
-
-def _credit_full_history_walks() -> int:
-    """Write down what a full history walk already did.  -> rows changed.
-
-    The scanner records how far a walk reached so the next run can carry on.
-    That bookkeeping only ever ran for windowed runs, and a run with no window
-    reads every commit on every ref, so an install scanned end to end came out
-    of it with every repository still saying nobody had walked anything.  Set a
-    window afterwards and the catch up pass starts from nothing, spending its
-    nights walking backwards through history that has already been read, on a
-    rate limit budget the real scans need.
-
-    The condition to run at all is the interesting part, and it is
-    self evidencing rather than assumed: this only fires when not one
-    repository in the database carries a marker.  A marker can only be written
-    by a windowed run, so none anywhere means no windowed run has ever
-    happened here, which in turn means every completed scan was a full walk.
-    An install that has used a window has markers that mean something, and this
-    leaves them alone.
-
-    Repositories in an account whose most recent completed run reported
-    failures are skipped.  Marking a history complete is a claim that stops
-    anything ever looking at it again, so a doubt has to leave the repository
-    looking unwalked: the cost of that is a catch up pass with work to do, and
-    the cost of the opposite is a far end nobody reads again.
-    """
-    from sqlalchemy import func
-
-    from app.core.models import Repository, ScanRun
-
-    with session_scope() as session:
-        marked = (session.query(func.count(Repository.id))
-                  .filter(Repository.history_from != "").scalar() or 0)
-        if marked:
-            return 0
-        scanned = (session.query(func.count(Repository.id))
-                   .filter(Repository.last_scanned_at.isnot(None)).scalar() or 0)
-        if not scanned:
-            return 0
-
-        # The newest completed run for each account, and whether it was clean.
-        runs = (session.query(ScanRun)
-                .filter(ScanRun.status.in_(("finished", "empty")))
-                .order_by(ScanRun.id.desc()).all())
-        latest = {}
-        for run in runs:
-            latest.setdefault(run.connection or "", run)
-        troubled = {name for name, run in latest.items()
-                    if (run.repositories_failed or 0)
-                    or (run.repositories_partial or 0)}
-
-        changed = 0
-        for repo in (session.query(Repository)
-                     .filter(Repository.last_scanned_at.isnot(None))
-                     .filter(Repository.history_from == "").all()):
-            if (repo.connection or "") in troubled:
-                continue
-            if (repo.connection or "") not in latest:
-                continue
-            repo.history_from = repo.last_scanned_at.strftime("%Y-%m-%d")
-            repo.history_complete = True
-            changed += 1
-        session.flush()
-        return changed
 
 
 def _safe_default(value) -> bool:

@@ -216,6 +216,26 @@ def _filtered_findings(db, user, params):
     # out of this list by default: the findings are open, they are real, and
     # the record of what a repository held when it was retired is the part
     # somebody asks about later.
+    # New or changed recently.
+    #
+    # Two dates, because "recent" means two different things and a filter that
+    # picked one would quietly hide the other.  A finding is recent if this
+    # product first saw it inside the window, or if the code it sits on was
+    # committed inside the window.  The first answers "what has turned up",
+    # the second "what has somebody touched", and a reviewer asking for the
+    # last week wants both.
+    #
+    # The commit date is not known for every kind: it is recorded for
+    # credentials and for most code findings, and never for a vulnerable
+    # package or a misconfiguration, which have no line in a file to blame.
+    # Those still match on the date they were first seen, so nothing is
+    # excluded for want of a date it could never have had.
+    since_days = (params.get("since", "") or "").strip()
+    if since_days in ("1", "7", "14", "30"):
+        cutoff = datetime.now(timezone.utc) - timedelta(days=int(since_days))
+        query = query.filter(sa_or(Finding.first_found_at >= cutoff,
+                                   Finding.committed_at >= cutoff))
+
     archived_want = str(params.get("archived", ""))
     if archived_want in ("0", "1"):
         _archived = (db.query(Repository.full_name)
@@ -750,6 +770,11 @@ def findings(request: Request, user: User = Depends(current_user)):
     since = (params.get("baseline", "new") or "new").strip().lower()
     if since not in baseline_filter.MODES:
         since = "new"
+    # How far back "recent" reaches, empty meaning all of it.  Read here as
+    # well as in the query so the dropdown comes back on what was chosen.
+    since_choice = (params.get("since", "") or "").strip()
+    if since_choice not in ("1", "7", "14", "30"):
+        since_choice = ""
     sort = (params.get("sort", "") or "").strip().lower()
     if sort not in SORTABLE:
         sort = "priority"
@@ -866,7 +891,7 @@ def findings(request: Request, user: User = Depends(current_user)):
                      "connection": connection, "per_page": limit,
                      "confidence": confidence, "sort": sort, "dir": direction,
                      "triage": triage, "baseline": since, "reach": reach,
-                     "group": grouped},
+                     "since": since_choice, "group": grouped},
             hidden_unreachable=hidden_unreachable,
             groups=groups, grouped=grouped, folded=folded,
             page_sizes=PAGE_SIZES,
@@ -887,6 +912,7 @@ def findings(request: Request, user: User = Depends(current_user)):
                                    ("connection", connection),
                                    ("triage", triage if triage != "work" else ""),
                                    ("baseline", since if since != "new" else ""),
+                                   ("since", since_choice),
                                    ("sort", sort if sort != "priority" else ""),
                                    ("dir", direction if sort != "priority" else ""))
                                   if value}),

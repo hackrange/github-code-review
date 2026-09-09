@@ -17,6 +17,20 @@
     <span class="faint small">reviewed by a person and signed off, and the
       branches nobody is expected to review</span>
   </div>
+  {# Every state reachable by clicking, rather than by knowing the query
+     string.  The dashboard could only ever send somebody to the current ones,
+     so the amber list, which is the one that needs a person, could not be
+     opened at all. #}
+  <div class="small" style="padding:0 1rem .5rem">
+    {% for key, label in [('', 'All'), ('active', 'Current'),
+                          ('stale', 'Needs re-checking'), ('lapsed', 'Expired'),
+                          ('revoked', 'Withdrawn'),
+                          ('not_applicable', 'Not applicable')] %}
+      {%- if certified_filter == key %}<strong>{{ label }}</strong>
+      {%- else %}<a href="{{ base }}/repositories{{ '?certified=' ~ key if key }}">{{ label }}</a>
+      {%- endif %}{{ ' &middot; ' | safe if not loop.last }}
+    {%- endfor %}
+  </div>
   <div class="table-scroll">
     <table class="small">
       <thead>

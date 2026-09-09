@@ -589,7 +589,15 @@
         {% if f.exposure %}<tr><th>Exposure</th><td>{{ f.exposure }}</td></tr>{% endif %}
         {% if f.author_name %}<tr><th>Committed by</th><td>{{ f.author_name }}
           {% if f.author_login %}<span class="faint">({{ f.author_login }})</span>{% endif %}</td></tr>{% endif %}
-        {% if f.committed_at %}<tr><th>Committed</th><td>{{ f.committed_at | dt('%Y-%m-%d') }}</td></tr>{% endif %}
+        {# When the code itself last changed, as opposed to when this product
+           last looked at it.  Shown even when it is not known, because a row
+           that disappears reads as "nothing has changed" rather than as "we
+           did not record it".  A vulnerable package and a misconfiguration
+           have no line in a file to blame, so neither ever carries one. #}
+        <tr><th>Last modified</th><td>
+          {%- if f.committed_at %}{{ f.committed_at | dt('%Y-%m-%d') }}
+          {%- else %}<span class="faint">not recorded for a
+            {{ f.kind.value if f.kind else 'finding' }}</span>{% endif %}</td></tr>
         <tr><th>First found</th><td>{{ f.first_found_at | dt('%Y-%m-%d %H:%M') if f.first_found_at }}</td></tr>
         <tr><th>Last found</th><td>{{ f.last_found_at | dt('%Y-%m-%d %H:%M') if f.last_found_at }}</td></tr>
         <tr><th>Fingerprint</th><td class="mono small">{{ f.fingerprint }}

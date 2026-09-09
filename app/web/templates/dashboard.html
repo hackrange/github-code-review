@@ -103,6 +103,22 @@
   {% endif %}
 </div>
 
+{# The amber count, as somewhere to go.
+   It sits inside the tile above, and a link inside a link is not a thing a
+   browser will honor, so the way to reach those branches is a line of its own.
+   It is the count that needs a person: a review that no longer describes the
+   code is the one somebody has to look at again, and until now it was a number
+   with nowhere to click. #}
+{% set needs_check = certified.mine_stale if certified.scoped else certified.stale %}
+{% if needs_check %}
+<div class="small" style="margin:-.75rem 0 1.25rem">
+  <a href="{{ base }}/repositories?certified=stale">{{ needs_check }} certified
+    branch{{ '' if needs_check == 1 else 'es' }} need{{ 's' if needs_check == 1 else '' }}
+    re-checking</a>
+  <span class="faint">because the code has moved since somebody signed it off.</span>
+</div>
+{% endif %}
+
 {# What was left out of the numbers above, said plainly.
    These findings are still open and still in the findings list, the reports
    and the export.  They are kept out of the counts because nobody can act on
