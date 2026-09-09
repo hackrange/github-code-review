@@ -53,14 +53,30 @@
 
 {{ pager() }}
 
-{% if can_revoke and rows %}
+{% set can_pick = can_approve or can_revoke %}
+{% if can_pick and rows %}
+{# The bar carries every action the list has, and each button is dead until
+   something it can act on is ticked.  Approving and rejecting only apply to a
+   row still waiting on a decision, revoking only to one already approved, and
+   a mixed selection is fine: each action takes its own share and says how many
+   it left. #}
 <div class="card" id="bulk-bar" hidden>
   <div class="flex-between">
     <div class="small"><strong><span data-slot="bulk-n">0</span></strong>
-      selected</div>
+      selected<span class="faint">, <span data-slot="bulk-n-requested">0</span>
+      waiting and <span data-slot="bulk-n-approved">0</span> approved</span></div>
     <div class="page-actions">
       <button type="button" class="btn sm" id="bulk-clear">Clear</button>
-      <button type="button" class="btn sm danger" data-modal="revoke-modal">Revoke the selected</button>
+      {% if can_approve %}
+      <button type="button" class="btn sm primary" data-needs="requested"
+              data-modal="approve-modal" disabled>Approve the selected</button>
+      <button type="button" class="btn sm" data-needs="requested"
+              data-modal="reject-modal" disabled>Reject the selected</button>
+      {% endif %}
+      {% if can_revoke %}
+      <button type="button" class="btn sm danger" data-needs="approved"
+              data-modal="revoke-modal" disabled>Revoke the selected</button>
+      {% endif %}
     </div>
   </div>
 </div>
@@ -71,21 +87,25 @@
   <div class="table-scroll">
     <table>
       <thead><tr>
-        {% if can_revoke %}
+        {% if can_pick %}
         <th class="nowrap"><input type="checkbox" id="bulk-select-page"
-            title="Every approved one on this page"></th>
+            title="Everything on this page you can act on"></th>
         {% endif %}
         <th>Status</th><th>Finding</th><th>Why</th><th>Asked by</th><th></th></tr></thead>
       <tbody>
       {% for w in rows %}
         {% set f = findings.get(w.finding_id) %}
         <tr>
-          {% if can_revoke %}
-          {# Only an approved exception can be taken back, so the rest of the
-             boxes are dead rather than absent: a column that appears and
-             disappears down the table is harder to read than a locked box. #}
+          {% if can_pick %}
+          {# A rejected or revoked one is finished with, so its box is dead
+             rather than absent: a column that appears and disappears down the
+             table is harder to read than a locked box.  The state travels with
+             the box so the bar knows which buttons the selection can reach. #}
+          {% set can_act = (w.status.value == 'requested' and can_approve)
+                        or (w.status.value == 'approved' and can_revoke) %}
           <td><input type="checkbox" class="bulk-pick" value="{{ w.id }}"
-                     {{ 'disabled' if w.status.value != 'approved' }}></td>
+                     data-state="{{ w.status.value }}"
+                     {{ 'disabled' if not can_act }}></td>
           {% endif %}
           <td class="stack nowrap">
             {% if w.status.value == 'approved' and w.expires_at and w.expires_at.replace(tzinfo=None) < now.replace(tzinfo=None) %}
@@ -148,10 +168,80 @@
   <div class="empty">No exceptions yet.</div>
   {% endif %}
 </div>
-{% if can_revoke %}
-<form method="post" id="bulk-form" action="{{ base }}/waivers/revoke-bulk">
+{# One list of ticked rows, one hidden field per action, all filled from the
+   same place.  Keeping a list per action would eventually mean two lists that
+   disagree about what is selected. #}
+{% if can_approve %}
+<form method="post" id="bulk-approve-form" action="{{ base }}/waivers/approve-bulk">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-  <input type="hidden" name="waiver_ids" id="bulk-ids" value="">
+  <input type="hidden" name="waiver_ids" class="bulk-ids" value="">
+</form>
+<form method="post" id="bulk-reject-form" action="{{ base }}/waivers/reject-bulk">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="waiver_ids" class="bulk-ids" value="">
+</form>
+
+<div class="modal-backdrop" id="approve-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Approve what is selected
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <div class="notice info">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+        <div><strong><span data-slot="bulk-n-requested">0</span></strong>
+          requests. Their findings leave both report files as soon as you save,
+          and each one gets an exclusion so the next scan does not put it
+          back. Anything else you ticked is left alone.</div>
+      </div>
+      <label>Why these are acceptable
+        <textarea name="reason" rows="4" required minlength="20" maxlength="2000"
+                  form="bulk-approve-form"
+                  placeholder="What you checked, and what makes this whole set safe to set aside."></textarea>
+        <span class="faint small">The same reason goes on every exception in
+          the batch and into the audit log, so it has to hold for all of them.
+          Do it in batches if it does not.</span>
+      </label>
+      <p class="small faint">The expiry each person asked for is kept. They do
+        not all come back on the same day.</p>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Cancel</button>
+      <button type="submit" class="btn primary" form="bulk-approve-form">Approve them</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="reject-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Reject what is selected
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <div class="notice info">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+        <div><strong><span data-slot="bulk-n-requested">0</span></strong>
+          requests. Nothing on disk moves: these findings were never out of the
+          report files. Anything else you ticked is left alone.</div>
+      </div>
+      <label>Why these are being turned down
+        <textarea name="reason" rows="4" required minlength="20" maxlength="2000"
+                  form="bulk-reject-form"
+                  placeholder="What has to happen instead, and by when."></textarea>
+        <span class="faint small">The people who asked read this, so it is
+          worth writing what they should do next.</span>
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Cancel</button>
+      <button type="submit" class="btn primary" form="bulk-reject-form">Reject them</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if can_revoke %}
+<form method="post" id="bulk-revoke-form" action="{{ base }}/waivers/revoke-bulk">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="waiver_ids" class="bulk-ids" value="">
 </form>
 
 <div class="modal-backdrop" id="revoke-modal" hidden>
@@ -161,16 +251,17 @@
     <div class="modal-body">
       <div class="notice warn">
         <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
-        <div><strong><span data-slot="bulk-n">0</span></strong> exceptions.
+        <div><strong><span data-slot="bulk-n-approved">0</span></strong> exceptions.
           Their findings come straight back into both report files, and any
-          exclusion each one created is retired with it.</div>
+          exclusion each one created is retired with it. Anything else you
+          ticked is left alone.</div>
       </div>
       <p class="small faint">The exceptions are not deleted. They stay on the
         record as revoked, with your name and the date against them.</p>
     </div>
     <div class="modal-foot">
       <button type="button" class="btn" data-close-modal>Cancel</button>
-      <button type="submit" class="btn danger" form="bulk-form">Revoke them</button>
+      <button type="submit" class="btn danger" form="bulk-revoke-form">Revoke them</button>
     </div>
   </div>
 </div>

@@ -44,6 +44,14 @@ an exception they asked for themselves.
 Every exception has an expiration date, up to a year out. When it passes, the
 finding comes back into both files on the next write.
 
+Requests arrive in batches, because one dependency bump is the same finding in
+forty repositories. An admin can tick a set of them and approve or reject the
+lot in one go, or take back a set already approved. It is the same permission
+check as deciding them one at a time, applied per row: an id belonging to a
+repository the account cannot see is skipped rather than decided. A reason is
+required on a bulk decision, and it is written onto every exception in the
+batch as well as into the audit log.
+
 ## Exclusions and grades are admin only
 
 Writing an exclusion is the same decision as approving an exception: it takes a

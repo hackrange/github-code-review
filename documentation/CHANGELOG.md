@@ -6,6 +6,15 @@ moved.
 
 ## 2026-09-09
 
+**Approving and rejecting exceptions in bulk.**  The exceptions page already
+let an admin take back a batch of approved ones.  It now decides a batch of
+requests the same way: tick the rows, approve them or reject them in one go,
+and type the reason once.  A ticked row the action does not apply to is left
+alone rather than refused, so a mixed selection is fine, and the page says how
+many it skipped.  The reason is required, goes on every exception in the batch
+next to who decided it and when, and is written to the audit log.  Each
+approved finding keeps the expiration date the person who asked for it picked.
+
 **Branches that certify themselves.**  A completed scan now signs off the
 branches it found nothing to read on: no findings at all, or nothing above a
 low.  Those badges are marked as a machine's work everywhere they appear, and

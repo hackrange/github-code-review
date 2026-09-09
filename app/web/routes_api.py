@@ -639,6 +639,129 @@ async def revoke_waivers(request: Request, user: User = Depends(current_user)):
     return redirect(f"/waivers?msg={quote(note)}&kind=warn")
 
 
+def _bulk_reason(form) -> str:
+    """The sentence that has to cover every row in the batch.
+
+    A decision taken on forty findings at once is still a decision, and the
+    only thing that explains it later is what was typed here.  Same floor as
+    asking for an exception in the first place: twenty characters is not much,
+    but it rules out "ok".
+    """
+    text = clean_text(form.get("reason", ""), "Reason", limit=2000)
+    if len(text) < 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Say a bit more about the decision, at least 20 characters.")
+    return text
+
+
+@router.post("/waivers/approve-bulk")
+async def approve_waivers(request: Request, user: User = Depends(current_user)):
+    """Agree to a batch of requests in one go.
+
+    One dependency bump turns up as the same finding in forty repositories and
+    forty people ask for the same exception in the same afternoon.  That is one
+    decision, so it gets taken once.  The reason typed here goes on every
+    waiver in the batch, so each one still says why on its own.
+    """
+    await check_csrf(request)
+    rbac.require(user, "waiver.approve")
+
+    from urllib.parse import quote
+
+    form = await request.form()
+    reason = _bulk_reason(form)
+    wanted = form_ids(form, "waiver_ids", "ids")
+    if not wanted:
+        raise HTTPException(status_code=400, detail="Nothing was selected.")
+
+    approved = skipped = 0
+    with session_scope() as db:
+        for waiver in db.query(Waiver).filter(Waiver.id.in_(wanted)).all():
+            if waiver.status != WaiverStatus.REQUESTED:
+                skipped += 1
+                continue
+            # The scope check the single approve gets from the page: an id
+            # from another team must do nothing rather than sign off on a
+            # finding this account cannot even see.
+            finding = rbac.visible_finding(db, user, waiver.finding_id)
+            if finding is None:
+                skipped += 1
+                continue
+            waiver.status = WaiverStatus.APPROVED
+            waiver.decided_by = user.username
+            waiver.decided_at = utcnow()
+            waiver.decision_note = reason
+            finding.state = FindingState.WAIVED
+            _set_exception(finding, waiver, user.username)
+            _mirror_waiver(db, finding, waiver, user.username)
+            approved += 1
+        db.flush()
+
+        # One line for the decision, carrying the reason.  The waivers carry
+        # the detail of which findings it covered.
+        record(db, "waiver.approved", actor=user.username,
+               target=f"{approved} exceptions", detail=f"bulk: {reason}",
+               source_ip=client_ip(request))
+        if approved:
+            # An approval changes what is on disk, so rewrite both files now.
+            write_reports(db)
+
+    note = (f"{approved} exception(s) approved. Their findings have left both "
+            "report files.")
+    if skipped:
+        note += (f" {skipped} were not waiting on a decision, or not yours, "
+                 "and were left alone.")
+    return redirect(f"/waivers?msg={quote(note)}&kind=ok")
+
+
+@router.post("/waivers/reject-bulk")
+async def reject_waivers(request: Request, user: User = Depends(current_user)):
+    """Turn down a batch of requests in one go.
+
+    Nothing on disk moves either way: these findings were never out of the
+    report files.  What changes is that the people who asked get an answer,
+    and the answer is written down.
+    """
+    await check_csrf(request)
+    rbac.require(user, "waiver.approve")
+
+    from urllib.parse import quote
+
+    form = await request.form()
+    reason = _bulk_reason(form)
+    wanted = form_ids(form, "waiver_ids", "ids")
+    if not wanted:
+        raise HTTPException(status_code=400, detail="Nothing was selected.")
+
+    rejected = skipped = 0
+    with session_scope() as db:
+        for waiver in db.query(Waiver).filter(Waiver.id.in_(wanted)).all():
+            if waiver.status != WaiverStatus.REQUESTED:
+                skipped += 1
+                continue
+            if rbac.visible_finding(db, user, waiver.finding_id) is None:
+                skipped += 1
+                continue
+            waiver.status = WaiverStatus.REJECTED
+            waiver.decided_by = user.username
+            waiver.decided_at = utcnow()
+            waiver.decision_note = reason
+            rejected += 1
+        db.flush()
+
+        record(db, "waiver.rejected", actor=user.username,
+               target=f"{rejected} exceptions", detail=f"bulk: {reason}",
+               source_ip=client_ip(request))
+
+    note = (f"{rejected} exception(s) rejected. Their findings stay in both "
+            "report files.")
+    if skipped:
+        note += (f" {skipped} were not waiting on a decision, or not yours, "
+                 "and were left alone.")
+    return redirect(f"/waivers?msg={quote(note)}&kind=info")
+
+
 @router.post("/exclusions/delete-bulk")
 async def delete_exclusions(request: Request, user: User = Depends(current_user)):
     """Remove a batch of exclusion rules.
