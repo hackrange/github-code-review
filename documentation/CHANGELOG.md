@@ -6,6 +6,16 @@ moved.
 
 ## 2026-09-09
 
+**A certified seal on the trends page.**  Filter to a branch, a repository or
+an organization where every branch has been signed off and a green seal sits in
+the space to the right of the risk matrix.  It is faded rather than solid,
+because it is a fact about the scope and not a verdict on the risk beside it.
+It only appears when the whole scope carries a sign off: eleven branches of
+twelve is not a certified repository, and a mark meaning "mostly" is worth less
+than no mark, since the reader cannot tell which kind of mostly they have.
+Branches marked not applicable come out of the count and the seal says how many.
+A sign off a scan wrote says so on the seal itself, the same as everywhere else.
+
 **Archived repositories stop inflating the risk matrix.**  Code that can no
 longer be changed is not work anybody can do, and a grid that counts it has
 cells that never empty however much gets fixed.  The matrix and the branch

@@ -560,6 +560,99 @@ def coverage(session, repos, certifications=None, exemptions=None) -> dict:
     }
 
 
+def scope_seal(session, repos, certifications=None, exemptions=None,
+               organization="", repository="", branch="") -> dict:
+    """-> what a seal on this scope may claim, or {"show": False}.
+
+    A seal is only honest when everything in the scope carries one.  Signed
+    off on eleven branches of twelve is not a certified repository, and a
+    green mark that means "mostly" is worth less than no mark, because the
+    reader cannot tell which kind of mostly they are looking at.
+
+    So this counts the same population `coverage` does, narrowed to what is on
+    screen, and shows nothing unless the two numbers meet.  An empty scope
+    shows nothing either: no branches signed off is not the same claim as no
+    branches, and a seal on an empty set is the easiest way to be wrong.
+
+    A sign off a scan wrote is marked as one, here as everywhere else.  The
+    difference between "somebody read this" and "the engines had nothing to
+    say about it" is the whole reason the automatic flag exists, and a seal
+    that blurred the two would be the worst place to blur it.
+    """
+    import json as _json
+
+    from app.core.models import Certification, CertificationExemption, Repository
+
+    rows = (repos if repos is not None else session.query(Repository))
+    rows = rows.filter(Repository.archived.is_(False))
+    if repository:
+        rows = rows.filter(Repository.full_name == repository)
+    elif organization:
+        rows = rows.filter(Repository.organization == organization)
+
+    population, default_branch = set(), {}
+    for full_name, default, names in rows.with_entities(
+            Repository.full_name, Repository.default_branch,
+            Repository.branch_names).all():
+        default_branch[full_name] = default or ""
+        try:
+            walked = _json.loads(names or "[]")
+        except (ValueError, TypeError):
+            walked = []
+        for name in walked:
+            if name and (not branch or name == branch):
+                population.add((full_name, name))
+
+    if not population:
+        return {"show": False}
+
+    def _resolve(repo_name, name):
+        return (repo_name, name or default_branch.get(repo_name, ""))
+
+    marks = (exemptions if exemptions is not None
+             else session.query(CertificationExemption))
+    exempt = {key for key in (
+        _resolve(repo_name, name) for repo_name, name in
+        marks.with_entities(CertificationExemption.repository,
+                            CertificationExemption.branch).all())
+        if key in population}
+
+    certifiable = len(population) - len(exempt)
+    if certifiable <= 0:
+        return {"show": False}
+
+    signed, automatic, newest, who = 0, 0, None, ""
+    for row in (certifications if certifications is not None
+                else session.query(Certification)).all():
+        key = _resolve(row.repository, row.branch)
+        if key not in population or key in exempt:
+            continue
+        if status(session, row).get("state") != ACTIVE:
+            continue
+        signed += 1
+        if row.automatic:
+            automatic += 1
+        when = _aware(row.certified_at)
+        if when is not None and (newest is None or when > newest):
+            newest, who = when, row.certified_by or ""
+
+    if signed != certifiable:
+        return {"show": False}
+
+    return {
+        "show": True,
+        "branches": signed,
+        "exempt": len(exempt),
+        "automatic": automatic,
+        # Three ways to say who, because a mixed set is neither of the other
+        # two and reading it as either would be a claim nobody made.
+        "by_a_person": automatic == 0,
+        "by_a_scan": automatic == signed,
+        "who": who,
+        "at": newest,
+    }
+
+
 def all_exemptions(session, base=None) -> list:
     """Every branch marked as not expecting a sign off, newest first."""
     from app.core.models import CertificationExemption

@@ -826,3 +826,58 @@ table.heat th.sorted { color: var(--text); }
 table.heat .heat-actions { text-align: right; white-space: nowrap;
   padding: .2rem 0 .2rem .6rem; }
 table.heat .heat-actions .btn { margin-left: .3rem; }
+
+/* The certified seal on the trends page.
+ *
+ * Sits in the space to the right of the risk matrix, which is dead on any
+ * screen wide enough to have some.  It is deliberately faded: this is a fact
+ * about the scope rather than a call to action, and a solid green mark beside
+ * a risk matrix reads as a verdict on the risk.
+ *
+ * The grid keeps its own scrolling, so a narrow screen scrolls the table and
+ * drops the seal underneath rather than squeezing both. */
+.matrix-wrap { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+.matrix-wrap > .matrix-main { flex: 1 1 320px; min-width: 0; }
+
+.seal-space {
+  flex: 0 1 210px;
+  display: flex;
+  justify-content: center;
+  padding: .5rem 0;
+}
+.seal {
+  position: relative;
+  width: 190px;
+  text-align: center;
+  color: var(--ok);
+  opacity: .5;
+  /* Nothing here is clickable, and a seal that highlights on hover invites a
+     click that does nothing. */
+  user-select: none;
+}
+.seal svg {
+  width: 120px; height: 120px;
+  display: block; margin: 0 auto;
+}
+.seal .ring {
+  fill: none; stroke: currentColor; stroke-width: 4;
+}
+.seal .ring.thin { stroke-width: 1.5; stroke-dasharray: 3 5; }
+.seal .tick {
+  fill: none; stroke: currentColor; stroke-width: 9;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.seal-text {
+  display: flex; flex-direction: column; gap: .1rem;
+  margin-top: .35rem; line-height: 1.35;
+}
+.seal-text strong {
+  font-size: .95rem; letter-spacing: .14em; text-transform: uppercase;
+}
+.seal-text span { font-size: .72rem; }
+/* A scan wrote it, said in the seal itself rather than only in a tooltip. */
+.seal-text .mark { font-style: italic; }
+
+@media (max-width: 720px) {
+  .seal-space { flex-basis: 100%; }
+}

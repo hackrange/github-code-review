@@ -616,6 +616,18 @@ def trends_page(request: Request, user: User = Depends(current_user)):
         set_aside = report_data.archived_aside(
             rbac.visible_findings(db, user),
             organization, repository, branch, connection)
+        # A seal, only where everything on screen is signed off.
+        #
+        # Scoped through the same three queries the dashboard tile uses, so a
+        # developer is never shown a mark earned by branches they cannot see.
+        from app.core import certification as _cert
+
+        seal = _cert.scope_seal(
+            db,
+            rbac.visible_repositories(db, user),
+            rbac.visible_certifications(db, user),
+            rbac.visible_certification_exemptions(db, user),
+            organization, repository, branch)
         options = trends.choices(db, base=base, connection=connection,
                                  organization=organization,
                                  repository=repository)
@@ -720,7 +732,7 @@ def trends_page(request: Request, user: User = Depends(current_user)):
             basis=basis, window=window, options=options,
             first_snapshot=first_snapshot,
             newest_reading=newest, stale_days=stale_days,
-            archived_aside=set_aside,
+            archived_aside=set_aside, seal=seal,
             filters={"org": organization, "repo": repository,
                      "branch": branch, "connection": connection,
                      "basis": basis, "days": window},

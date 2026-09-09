@@ -204,6 +204,8 @@
     <span class="faint small">Impact against likelihood, asked separately</span>
   </div>
 
+  <div class="matrix-wrap">
+  <div class="matrix-main">
   {% if not matrix.placed %}
   {# Three different things used to read as one sentence about rescanning.
      Nothing open here is a result and a good one.  Findings that are open but
@@ -263,7 +265,46 @@
       </tbody>
     </table>
   </div>
+  {% endif %}
+  </div>
+  {% if seal and seal.show %}
+  {# The white space to the right of the grid, dead on any screen wide enough
+     to have some.  Faded on purpose: this is a fact about the scope, not a
+     call to action, and a solid green badge beside a risk matrix reads as a
+     verdict on the risk.
 
+     A sign off a scan wrote says so.  It claims a great deal less than a
+     person's, and this is the last place to blur the two. #}
+  <div class="seal-space">
+    <div class="seal" role="img"
+         aria-label="Every branch in this scope has been signed off">
+      <svg viewBox="0 0 120 120" aria-hidden="true">
+        <circle class="ring" cx="60" cy="60" r="54"/>
+        <circle class="ring thin" cx="60" cy="60" r="46"/>
+        <path class="tick" d="M40 62 l13 13 l27 -31"/>
+      </svg>
+      <div class="seal-text">
+        <strong>Certified</strong>
+        <span>{{ seal.branches }} branch{{ '' if seal.branches == 1 else 'es' }},
+          all signed off</span>
+        {% if seal.by_a_scan %}
+        <span class="mark">signed off by a scan, not a person</span>
+        {% elif not seal.by_a_person %}
+        <span class="mark">{{ seal.automatic }} of them signed off by a scan</span>
+        {% elif seal.who %}
+        <span>by {{ seal.who }}</span>
+        {% endif %}
+        {% if seal.at %}<span>{{ seal.at | dt('%d %B %Y') }}</span>{% endif %}
+        {% if seal.exempt %}
+        <span>{{ seal.exempt }} left out as not applicable</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  </div>
+
+  {% if matrix.placed %}
   {# What is not on the picture, said on the picture.  A matrix holding an
      eighth of the findings, presented without that number, is read as a
      complete picture of the estate. #}
