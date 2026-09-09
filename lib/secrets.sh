@@ -590,6 +590,16 @@ run_trufflehog() {
     args+=(--no-verification)
   fi
 
+  # The size ceiling, on the one thing this engine lets us bound.
+  #
+  # gitleaks takes a per file limit and this does not, but the files that hurt
+  # are archives: a recorded traffic capture is a zip, and a zip is
+  # decompressed before it is read.  Seventy four megabytes on disk became
+  # gigabytes in memory and took a worker to ninety three gigabytes before the
+  # kernel killed it, on a repository of twenty four commits whose whole
+  # history measures thirty six megabytes.  History size was never the signal.
+  local arch; arch=$(cfg_num '.scan.secrets.trufflehog.archive_max_mb' 0)
+  (( arch > 0 )) && args+=(--archive-max-size "${arch}MB")
   local conc; conc=$(cfg_num '.scan.secrets.trufflehog.concurrency' 8)
   args+=(--concurrency "$conc")
 
@@ -647,6 +657,16 @@ run_trufflehog_worktree() {
   else
     args+=(--no-verification)
   fi
+  # The size ceiling, on the one thing this engine lets us bound.
+  #
+  # gitleaks takes a per file limit and this does not, but the files that hurt
+  # are archives: a recorded traffic capture is a zip, and a zip is
+  # decompressed before it is read.  Seventy four megabytes on disk became
+  # gigabytes in memory and took a worker to ninety three gigabytes before the
+  # kernel killed it, on a repository of twenty four commits whose whole
+  # history measures thirty six megabytes.  History size was never the signal.
+  local arch; arch=$(cfg_num '.scan.secrets.trufflehog.archive_max_mb' 0)
+  (( arch > 0 )) && args+=(--archive-max-size "${arch}MB")
   args+=(--concurrency "$(cfg_num '.scan.secrets.trufflehog.concurrency' 8)")
   local rcfile="$GHSCAN_TMPROOT/trufflehog.rc"; : > "$rcfile"
   { trufflehog "${args[@]}" 2>"$GHSCAN_TMPROOT/trufflehog.log" \

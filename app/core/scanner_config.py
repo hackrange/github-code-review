@@ -278,7 +278,19 @@ def build(session, out_dir: Path, orgs=None, repos=None, connection=None,
     # repository.  A repository well under the repository limit can still hold
     # one enormous file, and reading it whole is what took the scanner to 28 GB
     # and got it killed by the kernel.
-    secrets["gitleaks"]["max_target_megabytes"] = _int(session, "secrets.max_file_mb", 25)
+    _file_mb = _int(session, "secrets.max_file_mb", 25)
+    secrets["gitleaks"]["max_target_megabytes"] = _file_mb
+    # The same number to the other engine, because the setting says "the
+    # credential pass" and half a pass obeying it is worse than none: the
+    # number on the screen reads as a limit and was one engine's opinion.
+    #
+    # trufflehog has no general per file ceiling, so this lands on the one
+    # thing it does bound, which happens to be the thing that hurts.  A
+    # recorded traffic capture is a zip, and a zip is decompressed before it is
+    # read: seventy four megabytes on disk becomes gigabytes in memory, and one
+    # repository of them took a worker to ninety three gigabytes and had it
+    # killed by the kernel.
+    secrets.setdefault("trufflehog", {})["archive_max_mb"] = _file_mb
     # Read by both engines rather than one, unlike the code pass equivalent.
     # A list that half the pass ignores is worse than no list: it reads as
     # done and is not.
