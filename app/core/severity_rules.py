@@ -27,6 +27,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import logging
+import re
 
 from app.core.models import Severity, SeverityRule
 
@@ -46,6 +47,8 @@ FIELDS = (
     ("confidence", "Confidence", "How sure the engine was: low, medium or high"),
     ("engine", "Found by", "The engine that reported it, such as semgrep or trivy"),
     ("snippet", "Code", "Text in the line the engine matched"),
+    ("fingerprint", "Fingerprint", "The finding's own fingerprint, which names "
+                                   "one finding and nothing else"),
 )
 
 MATCH_TYPES = tuple(name for name, _label, _help in FIELDS)
@@ -58,9 +61,16 @@ FIELD_LABELS = {name: label for name, label, _help in FIELDS}
 # A line of code ranks with a credential value: both name a particular thing
 # somebody wrote.  An engine names a third of the database and confidence names
 # most of it, so both sit at the bottom with kind and state.
-FIELD_RANK = {"rule": 5, "value": 4, "author": 4, "snippet": 4, "cwe": 3,
-              "exposure": 2, "engine": 2, "kind": 1, "state": 1,
-              "confidence": 1}
+# A fingerprint names one finding and no other, so it is the most specific
+# thing anybody can write and it outranks even a rule name.
+FIELD_RANK = {"fingerprint": 6, "rule": 5, "value": 4, "author": 4,
+              "snippet": 4, "cwe": 3, "exposure": 2, "engine": 2, "kind": 1,
+              "state": 1, "confidence": 1}
+
+# What a fingerprint looks like, with the kind in front or without it.  Checked
+# when a rule is saved: a fingerprint is copied off a page, and a value that
+# could never match one is a typo rather than an unusual choice.
+FINGERPRINT = re.compile(r"(?:[a-z]+:)?[0-9a-f]{8,64}$")
 
 # The values that are not free text.  A typo in one of these is a rule that
 # silently never fires, which is worse than an error message.
@@ -135,6 +145,13 @@ def _clean_condition(field: str, value: str) -> tuple:
             FIELD_LABELS[name] for name in MATCH_TYPES)
     if not value:
         return None, "Give %s something to match." % FIELD_LABELS[field]
+    if field == "fingerprint" and not FINGERPRINT.match(value.lower()):
+        # The same reasoning as the list below.  Somebody typing a rule name
+        # or a file path in here would get a rule that never fires and no
+        # word about why, which is the failure this module exists to avoid.
+        return None, ("A fingerprint is the one printed on the finding, a "
+                      "kind and then hex. Copy it from the finding rather "
+                      "than typing it.")
     allowed = ALLOWED.get(field)
     if allowed and value.lower() not in allowed:
         # Named rather than hinted at.  A rule that quietly never fires is
@@ -301,6 +318,8 @@ def _field_of(finding, field: str) -> str:
         return str(getattr(finding, "engines", "") or "").strip().lower()
     if field == "snippet":
         return str(getattr(finding, "snippet", "") or "").strip().lower()
+    if field == "fingerprint":
+        return str(getattr(finding, "fingerprint", "") or "").strip().lower()
     if field in ("kind", "state"):
         raw = getattr(finding, field, "")
         return str(getattr(raw, "value", raw) or "").strip().lower()
@@ -358,6 +377,17 @@ def _one_matches(field: str, pattern: str, finding) -> bool:
         if not actual:
             return False
         return pattern in actual
+    if field == "fingerprint":
+        # Written with the kind in front or without it.  The page prints
+        # code:c9379 and so on, and somebody copying it takes either the whole
+        # thing or the hash on the end, and both name the same finding.
+        actual = _field_of(finding, "fingerprint")
+        if not actual:
+            return False
+        if "*" in pattern or "?" in pattern:
+            return fnmatch.fnmatch(actual, pattern)
+        bare = pattern.split(":", 1)[-1]
+        return actual == pattern or actual.split(":", 1)[-1] == bare
     if field == "author":
         for actual in _author_of(finding):
             if not actual:
@@ -466,6 +496,17 @@ def _sql_for(field: str, pattern: str):
                   + literal(","))
         return listed.like("%,{},%".format(
             pattern.replace("*", "%").replace("?", "_") if wild else pattern))
+    if field == "fingerprint":
+        # The same reading as `_one_matches`: the whole thing, or the hash on
+        # the end of it.  endswith rather than a string built by hand, so the
+        # value is escaped rather than read as a pattern.
+        actual = func.lower(func.coalesce(Finding.fingerprint, ""))
+        if wild:
+            return (actual != "") & actual.like(
+                pattern.replace("*", "%").replace("?", "_"))
+        bare = pattern.split(":", 1)[-1]
+        return or_(actual == pattern,
+                   actual.endswith(":" + bare, autoescape=True))
     if field == "snippet":
         # Contains and nothing else, matching `_one_matches` above.  The two
         # have to agree or the number beside the rule is not the rule.

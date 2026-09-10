@@ -6,6 +6,15 @@ moved.
 
 ## 2026-09-10
 
+**A custom severity can name one finding.**  Every condition on a severity
+rule described a group: the rule that fired, the engine, the confidence, the
+CWE.  Fifteen findings on one rule shared all four, so grading the one somebody
+had actually read meant grading the other fourteen with it.  Fingerprint is now
+a condition like the rest, written with the kind in front or as the hash on its
+own, and it beats every broader rule where both match.  A value that could
+never be a fingerprint is refused when the rule is saved rather than accepted
+as a rule that never fires.
+
 **A token nobody could present is no longer reported as a credential.**  A JSON
 web token pasted into a fixture, a test or a README usually keeps its real
 header and its real claims and has a word where the signature goes.  Nothing in

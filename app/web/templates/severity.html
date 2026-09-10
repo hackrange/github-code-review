@@ -19,7 +19,9 @@
       combination: a credential that only ever existed in git history is not
       the same as one that is in the code today. Where two rules both match, the
       narrower one wins, and a rule naming three things is narrower than one
-      naming a single thing. The engine's own grade is kept beside the new one
+      naming a single thing. To grade one finding and nothing else, match on
+      the fingerprint printed at the bottom of it, which is narrower than any
+      of them. The engine's own grade is kept beside the new one
       on every finding it changes. Changes apply from the next scan.</div>
   </div>
 </div>
