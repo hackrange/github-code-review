@@ -26,6 +26,11 @@ log = logging.getLogger("gcr.api_tokens")
 SCOPES = {
     "review": "Send code to be looked at",
     "rules": "Read the triage rules and exclusions",
+    # The files a scan wrote, whole.  Its own scope rather than a corner of
+    # another, so a token handed to an editor cannot reach them by accident:
+    # a review token sends code and gets an opinion back, and this one takes
+    # away every finding on the estate in a single file.
+    "reports": "Download the report files a scan produced",
 }
 
 PREFIX = "gcr_"

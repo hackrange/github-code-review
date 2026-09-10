@@ -92,6 +92,14 @@ def caller_for(scope: str):
     return resolve
 
 
+def _iso(stamp: float) -> str:
+    """A file's timestamp, in the one format everything downstream can read."""
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(stamp, timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
 def _safe_path(raw: str) -> str:
     """A path from a request, made safe to write under a directory we chose.
 
@@ -110,6 +118,110 @@ def _safe_path(raw: str) -> str:
     if len(parts) > 40:
         raise HTTPException(status_code=400, detail="That path is unreasonably deep.")
     return "/".join(parts)
+
+
+# The files a scan produced, whole.
+#
+# Every other endpoint here takes something the caller already has and gives an
+# opinion about it.  This one hands over the estate: vulnerabilities.json is
+# every finding in every organization on the install, and an SBOM names every
+# repository and what each is built from.
+#
+# So it is gated three times over, and the layers are deliberately different
+# kinds of check rather than three spellings of one.  The token must carry the
+# reports scope, which no editor token has.  The person behind it must see
+# everything, because a token is its owner with less of them and a scoped
+# reader must not get by a file what the screen refuses them.  And the name has
+# to be one of a fixed list, so no request decides what gets read off disk.
+REPORT_FILES = {
+    "vulnerabilities.json": "application/json",
+    "vulnerabilities.csv": "text/csv",
+    "vex.openvex.json": "application/json",
+    "vex.cyclonedx.json": "application/json",
+    "sbom.cdx.json": "application/json",
+    "sbom.spdx.json": "application/json",
+    "sbom-summary.json": "application/json",
+}
+
+
+def _report_files(directory):
+    """-> {name: media type} for everything a scan actually wrote.
+
+    The seven above, plus one per repository under the SBOM directory, because
+    "give me the SBOM for this repository" is the question somebody answering a
+    customer actually has and the combined file is the wrong shape for it.
+
+    Built from the directory rather than fixed, so a per repository name never
+    has to be guessed at, and every name is still one this function put in the
+    set: a request chooses from the list, it does not describe a path.
+    """
+    from app.core.reports import SBOM_DIRECTORY
+
+    known = dict(REPORT_FILES)
+    nested = directory / SBOM_DIRECTORY
+    if nested.is_dir():
+        for child in nested.iterdir():
+            if child.is_file() and child.suffix == ".json":
+                known["%s/%s" % (SBOM_DIRECTORY, child.name)] = "application/json"
+    return known
+
+
+@router.get("/reports")
+def list_reports(caller=Depends(caller_for("reports"))):
+    """What is there to fetch, and how old each one is."""
+    from app.core import rbac
+    from app.core import reports as reports_mod
+
+    if not rbac.sees_everything(caller.user):
+        raise HTTPException(status_code=403,
+                            detail="These files cover every organization on "
+                                   "this install, so they need an account "
+                                   "that sees all of it.")
+    with session_scope() as db:
+        directory = reports_mod.output_dir(db)
+
+    out = []
+    for name in sorted(_report_files(directory)):
+        path = directory / name
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        out.append({"name": name, "bytes": stat.st_size,
+                    "written_at": _iso(stat.st_mtime)})
+    return {"reports": out}
+
+
+@router.get("/reports/{name:path}")
+def download_one_report(name: str, caller=Depends(caller_for("reports"))):
+    """One report file, as it is on disk."""
+    from fastapi.responses import FileResponse
+
+    from app.core import rbac
+    from app.core import reports as reports_mod
+
+    if not rbac.sees_everything(caller.user):
+        raise HTTPException(status_code=403,
+                            detail="These files cover every organization on "
+                                   "this install, so they need an account "
+                                   "that sees all of it.")
+    # Matched against the list rather than cleaned up.  A name that is not on
+    # it is refused whatever it looks like, so nothing here has to reason about
+    # dots and slashes.
+    with session_scope() as db:
+        directory = reports_mod.output_dir(db)
+
+    media = _report_files(directory).get(name)
+    if media is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No such report.  Ask /api/v1/reports for the list.")
+    path = directory / name
+    if not path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="That report has not been written yet.  It appears after "
+                   "the first scan that finishes.")
+    return FileResponse(str(path), media_type=media, filename=name)
 
 
 @router.get("/ping")
