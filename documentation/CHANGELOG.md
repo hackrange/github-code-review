@@ -6,6 +6,17 @@ moved.
 
 ## 2026-09-10
 
+**The trends page says why a scope is not certified, and its branch box names
+every branch.**  The box was built out of findings, so a branch with nothing
+open never appeared in it: a repository of three branches offered one, and "All
+branches" read as that one branch.  The seal beside the risk matrix counts every
+branch the last scan walked, so it withheld itself over branches the reader
+could not see, and the missing seal looked like a fault rather than an answer.
+The box now offers every branch that was walked, and where a scope is part way
+signed off the space beside the grid says so: one of three, and a seal needs all
+of them.  The seal itself is unchanged, because a green mark meaning "mostly" is
+worth less than no mark at all.
+
 **A custom severity can name one finding.**  Every condition on a severity
 rule described a group: the rule that fired, the engine, the confidence, the
 CWE.  Fifteen findings on one rule shared all four, so grading the one somebody

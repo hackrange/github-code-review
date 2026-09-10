@@ -637,7 +637,14 @@ def scope_seal(session, repos, certifications=None, exemptions=None,
             newest, who = when, row.certified_by or ""
 
     if signed != certifiable:
-        return {"show": False}
+        # The counts come back even though the seal does not.  A scope that is
+        # nearly signed off and a scope nobody has touched both showed nothing
+        # here, and the difference is the whole question the reader has: the
+        # branch box on this page can only offer branches that carry findings,
+        # so a repository whose other branches are clean looks like a
+        # repository of one branch and the missing seal reads as a bug.
+        return {"show": False, "signed": signed, "certifiable": certifiable,
+                "exempt": len(exempt)}
 
     return {
         "show": True,

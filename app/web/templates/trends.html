@@ -301,6 +301,23 @@
       </div>
     </div>
   </div>
+  {% elif seal and seal.certifiable and seal.signed %}
+  {# Why there is no seal, where somebody would otherwise have to guess.  A
+     scope one branch short of a seal and a scope nobody has read showed the
+     same empty space, and the branch box on this page can only name branches
+     that carry findings, so a repository whose other branches are clean looks
+     like a repository of one. #}
+  <div class="seal-space">
+    <div class="seal-text faint small">
+      <strong>Not certified</strong>
+      <span>{{ seal.signed }} of {{ seal.certifiable }} branch{{ '' if seal.certifiable == 1 else 'es' }}
+        signed off</span>
+      <span>a seal needs all of them</span>
+      {% if seal.exempt %}
+      <span>{{ seal.exempt }} left out as not applicable</span>
+      {% endif %}
+    </div>
+  </div>
   {% endif %}
   </div>
 

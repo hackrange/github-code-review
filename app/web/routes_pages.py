@@ -224,6 +224,36 @@ def _expiry_window(days: int) -> dict:
     }
 
 
+def _walked_branches(db, user, repository: str) -> set:
+    """Every branch the last scan walked in this repository.
+
+    The boxes on this page are built out of findings, which is right for a
+    chart and wrong for the word "all": a branch with nothing open has no
+    findings to name it, so a repository of three branches offered one and
+    "All branches" read as that one.  The seal beside the grid counts every
+    branch that was walked, so the two disagreed on screen and the missing
+    seal looked like a fault.
+
+    Only for a repository.  At the estate level this is thousands of names in
+    a box nobody can use, and the question it answers is not being asked.
+    """
+    from app.core.models import Repository
+
+    if not repository:
+        return set()
+    rows = (rbac.visible_repositories(db, user)
+            .filter(Repository.full_name == repository)
+            .with_entities(Repository.branch_names).all())
+    out = set()
+    for (names,) in rows:
+        try:
+            walked = json.loads(names or "[]")
+        except (TypeError, ValueError):
+            walked = []
+        out.update(name for name in walked if name)
+    return out
+
+
 def _labels(db) -> list:
     """The sensitivity labels this install uses."""
     from app.core import settings_store as _store
@@ -713,7 +743,8 @@ def trends_page(request: Request, user: User = Depends(current_user)):
             set(options.get("branches") or [])
             | set(branch_scope.names(report_data._scoped(
                 rbac.visible_findings(db, user), organization, repository,
-                "", connection))))
+                "", connection)))
+            | _walked_branches(db, user, repository))
 
         # Where the recorded history starts.  Everything before it was worked
         # out from when findings were first seen and resolved, and its
