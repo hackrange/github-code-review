@@ -41,6 +41,10 @@ CSV_COLUMNS = [
     "author", "author_login", "committed_at",
     "commit", "url",
     "first_found", "last_found",
+    # Added after the rest, so a tool reading by position still finds every
+    # column where it was.  What the finding is part of, the same five answers
+    # the JSON carries in its asset block.
+    "application", "business_owner", "technical_owner", "holds", "visibility",
 ]
 
 SEVERITY_ORDER = {
@@ -286,8 +290,13 @@ def as_dict(finding: Finding, facts: dict = None) -> dict:
     return record
 
 
-def as_row(finding: Finding) -> dict:
-    """One finding, flattened for the CSV."""
+def as_row(finding: Finding, facts: dict = None) -> dict:
+    """One finding, flattened for the CSV.
+
+    `facts` is what `repo_facts` returned for this set of findings, the same as
+    for `as_dict`.  Without it the five repository columns are empty.
+    """
+    asset = (facts or {}).get(finding.repo_id) or _nothing_known()
     return {
         "vuln_id": finding.vuln_id or "",
         "finding_id": finding.fingerprint,
@@ -338,6 +347,14 @@ def as_row(finding: Finding) -> dict:
         "url": finding.url or "",
         "first_found": _iso(finding.first_found_at),
         "last_found": _iso(finding.last_found_at),
+        "application": asset["application"],
+        "business_owner": asset["business_owner"],
+        "technical_owner": asset["technical_owner"],
+        # Pipe delimited, the way the tagging spreadsheet writes it.  A comma
+        # inside a cell is quoted correctly and then read back by eye as two
+        # columns, and somebody always does that at least once.
+        "holds": " | ".join(asset["holds"]),
+        "visibility": asset["visibility"],
     }
 
 
@@ -565,7 +582,7 @@ def write_reports(session, reports_dir: Path = None) -> dict:
                             extrasaction="ignore", lineterminator="\n")
     writer.writeheader()
     for finding in findings:
-        writer.writerow(as_row(finding))
+        writer.writerow(as_row(finding, facts))
     _write_atomic(reports_dir / "vulnerabilities.csv", buffer.getvalue())
 
     # The same decisions, in the format a customer's procurement team reads.

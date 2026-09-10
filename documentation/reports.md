@@ -99,6 +99,13 @@ Cleartext credentials are never written. Only the mask and a fingerprint.
 Same findings, flattened, with a fixed column order so a tool reading it does
 not have to guess. Columns it does not need for a given kind are simply empty.
 
+The five repository answers are there too, as `application`, `business_owner`,
+`technical_owner`, `holds` and `visibility`. They sit at the end, after
+`last_found`, so every column a tool already reads is still in the position it
+was. `holds` is pipe delimited rather than comma delimited, the same as the
+tagging spreadsheet writes it, because a comma inside a quoted cell gets read
+back by eye as two columns.
+
 ## Exceptions
 
 An approved exception removes the finding from both files. Not hidden, gone.

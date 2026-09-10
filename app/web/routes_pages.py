@@ -1222,8 +1222,9 @@ def export_findings(request: Request, user: User = Depends(current_user)):
         trimmed = len(rows) > MAX_EXPORT_ROWS
         rows = rows[:MAX_EXPORT_ROWS]
 
+        facts = repo_facts(db, rows)
+
         if wants == "json":
-            facts = repo_facts(db, rows)
             body = json_module.dumps({
                 "generator": {"name": APP_NAME, "version": VERSION},
                 "generated_at": datetime.now(timezone.utc).strftime(
@@ -1241,7 +1242,7 @@ def export_findings(request: Request, user: User = Depends(current_user)):
                                            lineterminator="\n")
             writer.writeheader()
             for row in rows:
-                writer.writerow(as_row(row))
+                writer.writerow(as_row(row, facts))
             body = buffer.getvalue()
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
