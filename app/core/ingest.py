@@ -409,6 +409,49 @@ def _reach_map(session) -> dict:
     return {name: count for name, count in rows if name}
 
 
+def _drop_certifications_for_gone_branches(session, repo, full_name,
+                                           walked: set) -> int:
+    """Take away the sign offs on branches this scan could not find.
+
+    A branch that has been deleted is not a branch anybody can vouch for, and
+    a green badge against one is a claim about code that is not there.  If it
+    ever comes back it comes back unreviewed, which is the right starting
+    point: whoever recreated it did not read it.
+
+    Only ever on the evidence of a scan that looked.  This runs where a
+    repository has just reported the branches it walked, so a name missing
+    from that list is missing because something went and checked, not because
+    a run was cut short or a repository was skipped.  Everything else in this
+    file holds findings open on exactly that distinction, and deleting a row
+    is far less forgiving than holding one open, so the bar is the same and
+    the consequence of getting it wrong is worse.
+
+    The default branch counts as walked whatever it is called, because a
+    certification written against "" means whichever branch the repository
+    deploys from.
+    """
+    from app.core.models import Certification
+
+    if not walked:
+        return 0
+    default = (getattr(repo, "default_branch", "") or "")
+    rows = (session.query(Certification)
+            .filter(Certification.repository == full_name).all())
+    dropped = 0
+    for row in rows:
+        named = (row.branch or default)
+        if not named or named in walked:
+            continue
+        log.warning("the sign off on %s@%s is being removed: this scan walked "
+                    "%d branch(es) and that was not one of them",
+                    full_name, named, len(walked))
+        session.delete(row)
+        dropped += 1
+    if dropped:
+        session.flush()
+    return dropped
+
+
 def _risk_context(repo, connection, reach: dict = None) -> dict:
     """What the repository holds, for the impact half of the assessment.
 
@@ -554,6 +597,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                    if str(name).strip()]
         if scanned:
             repo.branch_names = json.dumps(sorted(set(scanned))[:MAX_BRANCH_NAMES])
+            counts["certifications_dropped"] = (
+                counts.get("certifications_dropped", 0)
+                + _drop_certifications_for_gone_branches(
+                    session, repo, full_name, set(scanned)))
 
         # How far the credential engines walked here.  Only ever moved by a
         # run that actually walked something: a repository skipped this time

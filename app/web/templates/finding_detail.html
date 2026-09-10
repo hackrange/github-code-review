@@ -753,6 +753,25 @@
       found nothing to read there, not by a person. Signing off here replaces
       it with your own review, and a scan never writes over that.</p>
     {% endif %}
+    {# What is open on this branch right now.
+       The form used to ask somebody to vouch for a branch without saying what
+       was on it.  One was signed off twelve minutes after a medium advisory
+       landed, by a reader who had no way of knowing from this page.  The
+       badge was right and the person was not informed, which is worse than a
+       wrong badge. #}
+    {% if covering and covering.total %}
+    <p class="small">Signing this off covers
+      <strong>{{ covering.total }}</strong> open finding{{ '' if covering.total == 1 else 's' }}
+      on this branch{% if covering.critical or covering.high or covering.medium %},
+      including
+      {%- if covering.critical %} {{ covering.critical }} critical{% endif %}
+      {%- if covering.high %}{{ ',' if covering.critical }} {{ covering.high }} high{% endif %}
+      {%- if covering.medium %}{{ ',' if covering.critical or covering.high }} {{ covering.medium }} medium{% endif %}
+      {%- endif %}.
+      <a href="{{ base }}/findings?repo={{ f.repository | urlencode }}{% if f.branch %}&branch={{ f.branch | urlencode }}{% endif %}&state=open">Read them first</a>.</p>
+    {% elif covering %}
+    <p class="faint small">Nothing is open on this branch right now.</p>
+    {% endif %}
     <p class="faint small">A record that somebody in security read this code and
       found nothing they considered unsafe. It covers
       <strong>{{ f.repository }}</strong> on

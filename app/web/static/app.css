@@ -212,6 +212,11 @@ a.stat:hover .l { color: var(--text); }
 .stat.warn .n { color: var(--warn); }
 .stat.ok .n   { color: var(--ok); }
 
+/* A branch name in a certification row.  Long ones carry slashes and dashes
+   and are the whole identity of the row, so they wrap rather than being cut
+   off: a clipped name reads as a branch that has gone. */
+.branch-name { word-break: break-word; max-width: 22rem; }
+
 /* Saying a branch is not one anybody will sign off.  Set apart from the sign
    off above it by a line and some space, because the two are opposite claims
    and the cost of reading one as the other is somebody believing a branch was

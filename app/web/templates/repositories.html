@@ -32,8 +32,19 @@
       {%- endif %}{{ ' &middot; ' | safe if not loop.last }}
     {%- endfor %}
   </div>
+  {# A search over the sign offs, alongside the state links rather than
+     instead of them.  The state narrows which kind you are looking at and
+     this narrows which repository, and on an estate with three thousand of
+     them neither is much use without the other. #}
+  <div class="field" style="max-width:420px;margin:0 1rem .6rem">
+    <label for="cert-search">Search</label>
+    <input type="text" id="cert-search" data-filter="cert-table" autocomplete="off"
+           placeholder="repository, branch or who signed it off">
+    <div class="small faint" data-filter-count="cert-table"></div>
+  </div>
+  <div class="empty" data-filter-empty="cert-table" hidden>Nothing matches that.</div>
   <div class="table-scroll">
-    <table class="small">
+    <table id="cert-table" class="small">
       <thead>
         <tr><th>Repository</th><th>Branch</th><th>State</th><th>Certified</th>
           <th>Expires</th><th>By</th><th>Why</th></tr>
@@ -42,7 +53,11 @@
         {% for row in certified %}
         <tr>
           <td class="mono">{{ row.repository }}</td>
-          <td>{{ row.branch }}</td>
+          {# The branch name, in full and allowed to wrap.  A name like
+             Feature/DIGI-1734-add-notification-to-approver in an unpadded
+             cell reads as an empty one, which looks like a branch that has
+             gone rather than one with a long name. #}
+          <td class="mono small branch-name">{{ row.branch or 'the default branch' }}</td>
           <td>
             {% if row.state == 'active' %}<span class="badge ok">current</span>
             {% elif row.state == 'stale' %}<span class="badge medium"
@@ -55,6 +70,16 @@
             {% elif row.state == 'not_applicable' %}<span class="badge unknown"
               title="{{ row.why }}">not applicable</span>
             {% else %}<span class="faint">{{ row.state }}</span>{% endif %}
+            {# Somewhere to go from an amber badge.
+               The state says the branch has moved since somebody signed it
+               off.  The question that follows is always the same, what
+               arrived since, and until now the only way to answer it was to
+               go and build the filter by hand. #}
+            {% if row.state == 'stale' %}
+            <a class="btn sm" style="margin-left:.4rem"
+               href="{{ base }}/findings?repo={{ row.repository | urlencode }}{% if row.branch %}&branch={{ row.branch | urlencode }}{% endif %}&state=open&since=30"
+               title="The findings on this branch, newest first, so the review can be redone or withdrawn">Review changes</a>
+            {% endif %}
           </td>
           <td class="nowrap">{{ row.at | dt('%d %b %Y') if row.at }}</td>
           <td class="nowrap">{{ row.expires | dt('%d %b %Y') if row.expires }}</td>

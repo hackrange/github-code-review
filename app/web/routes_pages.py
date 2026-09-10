@@ -1307,6 +1307,22 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
         # separately because it is a separate claim: it does not certify the
         # branch, it takes it out of the count of branches still owed one.
         exemption = certification_store.exemption(db, row.repository, row.branch)
+        # What signing this branch off would be covering.
+        #
+        # The form asked somebody to vouch for a branch without telling them
+        # what was open on it.  One was signed off twelve minutes after a
+        # medium advisory landed on it, by somebody who had no way of knowing
+        # from the page in front of them.  The badge was right and the reader
+        # was not informed, which is a worse failure than a wrong badge.
+        _branch_now = (rbac.visible_findings(db, user)
+                       .filter(Finding.state == FindingState.OPEN)
+                       .filter(Finding.repository == row.repository))
+        if row.branch:
+            _branch_now = _branch_now.filter(Finding.branch == row.branch)
+        covering = {"total": _branch_now.count()}
+        for _sev in (Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM):
+            covering[_sev.value] = _branch_now.filter(
+                Finding.severity == _sev).count()
 
         about = repo_context.for_repository(db, row.repository)
         risk_context = {"sensitivity": about.get("sensitivity"),
@@ -1328,6 +1344,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        on_branches=on_branches,
                        certification=certification,
                        exemption=exemption,
+                       covering=covering,
                        can_certify=rbac.can(user, "repo.certify"),
                        can_exempt=rbac.can(user, "repo.certify.exempt"),
                        # Both halves of what the grade is standing in for.
