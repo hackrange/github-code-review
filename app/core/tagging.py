@@ -42,7 +42,11 @@ def effective(session, repo) -> dict:
         source = connection_store.by_name(session, repo.connection)
     if source is None:
         source = _connection_for_org(session, repo.organization)
+    return _applies(repo, source)
 
+
+def _applies(repo, source) -> dict:
+    """The fallback itself, once the connection to fall back to is in hand."""
     out = {}
     for field in FIELDS:
         own = (getattr(repo, field, "") or "").strip()
@@ -52,6 +56,35 @@ def effective(session, repo) -> dict:
         inherited = (getattr(source, field, "") or "").strip() if source else ""
         out[field] = {"value": inherited,
                       "from": "connection" if inherited else "nobody"}
+    return out
+
+
+def effective_many(session, repos) -> dict:
+    """The same answers for a list of repositories, keyed by repository id.
+
+    `effective` asks the database for a connection every time it is called,
+    which is fine for the one repository a page is showing.  A report covering
+    an estate would run that query a few hundred times to read a string
+    somebody typed once, so the connections are read here in a single go and
+    the fallback is done from memory.
+    """
+    from app.core.models import Connection
+
+    by_name, by_org = {}, {}
+    for row in session.query(Connection).all():
+        by_name[(row.name or "").strip()] = row
+        orgs = (row.scope_orgs() if hasattr(row, "scope_orgs")
+                else [o.strip() for o in (row.organizations or "").split(",")])
+        for org in orgs:
+            # First match wins, the same as _connection_for_org does.
+            by_org.setdefault(org, row)
+
+    out = {}
+    for repo in repos:
+        source = by_name.get((getattr(repo, "connection", "") or "").strip())
+        if source is None:
+            source = by_org.get(getattr(repo, "organization", "") or "")
+        out[repo.id] = _applies(repo, source)
     return out
 
 

@@ -104,8 +104,86 @@ def reportable(session) -> list:
     return out
 
 
-def as_dict(finding: Finding) -> dict:
-    """One finding, the way it goes into the JSON."""
+# The four tagged answers, by the name they carry in the database and the name
+# they go out under.  The names outside are the ones the finding page prints,
+# because a person reading the file and a person reading the page are usually
+# the same person having the same argument.
+ASSET_FIELDS = {
+    "application_name": "application",
+    "application_owner": "business_owner",
+    "technical_owner": "technical_owner",
+    "sensitivity": "holds",
+}
+
+
+def _nothing_known() -> dict:
+    """What a finding carries when its repository row has gone.
+
+    The keys are present and empty rather than absent, so nothing reading the
+    file has to tell a missing question from an unanswered one.
+    """
+    return {"application": "", "business_owner": "", "technical_owner": "",
+            "holds": [], "visibility": "", "inherited": []}
+
+
+def repo_facts(session, findings) -> dict:
+    """What each finding's repository is, keyed by repository id.
+
+    The same four answers the finding page shows beside a finding, plus whether
+    the repository is public.  A hardcoded password is an incident in the
+    payment gateway and a chore in a brochure site, and nothing in the finding
+    itself says which, so a tool reading this file was making that call with
+    less than the person on the page had.
+
+    Read once for the whole report rather than per finding: an estate puts
+    thousands of findings in a few hundred repositories.
+    """
+    from app.core import tagging
+    from app.core.models import Repository
+
+    ids = sorted({f.repo_id for f in findings if f.repo_id})
+    if not ids:
+        return {}
+
+    rows = []
+    # In batches, because an estate can name more repositories than a database
+    # will take in one IN clause.
+    for start in range(0, len(ids), 500):
+        rows.extend(session.query(Repository)
+                    .filter(Repository.id.in_(ids[start:start + 500])).all())
+
+    applies = tagging.effective_many(session, rows)
+
+    out = {}
+    for row in rows:
+        said = applies.get(row.id) or {}
+        fact = _nothing_known()
+        fact["visibility"] = row.visibility or ""
+        for field, name in ASSET_FIELDS.items():
+            value = (said.get(field) or {}).get("value", "")
+            if name == "holds":
+                # A list, not the comma separated string somebody typed, so a
+                # reader can match on one label without splitting it first.
+                fact[name] = [one.strip() for one in value.split(",") if one.strip()]
+            else:
+                fact[name] = value
+        # Which of the four came from the account rather than this repository.
+        # An empty value already says nobody has said anything; without this a
+        # reader cannot tell an answer given about this repository from one
+        # inherited by it along with two hundred others.
+        fact["inherited"] = sorted(
+            name for field, name in ASSET_FIELDS.items()
+            if (said.get(field) or {}).get("from") == "connection")
+        out[row.id] = fact
+    return out
+
+
+def as_dict(finding: Finding, facts: dict = None) -> dict:
+    """One finding, the way it goes into the JSON.
+
+    `facts` is what `repo_facts` returned for this set of findings.  Without it
+    the repository half of the record is empty rather than absent.
+    """
     branches = []
     try:
         branches = json.loads(finding.branches or "[]")
@@ -161,6 +239,8 @@ def as_dict(finding: Finding) -> dict:
             "likelihood": finding.likelihood or "",
             "likelihood_reason": finding.likelihood_reason or "",
         },
+        # What the code is part of, who answers for it, and what it holds.
+        "asset": (facts or {}).get(finding.repo_id) or _nothing_known(),
     }
 
     if _enum(finding.kind) == "credential":
@@ -456,6 +536,7 @@ def write_reports(session, reports_dir: Path = None) -> dict:
     """
     reports_dir = Path(reports_dir) if reports_dir else output_dir(session)
     findings = reportable(session)
+    facts = repo_facts(session, findings)
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     counts = {}
@@ -474,7 +555,7 @@ def write_reports(session, reports_dir: Path = None) -> dict:
             "organizations": sorted({f.organization for f in findings if f.organization}),
             "repositories": len({f.repository for f in findings if f.repository}),
         },
-        "findings": [as_dict(f) for f in findings],
+        "findings": [as_dict(f, facts) for f in findings],
     }
     _write_atomic(reports_dir / "vulnerabilities.json",
                   json.dumps(document, indent=2) + "\n")

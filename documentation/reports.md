@@ -45,6 +45,14 @@ either, which matters when something is polling them on a timer.
     "login": "someperson",
     "committed_at": "2023-04-11T16:01:17Z"
   },
+  "asset": {
+    "application": "Payment gateway",
+    "business_owner": "dana@example.com",
+    "technical_owner": "sam@example.com",
+    "holds": ["PCI", "Customer Data"],
+    "visibility": "private",
+    "inherited": ["business_owner"]
+  },
   "first_found": "2026-06-02T02:17:44Z",
   "last_found": "2026-08-26T02:17:09Z"
 }
@@ -56,6 +64,23 @@ drops out of both files.
 
 Findings are matched between scans by `finding_id`, so a credential keeps its
 history even if the file it sits in gets renamed.
+
+## What the finding is part of
+
+Every finding carries an `asset` block: the application, its business owner,
+its technical owner, what the repository holds, and whether it is public. The
+same four answers the finding page shows, resolved the same way, so anything
+set on the repository wins and anything left empty falls back to the
+connection.
+
+`holds` is a list, so a label can be matched without splitting a string first.
+`inherited` names the answers that came from the connection rather than from
+this repository, because an answer given about one repository and an answer
+given about the account it sits in are not the same claim. An empty value
+means nobody has said.
+
+A finding whose repository row has since been deleted carries the block with
+everything empty, never a missing key.
 
 ## The three kinds
 

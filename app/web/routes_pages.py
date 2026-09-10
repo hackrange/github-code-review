@@ -1208,7 +1208,7 @@ def export_findings(request: Request, user: User = Depends(current_user)):
 
     from fastapi.responses import StreamingResponse
 
-    from app.core.reports import CSV_COLUMNS, as_dict, as_row
+    from app.core.reports import CSV_COLUMNS, as_dict, as_row, repo_facts
 
     rbac.require(user, "findings.export")
 
@@ -1223,6 +1223,7 @@ def export_findings(request: Request, user: User = Depends(current_user)):
         rows = rows[:MAX_EXPORT_ROWS]
 
         if wants == "json":
+            facts = repo_facts(db, rows)
             body = json_module.dumps({
                 "generator": {"name": APP_NAME, "version": VERSION},
                 "generated_at": datetime.now(timezone.utc).strftime(
@@ -1231,7 +1232,7 @@ def export_findings(request: Request, user: User = Depends(current_user)):
                             if name not in {"format", "offset"}},
                 "count": len(rows),
                 "truncated": trimmed,
-                "findings": [as_dict(row) for row in rows],
+                "findings": [as_dict(row, facts) for row in rows],
             }, indent=2) + "\n"
         else:
             buffer = io_module.StringIO()
