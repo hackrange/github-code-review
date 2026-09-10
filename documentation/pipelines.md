@@ -41,6 +41,85 @@ docker run --rm -v "$PWD:/src:ro" \
 Mount read only.  Nothing needs to write to your checkout, and a scanner that
 cannot modify what it is looking at is one less thing to think about.
 
+## Getting the scanner onto the build agent
+
+That command assumes `github-code-review:1.0.1` is already on the machine
+running the build.  On your own laptop it will be, because that is where you
+built it.  On a Jenkins agent it will not, and this is the step every recipe
+below quietly skips.
+
+Two things are worth saying plainly before the options.
+
+**The build agent never talks to the Git Code Review server.**  A review reads
+a directory on disk and runs the engines against it.  No token, no
+configuration, no network call to the server, nothing sent anywhere.  That is
+why it works on an agent that has never heard of your install, and it is also
+why a finding in a pipeline does not appear on the dashboard: nothing sent it
+there.  The dashboard shows what the server's own scans found.  The two are
+separate records of the same code, on purpose.
+
+**The agent does not clone this repository.**  It clones the application it is
+building, which it already does.  What it needs is the scanner, and that is a
+thing you put on the agent once rather than something the build fetches.
+
+### Option one: a registry the agent already pulls from
+
+The one to pick if your agents run Docker and you have a registry.
+
+```bash
+# On the machine where you build it
+docker tag github-code-review:1.0.1 registry.example.com/security/ghscan:1.0.1
+docker push registry.example.com/security/ghscan:1.0.1
+```
+
+Then in the pipeline, use that name instead:
+
+```bash
+docker run --rm -v "$WORKSPACE:/src:ro" \
+  --entrypoint /opt/gcr/bin/ghscan \
+  registry.example.com/security/ghscan:1.0.1 \
+  review /src --diff origin/main --fail-on secrets
+```
+
+The engines, their versions and the rule packs travel together as one pinned
+artifact, so every pipeline is running exactly what you tested.  Upgrading the
+scanner everywhere is one push and one tag change.
+
+Pin the version.  A pipeline on `:latest` changes what it enforces on a day
+nobody chose, and the first anybody knows is a build that fails on code that
+did not change.
+
+### Option two: install it on the agent
+
+The one to pick if your agents have no Docker socket, or you would rather not
+run containers inside builds.
+
+```bash
+# On each agent, once
+sudo contrib/install-deps.sh          # gitleaks, trufflehog, semgrep, trivy, syft, grype
+sudo mkdir -p /opt/ghscan
+sudo cp -r bin lib /opt/ghscan/
+```
+
+`ghscan` finds everything relative to its own location, so `bin/` and `lib/`
+sitting beside each other under one directory is a complete install.  The
+pipeline then calls it directly:
+
+```bash
+/opt/ghscan/bin/ghscan review "$WORKSPACE" --diff origin/main --fail-on secrets
+```
+
+The cost is that engine versions are now yours to keep level across every
+agent.  Two agents on different gitleaks versions will disagree about the same
+commit, and that argument is hard to have.
+
+### Option three: build the image during the pipeline
+
+Do not.  It couples every application build to this repository, rebuilds a
+scanner that did not change, and adds minutes to a job that should take
+seconds.  It is listed only so that ruling it out is a decision rather than an
+oversight.
+
 ## Three things that catch people out
 
 **A shallow clone breaks `--diff`.**  Jenkins, GitLab and GitHub all clone with
@@ -61,7 +140,10 @@ and the twentieth gets ignored.
 
 ## Jenkins
 
-Declarative, on an agent with Docker:
+Declarative, on an agent with Docker.  The image name is the one you pushed in
+option one above; `github-code-review:1.0.1` only works on a machine that built
+it, which a Jenkins agent almost certainly did not.  Substitute your registry
+throughout.
 
 ```groovy
 pipeline {
