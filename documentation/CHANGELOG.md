@@ -4,6 +4,33 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-09-10
+
+**A token nobody could present is no longer reported as a credential.**  A JSON
+web token pasted into a fixture, a test or a README usually keeps its real
+header and its real claims and has a word where the signature goes.  Nothing in
+its length or its entropy says so, so it came out critical and developers were
+being asked to rotate something that never existed.  The signature is now read
+the way the rest of the token already was: RS256 signs with 342 characters and
+HS256 with 43, so a signature that is empty, that is not base64url, or that is
+the wrong length for the algorithm the header itself names cannot have been
+produced by signing anything.  Those are set aside as placeholders, with the
+check that dropped them recorded beside them, the same as every other filtered
+candidate.  A token signed to the right length is untouched, and an algorithm
+whose length this does not know is left alone rather than guessed at.
+
+**What the finding is part of, in both report files.**  Every record in
+vulnerabilities.json now carries an asset block: the application, the business
+owner, the technical owner, what the repository holds and whether anybody can
+read it.  The same five answers are on the end of every row of
+vulnerabilities.csv, after last found, so columns a tool already reads keep
+their positions.  They are filled the way the finding page fills them, so what
+is set on the repository wins and what is empty falls back to the connection,
+and the file says which answers were inherited rather than given.  A hardcoded
+password is an incident in the payment gateway and a chore in a brochure site,
+and until now anything importing these files had to tell those apart with less
+than the person reading the screen had.
+
 ## 2026-09-09
 
 **A certified seal on the trends page.**  Filter to a branch, a repository or

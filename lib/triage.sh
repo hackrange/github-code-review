@@ -390,9 +390,14 @@ triage_findings() {
         | (($ent < $minent) and ($named | not)) as $low_entropy
         | ($f.low_character_diversity // false) as $too_uniform
         | (any($ppath[]?; . as $re | $path | test($re))) as $noisy_path
+        # A token whose signature is the wrong length for its own algorithm,
+        # or is not base64url at all, cannot be verified by anybody.  It reads
+        # as a critical credential on entropy alone, which is what put stubs
+        # from fixtures and documentation at the top of the queue.
+        | ($f.jwt_signature_stub // false) as $jwt_stub
 
         | (if $f.verified then "confirmed"
-           elif $pat_hit or $too_uniform then "placeholder"
+           elif $pat_hit or $too_uniform or $jwt_stub then "placeholder"
            elif $too_short or ($low_entropy and ($tri.drop_unverified_below_entropy // true)) then "placeholder"
            elif $noisy_path then "low"
            else "probable" end) as $verdict
@@ -426,6 +431,7 @@ triage_findings() {
               below_min_length: $too_short,
               below_min_entropy: $low_entropy,
               low_character_diversity: $too_uniform,
+              jwt_signature_stub: $jwt_stub,
               non_production_path: $noisy_path
             }
           }

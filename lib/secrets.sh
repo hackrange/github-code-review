@@ -430,6 +430,16 @@ derive_secret_facts() {
           end;
       def isoish($t):
         if ($t | type) == "number" then ($t | todate) else null end;
+      # How long a signature is, in base64url characters, for the algorithms
+      # that fix its length.  RSA at 256 bits of hash signs with the whole
+      # modulus, so RS256 is 256 bytes and 342 characters; HS256 is a 32 byte
+      # MAC and 43.  Nothing else is a signature those algorithms produced.
+      def sig_chars($alg):
+        {"HS256": 43, "HS384": 64, "HS512": 86,
+         "RS256": 342, "RS384": 512, "RS512": 683,
+         "PS256": 342, "PS384": 512, "PS512": 683,
+         "ES256": 86, "ES384": 128, "ES512": 176}
+        | .[$alg | ascii_upcase];
       def jwt_facts:
         . as $s
         | ($s | jpart(0)) as $h
@@ -439,6 +449,10 @@ derive_secret_facts() {
           then {jwt: false}
           else
             ($b | keys) as $names
+            | ($s | split(".")) as $parts
+            | (($parts[2] // "") | sub("=+$"; "")) as $sig
+            | (($h.alg // "") | tostring) as $alg
+            | (if ($parts | length) == 3 then sig_chars($alg) else null end) as $want
             | {
                 jwt: true,
                 jwt_alg: ($h.alg // "" | tostring),
@@ -454,6 +468,22 @@ derive_secret_facts() {
                 jwt_expired:
                   (if ($b.exp | type) == "number" then ($b.exp < $now) else null end),
                 jwt_claims: $names,
+                # Whether anybody could present this.  A signature that is
+                # empty, that is not base64url, or that is the wrong length for
+                # the algorithm the header itself names was not produced by
+                # signing anything, so the value is the shape of a token
+                # rather than a token.  A stub written into a fixture or a
+                # README reads exactly like this and a real one never does.
+                #
+                # Said as a fact here and judged in triage, the same as every
+                # other placeholder signal, so it lands in the filtered list
+                # with a reason rather than disappearing.
+                jwt_signature_stub:
+                  (($alg | ascii_downcase) == "none"
+                   or ($sig | length) == 0
+                   or ($sig | test("[^A-Za-z0-9_-]"))
+                   or (if $want == null then false
+                       else ($sig | length) != $want end)),
                 # A claim is identifying either because of what it is called or
                 # because its value is plainly an address, whatever it is
                 # called.  Both happen.

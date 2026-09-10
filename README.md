@@ -440,8 +440,13 @@ want to know about. It is on by default. `--no-verify` turns it off.
 2. placeholder patterns: `EXAMPLE`, `changeme`, `YOUR_API_KEY`, `${VAR}`,
    `<token>`, `xxxxxxxx`, `AKIAIOSFODNN7EXAMPLE`
 3. character diversity: four or fewer distinct characters is filler
-4. length and entropy floors, 12 characters and 3.0 bits per character
-5. path: `test/`, `fixtures/`, `docs/`, `vendor/`, `*.md`, lockfiles. These are
+4. a JSON web token whose signature could not have been produced by signing
+   anything: empty, not base64url, or the wrong length for the algorithm its
+   own header names. RS256 signs with 342 characters and HS256 with 43, so a
+   token carrying the word SIGNATURE where those go cannot be presented to
+   anybody and is not a credential
+5. length and entropy floors, 12 characters and 3.0 bits per character
+6. path: `test/`, `fixtures/`, `docs/`, `vendor/`, `*.md`, lockfiles. These are
    downgraded, not deleted, because real keys do end up in test fixtures.
 
 Nothing disappears silently. Every dropped candidate is listed under

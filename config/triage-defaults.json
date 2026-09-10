@@ -18,6 +18,7 @@
     "(?i)(insert|enter|add)[-_ ]?(your|the)?[-_ ]?(key|token|secret|password)",
     "(?i)^(test|testing|foo|bar|baz|qux|abc123|password|passwd|secret|token|admin|root|hunter2|123456|letmein)$",
     "(?i)(?<![A-Za-z0-9])(not[-_]?a[-_]?real|fake|mock|stub|lorem|ipsum|deadbeef|cafebabe)(?![A-Za-z0-9])",
+    "(?i)(?<![A-Za-z0-9])signature[-_]?(value|here|placeholder|goes[-_]?here)(?![A-Za-z0-9])",
     "(?i)^(<|\\{\\{|\\$\\{|%|\\[)",
     "(?i)(AKIAIOSFODNN7EXAMPLE|wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY)",
     "(?i)\\b(place|put|insert|enter|fill|paste|type|replace|specify|provide|supply|set)\\b[^\\n]{0,40}\\b(here|below|later|value|this|yours)\\b",

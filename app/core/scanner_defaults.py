@@ -111,6 +111,12 @@ TEMPLATE = {
                         # word to stand on its own keeps "fake_key" and
                         # "mock-token" caught and leaves "MIIfakeEog" alone.
                         "(?i)(?<![A-Za-z0-9])(not[-_]?a[-_]?real|fake|mock|stub|lorem|ipsum|deadbeef|cafebabe)(?![A-Za-z0-9])",
+                        # The stub a fixture puts where a signature goes.
+                        # The trailing word is required rather than optional:
+                        # a presigned URL carries X-Amz-Signature and is a
+                        # real credential, so matching the bare word would
+                        # drop the thing it is most important to report.
+                        "(?i)(?<![A-Za-z0-9])signature[-_]?(value|here|placeholder|goes[-_]?here)(?![A-Za-z0-9])",
                         "(?i)^(<|\\{\\{|\\$\\{|%|\\[)",
                         "(?i)(AKIAIOSFODNN7EXAMPLE|wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY)",
                         "(?i)\\b(place|put|insert|enter|fill|paste|type|replace|specify|provide|supply|set)\\b[^\\n]{0,40}\\b(here|below|later|value|this|yours)\\b",
