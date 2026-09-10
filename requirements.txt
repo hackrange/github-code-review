@@ -57,4 +57,4 @@ jsonschema==4.26.0
 # It needs pango, cairo and glib from the system, which the Dockerfile
 # installs.  Without them the import fails loudly at start rather than
 # producing a broken document later.
-weasyprint==69.0
+weasyprint==70.0

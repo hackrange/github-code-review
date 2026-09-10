@@ -68,6 +68,72 @@ def _scanning_now_ids() -> set:
         return set()
 
 
+def report_url_fetcher(allowed: str = ""):
+    """-> a fetcher for the report typesetter that refuses to go anywhere.
+
+    The typesetter resolves whatever the page it is given references, and the
+    page is built from findings: repository names, file paths, rule names,
+    commit messages, author names.  Every one of those is chosen by whoever
+    can commit to a scanned repository.
+
+    Nothing gets through today.  Those values are escaped on the way in, the
+    template carries no external reference but the logo, and the logo is
+    checked for its scheme where it is set.  Both of those facts are one
+    careless edit away from being untrue, and neither edit would look
+    dangerous: a `| safe` on a field somebody wanted to render as markup, or
+    an image added to a header.  This is the guard that does not depend on
+    anybody remembering.
+
+    A data URI is an image already in hand rather than an address, so it is
+    allowed.  So is the logo an administrator typed in, exactly, and nothing
+    that merely resembles it.  Everything else is this server making a request
+    because a page told it to, which is the whole of CWE-918.
+
+    Two shapes, because the library changed under this.  WeasyPrint 70 fixed
+    its own server side request forgery by replacing the fetcher function with
+    a class that takes a list of protocols, so that is what an install on 70
+    gets, with the allowlist on top of it.  An older install gets the callable
+    the earlier versions take.  The rule is the same either way; only the way
+    of saying it moved.
+    """
+    def permitted(url) -> bool:
+        target = str(url)
+        return (target.lower().startswith("data:")
+                or bool(allowed) and target == allowed)
+
+    def refuse(url):
+        log.warning("a report tried to fetch %.120r while being typeset; "
+                    "refused", str(url))
+
+    try:                            # WeasyPrint 70 and later
+        from weasyprint.urls import URLFetcher, URLFetchingError
+
+        class _ReportFetcher(URLFetcher):
+            def fetch(self, url, *args, **kwargs):
+                if not permitted(url):
+                    refuse(url)
+                    raise URLFetchingError(
+                        "This report may not fetch anything but its logo.")
+                return super().fetch(url, *args, **kwargs)
+
+        # The protocol list is the library's own guard against this, kept as
+        # well as the allowlist rather than instead of it: two ways to say no
+        # cost nothing, and the one above is about addresses rather than
+        # schemes.
+        return _ReportFetcher(allowed_protocols=("data", "https"))
+    except ImportError:             # WeasyPrint 69 and earlier
+        from weasyprint.urls import default_url_fetcher
+
+        def fetch(url, *args, **kwargs):
+            if not permitted(url):
+                refuse(url)
+                raise ValueError(
+                    "This report may not fetch anything but its logo.")
+            return default_url_fetcher(url, *args, **kwargs)
+
+        return fetch
+
+
 def _shared(db, user: User) -> dict:
     """The handful of things the shell needs on every page."""
     pending = 0
@@ -889,7 +955,9 @@ def trends_report(request: Request, user: User = Depends(current_user)):
             detail="Reports need the typesetting libraries, which are not "
                    "installed on this server.")
 
-    pdf = HTML(string=html, base_url=str(request.base_url)).write_pdf()
+    pdf = HTML(string=html, base_url=str(request.base_url),
+               url_fetcher=report_url_fetcher(context.get("logo") or "")
+               ).write_pdf()
 
     stem = (repository or organization or "all-repositories").replace("/", "-")
     name = "security-assessment-%s-%s.pdf" % (stem, now.strftime("%Y-%m-%d"))
