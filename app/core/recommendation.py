@@ -132,7 +132,11 @@ def for_finding(finding, context: dict = None):
                     "anything in the repository.")
     elif triage == "not_applicable":
         suggestion = Severity.INFO
-        sentence = ("The fidelity pass found this is not what its rule was "
+        # Not "the fidelity pass".  A credential set aside by a triage rule
+        # arrives here too, and naming the wrong pass in the one sentence a
+        # reader is asked to accept is how a correct recommendation gets
+        # disbelieved.
+        sentence = ("This was read and found not to be what its rule was "
                     "looking for" + (f": {reason}" if reason else "."))
     elif triage == "third_party":
         suggestion = _down(current, 2)

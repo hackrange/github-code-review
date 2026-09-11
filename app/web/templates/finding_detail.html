@@ -121,9 +121,51 @@
 </div>
 {% endif %}
 
+{# A finding that is not open any more, said at the top.
+
+   The grade is a record of what this was worth while it was open, and nothing
+   recalculates it afterwards, so a closed finding keeps leading with the same
+   red badge it had on the day it was found.  The state was a bare word in the
+   details table a long way down the page, and the only reading available from
+   the top was that nothing had happened: somebody who had just written a
+   triage rule, watched it work, and come back to look, read a critical badge
+   and concluded the rule had not taken.  It had. #}
+{% if f.state.value != 'open' %}
+<div class="notice {{ 'ok' if f.state.value == 'fixed' else 'info' }}">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+  <div>
+    {% if f.state.value == 'fixed' %}
+    <strong>Closed{% if f.resolved_at %} on
+      {{ f.resolved_at | dt('%d %b %Y') }}{% endif %}.</strong>
+    It was not there the last time it was looked for. That is either a scan
+    that read this code and did not report it, or a recheck that went and
+    looked. A later scan that finds it again reopens it on its own, with the
+    grade it has now.
+    {% else %}
+    <strong>Waived.</strong> Somebody decided this one, and the decision is
+    further down the page with who made it and when it runs out. A scan that
+    finds it again leaves it waived.
+    {% endif %}
+    <div class="small" style="margin-top:.25rem">It still reads
+      <strong>{{ f.severity.value }}</strong> above. That is what it was worth
+      while it was open, kept as a record rather than read again now, so
+      closing one never changes its grade. It is counted nowhere: every figure
+      on the dashboard and in both report files counts open findings only, and
+      the findings list leaves it out unless you ask for this state by name.
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="page-head">
   <div>
-    <h1><span class="badge {{ f.severity.value }}">{{ f.severity.value }}</span>
+    <h1><span class="badge {{ f.severity.value }}"
+        {%- if f.state.value != 'open' %} title="What it was worth while it was open.  Closing one does not regrade it."{% endif %}>{{ f.severity.value }}</span>
+      {#- The state beside the grade, because the two are read together and
+          only one of them was here.  A red badge on its own is the whole
+          answer a reader takes from a heading. -#}
+      {% if f.state.value != 'open' %}<span class="badge {{ 'ok' if f.state.value == 'fixed' else 'waived' }}"
+        title="This is not open work.">{{ 'closed' if f.state.value == 'fixed' else f.state.value }}</span>{% endif %}
       {% if f.confidence %}<span class="badge {{ 'ok' if f.confidence == 'high' else ('medium' if f.confidence == 'low' else '') }}"
         title="How sure the engine was about its own rule.">{{ f.confidence }} confidence</span>{% endif %}
       {{ f.rule or f.vulnerability_id or 'Finding' }}</h1>
@@ -416,7 +458,9 @@
         <tr><th>Confidence</th><td>{{ f.confidence }}
           <span class="faint small">how sure the engine was about its own rule</span></td></tr>
         {% endif %}
-        <tr><th>State</th><td>{{ f.state.value }}</td></tr>
+        <tr><th>State</th><td>{{ f.state.value }}
+          {%- if f.state.value == 'fixed' and f.resolved_at %},
+          closed on {{ f.resolved_at | dt('%d %b %Y %H:%M') }}{% endif %}</td></tr>
         <tr><th>Organization</th><td>{{ f.organization }}</td></tr>
         {# A link, not text.  Every scan records where the repository lives and
            no page had ever offered it, which is only a small annoyance on a

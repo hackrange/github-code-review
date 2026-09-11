@@ -479,6 +479,93 @@ def _risk_context(repo, connection, reach: dict = None) -> dict:
                 getattr(repo, "full_name", "") or "", 0)}
 
 
+def _set_aside_placeholders(session, document, seen_at, seen_fingerprints) -> int:
+    """Credentials this run read, recognised, and deliberately did not report.
+
+    A value matching a triage rule, or one too short or too uniform to be a
+    credential, is kept out of the reported set.  It is not thrown away: the
+    scanner writes it into the report with its fingerprint, the file it sits in
+    and which test it was that decided, and nothing on this side had ever read
+    that list.
+
+    So a finding whose value somebody had just ruled a placeholder went missing
+    from the reported set, and the loop below closed it as fixed.  Fixed says
+    the password was taken out of the code.  It is still on the same line, and
+    the record now says otherwise, which is the reading an audit takes at face
+    value a year later.
+
+    The rule the rest of this file keeps is that absence from a report only
+    means fixed if somebody looked.  This is the one case where the report says
+    in as many words that somebody looked straight at the value and ruled it
+    out.  So it is written down as a decision: set aside, kept, out of the work
+    and out of the report files, rather than closed as though the code had been
+    cleaned up.
+
+    -> how many findings it changed.
+    """
+    # Which test it was, in the order that says the most about the value.  A
+    # rule somebody wrote is a person's decision and outranks the heuristics,
+    # which are the scanner's own reading of the shape of the string.
+    reasons = (
+        ("placeholder_pattern_match", "it matches a triage rule"),
+        ("jwt_signature_stub",
+         "its signature is the wrong length for the algorithm it names, so "
+         "nobody could present it anywhere"),
+        ("low_character_diversity",
+         "it is built from too few distinct characters to be a credential"),
+        ("below_min_length", "it is shorter than a credential"),
+        ("below_min_entropy", "it is too predictable to be a credential"),
+    )
+
+    changed = 0
+    for row in (document.get("placeholders_filtered") or []):
+        if not isinstance(row, dict):
+            continue
+        digest = str(row.get("secret_fingerprint") or "").strip()
+        if not digest:
+            continue
+        marker = "cred:" + digest
+        # Read and ruled out is not missing.  Recorded before anything else
+        # below, so the resolve loop leaves this one alone whatever happens.
+        seen_fingerprints.add(marker)
+
+        finding = (session.query(Finding)
+                   .filter(Finding.fingerprint == marker).one_or_none())
+        if finding is None or finding.kind != FindingKind.CREDENTIAL:
+            continue
+
+        triage = row.get("triage")
+        triage = triage if isinstance(triage, dict) else {}
+        why = next((text for key, text in reasons if triage.get(key)),
+                   "it did not survive triage")
+        sentence = ("The scanner read this value and did not report it, because "
+                    "%s.  It is still in the code: this says it is not a "
+                    "credential, not that it was removed." % why)
+
+        touched = False
+        if finding.triage != "not_applicable":
+            finding.triage = "not_applicable"
+            finding.triage_reason = sentence
+            touched = True
+        # Somebody else's decision is left as they made it.  A waiver carries
+        # who asked and who agreed, and overwriting it would put a sentence
+        # nobody wrote where their reason used to be.
+        if not finding.excepted:
+            finding.excepted = True
+            finding.exception_reason = sentence
+            finding.exception_by = "the triage rules"
+            finding.exception_at = seen_at
+            touched = True
+        if finding.state != FindingState.WAIVED:
+            finding.state = FindingState.WAIVED
+            # It was never resolved.  A date here would be the same claim the
+            # state used to make, kept in a field nobody looks at.
+            finding.resolved_at = None
+            touched = True
+        changed += 1 if touched else 0
+    return changed
+
+
 def ingest_report(session, report_path: Path, scanned_repos: set = None,
                   connection=None) -> dict:
     """Fold one scanner report into the database.
@@ -1019,6 +1106,11 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                         "so nothing is held open for it: %.120r", row)
             continue
         partial_code[named] = row.get("reason") or ""
+    # Before anything is closed, because the whole point of it is to keep a
+    # value the scanner looked at out of the set that looks like it went away.
+    counts["set_aside"] = _set_aside_placeholders(
+        session, document, seen_at, seen_fingerprints)
+
     in_scope = scanned_repos if scanned_repos is not None else touched_repos
     if in_scope:
         stale = (session.query(Finding)
