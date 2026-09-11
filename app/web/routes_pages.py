@@ -68,6 +68,35 @@ def _scanning_now_ids() -> set:
         return set()
 
 
+def _compare_url(db, row) -> str:
+    """Where to see what arrived on a branch since it was signed off.
+
+    A certification records the commit that was reviewed.  The scan records
+    where the branch is now.  Two commits and the repository's own address are
+    everything a compare view needs, and every host this product speaks to
+    offers one at the same shape.
+
+    Empty when either commit is missing, because a link that goes somewhere
+    unhelpful is worse than no link: the reader clicks it, learns nothing and
+    trusts the next one less.
+    """
+    from app.core import certification as _c
+    from app.core.models import Repository
+
+    base = (row.commit_sha or "").strip()
+    if not base:
+        return ""
+    head = (_c.head_of(db, row.repository, row.branch) or "").strip()
+    if not head or head == base:
+        return ""
+    repo = (db.query(Repository)
+            .filter(Repository.full_name == row.repository).one_or_none())
+    home = (getattr(repo, "html_url", "") or "").strip().rstrip("/")
+    if not home:
+        return ""
+    return "%s/compare/%s...%s" % (home, base, head)
+
+
 def report_url_fetcher(allowed: str = ""):
     """-> a fetcher for the report typesetter that refuses to go anywhere.
 
@@ -1504,7 +1533,17 @@ def repositories(request: Request, user: User = Depends(current_user)):
                            # Shown, not implied by the author's name.  A
                            # reader scanning this list has to be able to tell
                            # a scan finding nothing from somebody reading it.
-                           "automatic": bool(row.automatic)})
+                           "automatic": bool(row.automatic),
+                           # Why it went amber, because the answer decides
+                           # where a reader should be sent.  A branch that
+                           # moved has no findings to show by definition, and
+                           # offering a findings list for it sends somebody to
+                           # an empty page and leaves them with no way to judge
+                           # whether the sign off still holds.  What they need
+                           # there is the code that arrived since.
+                           "moved": bool(state.get("moved")),
+                           "compare": _compare_url(db, row)
+                           if state.get("moved") else ""})
         # Branches nobody is expected to sign off, listed beside the sign
         # offs.  They belong on the same page: this is the only place an
         # administrator can find what has been marked, and a decision that
@@ -1521,6 +1560,35 @@ def repositories(request: Request, user: User = Depends(current_user)):
                            "at": row.marked_at, "expires": None,
                            "note": row.reason, "automatic": False})
         badges.sort(key=lambda b: (b["repository"], b["branch"]))
+
+        # The same badge again, beside the branch it is about, in the
+        # repository table lower down.  Worked out before the state filter
+        # runs: narrowing the card above to the amber ones is a question about
+        # the card, and it must not quietly blank the column that tells
+        # somebody going down the rows whether this repository's own default
+        # branch has been read.
+        #
+        # Only the default branch.  A sign off on a release branch is not a
+        # fact about the branch named in that cell, and a green mark beside a
+        # name it is not about is the kind nobody can rely on afterwards.
+        default_of = {row.full_name: (row.default_branch or "") for row in rows}
+        certified_default = {}
+        for badge in badges:
+            default_branch = default_of.get(badge["repository"], "")
+            # A certification names the branch a finding was on, and one on
+            # the default branch may carry no branch at all.  coverage()
+            # resolves it the same way.
+            if (badge["branch"] or default_branch) != default_branch:
+                continue
+            # A sign off and an exemption can both exist for one branch, and
+            # the exemption is the one that decides: nobody was ever going to
+            # be asked to review this.  Again the same order coverage() takes,
+            # so the column and the percentage cannot disagree.
+            held = certified_default.get(badge["repository"])
+            if held and held["state"] == _cert.NOT_APPLICABLE:
+                continue
+            certified_default[badge["repository"]] = badge
+
         if wanted:
             badges = [b for b in badges if b["state"] == wanted]
 
@@ -1539,7 +1607,8 @@ def repositories(request: Request, user: User = Depends(current_user)):
                        can_scan=rbac.can(user, "scan.run"),
                        scanning_now=_scanning_now(),
                        scanning_now_ids=_scanning_now_ids(),
-                       certified=badges, certified_filter=wanted)
+                       certified=badges, certified_filter=wanted,
+                       certified_default=certified_default)
         return page(request, "repositories.html", **context)
 
 

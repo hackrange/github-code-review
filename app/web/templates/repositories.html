@@ -4,6 +4,37 @@
 <div class="page-head"><div><h1>Repositories</h1>
   <div class="faint small">{{ rows|length }} you can see</div></div></div>
 
+{# One mapping from a sign off state to what the page says about it, used by
+   both tables here.  Two copies of it is how the card and the column end up
+   disagreeing the first time somebody edits one of them.
+
+   `beside_branch` picks the longer wording, for the badge that sits next to a
+   branch name rather than under a column headed State: "expired" on its own
+   there reads as a fact about the branch rather than about a review of it.
+
+   The green one says "certified" in both places.  It used to say "current"
+   under the State column, which is a step removed from the question anybody is
+   actually asking of that page, and it left the reader to work out current
+   what.  The rest of the set still reads as states beside it: certified, needs
+   re-checking, expired, withdrawn, not applicable. #}
+{% macro cert_badge(state, why, beside_branch=False) -%}
+  {%- if state == 'active' -%}
+  <span class="badge ok" title="{{ why }}">certified</span>
+  {%- elif state == 'stale' -%}
+  <span class="badge medium" title="{{ why }}">needs re-checking</span>
+  {%- elif state == 'lapsed' -%}
+  <span class="badge unknown" title="{{ why }}">{{ 'certification expired' if beside_branch else 'expired' }}</span>
+  {%- elif state == 'revoked' -%}
+  <span class="badge waived" title="{{ why }}">{{ 'certification withdrawn' if beside_branch else 'withdrawn' }}</span>
+  {#- Gray, and worded as a statement about the branch rather than about
+      anybody having read it.  Nothing here is a sign off. -#}
+  {%- elif state == 'not_applicable' -%}
+  <span class="badge unknown" title="{{ why }}">not applicable</span>
+  {%- else -%}
+  <span class="faint">{{ state }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
 {# The security sign offs.
    The dashboard counts these and its tile linked here with a filter nothing
    implemented, so the number opened a list of every repository.  A count that
@@ -59,26 +90,28 @@
              gone rather than one with a long name. #}
           <td class="mono small branch-name">{{ row.branch or 'the default branch' }}</td>
           <td>
-            {% if row.state == 'active' %}<span class="badge ok">current</span>
-            {% elif row.state == 'stale' %}<span class="badge medium"
-              title="{{ row.why }}">needs re-checking</span>
-            {% elif row.state == 'lapsed' %}<span class="badge unknown">expired</span>
-            {% elif row.state == 'revoked' %}<span class="badge waived"
-              title="{{ row.why }}">withdrawn</span>
-            {# Gray, and worded as a statement about the branch rather than
-               about anybody having read it.  Nothing here is a sign off. #}
-            {% elif row.state == 'not_applicable' %}<span class="badge unknown"
-              title="{{ row.why }}">not applicable</span>
-            {% else %}<span class="faint">{{ row.state }}</span>{% endif %}
-            {# Somewhere to go from an amber badge.
-               The state says the branch has moved since somebody signed it
-               off.  The question that follows is always the same, what
-               arrived since, and until now the only way to answer it was to
-               go and build the filter by hand. #}
-            {% if row.state == 'stale' %}
+            {{ cert_badge(row.state, row.why) }}
+            {# Somewhere to go from an amber badge, and it depends on why.
+               A badge goes amber for two different reasons and they need
+               different pages.  Findings arrived, in which case the findings
+               are the thing to read.  Or the branch moved, in which case there
+               are no findings by definition and a findings list is an empty
+               page: somebody sent there cannot tell whether the sign off still
+               holds, which is the only question they came to answer.  What
+               they need then is the code that arrived since, which the
+               repository's own compare view already shows between the commit
+               that was reviewed and the commit the branch is on now. #}
+            {% if row.state == 'stale' and row.moved and row.compare %}
+            <a class="btn sm" style="margin-left:.4rem" rel="noopener noreferrer"
+               target="_blank" href="{{ row.compare }}"
+               title="What has been committed to this branch since it was signed off">Review the commits</a>
+            {% elif row.state == 'stale' and row.moved %}
+            <span class="faint small" style="margin-left:.4rem"
+                  title="The commit that was reviewed or the branch head is not recorded, so there is nothing to compare against">nothing to compare</span>
+            {% elif row.state == 'stale' %}
             <a class="btn sm" style="margin-left:.4rem"
-               href="{{ base }}/findings?repo={{ row.repository | urlencode }}{% if row.branch %}&branch={{ row.branch | urlencode }}{% endif %}&state=open&since=30"
-               title="The findings on this branch, newest first, so the review can be redone or withdrawn">Review changes</a>
+               href="{{ base }}/findings?repo={{ row.repository | urlencode }}{% if row.branch %}&branch={{ row.branch | urlencode }}{% endif %}&state=open"
+               title="The findings on this branch, so the review can be redone or withdrawn">Review findings</a>
             {% endif %}
           </td>
           <td class="nowrap">{{ row.at | dt('%d %b %Y') if row.at }}</td>
@@ -119,7 +152,8 @@
   <div class="table-scroll">
     <table id="repo-table">
       <thead><tr><th>Organization</th><th>Repository</th><th>Visibility</th>
-        <th>Default branch</th><th>Open findings</th><th class="nowrap">Last scanned</th>
+        <th>Default branch<span class="faint small"> and its sign off</span></th>
+        <th>Open findings</th><th class="nowrap">Last scanned</th>
         {# Named in the header as well as in the tooltip.  A tooltip is a
            hover, which is nothing at all on a touch screen, and the difference
            between this button and the one on a finding is worth more than a
@@ -133,7 +167,27 @@
           <td class="small"><a href="{{ base }}/findings?q={{ r.name }}">{{ r.name }}</a>
             {% if r.archived %}<span class="badge waived">archived</span>{% endif %}</td>
           <td class="small faint">{{ r.visibility }}</td>
-          <td class="small faint">{{ r.default_branch }}</td>
+          {# The sign off on this repository's own default branch, beside the
+             branch it is about.  The card above is the whole list, which is
+             the wrong shape for the question somebody has going down these
+             rows.  A branch nobody has reviewed shows nothing: an absent
+             badge already says that, and a gray "none" on every row of a
+             three thousand repository estate is something the reader has to
+             look past to find the rows that say anything.
+
+             An automatic one says so here rather than in the tooltip.  A
+             hover is nothing at all on a touch screen, and a scan finding
+             nothing to read claims a great deal less than somebody having
+             read it, which is the whole reason the two are told apart. #}
+          {% set cert = certified_default.get(r.full_name) %}
+          <td class="small faint">{{ r.default_branch }}
+            {%- if cert %} {{ cert_badge(cert.state, cert.why ~
+                 ('. Marked by ' if cert.state == 'not_applicable'
+                  else '. Signed off by ') ~
+                 ('a scan' if cert.automatic else (cert.by or 'somebody')),
+                 beside_branch=True) }}
+            {%- if cert.automatic %}<span class="faint small"> by a scan</span>
+            {%- endif %}{% endif %}</td>
           <td class="nowrap">
             {% for level in ['critical','high','medium','low'] %}
               {% if c.get(level) %}<span class="badge {{ level }}">{{ c[level] }}</span>{% endif %}
