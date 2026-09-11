@@ -68,6 +68,16 @@ def _scanning_now_ids() -> set:
         return set()
 
 
+def _branch_finding_count(db, user, repository: str, branch: str) -> int:
+    """How many open findings this reader can see on one branch."""
+    q = (rbac.visible_findings(db, user)
+         .filter(Finding.state == FindingState.OPEN)
+         .filter(Finding.repository == repository))
+    if branch:
+        q = q.filter(Finding.branch == branch)
+    return q.count()
+
+
 def _compare_url(db, row) -> str:
     """Where to see what arrived on a branch since it was signed off.
 
@@ -1500,6 +1510,83 @@ def waivers(request: Request, q: str = "", status: str = "", page_no: int = 1,
         return page(request, "waivers.html", **context)
 
 
+@router.get("/certifications")
+def certification_detail(request: Request, repo: str = "", branch: str = "",
+                         msg: str = "", kind: str = "",
+                         user: User = Depends(current_user)):
+    """One sign off, with what changed and the two things you can do about it.
+
+    The certify and withdraw forms used to live only on a finding, and they act
+    on that finding's repository and branch.  That works until the branch has
+    no findings on it, which is exactly the branch a scan signs off
+    automatically.  Push to one of those and the badge stops reading as
+    current, and there is no finding anywhere on that branch to open the form
+    from.  It could not be signed off again, withdrawn, or made to go away by
+    any route in the product.
+
+    So this is addressed by repository and branch rather than through a
+    finding, and it is what the repository name on the certifications list
+    links to.
+    """
+    from app.core import certification as _cert
+    from app.core.models import Repository as _Repo
+
+    repository = clean_text(repo, "Repository", limit=320, required=False)
+    branch_name = clean_text(branch, "Branch", limit=255, required=False)
+
+    with session_scope() as db:
+        # Through the repository scope, so a name in the query string cannot
+        # reach a repository this reader may not open.  Absent and forbidden
+        # answer the same way.
+        owner = (rbac.visible_repositories(db, user)
+                 .filter(_Repo.full_name == repository).one_or_none())
+        if owner is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        # A branch with no sign off on it opens too, rather than 404ing.
+        #
+        # The branches short of a seal are the clean ones by definition: no
+        # findings, so no finding to reach the form from, and no sign off yet
+        # so nothing to look up either.  Those are exactly the names the seal
+        # now lists as outstanding, and a link that answers "no such thing" is
+        # how a reader learns the list is wrong when it is right.
+        #
+        # Only for a branch this install has actually walked.  Any other name
+        # in the query string is not a branch, and opening a sign off form on
+        # one would let somebody certify a string they typed.
+        row = _cert.for_branch(db, repository, branch_name)
+        if row is None:
+            if (branch_name or owner.default_branch or "") not in \
+                    _walked_branches(db, user, repository) | {
+                        owner.default_branch or ""}:
+                raise HTTPException(
+                    status_code=404,
+                    detail="The last scan of that repository did not walk "
+                           "that branch.")
+            state = {"state": _cert.NONE, "why": "", "certification": None}
+        else:
+            state = _cert.status(db, row)
+        head = _cert.head_of(db, repository, branch_name) or ""
+        compare = (_compare_url(db, row)
+                   if row is not None and state.get("moved") else "")
+        found = (rbac.visible_findings(db, user)
+                 .filter(Finding.state == FindingState.OPEN)
+                 .filter(Finding.repository == repository))
+        if branch_name:
+            found = found.filter(Finding.branch == branch_name)
+        context = _shared(db, user)
+        context.update(active_page="repositories", repository=repository,
+                       branch=branch_name, row=row, state=state, head=head,
+                       pushed_at=owner.pushed_at,
+                       last_scanned=owner.last_scanned_at,
+                       compare=compare, findings_count=found.count(),
+                       can_certify=rbac.can(user, "repo.certify"),
+                       message=clean_text(msg, "message", limit=300,
+                                          required=False),
+                       kind=("warn" if kind == "warn" else "ok"),
+                       **_expiry_window(90))
+        return page(request, "certification.html", **context)
+
+
 @router.get("/repositories")
 def repositories(request: Request, user: User = Depends(current_user)):
     from app.core import certification as _cert
@@ -1508,8 +1595,8 @@ def repositories(request: Request, user: User = Depends(current_user)):
     # did not exist, so the number opened a list of everything.  A count that
     # cannot be opened is a count somebody has to take on trust.
     wanted = (request.query_params.get("certified", "") or "").strip().lower()
-    if wanted not in {"", "active", "stale", "lapsed", "revoked",
-                      "not_applicable"}:
+    if wanted not in {"", "active", "stale", "rescanning", "unknown", "lapsed",
+                      "revoked", "not_applicable"}:
         wanted = ""
 
     with session_scope() as db:
@@ -1543,7 +1630,13 @@ def repositories(request: Request, user: User = Depends(current_user)):
                            # there is the code that arrived since.
                            "moved": bool(state.get("moved")),
                            "compare": _compare_url(db, row)
-                           if state.get("moved") else ""})
+                           if state.get("moved") else "",
+                           # How much is open on that branch, so the branch
+                           # name is a way in when there is something to read
+                           # and plain text when there is not.  A link that
+                           # opens an empty page is worse than no link.
+                           "findings": _branch_finding_count(
+                               db, user, row.repository, row.branch)})
         # Branches nobody is expected to sign off, listed beside the sign
         # offs.  They belong on the same page: this is the only place an
         # administrator can find what has been marked, and a decision that
@@ -1608,6 +1701,7 @@ def repositories(request: Request, user: User = Depends(current_user)):
                        scanning_now=_scanning_now(),
                        scanning_now_ids=_scanning_now_ids(),
                        certified=badges, certified_filter=wanted,
+                       can_certify=rbac.can(user, "repo.certify"),
                        certified_default=certified_default)
         return page(request, "repositories.html", **context)
 

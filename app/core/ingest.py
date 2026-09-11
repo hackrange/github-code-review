@@ -418,13 +418,19 @@ def _drop_certifications_for_gone_branches(session, repo, full_name,
     ever comes back it comes back unreviewed, which is the right starting
     point: whoever recreated it did not read it.
 
-    Only ever on the evidence of a scan that looked.  This runs where a
-    repository has just reported the branches it walked, so a name missing
-    from that list is missing because something went and checked, not because
-    a run was cut short or a repository was skipped.  Everything else in this
-    file holds findings open on exactly that distinction, and deleting a row
-    is far less forgiving than holding one open, so the bar is the same and
-    the consequence of getting it wrong is worse.
+    Only ever on the evidence of a scan that looked, and only ever against the
+    full list of branches that are there.  That is not the list a run walks:
+    the quiet branch filter and the per repository cap both narrow it, so with
+    `stale_days` set every branch nobody has touched lately was missing from
+    the walked list and the sign off on it was being deleted on every scan.
+    The two lists are now carried separately for exactly this reason.
+
+    A name missing from the full list is missing because something went and
+    checked, not because a run was cut short or a branch was skipped for being
+    quiet.  Everything else in this file holds findings open on that same
+    distinction, and deleting a row is far less forgiving than holding one
+    open, so the bar is the same and the consequence of getting it wrong is
+    worse.
 
     The default branch counts as walked whatever it is called, because a
     certification written against "" means whichever branch the repository
@@ -442,9 +448,9 @@ def _drop_certifications_for_gone_branches(session, repo, full_name,
         named = (row.branch or default)
         if not named or named in walked:
             continue
-        log.warning("the sign off on %s@%s is being removed: this scan walked "
-                    "%d branch(es) and that was not one of them",
-                    full_name, named, len(walked))
+        log.warning("the sign off on %s@%s is being removed: this scan found "
+                    "%d branch(es) in the repository and that was not one of "
+                    "them", full_name, named, len(walked))
         session.delete(row)
         dropped += 1
     if dropped:
@@ -573,6 +579,14 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         repo.default_branch = meta.get("default_branch") or repo.default_branch
         repo.archived = bool(meta.get("archived", repo.archived))
         repo.size_kb = int(meta.get("size_kb") or repo.size_kb or 0)
+        # Kept rather than dropped.  The provider reports it on every
+        # repository and nothing here was reading it, so a sign off that
+        # stopped reading as current could say the branch had moved and not
+        # when, which is the difference between a fact and something somebody
+        # can act on.
+        _pushed = _when(meta.get("pushed_at"))
+        if _pushed is not None:
+            repo.pushed_at = _pushed
         repo.html_url = meta.get("html_url") or repo.html_url
         # A worker that timed out or crashed still gets an entry, so that the
         # repository does not vanish from the report.  It did not look at
@@ -595,12 +609,29 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         scanned = [str(name).strip()
                    for name in (entry.get("branches_scanned") or [])
                    if str(name).strip()]
+        # And every branch that is there, which is a different list.  The
+        # walked one is narrowed by the quiet branch filter and the per
+        # repository cap, so a name missing from it does not mean the branch
+        # has gone.  A sign off is only ever taken away on this one.
+        present = [str(name).strip()
+                   for name in (entry.get("branches_present") or [])
+                   if str(name).strip()]
+        if present:
+            repo.branch_names_present = json.dumps(
+                sorted(set(present))[:MAX_BRANCH_NAMES])
         if scanned:
             repo.branch_names = json.dumps(sorted(set(scanned))[:MAX_BRANCH_NAMES])
+        # Only on the full list, and only when a scanner new enough to send it
+        # did.  A report that does not carry one is not evidence that anything
+        # has gone, and deleting a row is the one move here that cannot be
+        # undone: the badge shows as unknown until a scan says otherwise,
+        # which is the forgiving direction and the one every other guard in
+        # this file takes.
+        if present:
             counts["certifications_dropped"] = (
                 counts.get("certifications_dropped", 0)
                 + _drop_certifications_for_gone_branches(
-                    session, repo, full_name, set(scanned)))
+                    session, repo, full_name, set(present)))
 
         # How far the credential engines walked here.  Only ever moved by a
         # run that actually walked something: a repository skipped this time

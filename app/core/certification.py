@@ -63,7 +63,30 @@ log = logging.getLogger("gcr.certification")
 # The states a badge can be in, worst last so a caller can sort on it.
 ACTIVE = "active"        # reviewed, in date, and nothing has changed since
 STALE = "stale"          # in date, but the code has moved on
+# The same fact about a badge a scan wrote, which asks nobody for anything.
+#
+# Almost every sign off on a large install is automatic: a scan looked, found
+# nothing, and said so.  When somebody pushes to such a branch the old code
+# turned it amber and asked a person to re-check something no person ever
+# checked, for work the next scan is already going to do.  On one estate that
+# was ninety nine point six percent of the badges, so the one amber that meant
+# "a human vouched for this and the code has changed since" was lost among them.
+RESCANNING = "rescanning"  # a scan signed it, and the code moved since
 LAPSED = "lapsed"        # the date has passed
+# A sign off on a branch nobody can go and look at.
+#
+# The amber state exists to ask a person to read a diff.  When the branch it
+# names is not one the last scan found, there is no diff to hand them: the
+# compare link points at commits the host has since collected, and clicking it
+# returns a 404.  Asking for a review that cannot be done is worse than asking
+# for nothing, because the reader spends the trip finding that out and trusts
+# the next amber badge less.
+#
+# So it is neither.  Not certified, because nothing here has been read against
+# code that is present.  Not amber, because there is no work to do.  Unknown,
+# which is what it is, and which says out loud that the answer is missing
+# rather than guessing at one.
+UNKNOWN = "unknown"      # the branch is not one this install can reach
 REVOKED = "revoked"      # somebody took it back
 NOT_APPLICABLE = "not_applicable"   # nobody is expected to review this
 NONE = "none"            # nobody has reviewed this
@@ -84,6 +107,11 @@ AUTOMATIC_DAYS = 90
 # The grades that leave a branch clear.  Anything above these is a finding
 # somebody has to read, and a branch holding one is not signed off by a scan.
 AUTOMATIC_CLEAR = (Severity.LOW, Severity.INFO)
+
+# How many branches a "not certified" note names before it stops naming them.
+# Enough to act on a repository, short enough that a whole organization does
+# not turn the line into a wall nobody reads.
+MAX_NAMED = 12
 
 # The passes that have to have finished first.  This is the rule the whole
 # feature rests on: a pass that did not run reports nothing, and nothing is
@@ -116,23 +144,104 @@ def for_branch(session, repository: str, branch: str):
             .one_or_none())
 
 
-def _default_branch_of(session, repository: str) -> str:
-    """The branch a sign off with no branch on it is about."""
+def _on_day(value) -> str:
+    """A date somebody can hold in their head, or a phrase that admits it."""
+    value = _aware(value)
+    return value.strftime("%d %b %Y") if value is not None else "an unknown date"
+
+
+def _repo_row(session, repository: str):
+    """The repository a sign off is about, read once.
+
+    Every question a badge asks -- where the branch is now, when it was last
+    pushed, what the default branch is called, whether the branch is still
+    there -- is answered out of the same row.  Four of them each going and
+    fetching it turned a page of two thousand badges into eight thousand
+    queries.
+    """
     from app.core.models import Repository
 
-    repo = (session.query(Repository)
+    return (session.query(Repository)
             .filter(Repository.full_name == repository).one_or_none())
+
+
+def _pushed_phrase(session, repository: str, repo=None) -> str:
+    """" on 12 Mar", or nothing at all when the host never said.
+
+    Said where it is useful rather than left to be worked out.  "The branch has
+    moved" is a fact nobody can act on; "the branch moved on Tuesday" is the
+    start of finding out who and why.
+    """
+    if repo is None:
+        repo = _repo_row(session, repository)
+    when = _aware(getattr(repo, "pushed_at", None)) if repo else None
+    return (" on %s" % when.strftime("%d %b %Y")) if when is not None else ""
+
+
+def _default_branch_of(session, repository: str, repo=None) -> str:
+    """The branch a sign off with no branch on it is about."""
+    if repo is None:
+        repo = _repo_row(session, repository)
     return (getattr(repo, "default_branch", "") or "") if repo else ""
 
 
-def head_of(session, repository: str, branch: str) -> str:
+def _out_of_reach(session, row, repo=None) -> str:
+    """Why this sign off cannot be reviewed, or "" when it can.
+
+    Said when the branch is not among the branches the last scan found in this
+    repository.  A merged pull request whose branch was then deleted leaves
+    exactly this: a sign off naming a ref that is gone, against a commit the
+    host squashed away with it.  Ingest removes those when a scan reports what
+    it found, so this is the gap in between, and the gap can be long when the
+    scan that would have reported it failed, or never got to the repository at
+    all.
+
+    Against the full list of branches, not the ones the run walked.  Those are
+    two different lists: the quiet branch filter and the per repository cap
+    both narrow what a run walks, so a branch nobody has touched for a year is
+    missing from the walked list while being perfectly present.  A sign off on
+    one of those still stands.  It is out of the coverage figure, because the
+    figure counts what this install looked at, but nobody is being told the
+    code has gone.
+
+    Only ever said on the evidence of a scan that looked.  A repository whose
+    scanner never sent a full list says nothing either way: a missing list is
+    not proof that a branch is missing.  The default branch counts as found
+    whatever it is called, the same rule ingest uses, because a sign off
+    written against "" means whichever branch the repository deploys from.
+    """
+    import json
+
+    if repo is None:
+        repo = _repo_row(session, row.repository)
+    if repo is None:
+        return "this repository is no longer in the scan"
+    default = (getattr(repo, "default_branch", "") or "")
+    named = row.branch or default
+    if not named:
+        return ""
+    try:
+        there = {str(name) for name in
+                 (json.loads(getattr(repo, "branch_names_present", "")
+                             or "[]") or []) if name}
+    except (TypeError, ValueError):
+        there = set()
+    if not there:
+        return ""
+    if named == default or named in there:
+        return ""
+    return ("the last scan of this repository found %d branch%s and %s was "
+            "not one of them, so there is nothing here to read.  The sign off "
+            "is removed once a scan confirms the branch has gone"
+            % (len(there), "" if len(there) == 1 else "es", named))
+
+
+def head_of(session, repository: str, branch: str, repo=None) -> str:
     """Where that branch was at the last scan, as a commit."""
     import json
 
-    from app.core.models import Repository
-
-    repo = (session.query(Repository)
-            .filter(Repository.full_name == repository).one_or_none())
+    if repo is None:
+        repo = _repo_row(session, repository)
     if repo is None:
         return ""
     try:
@@ -161,6 +270,14 @@ def status(session, row, head_sha: str = "") -> dict:
                     row.revoked_by or "somebody",
                     ": " + row.revoked_reason if row.revoked_reason else ""))}
 
+    # Before the date and before the commits, because both of those are
+    # questions about a branch, and this is the question of whether the branch
+    # is there to ask them about.
+    repo = _repo_row(session, row.repository)
+    gone = _out_of_reach(session, row, repo)
+    if gone:
+        return {"state": UNKNOWN, "certification": row, "why": gone}
+
     expires = _aware(row.expires_at)
     if not expires or expires <= now:
         return {"state": LAPSED, "certification": row,
@@ -178,12 +295,28 @@ def status(session, row, head_sha: str = "") -> dict:
     # and guessing towards still-fine is the one direction that would make
     # this badge a liability.
     if not head_sha:
-        head_sha = head_of(session, row.repository, row.branch)
+        head_sha = head_of(session, row.repository, row.branch, repo)
     if row.commit_sha and head_sha and head_sha != row.commit_sha:
+        # A scan's own sign off, overtaken by a push.  Nobody is being asked
+        # for anything: the next scan reads the new commit and either signs it
+        # again or produces a finding that speaks for itself.  Saying "needs
+        # re-checking" here invents work and buries the badges that mean it.
+        if getattr(row, "automatic", False):
+            return {"state": RESCANNING, "certification": row, "moved": True,
+                    "why": ("the branch moved%s, from %s to %s, after the scan "
+                            "signed it off on %s.  The next scan reads the new "
+                            "commits and signs it again if it still finds "
+                            "nothing"
+                            % (_pushed_phrase(session, row.repository, repo),
+                               row.commit_sha[:12], head_sha[:12],
+                               _on_day(row.certified_at)))}
         return {"state": STALE, "certification": row, "moved": True,
-                "why": ("the branch has moved since the review, from %s to %s, "
-                        "so somebody has pushed code nobody has looked at"
-                        % (row.commit_sha[:12], head_sha[:12]))}
+                "why": ("the branch moved%s, from %s to %s, after it was "
+                        "reviewed on %s, so there is code here nobody has "
+                        "looked at"
+                        % (_pushed_phrase(session, row.repository, repo),
+                           row.commit_sha[:12], head_sha[:12],
+                           _on_day(row.certified_at)))}
 
     # And whether anything has been found since, which catches the case the
     # commit check cannot: a repository certified before it was ever scanned,
@@ -203,7 +336,7 @@ def status(session, row, head_sha: str = "") -> dict:
     # predates the branch being recorded and there is no way to place it.  That
     # errs towards amber, which is the safe direction for a claim that
     # something has been read.
-    named = row.branch or _default_branch_of(session, row.repository)
+    named = row.branch or _default_branch_of(session, row.repository, repo)
     since_q = (session.query(Finding)
                .filter(Finding.repository == row.repository)
                .filter(Finding.state == FindingState.OPEN)
@@ -246,7 +379,24 @@ def certify(session, repository: str, branch: str, note: str, expires_at,
         return None, ("Say what you reviewed and what you concluded.  Somebody "
                       "is going to rely on this without being able to ask you.")
 
+    # Nothing to read, nothing to sign.  A branch the last scan did not find is
+    # one the host no longer has, and a sign off is a statement that somebody
+    # read some code.  Checked here rather than only on the form, because the
+    # form is not the only way in and a claim that cannot be true should not be
+    # storable by any route.
+    #
+    # An automatic sign off skips the check: it is written while walking the
+    # branch list itself, so the branch is in reach by construction, and the
+    # recorded list is the one the run in progress is about to replace.
     row = for_branch(session, repository, branch)
+    if not automatic:
+        gone = _out_of_reach(
+            session, row if row is not None
+            else Certification(repository=repository, branch=(branch or "")))
+        if gone:
+            return None, ("That branch is not one the last scan of this "
+                          "repository found, so there is no code here to "
+                          "review: " + gone)
     if row is None:
         row = Certification(repository=repository, branch=(branch or ""))
         session.add(row)
@@ -653,6 +803,7 @@ def scope_seal(session, repos, certifications=None, exemptions=None,
         return {"show": False}
 
     signed, automatic, newest, who = 0, 0, None, ""
+    done = set()
     for row in (certifications if certifications is not None
                 else session.query(Certification)).all():
         key = _resolve(row.repository, row.branch)
@@ -661,6 +812,7 @@ def scope_seal(session, repos, certifications=None, exemptions=None,
         if status(session, row).get("state") != ACTIVE:
             continue
         signed += 1
+        done.add(key)
         if row.automatic:
             automatic += 1
         when = _aware(row.certified_at)
@@ -674,8 +826,19 @@ def scope_seal(session, repos, certifications=None, exemptions=None,
         # branch box on this page can only offer branches that carry findings,
         # so a repository whose other branches are clean looks like a
         # repository of one branch and the missing seal reads as a bug.
+        #
+        # And the names of the ones that are short, because the number on its
+        # own cannot be acted on.  "One of three signed off" on a page whose
+        # branch box offers one branch is a reader being told they are missing
+        # two of something they cannot find: the other two are clean, so they
+        # carry no findings, so nothing on the page mentions them.  Named, the
+        # sentence becomes a list of what to go and do.
+        missing = sorted(population - exempt - done)
         return {"show": False, "signed": signed, "certifiable": certifiable,
-                "exempt": len(exempt)}
+                "exempt": len(exempt),
+                "outstanding": [{"repository": repo_name, "branch": name}
+                                for repo_name, name in missing[:MAX_NAMED]],
+                "outstanding_total": len(missing)}
 
     return {
         "show": True,
@@ -719,7 +882,8 @@ def counts(session, base=None) -> dict:
     from app.core.models import Certification
 
     rows = (base if base is not None else session.query(Certification)).all()
-    out = {ACTIVE: 0, STALE: 0, LAPSED: 0, REVOKED: 0, "automatic": 0}
+    out = {ACTIVE: 0, STALE: 0, RESCANNING: 0, UNKNOWN: 0, LAPSED: 0,
+           REVOKED: 0, "automatic": 0}
     for row in rows:
         state = status(session, row).get("state", "")
         if state in out:

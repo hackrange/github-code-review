@@ -35,6 +35,20 @@ router = APIRouter()
 MAX_WAIVER_DAYS = 365
 
 
+def _safe_back(raw: str) -> str:
+    """Where to send the reader afterwards, from a value they supplied.
+
+    Only a path on this site.  Anything absolute, scheme relative or carrying a
+    host is replaced rather than cleaned up, because a redirect target that came
+    in on a form is the classic way to turn a trusted page into somebody else's
+    landing page.
+    """
+    text = (raw or "").strip()
+    if not text.startswith("/") or text.startswith("//") or "\\" in text:
+        return "/repositories"
+    return text.split("?", 1)[0][:200]
+
+
 def _parse_expiry(value: str) -> datetime:
     """A date, in the future, and not absurdly far into it.
 
@@ -3192,6 +3206,163 @@ async def unexempt_from_certification(finding_id: int, request: Request,
 
     return redirect(f"/findings/{finding_id}?msg=" + quote(
         "This branch counts towards coverage again.") + "&kind=ok")
+
+
+def _branch_in_reach(db, user, repository: str, branch: str):
+    """The repository named, if this person may act on it.  -> row or None.
+
+    Addressed by name rather than through a finding, so the answer has to come
+    from the repository scope directly.  A repository the reader cannot see and
+    one that is not there answer the same way, because telling them apart turns
+    a name into a way to find out what exists.
+    """
+    from app.core.models import Repository
+
+    if not repository:
+        return None
+    return (rbac.visible_repositories(db, user)
+            .filter(Repository.full_name == repository).one_or_none())
+
+
+@router.post("/certifications/certify")
+async def certify_a_branch(request: Request,
+                           user: User = Depends(current_user)):
+    """Sign off a branch named directly, rather than through a finding.
+
+    The form on a finding covers the case where somebody has just read one.
+    It cannot cover the case that matters most here: a branch with no findings
+    on it at all.  Those are exactly the branches a scan signs off
+    automatically, and when somebody then pushes to one the badge turns amber
+    and there is no finding anywhere on that branch to open the form from.
+
+    So an amber badge on a branch nobody has ever filed a finding against could
+    not be re-certified, withdrawn, or made to go away by any route in the
+    product.  It simply sat there.
+    """
+    await check_csrf(request)
+    rbac.require(user, "repo.certify")
+
+    from urllib.parse import quote
+
+    from app.core import certification
+
+    form = await request.form()
+    repository = clean_text(form.get("repository"), "Repository", limit=320)
+    branch = clean_text(form.get("branch"), "Branch", limit=255, required=False)
+    note = clean_text(form.get("note"), "Note", limit=4000)
+    expires_at = _parse_expiry(str(form.get("expires", "")))
+    back = str(form.get("back", "") or "/repositories")
+
+    with session_scope() as db:
+        if _branch_in_reach(db, user, repository, branch) is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        head = certification.head_of(db, repository, branch)
+        row, problem = certification.certify(
+            db, repository, branch, note, expires_at, user.username, head)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        record(db, "repo.certified", actor=user.username,
+               target=f"{repository}@{branch or 'default'}",
+               detail=f"until {row.expires_at:%Y-%m-%d}: {note[:150]}",
+               source_ip=client_ip(request))
+        where = f"{repository} on {branch or 'the default branch'}"
+
+    return redirect(_safe_back(back) + "?msg=" + quote(
+        f"Certified {where}.  It lapses on the date you set, and reads as out "
+        "of date the moment somebody pushes or a new finding arrives.")
+        + "&kind=ok")
+
+
+@router.post("/certifications/revoke")
+async def revoke_a_branch(request: Request,
+                          user: User = Depends(current_user)):
+    """Withdraw a sign off on a branch named directly.  Kept, not deleted."""
+    await check_csrf(request)
+    rbac.require(user, "repo.certify")
+
+    from urllib.parse import quote
+
+    from app.core import certification
+
+    form = await request.form()
+    repository = clean_text(form.get("repository"), "Repository", limit=320)
+    branch = clean_text(form.get("branch"), "Branch", limit=255, required=False)
+    reason = clean_text(form.get("reason"), "Reason", limit=2000, required=False)
+    back = str(form.get("back", "") or "/repositories")
+
+    with session_scope() as db:
+        if _branch_in_reach(db, user, repository, branch) is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        _row, problem = certification.revoke(
+            db, repository, branch, user.username, reason)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        record(db, "repo.certification_revoked", actor=user.username,
+               target=f"{repository}@{branch or 'default'}",
+               detail=reason[:200], source_ip=client_ip(request))
+
+    return redirect(_safe_back(back) + "?msg=" + quote(
+        "The certification is withdrawn.  The record that it was given, and "
+        "taken back, stays.") + "&kind=warn")
+
+
+@router.post("/certifications/revoke-bulk")
+async def revoke_branches(request: Request,
+                          user: User = Depends(current_user)):
+    """Withdraw a set of sign offs in one go.
+
+    One dependency bump is the same finding in forty repositories, and one
+    scan is the same automatic sign off across an estate.  Taking them back one
+    at a time is how a list nobody can act on stays a list nobody acts on.
+
+    Ticked rows rather than "everything matching the filter", because a filter
+    can change under somebody between reading the page and pressing the button,
+    and a mistake here is silent: a withdrawn sign off looks exactly like one
+    that was never given.
+
+    It is the same permission check as withdrawing one, applied per row.  A
+    repository the account cannot see is skipped rather than withdrawn.
+    """
+    await check_csrf(request)
+    rbac.require(user, "repo.certify")
+
+    from urllib.parse import quote
+
+    from app.core import certification
+
+    form = await request.form()
+    wanted = [str(v) for v in form.getlist("pair") if str(v).strip()]
+    reason = clean_text(form.get("reason"), "Reason", limit=2000)
+    back = str(form.get("back", "") or "/repositories")
+    if not wanted:
+        raise HTTPException(status_code=400,
+                            detail="Tick the ones to withdraw first.")
+
+    done = skipped = 0
+    with session_scope() as db:
+        for pair in wanted[:500]:
+            # repository and branch, separated by a space: a branch may hold
+            # every other punctuation mark and a repository name may not hold
+            # a space at all.
+            repository, _, branch = pair.partition(" ")
+            if _branch_in_reach(db, user, repository, branch) is None:
+                skipped += 1
+                continue
+            _row, problem = certification.revoke(
+                db, repository, branch, user.username, reason)
+            if problem:
+                skipped += 1
+                continue
+            record(db, "repo.certification_revoked", actor=user.username,
+                   target=f"{repository}@{branch or 'default'}",
+                   detail=reason[:200], source_ip=client_ip(request))
+            done += 1
+
+    note = "%d certification%s withdrawn." % (done, "" if done == 1 else "s")
+    if skipped:
+        note += ("  %d left alone: already withdrawn, or not yours to take back."
+                 % skipped)
+    return redirect(_safe_back(back) + "?msg=" + quote(note) + "&kind=warn")
 
 
 @router.post("/findings/regrade-bulk")

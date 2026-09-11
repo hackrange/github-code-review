@@ -274,6 +274,11 @@ report_build() {
           # made on the wrong evidence.
           secrets_incomplete_reason: (.secrets_incomplete_reason // null),
           branches_scanned: .branches_scanned,
+          # And every branch that is there, walked or not.  The walked list is
+          # narrowed by the quiet branch filter and the per repository cap, so
+          # a name missing from it does not mean the branch has gone.  A sign
+          # off may only be taken away on the evidence of this one.
+          branches_present: (.branches_present // null),
           branch_count,
           # Where each branch actually was, and whether a dynamic pass could
           # run here.  Both are worked out per repository and both were being

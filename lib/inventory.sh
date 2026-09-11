@@ -254,6 +254,30 @@ repo_branches() {
   (( ${#out[@]} > 0 )) && printf '%s\n' "${out[@]}"
 }
 
+# repo_branches_present <clone_dir> -> every branch that is there, newline
+# separated, with only the exclude patterns applied.
+#
+# Not the same list as repo_branches, and treating the two as one deletes
+# people's work.  A branch skipped for being quiet, or cut off by the per
+# repository cap, is still a branch.  A branch that was merged and then
+# deleted is not.  The only evidence downstream that a sign off is about code
+# that no longer exists is a name missing from a list, and the walked list
+# cannot carry that: with stale_days set every quiet branch looks deleted, and
+# the sign off on it was being thrown away on the next scan.
+#
+# Exclude patterns still apply, because an excluded branch is somebody saying
+# they do not want it looked at or counted.
+repo_branches_present() {
+  local dir="$1"
+  local br
+  while IFS= read -r br; do
+    [[ -z "$br" ]] && continue
+    branch_allowed "$br" || continue
+    printf '%s\n' "$br"
+  done < <(git -C "$dir" for-each-ref --format='%(refname:strip=2)' \
+             --sort=-committerdate refs/heads/ 2>/dev/null)
+}
+
 # branches_containing <clone_dir> <sha> -> comma-free newline list of branches
 # whose history contains that commit. This is how a finding at a commit is
 # attributed back to every branch it is reachable from.

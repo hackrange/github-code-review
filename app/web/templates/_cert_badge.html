@@ -1,0 +1,41 @@
+{# One mapping from a sign off state to what the page says about it, used by
+   both tables here.  Two copies of it is how the card and the column end up
+   disagreeing the first time somebody edits one of them.
+
+   `beside_branch` picks the longer wording, for the badge that sits next to a
+   branch name rather than under a column headed State: "expired" on its own
+   there reads as a fact about the branch rather than about a review of it.
+
+   The green one says "certified" in both places.  It used to say "current"
+   under the State column, which is a step removed from the question anybody is
+   actually asking of that page, and it left the reader to work out current
+   what.  The rest of the set still reads as states beside it: certified, needs
+   re-checking, expired, withdrawn, not applicable. #}
+{% macro cert_badge(state, why, beside_branch=False) -%}
+  {%- if state == 'active' -%}
+  <span class="badge ok" title="{{ why }}">certified</span>
+  {%- elif state == 'stale' -%}
+  <span class="badge medium" title="{{ why }}">needs re-checking</span>
+  {#- Gray, and no call to action.  A scan signed this and a scan will sign it
+      again; asking a person to re-check something no person ever checked is
+      work invented out of nothing, and it buries the amber ones that mean it. -#}
+  {%- elif state == 'rescanning' -%}
+  <span class="badge unknown" title="{{ why }}">waiting for the next scan</span>
+  {#- Gray, and no call to action.  The branch this names is not one the last
+      scan found, so there is no diff to send anybody to look at: the compare
+      link would point at commits the host has collected and return a 404.
+      Saying "needs re-checking" here asks for work that cannot be done. -#}
+  {%- elif state == 'unknown' -%}
+  <span class="badge unknown" title="{{ why }}">branch not found</span>
+  {%- elif state == 'lapsed' -%}
+  <span class="badge unknown" title="{{ why }}">{{ 'certification expired' if beside_branch else 'expired' }}</span>
+  {%- elif state == 'revoked' -%}
+  <span class="badge waived" title="{{ why }}">{{ 'certification withdrawn' if beside_branch else 'withdrawn' }}</span>
+  {#- Gray, and worded as a statement about the branch rather than about
+      anybody having read it.  Nothing here is a sign off. -#}
+  {%- elif state == 'not_applicable' -%}
+  <span class="badge unknown" title="{{ why }}">not applicable</span>
+  {%- else -%}
+  <span class="faint">{{ state }}</span>
+  {%- endif -%}
+{%- endmacro %}

@@ -317,6 +317,24 @@
       <span>{{ seal.exempt }} left out as not applicable</span>
       {% endif %}
     </div>
+    {# Which ones, because the number on its own cannot be acted on.  The
+       branch box above offers only branches carrying findings, so the
+       branches that are short are usually the clean ones and nothing else on
+       this page mentions them by name. #}
+    {% if seal.outstanding %}
+    <div class="small faint" style="margin-top:.35rem">
+      Waiting on
+      {% for item in seal.outstanding -%}
+      <a href="{{ base }}/certifications?repo={{ item.repository | urlencode }}{% if item.branch %}&branch={{ item.branch | urlencode }}{% endif %}"
+         class="mono">{{ item.branch or 'the default branch' }}</a>{% if not filters.repo %}
+      <span class="mono">({{ item.repository }})</span>{% endif -%}
+      {{ ', ' if not loop.last }}
+      {%- endfor %}
+      {%- if seal.outstanding_total > seal.outstanding | length %}
+      and {{ seal.outstanding_total - (seal.outstanding | length) }} more
+      {%- endif %}.
+    </div>
+    {% endif %}
   </div>
   {% endif %}
   </div>

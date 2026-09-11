@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{# The one mapping from a state to what the page says about it, in a file of
+   its own so both pages can import it.  Importing it from a page that extends
+   a layout runs that whole page, which fails on everything the layout expects
+   in its context and has nothing to do with a badge. #}
+{% import "_cert_badge.html" as cb %}
+{% block title %}{{ repository }} &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1 class="mono">{{ repository }}</h1>
+    <div class="faint small">on {{ branch or 'the default branch' }}</div></div>
+  <div class="page-actions">
+    <a class="btn" href="{{ base }}/repositories">Back to repositories</a>
+  </div>
+</div>
+
+{% if message %}
+<div class="notice {{ 'warn' if kind == 'warn' else 'ok' }}">{{ message }}</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head">Where this sign off stands</div>
+  <div class="card-body">
+    {#- A branch the scan walked but nobody has signed off opens here too.
+        Those are the clean ones: no findings, so no finding to reach the form
+        from, and they are exactly the names the seal lists as outstanding. -#}
+    {% if not row %}
+    <p><span class="badge unknown">not signed off</span></p>
+    <p class="faint small">Nobody has reviewed this branch, and no scan has
+      signed it off. It counts as outstanding against the coverage figure.</p>
+    <table class="small">
+      <tr><th>Commit now</th>
+        <td class="mono">{{ head[:12] if head else 'not recorded' }}</td></tr>
+      {% if pushed_at %}
+      <tr><th>Last pushed</th><td>{{ pushed_at | dt('%d %b %Y %H:%M') }}</td></tr>
+      {% endif %}
+      <tr><th>Last scanned</th>
+        <td>{{ last_scanned | dt('%d %b %Y %H:%M') if last_scanned else 'never' }}</td></tr>
+    </table>
+    {% else %}
+    <p>{{ cb.cert_badge(state.state, state.why, beside_branch=True) }}</p>
+    <p class="faint small">{{ state.why }}</p>
+    <table class="small">
+      <tr><th>Signed off by</th>
+        <td>{{ 'a scan, which found nothing to read on this branch'
+               if row.automatic else row.certified_by or 'somebody' }}</td></tr>
+      <tr><th>Signed off on</th><td>{{ row.certified_at | dt('%d %b %Y %H:%M') }}</td></tr>
+      <tr><th>Expires</th><td>{{ row.expires_at | dt('%d %b %Y') }}</td></tr>
+      <tr><th>Commit reviewed</th>
+        <td class="mono">{{ row.commit_sha[:12] if row.commit_sha else 'none recorded' }}</td></tr>
+      <tr><th>Commit now</th>
+        <td class="mono">{{ head[:12] if head else 'not recorded' }}</td></tr>
+      {% if pushed_at %}
+      <tr><th>Last pushed</th><td>{{ pushed_at | dt('%d %b %Y %H:%M') }}</td></tr>
+      {% endif %}
+      <tr><th>Last scanned</th>
+        <td>{{ last_scanned | dt('%d %b %Y %H:%M') if last_scanned else 'never' }}</td></tr>
+      {% if row.note %}<tr><th>What was reviewed</th><td>{{ row.note }}</td></tr>{% endif %}
+    </table>
+    {% endif %}
+  </div>
+</div>
+
+{# What changed, which is the thing somebody has to read before deciding.
+   Two different questions depending on why it is not current, and sending
+   somebody to the wrong one leaves them with an empty page and no way to
+   judge. #}
+<div class="card">
+  <div class="card-head">What to look at before you decide</div>
+  <div class="card-body">
+    {% if not row %}
+    {% elif state.state == 'unknown' %}
+    {#- The branch is not one the last scan walked, so there is nothing to
+        send anybody to.  The compare view would point at commits the host has
+        collected along with the deleted branch and answer 404, which is worse
+        than saying so here: the reader spends the trip finding out. -#}
+    <p>There is nothing to review. The last scan of this repository did not
+      find <strong>{{ branch or 'the default branch' }}</strong>, so the code
+      this sign off was given for is not there to read.</p>
+    <p class="faint small">The usual reason is a pull request that was merged
+      and had its branch deleted. The sign off is removed on its own once a
+      scan of this repository confirms the branch has gone. Withdraw it below
+      if you would rather clear it now.</p>
+    {% elif compare %}
+    <p>Somebody pushed to this branch after it was signed off. The commits that
+      arrived since are the thing to read.</p>
+    <p><a class="btn" rel="noopener noreferrer" target="_blank"
+          href="{{ compare }}">Review the commits</a></p>
+    {% elif state.moved %}
+    <p class="faint">The branch has moved, but either the commit that was
+      reviewed or the commit it is on now was not recorded, so there is nothing
+      to compare against.</p>
+    {% endif %}
+
+    {% if state.state == 'unknown' %}
+    {% elif findings_count %}
+    <p>{{ findings_count }} open finding{{ '' if findings_count == 1 else 's' }}
+      on this branch.</p>
+    <p><a class="btn" href="{{ base }}/findings?repo={{ repository | urlencode }}{% if branch %}&branch={{ branch | urlencode }}{% endif %}&state=open">Review findings</a></p>
+    {% else %}
+    <p class="faint">Nothing is open on this branch.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% if can_certify %}
+<div class="card">
+  <div class="card-head">{{ 'What you can do about it' if state.state == 'unknown'
+                            else 'Sign it off' if not row
+                            else 'Sign it off again' }}</div>
+  <div class="card-body">
+    {#- No sign off form on a branch that is not there.  Signing one off is a
+        statement that somebody read the code, and there is no code here to
+        read; offering the form would invite a claim that cannot be true. -#}
+    {% if state.state == 'unknown' %}
+    <p class="faint small">This branch cannot be signed off again, because
+      there is nothing to read. Withdrawing it keeps the record that it was
+      given and taken back.</p>
+    {% else %}
+    {% if not row %}
+    <p class="faint small">Nobody has signed this branch off yet. Signing it
+      off is what takes it out of the outstanding count.</p>
+    {% endif %}
+    <p class="faint small">This records you reading the code as it is now. It
+      covers <strong class="mono">{{ repository }}</strong> on
+      <strong>{{ branch or 'the default branch' }}</strong> and nothing else.</p>
+    <form method="post" action="{{ base }}/certifications/certify">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="repository" value="{{ repository }}">
+      <input type="hidden" name="branch" value="{{ branch }}">
+      <input type="hidden" name="back" value="/certifications">
+      <label>What you reviewed, and what you concluded
+        <textarea name="note" rows="3" required minlength="20" maxlength="4000"
+                  placeholder="What you read, what you checked for, and why you are satisfied."></textarea>
+      </label>
+      <label>Expires
+        <input type="date" name="expires" required value="{{ default_expiry }}">
+        <span class="faint small">Required. It also stops reading as current the
+          moment anybody pushes again.</span>
+      </label>
+      <button class="btn primary" type="submit">Certify this branch</button>
+    </form>
+    {% endif %}
+
+    {% if row %}
+    <div class="exempt">
+      <p class="faint small">Withdrawing keeps the record. The fact that it was
+        given, and taken back, is the part somebody asks about later.</p>
+      <form method="post" action="{{ base }}/certifications/revoke">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="repository" value="{{ repository }}">
+        <input type="hidden" name="branch" value="{{ branch }}">
+        <input type="hidden" name="back" value="/repositories">
+        <input type="text" name="reason" maxlength="2000" placeholder="Why withdraw it">
+        <button class="btn" type="submit">Withdraw the certification</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

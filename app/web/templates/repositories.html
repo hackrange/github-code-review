@@ -4,36 +4,8 @@
 <div class="page-head"><div><h1>Repositories</h1>
   <div class="faint small">{{ rows|length }} you can see</div></div></div>
 
-{# One mapping from a sign off state to what the page says about it, used by
-   both tables here.  Two copies of it is how the card and the column end up
-   disagreeing the first time somebody edits one of them.
+{% import "_cert_badge.html" as cb %}
 
-   `beside_branch` picks the longer wording, for the badge that sits next to a
-   branch name rather than under a column headed State: "expired" on its own
-   there reads as a fact about the branch rather than about a review of it.
-
-   The green one says "certified" in both places.  It used to say "current"
-   under the State column, which is a step removed from the question anybody is
-   actually asking of that page, and it left the reader to work out current
-   what.  The rest of the set still reads as states beside it: certified, needs
-   re-checking, expired, withdrawn, not applicable. #}
-{% macro cert_badge(state, why, beside_branch=False) -%}
-  {%- if state == 'active' -%}
-  <span class="badge ok" title="{{ why }}">certified</span>
-  {%- elif state == 'stale' -%}
-  <span class="badge medium" title="{{ why }}">needs re-checking</span>
-  {%- elif state == 'lapsed' -%}
-  <span class="badge unknown" title="{{ why }}">{{ 'certification expired' if beside_branch else 'expired' }}</span>
-  {%- elif state == 'revoked' -%}
-  <span class="badge waived" title="{{ why }}">{{ 'certification withdrawn' if beside_branch else 'withdrawn' }}</span>
-  {#- Gray, and worded as a statement about the branch rather than about
-      anybody having read it.  Nothing here is a sign off. -#}
-  {%- elif state == 'not_applicable' -%}
-  <span class="badge unknown" title="{{ why }}">not applicable</span>
-  {%- else -%}
-  <span class="faint">{{ state }}</span>
-  {%- endif -%}
-{%- endmacro %}
 
 {# The security sign offs.
    The dashboard counts these and its tile linked here with a filter nothing
@@ -55,7 +27,10 @@
      opened at all. #}
   <div class="small" style="padding:0 1rem .5rem">
     {% for key, label in [('', 'All'), ('active', 'Current'),
-                          ('stale', 'Needs re-checking'), ('lapsed', 'Expired'),
+                          ('stale', 'Needs re-checking'),
+                          ('rescanning', 'Waiting for the next scan'),
+                          ('unknown', 'Branch not found'),
+                          ('lapsed', 'Expired'),
                           ('revoked', 'Withdrawn'),
                           ('not_applicable', 'Not applicable')] %}
       {%- if certified_filter == key %}<strong>{{ label }}</strong>
@@ -77,20 +52,35 @@
   <div class="table-scroll">
     <table id="cert-table" class="small">
       <thead>
-        <tr><th>Repository</th><th>Branch</th><th>State</th><th>Certified</th>
+        <tr>
+          {% if can_certify %}<th class="nowrap"><input type="checkbox" id="select-certs"
+              title="Everything shown"></th>{% endif %}
+          <th>Repository</th><th>Branch</th><th>State</th><th>Certified</th>
           <th>Expires</th><th>By</th><th>Why</th></tr>
       </thead>
       <tbody>
         {% for row in certified %}
         <tr>
-          <td class="mono">{{ row.repository }}</td>
+          {% if can_certify %}
+          <td class="nowrap"><input type="checkbox" name="pair" form="cert-bulk"
+              value="{{ row.repository }} {{ row.branch }}"
+              {{ 'disabled' if row.state in ('revoked', 'not_applicable') }}></td>
+          {% endif %}
+          {# The way in to the one page that can do something about this.
+             The certify and withdraw forms live on a finding, which works
+             until the branch has no findings on it, and a branch a scan signed
+             off is exactly that.  Then there was no route to it at all. #}
+          <td class="mono"><a href="{{ base }}/certifications?repo={{ row.repository | urlencode }}{% if row.branch %}&branch={{ row.branch | urlencode }}{% endif %}">{{ row.repository }}</a></td>
           {# The branch name, in full and allowed to wrap.  A name like
              Feature/DIGI-1734-add-notification-to-approver in an unpadded
              cell reads as an empty one, which looks like a branch that has
              gone rather than one with a long name. #}
-          <td class="mono small branch-name">{{ row.branch or 'the default branch' }}</td>
+          <td class="mono small branch-name">
+            {%- if row.findings %}<a href="{{ base }}/findings?repo={{ row.repository | urlencode }}{% if row.branch %}&branch={{ row.branch | urlencode }}{% endif %}&state=open"
+               title="{{ row.findings }} open finding{{ '' if row.findings == 1 else 's' }} on this branch">{{ row.branch or 'the default branch' }}</a>
+            {%- else %}{{ row.branch or 'the default branch' }}{% endif %}</td>
           <td>
-            {{ cert_badge(row.state, row.why) }}
+            {{ cb.cert_badge(row.state, row.why) }}
             {# Somewhere to go from an amber badge, and it depends on why.
                A badge goes amber for two different reasons and they need
                different pages.  Findings arrived, in which case the findings
@@ -121,12 +111,44 @@
              which one they are looking at. #}
           <td class="nowrap">{% if row.automatic %}<span class="faint">a scan</span>
             {%- else %}{{ row.by }}{% endif %}</td>
-          <td class="small faint">{{ row.note }}</td>
+          {# Why it is not current, when it is not.  This column used to show
+             the note somebody wrote when they signed it off, which answers
+             "what was reviewed" and not "why am I being asked about this".
+             On a page filtered to the ones needing attention, the second
+             question is the only one anybody has. #}
+          <td class="small">
+            {%- if row.state in ('stale', 'rescanning', 'unknown', 'lapsed', 'revoked') %}
+            {{ row.why }}
+            {%- if row.note %}<div class="faint" style="margin-top:.3rem">Signed off with: {{ row.note }}</div>{% endif %}
+            {%- else %}<span class="faint">{{ row.note }}</span>{% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
+  {% if can_certify %}
+  {# Withdrawing a set of them, because one scan writes the same sign off across
+     an estate and taking them back one at a time is how a list nobody can act
+     on stays a list nobody acts on.
+
+     Ticked rows rather than "everything matching the filter": a filter can
+     change under somebody between reading the page and pressing the button,
+     and a mistake here is silent, since a withdrawn sign off looks exactly
+     like one that was never given. #}
+  <form method="post" id="cert-bulk" action="{{ base }}/certifications/revoke-bulk"
+        style="padding:.6rem 1rem 0;display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="back" value="/repositories{{ '?certified=' ~ certified_filter if certified_filter }}">
+    <div class="field" style="flex:1 1 22rem;margin:0">
+      <label for="cert-bulk-reason">Why withdraw the ticked ones</label>
+      <input type="text" id="cert-bulk-reason" name="reason" required
+             minlength="3" maxlength="2000"
+             placeholder="Written onto every one of them, and into the audit log">
+    </div>
+    <button class="btn" type="submit">Withdraw the ticked certifications</button>
+  </form>
+  {% endif %}
   {% if certified_filter %}
   <div class="small faint" style="padding:.6rem 1rem 0">
     <a href="{{ base }}/repositories">Show every certification</a>
@@ -181,7 +203,7 @@
              read it, which is the whole reason the two are told apart. #}
           {% set cert = certified_default.get(r.full_name) %}
           <td class="small faint">{{ r.default_branch }}
-            {%- if cert %} {{ cert_badge(cert.state, cert.why ~
+            {%- if cert %} {{ cb.cert_badge(cert.state, cert.why ~
                  ('. Marked by ' if cert.state == 'not_applicable'
                   else '. Signed off by ') ~
                  ('a scan' if cert.automatic else (cert.by or 'somebody')),
@@ -236,4 +258,5 @@
   {% else %}<div class="empty">No repositories yet. Run a scan.</div>{% endif %}
 </div>
 <script src="{{ base }}/static/tablefilter.js?v={{ asset_v('tablefilter.js') }}"></script>
+<script src="{{ base }}/static/certbulk.js?v={{ asset_v('certbulk.js') }}"></script>
 {% endblock %}

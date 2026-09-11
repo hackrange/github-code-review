@@ -24,6 +24,10 @@ scan_one_repo() {
   # Which commit each branch is on, so a review of this code can be told
   # apart from a review of what it used to be.
   BRANCH_HEADS_JSON='{}'
+  # Every branch that is there, as opposed to the ones this run walked.  A
+  # branch skipped for being quiet is still a branch, and a sign off on one is
+  # not a sign off on code that has gone.
+  BRANCHES_PRESENT_JSON='[]'
   GHSCAN_SBOM_CDX=""
 
   local result_file="$results_dir/${slug}.json"
@@ -88,12 +92,18 @@ scan_one_repo() {
       --arg hist_from "${HISTORY_FROM:-}" \
       --argjson hist_done "${HISTORY_COMPLETE:-false}" \
       --argjson dast "${DAST_JSON:-null}" \
-      --argjson branch_heads "${BRANCH_HEADS_JSON:-{\}}" '
+      --argjson branch_heads "${BRANCH_HEADS_JSON:-{\}}" \
+      --argjson branches_present "${BRANCHES_PRESENT_JSON:-[]}" '
       {
         repository: $repo[0],
         status: $status,
         error: (if $err == "" then null else $err end),
         branches_scanned: $branches[0],
+        # Every branch that exists, walked or not.  The walked list above is
+        # narrowed by the quiet branch filter and the per repository cap, so a
+        # name missing from it does not mean the branch has gone, and taking a
+        # sign off away on that evidence throws away a review somebody did.
+        branches_present: $branches_present,
         # branch name to the commit it was on when this ran.
         branch_heads: $branch_heads,
         branch_count: ($branches[0] | length),
@@ -202,6 +212,20 @@ scan_one_repo() {
         | jq -c --arg b "$bh" --arg s "$sha" '. + {($b): $s}')
     done
     BRANCH_HEADS_JSON="$heads_json"
+
+    # And the full list, before the quiet branch filter and the per repository
+    # cap.  Recorded so that a branch missing from it means deleted, which is
+    # the only thing a sign off may be taken away on.
+    local -a present=()
+    local pb
+    while IFS= read -r pb; do
+      [[ -n "$pb" ]] && present+=("$pb")
+    done < <(repo_branches_present "$clone_dir")
+    if (( ${#present[@]} > 0 )); then
+      BRANCHES_PRESENT_JSON=$(printf '%s\n' "${present[@]}" | jq -R . | jq -sc '.')
+    else
+      BRANCHES_PRESENT_JSON="$BRANCHES_JSON"
+    fi
 
     log_info "[$full_name] ${#branches[@]} branch(es) in scope"
   fi

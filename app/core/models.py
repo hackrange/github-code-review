@@ -335,6 +335,11 @@ class Repository(Base):
     # row, because its credential engine failed and the marker is withheld
     # when an engine dies, which is correct and which nothing told the queue.
     history_attempted_at = Column(DateTime(timezone=True))
+    # When the host last saw a push.  Recorded so a badge that stopped reading
+    # as current can say when the code moved, rather than only that it did.
+    # "Somebody pushed" is a fact nobody can act on; "somebody pushed on
+    # Tuesday" is the start of finding out who and why.
+    pushed_at = Column(DateTime(timezone=True))
 
     # Every branch the last scan actually walked here, as a list of names.
     #
@@ -343,6 +348,18 @@ class Repository(Base):
     # rather than asking somebody to type a name from memory, and it is also the
     # only record afterwards of what a scan covered.
     branch_names = Column(LONG_JSON, default="[]")
+    # Every branch that is there, walked or not.
+    #
+    # Not the same list, and treating the two as one deletes people's work.
+    # The walked list is narrowed by the quiet branch filter and the per
+    # repository cap, so with either of those set a branch that is simply
+    # quiet is missing from it, and the one thing a sign off may be taken away
+    # on is a branch having been deleted.  Every scan was throwing away the
+    # reviews on quiet branches on that evidence.
+    #
+    # Empty where the scanner that wrote the report predates this, which is
+    # read as "nobody said" rather than as "nothing is there".
+    branch_names_present = Column(LONG_JSON, default="[]")
     # Branch name to the commit it was on at the last scan.
     #
     # What lets a security sign off know it is out of date.  Names alone say
