@@ -447,8 +447,26 @@
           {% set drill_url = (base ~ '/trends?' ~ drill ~ '&basis=' ~ filters.basis ~ '&days=' ~ filters.days
              ~ ('&connection=' ~ (filters.connection | urlencode) if filters.connection else ''))
              if (drill and row.name != '(none)') else '' %}
+          {# A seal beside a repository every branch of which is signed off.
+             The seal above is about the whole scope, so a page listing forty
+             repositories of which six are certified shows nothing at all, and
+             those six had nowhere on this page that said so.
+
+             Small, faded and not a link, like the big one: a fact about the
+             row rather than something to act on, and a green tick that
+             highlights invites a click that does nothing. #}
           <td class="heat-name">
-            <a href="{{ drill_url or findings_url }}">{{ row.name }}</a></td>
+            <a href="{{ drill_url or findings_url }}">{{ row.name }}</a>
+            {%- if row.name in heat_sealed %}
+            <span class="row-seal" role="img"
+                  title="Every branch this scan walked is signed off"
+                  aria-label="Certified: every branch signed off">
+              <svg viewBox="0 0 120 120" aria-hidden="true">
+                <circle class="ring" cx="60" cy="60" r="54"/>
+                <circle class="ring thin" cx="60" cy="60" r="46"/>
+                <path class="tick" d="M40 62 l13 13 l27 -31"/>
+              </svg></span>
+            {%- endif %}</td>
           {% for band in ['critical', 'high', 'medium', 'low', 'info'] %}
           <td class="cell band-{{ band }} {{ 'is-zero' if not row[band] }}">
             {%- if row[band] %}<a href="{{ findings_url }}&severity={{ band }}">{{ row[band] }}</a>{% endif -%}

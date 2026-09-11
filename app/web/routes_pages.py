@@ -293,6 +293,32 @@ def _walked_branches(db, user, repository: str) -> set:
     return out
 
 
+def _branches_read_in(db, user, repository: str, since) -> set:
+    """The branches the last scan walked, when that scan is inside the period.
+
+    _walked_branches answers "what is there now", which is the right answer to
+    the question it was written for and the wrong one here.  Offered under a
+    period of Today, it put back every branch of a repository last read a
+    month ago, which is exactly the list the period had just removed.
+
+    The repository's own last scan carries the date, so it is asked first.  A
+    scan outside the window read none of these branches during it, whatever
+    the branch list says is there today.
+    """
+    from app.core.models import Repository
+
+    if not repository:
+        return set()
+    recent = (rbac.visible_repositories(db, user)
+              .filter(Repository.full_name == repository)
+              .filter(Repository.last_scanned_at.isnot(None))
+              .filter(Repository.last_scanned_at >= since)
+              .count())
+    if not recent:
+        return set()
+    return _walked_branches(db, user, repository)
+
+
 def _labels(db) -> list:
     """The sensitivity labels this install uses."""
     from app.core import settings_store as _store
@@ -740,15 +766,64 @@ def trends_page(request: Request, user: User = Depends(current_user)):
 
         axis = ("branch" if repository else
                 "repository" if organization else "organization")
+
+        # What this period actually read, and what the page may therefore name.
+        #
+        # The chart honoured the period because it is drawn from the rollup.
+        # Everything beside it was drawn from the findings as they stand now,
+        # and a finding carries no notion of a period at all, so Today still
+        # listed every branch and repository the estate has ever held.
+        #
+        # The rollup cannot answer this either, which is the part that is easy
+        # to get wrong.  It snapshots every open finding in the estate each
+        # time any scan anywhere finishes, so a repository nobody has looked
+        # at in a month still has a row dated today.  The day on that row is
+        # when the snapshot was taken, not when the code was read.
+        #
+        # The repository's own last scan is the only record of when this code
+        # was read, so that is what the period is applied to.  It is the same
+        # evidence the staleness note further down this page already uses.
+        read_in_period = {name for (name,) in
+                          rbac.visible_repositories(db, user)
+                          .filter(Repository.last_scanned_at.isnot(None))
+                          .filter(Repository.last_scanned_at >= since)
+                          .with_entities(Repository.full_name).all() if name}
+        here = set(read_in_period)
+        if repository:
+            here &= {repository}
+        elif organization:
+            here = {name for name in here
+                    if name.split("/")[0] == organization}
+
+        # Which rows the period leaves, by the name each row carries.
+        named = (here if axis == "repository" else
+                 _branches_read_in(db, user, repository, since)
+                 if axis == "branch" else
+                 {name.split("/")[0] for name in here})
+
+        # Applied to the rows and never to the counts.
+        #
+        # Every total on this table is a link, and the list it opens has no
+        # notion of a period at all.  Narrowing the query behind the number
+        # would leave an organization cell reading nine over a list of ten,
+        # and a drill down that lands on a different number is worse than no
+        # link: it is the kind of wrong that makes somebody stop believing the
+        # rest of the screen.  So the period decides which rows are here, and
+        # a row that is here still says what clicking it will show.
+
         # Every row at this scope, not the busiest handful.  The table sorts
         # and pages now, and paging over a list that was already cut to twelve
         # would offer a second page of a truncation: the rows nobody can reach
         # are exactly the ones somebody sorting by a column is looking for.
-        every_row = report_data.hotspots(
+        every_row = [row for row in report_data.hotspots(
             report_data._scoped(rbac.visible_findings(db, user),
                                 organization, repository, branch, connection),
-            axis=axis, limit=None)
+            axis=axis, limit=None) if row["name"] in named]
         grid = {"axis": axis, "rows": every_row}
+        # The matrix names no repository and no branch, so there is nothing on
+        # it for the period to remove, and it is the same query the totals in
+        # the table are counted from.  Narrowing one and not the other is how
+        # two panels on one screen start disagreeing.
         matrix = report_data.risk_matrix(
             report_data._scoped(rbac.visible_findings(db, user),
                                 organization, repository, branch, connection))
@@ -770,20 +845,43 @@ def trends_page(request: Request, user: User = Depends(current_user)):
             rbac.visible_certifications(db, user),
             rbac.visible_certification_exemptions(db, user),
             organization, repository, branch)
+        # The same mark, per row, where the rows are repositories.
+        #
+        # The seal above is about the whole scope, so a page listing forty
+        # repositories of which six are fully signed off shows no seal at all,
+        # and the six have nothing on screen saying so.  Worked out once for
+        # the list rather than once per row: a table cannot afford a query
+        # each, and a mark worked out by a different rule than the seal next
+        # to it is two marks that will disagree.
+        sealed = (_cert.sealed_repositories(
+            db,
+            rbac.visible_repositories(db, user),
+            rbac.visible_certifications(db, user),
+            rbac.visible_certification_exemptions(db, user))
+            if axis == "repository" else set())
         options = trends.choices(db, base=base, connection=connection,
                                  organization=organization,
-                                 repository=repository)
+                                 repository=repository, since=since,
+                                 within=read_in_period)
         # The daily rollup files each finding under one branch name, so a
         # branch that only ever comes second in a finding's list is missing
         # from that box even though the table below counts it.  Offer it, or
         # the reader is told master has nothing on it by a filter that cannot
         # name master.
+        #
+        # Only where the period reaches it.  The finding has to sit in a
+        # repository this period read and have been seen inside it, and the
+        # branches the last scan walked count only when that scan itself
+        # landed inside the window, or this union would put straight back
+        # every name the period had just taken out.
         options["branches"] = sorted(
             set(options.get("branches") or [])
             | set(branch_scope.names(report_data._scoped(
                 rbac.visible_findings(db, user), organization, repository,
-                "", connection)))
-            | _walked_branches(db, user, repository))
+                "", connection)
+                .filter(Finding.repository.in_(sorted(here)))
+                .filter(Finding.last_found_at >= since)))
+            | _branches_read_in(db, user, repository, since))
 
         # Where the recorded history starts.  Everything before it was worked
         # out from when findings were first seen and resolved, and its
@@ -866,6 +964,7 @@ def trends_page(request: Request, user: User = Depends(current_user)):
             matrix=matrix,
             chart=charts.stacked_area(points),
             heat_rows=page_rows,
+            heat_sealed=sealed,
             heat_sort=sort, heat_dir=direction,
             heat_total=len(shaded), heat_page_no=heat_page_no,
             heat_pages=heat_pages, heat_per=per_rows,

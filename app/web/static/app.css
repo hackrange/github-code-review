@@ -886,3 +886,23 @@ table.heat .heat-actions .btn { margin-left: .3rem; }
 @media (max-width: 720px) {
   .seal-space { flex-basis: 100%; }
 }
+
+/* The same mark at the size of a row.  Faded and not clickable for the same
+   reason the big one is: it says something about the row, it is not a thing
+   to press. */
+.row-seal {
+  display: inline-block;
+  width: 14px; height: 14px;
+  margin-left: .35rem;
+  vertical-align: -2px;
+  color: var(--ok);
+  opacity: .55;
+  user-select: none;
+}
+.row-seal svg { width: 14px; height: 14px; display: block; }
+.row-seal .ring { fill: none; stroke: currentColor; stroke-width: 7; }
+.row-seal .ring.thin { display: none; }
+.row-seal .tick {
+  fill: none; stroke: currentColor; stroke-width: 12;
+  stroke-linecap: round; stroke-linejoin: round;
+}

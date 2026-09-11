@@ -410,7 +410,8 @@ def heatmap(session, basis: str = "actions", base=None, **scope) -> dict:
 
 
 def choices(session, base=None, connection: str = "", organization: str = "",
-            repository: str = "") -> dict:
+            repository: str = "", since: datetime = None,
+            within: set = None) -> dict:
     """What the filter boxes can offer, given what is already chosen.
 
     Each box offers only what the boxes to its left leave possible.  Picking a
@@ -418,17 +419,38 @@ def choices(session, base=None, connection: str = "", organization: str = "",
     which return nothing, is a filter that makes somebody prove a negative one
     click at a time.
 
+    The period is one of the things already chosen.  It was the one narrowing
+    never applied here, so a branch last read a month ago was still offered
+    under a period of Today, and picking it drew an empty chart.  That is the
+    same "prove a negative one click at a time" this docstring already
+    objected to, arriving through the one box nobody had wired up.
+
+    `within` is the set of repositories the period actually read, and it has
+    to be handed in because these rows cannot say.  record() snapshots every
+    open finding in the estate each time any scan anywhere finishes, so a
+    repository nobody has looked at in a month still gets a row today.  The
+    day on a row says when the snapshot was taken, not when that code was
+    read, and reading it as the second is what put every repository in the
+    estate behind a period of Today.
+
     Every list is narrowed by what came before it, and never by what comes
     after: choosing a branch must not remove the connections, or the reader
-    cannot get back out of a dead end they have just walked into.
+    cannot get back out of a dead end they have just walked into.  The period
+    does not narrow them either, for the same reason: it is a filter somebody
+    has to be able to widen again.
 
     Scoped the same way everything else is, so the boxes never name a
     repository the reader cannot open.  A filter list is a disclosure too.
     """
-    source = base if base is not None else session.query(TrendPoint)
+    everything = base if base is not None else session.query(TrendPoint)
+    source = everything
+    if since is not None:
+        source = source.filter(TrendPoint.day >= _midnight(since))
+    if within is not None:
+        source = source.filter(TrendPoint.repository.in_(sorted(within)))
 
     def distinct(column, **narrowing):
-        query = source
+        query = narrowing.pop("source", None) or source
         if narrowing.get("connection"):
             query = query.filter(TrendPoint.connection == narrowing["connection"])
         if narrowing.get("organization"):
@@ -441,7 +463,7 @@ def choices(session, base=None, connection: str = "", organization: str = "",
 
     return {
         # Never narrowed: this is the way back out.
-        "connections": distinct(TrendPoint.connection),
+        "connections": distinct(TrendPoint.connection, source=everything),
         "organizations": distinct(TrendPoint.organization,
                                   connection=connection),
         "repositories": distinct(TrendPoint.repository,

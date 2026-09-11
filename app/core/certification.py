@@ -854,6 +854,76 @@ def scope_seal(session, repos, certifications=None, exemptions=None,
     }
 
 
+def sealed_repositories(session, repos, certifications=None,
+                        exemptions=None) -> set:
+    """Every repository where each branch walked carries an active sign off.
+
+    -> {"org/name", ...}
+
+    The same population and the same rules scope_seal applies to one scope,
+    asked once for a whole list of them.  A table row cannot afford a query
+    each, and a mark worked out by a different rule than the seal beside it is
+    two marks that disagree the first time somebody checks them against each
+    other.
+
+    So the rules are repeated deliberately rather than approximated: a branch
+    marked not applicable is left out of the count instead of counted as done,
+    a sign off only counts while it is active, and a repository with nothing
+    certifiable gets no mark, because a seal on an empty set is the easiest
+    way to be wrong.
+    """
+    import json as _json
+
+    from app.core.models import Certification, CertificationExemption, Repository
+
+    rows = (repos if repos is not None else session.query(Repository))
+    rows = rows.filter(Repository.archived.is_(False))
+
+    population, default_branch = set(), {}
+    for full_name, default, names in rows.with_entities(
+            Repository.full_name, Repository.default_branch,
+            Repository.branch_names).all():
+        default_branch[full_name] = default or ""
+        try:
+            walked = _json.loads(names or "[]")
+        except (ValueError, TypeError):
+            walked = []
+        for name in walked:
+            if name:
+                population.add((full_name, name))
+    if not population:
+        return set()
+
+    def _resolve(repo_name, name):
+        return (repo_name, name or default_branch.get(repo_name, ""))
+
+    marks = (exemptions if exemptions is not None
+             else session.query(CertificationExemption))
+    exempt = {key for key in (
+        _resolve(repo_name, name) for repo_name, name in
+        marks.with_entities(CertificationExemption.repository,
+                            CertificationExemption.branch).all())
+        if key in population}
+
+    done = set()
+    for row in (certifications if certifications is not None
+                else session.query(Certification)).all():
+        key = _resolve(row.repository, row.branch)
+        if key not in population or key in exempt:
+            continue
+        if status(session, row).get("state") != ACTIVE:
+            continue
+        done.add(key)
+
+    owed, signed = {}, {}
+    for key in population - exempt:
+        owed[key[0]] = owed.get(key[0], 0) + 1
+        if key in done:
+            signed[key[0]] = signed.get(key[0], 0) + 1
+    return {name for name, total in owed.items()
+            if total and signed.get(name, 0) == total}
+
+
 def all_exemptions(session, base=None) -> list:
     """Every branch marked as not expecting a sign off, newest first."""
     from app.core.models import CertificationExemption
