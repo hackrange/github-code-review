@@ -38,8 +38,14 @@ repo_clone() {
   git -C "$dest" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
 
   if ! git -C "$dest" checkout --quiet --force "$default_branch" 2>/dev/null; then
+    # Said out loud rather than at debug.  Without a checkout there is no index
+    # file, and trufflehog refuses to read the repository at all: "failed to
+    # read index file".  That reads as an engine fault and is not one, and the
+    # pass it fails is then held open for ever while the catch up queue tries
+    # the same repository again every twenty minutes.  One line here would have
+    # named the cause in a minute rather than an hour.
     git -C "$dest" checkout --quiet --force HEAD 2>/dev/null || \
-      log_debug "$full_name: no working tree checkout (empty repo?)"
+      log_warn "$full_name: no working tree could be checked out, so there is no index and the credential engines cannot read it.  An empty repository, or a default branch ($default_branch) that is not there."
   fi
   return 0
 }
@@ -558,7 +564,11 @@ secrets_engine_died() {
     why="$engine exited $rc"
   fi
   if [[ -n "$logf" && -s "$logf" ]]; then
-    why="$why: $(tail -2 "$logf" | tr '\n' ' ' | cut -c1-200)"
+    # Six hundred rather than two hundred.  These engines report in JSON, and
+    # two hundred characters cut the one that mattered off mid sentence: the
+    # log said "failed to read index file: open /var/tmp/gcr-w" and stopped,
+    # which named the problem and hid which file and why.
+    why="$why: $(tail -2 "$logf" | tr '\n' ' ' | cut -c1-600)"
   fi
   SECRETS_PASS_INCOMPLETE="${SECRETS_PASS_INCOMPLETE:+$SECRETS_PASS_INCOMPLETE; }$why"
   log_warn "[$full_name] $why, so the credential pass is not complete"

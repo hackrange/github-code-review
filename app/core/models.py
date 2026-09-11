@@ -325,6 +325,16 @@ class Repository(Base):
     # been walked yet.
     history_from = Column(String(32), default="")
     history_complete = Column(Boolean, default=False, nullable=False)
+    # When the catch up pass last took this repository on.
+    #
+    # Not the same as last_scanned_at, which any scan moves.  This one exists
+    # so the catch up queue is a rotation rather than a ranking: it used to
+    # order by the marker alone, so a repository whose marker cannot move
+    # sorted first for ever and was chosen every twenty minutes while the rest
+    # of the backlog waited behind it.  One did exactly that, four passes in a
+    # row, because its credential engine failed and the marker is withheld
+    # when an engine dies, which is correct and which nothing told the queue.
+    history_attempted_at = Column(DateTime(timezone=True))
 
     # Every branch the last scan actually walked here, as a list of names.
     #

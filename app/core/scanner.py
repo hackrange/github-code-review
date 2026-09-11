@@ -1132,7 +1132,22 @@ def catchup_backlog(session, limit: int = 5):
     rows = (session.query(Repository)
             .filter(Repository.history_complete.is_(False))
             .filter(Repository.history_from != "")
-            .order_by(Repository.history_from.asc())
+            # Least recently attempted first, and only then furthest behind.
+            #
+            # Ordering by the marker alone made this a ranking rather than a
+            # rotation.  A repository whose marker cannot move stays at the top
+            # of a ranking for ever: one was picked every twenty minutes, four
+            # passes running, doing two minutes of work each time and finishing
+            # exactly where it started, while six others that could have
+            # progressed waited behind it.  The marker was withheld because its
+            # credential engine died, which is the correct thing to do and
+            # which nothing here could see.
+            #
+            # This does not try to work out whether a repository is broken.  It
+            # only stops any one of them holding the queue: attempted goes to
+            # the back, and a broken one still comes round again in its turn.
+            .order_by(Repository.history_attempted_at.asc().nullsfirst(),
+                      Repository.history_from.asc())
             .limit(200).all())
     if not rows:
         return None, []
@@ -1171,6 +1186,16 @@ def run_catchup(triggered_by: str = "catchup") -> dict:
         connection_id, repos = catchup_backlog(db, limit)
         if not repos:
             return {"ok": False, "reason": "Every history has been walked to its end."}
+        # Written down before the scan rather than after it, because the point
+        # is to record the attempt and not the outcome.  A pass that achieves
+        # nothing is exactly the case this is here for, and a repository whose
+        # scan dies would never reach a line placed afterwards.
+        from app.core.models import Repository as _Repo
+
+        (db.query(_Repo).filter(_Repo.full_name.in_(repos))
+         .update({_Repo.history_attempted_at: utcnow()},
+                 synchronize_session=False))
+        db.flush()
         row = connection_store.by_id(db, connection_id)
         if row is None or not row.enabled or not connection_store.configured(row):
             return {"ok": False, "reason": "The account those repositories came from is not usable."}
