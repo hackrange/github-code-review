@@ -51,6 +51,8 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import or_
+
 from datetime import timezone
 
 from app.core.models import (Certification, Finding, FindingState,
@@ -112,6 +114,15 @@ def for_branch(session, repository: str, branch: str):
             .filter(Certification.repository == repository)
             .filter(Certification.branch == (branch or ""))
             .one_or_none())
+
+
+def _default_branch_of(session, repository: str) -> str:
+    """The branch a sign off with no branch on it is about."""
+    from app.core.models import Repository
+
+    repo = (session.query(Repository)
+            .filter(Repository.full_name == repository).one_or_none())
+    return (getattr(repo, "default_branch", "") or "") if repo else ""
 
 
 def head_of(session, repository: str, branch: str) -> str:
@@ -177,12 +188,32 @@ def status(session, row, head_sha: str = "") -> dict:
     # And whether anything has been found since, which catches the case the
     # commit check cannot: a repository certified before it was ever scanned,
     # or one whose head this install has not recorded yet.
-    since = (session.query(Finding)
-             .filter(Finding.repository == row.repository)
-             .filter(Finding.state == FindingState.OPEN)
-             .filter(Finding.excepted.is_(False))
-             .filter(Finding.first_found_at > _aware(row.certified_at))
-             .count())
+    #
+    # On this branch, which is the whole point and was missing.  A sign off
+    # covers one branch and this counted the repository, so a single finding
+    # arriving on main turned every signed off branch in that repository amber
+    # at once.  Eight hundred and eighty one of nine hundred badges went that
+    # way, and the ones a person then opened to see what had changed showed
+    # nothing, because there was nothing on the branch they were told about.
+    # A badge that cries wolf about somebody else's branch is worse than no
+    # badge: it costs a review that finds nothing and teaches people to ignore
+    # the next one.
+    #
+    # A finding filed under no branch counts wherever it is, because it
+    # predates the branch being recorded and there is no way to place it.  That
+    # errs towards amber, which is the safe direction for a claim that
+    # something has been read.
+    named = row.branch or _default_branch_of(session, row.repository)
+    since_q = (session.query(Finding)
+               .filter(Finding.repository == row.repository)
+               .filter(Finding.state == FindingState.OPEN)
+               .filter(Finding.excepted.is_(False))
+               .filter(Finding.first_found_at > _aware(row.certified_at)))
+    if named:
+        since_q = since_q.filter(or_(Finding.branch == named,
+                                     Finding.branch.is_(None),
+                                     Finding.branch == ""))
+    since = since_q.count()
     if since:
         return {"state": STALE, "certification": row, "new_findings": since,
                 "why": ("%d finding%s has arrived since the review, so it no "
