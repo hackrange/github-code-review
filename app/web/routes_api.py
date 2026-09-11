@@ -42,11 +42,40 @@ def _safe_back(raw: str) -> str:
     host is replaced rather than cleaned up, because a redirect target that came
     in on a form is the classic way to turn a trusted page into somebody else's
     landing page.
+
+    The query string is kept.  Some of these pages are addressed entirely by
+    one: a sign off page is a repository and a branch in the query string and
+    nothing else, so dropping it sent somebody who had just signed a branch off
+    to a page that answered 404, with the sign off already recorded and no sign
+    of it.  A filtered list loses its filter the same way.
+
+    msg and kind are dropped, because they are put back on below.  A value
+    arriving on the form would otherwise be the one the page read, which is a
+    banner in our own voice saying whatever the link that was clicked chose.
     """
     text = (raw or "").strip()
     if not text.startswith("/") or text.startswith("//") or "\\" in text:
         return "/repositories"
-    return text.split("?", 1)[0][:200]
+    # A newline here is a second header, so this is not only about tidiness.
+    if any(ord(c) < 32 or ord(c) == 127 for c in text):
+        return "/repositories"
+    # Longer than any page of ours, so it is replaced rather than cut down.
+    # A truncated address is a 404 that reads as the page having been right
+    # to refuse, which is the failure this whole helper is here to stop.
+    if len(text) > 900:
+        return "/repositories"
+    path, _, query = text.partition("?")
+    kept = [pair for pair in query.split("&")
+            if pair and pair.partition("=")[0] not in ("msg", "kind")]
+    return path + ("?" + "&".join(kept) if kept else "")
+
+
+def _back_with(where: str, message: str, kind: str = "ok") -> str:
+    """That page, with the line to show the reader when it opens."""
+    from urllib.parse import quote
+
+    return "%s%smsg=%s&kind=%s" % (where, "&" if "?" in where else "?",
+                                   quote(message), kind)
 
 
 def _parse_expiry(value: str) -> datetime:
@@ -3242,8 +3271,6 @@ async def certify_a_branch(request: Request,
     await check_csrf(request)
     rbac.require(user, "repo.certify")
 
-    from urllib.parse import quote
-
     from app.core import certification
 
     form = await request.form()
@@ -3267,10 +3294,10 @@ async def certify_a_branch(request: Request,
                source_ip=client_ip(request))
         where = f"{repository} on {branch or 'the default branch'}"
 
-    return redirect(_safe_back(back) + "?msg=" + quote(
+    return redirect(_back_with(
+        _safe_back(back),
         f"Certified {where}.  It lapses on the date you set, and reads as out "
-        "of date the moment somebody pushes or a new finding arrives.")
-        + "&kind=ok")
+        "of date the moment somebody pushes or a new finding arrives."))
 
 
 @router.post("/certifications/revoke")
@@ -3279,8 +3306,6 @@ async def revoke_a_branch(request: Request,
     """Withdraw a sign off on a branch named directly.  Kept, not deleted."""
     await check_csrf(request)
     rbac.require(user, "repo.certify")
-
-    from urllib.parse import quote
 
     from app.core import certification
 
@@ -3301,9 +3326,10 @@ async def revoke_a_branch(request: Request,
                target=f"{repository}@{branch or 'default'}",
                detail=reason[:200], source_ip=client_ip(request))
 
-    return redirect(_safe_back(back) + "?msg=" + quote(
+    return redirect(_back_with(
+        _safe_back(back),
         "The certification is withdrawn.  The record that it was given, and "
-        "taken back, stays.") + "&kind=warn")
+        "taken back, stays.", "warn"))
 
 
 @router.post("/certifications/revoke-bulk")
@@ -3325,8 +3351,6 @@ async def revoke_branches(request: Request,
     """
     await check_csrf(request)
     rbac.require(user, "repo.certify")
-
-    from urllib.parse import quote
 
     from app.core import certification
 
@@ -3362,7 +3386,7 @@ async def revoke_branches(request: Request,
     if skipped:
         note += ("  %d left alone: already withdrawn, or not yours to take back."
                  % skipped)
-    return redirect(_safe_back(back) + "?msg=" + quote(note) + "&kind=warn")
+    return redirect(_back_with(_safe_back(back), note, "warn"))
 
 
 @router.post("/findings/regrade-bulk")
@@ -3681,16 +3705,16 @@ async def describe_repository(repo_id: int, request: Request,
     await check_csrf(request)
     rbac.require(user, "repo.describe")
 
-    from urllib.parse import quote
-
     from app.core.models import Repository as m_Repository
 
     form = await request.form()
     note = clean_text(form.get("note"), "Description", limit=4000,
                       required=False)
+    # Through the same check as every other return-to-where-you-were: a
+    # leading slash on its own still leaves //somewhere.else, which a browser
+    # reads as another host and follows.
     back = clean_text(form.get("back"), "Back", limit=300, required=False)
-    if not back.startswith("/"):
-        back = "/blast-radius"
+    back = _safe_back(back) if back else "/blast-radius"
 
     with session_scope() as db:
         repo = (db.query(m_Repository)
@@ -3709,8 +3733,8 @@ async def describe_repository(repo_id: int, request: Request,
                actor=user.username, target=repo.full_name,
                detail=note[:200], source_ip=client_ip(request))
 
-    return redirect(back + ("&" if "?" in back else "?") + "msg=" + quote(
-        "Saved." if note else "Description removed."))
+    return redirect(_back_with(
+        back, "Saved." if note else "Description removed."))
 
 
 @router.post("/notifications/save")

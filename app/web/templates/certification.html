@@ -128,7 +128,10 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="repository" value="{{ repository }}">
       <input type="hidden" name="branch" value="{{ branch }}">
-      <input type="hidden" name="back" value="/certifications">
+      {#- Back to this page, which is addressed by the repository and the
+          branch and by nothing else.  A bare /certifications is not a page. -#}
+      <input type="hidden" name="back"
+             value="/certifications?repo={{ repository | urlencode }}{{ '&branch=' ~ (branch | urlencode) if branch }}">
       <label>What you reviewed, and what you concluded
         <textarea name="note" rows="3" required minlength="20" maxlength="4000"
                   placeholder="What you read, what you checked for, and why you are satisfied."></textarea>
