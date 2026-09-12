@@ -508,6 +508,11 @@ def _set_aside_placeholders(session, document, seen_at, seen_fingerprints) -> in
     # which are the scanner's own reading of the shape of the string.
     reasons = (
         ("placeholder_pattern_match", "it matches a triage rule"),
+        ("content_digest",
+         "it is a hash of content rather than a credential: bare hex at exactly "
+         "one hash length, and one of several of that same shape in the same "
+         "file, which is what a generated report or a lock file looks like and "
+         "what a credential never looks like"),
         ("jwt_signature_stub",
          "its signature is the wrong length for the algorithm it names, so "
          "nobody could present it anywhere"),

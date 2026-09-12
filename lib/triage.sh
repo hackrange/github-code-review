@@ -343,6 +343,10 @@ triage_findings() {
 
     ($tri.placeholder_patterns // []) as $pp
     | ($tri.placeholder_paths // []) as $ppath
+    # How many of one hash shape make a file a data file.  Eight, because a
+    # generated report has hundreds and nothing that holds credentials has
+    # eight of one hash length in it.
+    | (($tri.digest_siblings_min // 8)) as $mindig
     | ($tri.min_entropy // 3.0) as $minent
     | ($tri.min_length // 12) as $minlen
     | (($allow.fingerprints // []) | map(ascii_downcase)) as $afp
@@ -396,8 +400,26 @@ triage_findings() {
         # from fixtures and documentation at the top of the queue.
         | ($f.jwt_signature_stub // false) as $jwt_stub
 
+        # A hash of content, in a file full of hashes of content.
+        #
+        # The detectors that produce most of this are the ones whose whole rule
+        # is a length and a nearby keyword: thirty two alphanumeric characters
+        # with the word box somewhere in the file is a Box credential as far as
+        # the engine is concerned, and an Allure test id, an ETag, a lock file
+        # integrity line and a coverage report id all fit it exactly.
+        #
+        # Two things have to hold together, and neither is enough alone.  The
+        # value is bare hex at exactly one hash length, which a real secret of
+        # the mixed alphanumeric shape these detectors describe essentially
+        # never is: sixteen of sixty two characters, thirty two times over.  And
+        # it is one of many of that same shape in the same file, which is what
+        # separates a generated artifact from a configuration file holding one
+        # hex API key that must still be reported.
+        | (($f.digest_shaped // false)
+           and (($f.digest_siblings // 0) >= $mindig)) as $digest
+
         | (if $f.verified then "confirmed"
-           elif $pat_hit or $too_uniform or $jwt_stub then "placeholder"
+           elif $pat_hit or $too_uniform or $jwt_stub or $digest then "placeholder"
            elif $too_short or ($low_entropy and ($tri.drop_unverified_below_entropy // true)) then "placeholder"
            elif $noisy_path then "low"
            else "probable" end) as $verdict
@@ -406,6 +428,7 @@ triage_findings() {
             entropy: (($ent * 1000 | round) / 1000),
             classification: (
               if $f.verified then "verified_live_credential"
+              elif $digest then "content_digest"
               elif $verdict == "placeholder" then "placeholder_or_test_value"
               elif $verdict == "low" then "probable_test_fixture"
               else "unverified_probable_secret" end),
@@ -421,6 +444,7 @@ triage_findings() {
               else ($sev.credential // "critical") end),
             severity_reason: (
               if $f.verified then "credential verified live against the issuing provider"
+              elif $digest then "a content hash, one of \($f.digest_siblings) of its own shape in the same file"
               elif $verdict == "low" then "real-shaped credential under a test or fixture path"
               else "credential survived placeholder triage" end),
             suppressed: $allowed,
@@ -432,6 +456,7 @@ triage_findings() {
               below_min_entropy: $low_entropy,
               low_character_diversity: $too_uniform,
               jwt_signature_stub: $jwt_stub,
+              content_digest: $digest,
               non_production_path: $noisy_path
             }
           }

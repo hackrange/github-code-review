@@ -334,6 +334,54 @@ secrets_skipped_findings() {
   }
 }
 
+# The lengths a hash comes out at, in hex characters: MD5, SHA1, SHA224,
+# SHA256, SHA384, SHA512.  Nothing else is treated as a digest length, because
+# the whole argument below rests on the value being exactly one hash long.
+_DIGEST_LENGTHS=" 32 40 56 64 96 128 "
+
+# How much of a file is read looking for the other hashes in it.  A generated
+# report is one enormous line and the answer is in the first few hundred
+# kilobytes of it; reading the whole of a 40MB artifact to count past eight
+# would be work spent confirming something already known.
+_DIGEST_SCAN_BYTES=4000000
+
+# _digest_siblings <dir> <file> <length> [commit] -> how many distinct hex
+# strings of exactly that length are in that file.
+#
+# This is the question that makes the check safe.  A Datadog API key is 32 hex
+# characters and a Git Code Review scan must keep reporting one; an Allure test
+# id is also 32 hex characters and there are four hundred of them in one
+# generated file.  One value of a shape is a credential.  Four hundred of the
+# same shape in one file is content addressing.
+#
+# Word boundaries on purpose: without them every 64 character hash counts twice
+# as a pair of 32s, and the count stops meaning what it says.
+# The file is read out of the history when it is not in the working tree, which
+# is the common case rather than the edge one: most of what a credential pass
+# finds is back in the history, and a generated report is replaced by the next
+# run, so the version that carried the value is often the only version that ever
+# had it.  Without this the check would miss exactly the findings it was written
+# for.
+_digest_siblings() {
+  local dir="$1" file="$2" len="$3" commit="${4:-}"
+  [[ -n "$dir" && -n "$file" ]] || { printf '0'; return 0; }
+
+  local body=""
+  if [[ -f "$dir/$file" ]]; then
+    body=$(head -c "$_DIGEST_SCAN_BYTES" -- "$dir/$file" 2>/dev/null)
+  elif [[ -n "$commit" ]]; then
+    body=$(git -C "$dir" show "$commit:$file" 2>/dev/null \
+           | head -c "$_DIGEST_SCAN_BYTES")
+  fi
+  # No opinion where the file cannot be read at all.  Zero siblings leaves the
+  # candidate where it was, which is reported.
+  [[ -n "$body" ]] || { printf '0'; return 0; }
+
+  printf '%s' "$body" \
+    | grep -oE "\b[0-9a-fA-F]{$len}\b" 2>/dev/null \
+    | sort -u | wc -l | tr -d ' '
+}
+
 derive_secret_facts() {
   local dir="${1:-}"
   local pre suf maxmask pp
@@ -403,9 +451,31 @@ derive_secret_facts() {
       live=$(_live_at_head "$dir" "$secret" "${allbr[@]}")
     fi
 
+    # Whether this is a hash of something rather than a credential.
+    #
+    # A detector that matches "thirty two alphanumeric characters near the word
+    # box" matches an MD5 too, and a generated test report is full of them: one
+    # Cypress run published into a repository produced a critical credential
+    # finding on an Allure test id, because the word box appears in a test name
+    # in the same file.  Nothing about the value's length or entropy can tell
+    # those apart, and entropy is the only evidence the rest of this pass has.
+    #
+    # Two facts are recorded and neither is a judgment, which triage makes: the
+    # value is exactly one hash long and bare hex, and this is how many other
+    # strings of that exact shape sit in the same file.  A real credential that
+    # happens to be hex is one of one.
+    local digest_shaped=false digest_siblings=0
+    if [[ "$secret" =~ ^[0-9a-fA-F]+$ && "$_DIGEST_LENGTHS" == *" $slen "* ]]; then
+      digest_shaped=true
+      digest_siblings=$(_digest_siblings "$dir" \
+        "$(printf '%s' "$line" | jq -r '.file // ""')" "$slen" \
+        "$(printf '%s' "$line" | jq -r '.commit // ""')")
+    fi
+
     printf '%s' "$line" | jq -c \
       --arg fp "$fp" --arg merge "$merge" --arg redacted "$redacted" \
       --argjson slen "$slen" --argjson pp "$pp" --argjson live "$live" \
+      --argjson dshape "$digest_shaped" --argjson dsibs "${digest_siblings:-0}" \
       --argjson now "$now_epoch" --argjson idc "$JWT_IDENTITY_CLAIMS" \
       --argjson prc "$JWT_PRIVILEGE_CLAIMS" '
       # A JSON web token is not opaque.  Two of its three parts are base64 of
@@ -529,7 +599,12 @@ derive_secret_facts() {
             (if ($s | test("-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")) then false
              else any($pp[]?; . as $re | $s | test($re)) end),
           low_character_diversity:
-            (($s | explode | unique | length) <= 4 and ($s | length) >= 8)
+            (($s | explode | unique | length) <= 4 and ($s | length) >= 8),
+          # Bare hex, exactly one hash long, and how many others of that shape
+          # share the file.  Facts, not a verdict: triage decides what a value
+          # surrounded by four hundred of its own shape is.
+          digest_shaped: $dshape,
+          digest_siblings: $dsibs
         }
       + ($s | jwt_facts)
       | del(._secret)'

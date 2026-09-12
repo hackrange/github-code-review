@@ -4,6 +4,33 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-09-13
+
+**A hash of content is no longer reported as a credential.**  Several detectors
+are a length and a nearby keyword and nothing else: thirty two alphanumeric
+characters with the word box somewhere in the file is a Box credential as far as
+the engine is concerned.  A Cypress run publishes a test report into a
+repository, one test name contains the word box, and every test id in that
+report is an MD5, so a generated file produced a critical credential finding on
+the default branch with nothing in the value's length or entropy to argue with.
+The same shape is every ETag, lock file integrity line and coverage report id in
+an estate.
+
+Two things now have to hold before one of these is set aside, and neither is
+enough on its own.  The value is bare hex at exactly one hash length, which a
+real secret of the mixed alphanumeric shape those detectors describe essentially
+never is.  And it is one of eight or more strings of that same shape in the same
+file, which is what separates a generated artifact from a configuration file
+holding a single hex API key that must still be reported.  A thirty two
+character hex key on its own in a file is untouched, and a credential the
+provider confirmed is never set aside by any of this.
+
+Nothing is deleted.  The finding moves to set aside with a sentence saying it is
+a hash of content, one of several of its shape in that file, and that the value
+is still in the code.  Existing findings are re-judged on the next scan.  The
+threshold is `digest_siblings_min` under the credential triage settings, for an
+installation that wants to see more of them or switch the check off.
+
 ## 2026-09-12
 
 **The digest says what the finding is.**  A message named the rule, the

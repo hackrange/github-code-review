@@ -96,6 +96,13 @@ TEMPLATE = {
                     "min_entropy": 3.0,
                     "min_length": 12,
                     "drop_unverified_below_entropy": True,
+                    # How many strings of one hash shape make a file a data
+                    # file rather than a place credentials live.  A generated
+                    # test report has hundreds of them and a configuration
+                    # file with one hex API key in it has one, which is the
+                    # difference this number draws.  Raise it to report more
+                    # of them, set it very high to switch the check off.
+                    "digest_siblings_min": 8,
                     "placeholder_patterns": [
                         "(?i)^(x{4,}|y{4,}|z{4,}|a{4,}|0{4,}|1{4,}|\\*{3,}|\\.{3,})$",
                         "(?i)(?<![A-Za-z0-9])(example|placeholder|redacted|dummy|sample|changeme|change[-_]?me|replace[-_]?me|yourkey|your[-_]?(api|secret|token|key|password))(?![A-Za-z0-9])",
