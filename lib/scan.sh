@@ -807,6 +807,13 @@ scan_one_repo() {
       # before the count is logged so the number means something.
       cfg_bool '.scan.vulnerabilities.reachability' true &&
         VULNS_JSON=$(vulns_reachability "$VULNS_JSON" "$clone_dir")
+      # When the file that asks for each package last changed.  Here for the
+      # same reason reachability is: the clone is still on disk, and this is the
+      # last moment either question can be asked.  A package has no line to
+      # blame, so this is the only date the kind can carry, and without it a
+      # critical that has been sitting in a repository since 2021 arrives
+      # looking like one somebody introduced last night.
+      (( need_clone )) && VULNS_JSON=$(vulns_dated "$VULNS_JSON" "$clone_dir")
       local nv; nv=$(printf '%s' "$VULNS_JSON" | jq 'length')
       log_info "[$full_name] $nv vulnerability finding(s)"
     fi

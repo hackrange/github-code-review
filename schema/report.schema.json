@@ -726,6 +726,39 @@
             "type": "string"
           }
         },
+        "declared": {
+          "type": "object",
+          "description": "The file that asks for this package, and when it last changed. A package has no line of code to blame, so this is the only date the kind can carry: it was being asked for on or before the day this file was last edited. Absent where the clone is shallow, or where the package came out of a container image rather than a file, because a date guessed there would read as somebody having added it yesterday.",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "committed_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "author_name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "author_email": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "commit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
         "reachability": {
           "type": "object",
           "description": "Whether the application can actually reach this package. A verdict and the reason for it; nothing is removed on the strength of it.",

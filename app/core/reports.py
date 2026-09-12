@@ -45,7 +45,25 @@ CSV_COLUMNS = [
     # column where it was.  What the finding is part of, the same five answers
     # the JSON carries in its asset block.
     "application", "business_owner", "technical_owner", "holds", "visibility",
+    # Which file asks for a vulnerable package.  Appended for the same reason
+    # the five above were: a reader that goes by position is unaffected, and a
+    # reader that goes by name gets the one answer this file could not give
+    # about the most common kind of finding in it.
+    "declared_in",
 ]
+
+# What turns a cell into a program.
+#
+# Excel, LibreOffice and Google Sheets all evaluate a cell whose first
+# character is one of these, so a rule name or a file path out of somebody
+# else's repository is code as soon as a reader double clicks the file.  Every
+# value in this report comes from a repository this tool does not control.
+#
+# It is applied to the copy that gets mailed, and deliberately not to the file
+# on disk: that file is a contract another tool reads, and an apostrophe in
+# front of a value it has parsed for years would be this product corrupting its
+# own output to defend a spreadsheet nobody opens it in.
+SPREADSHEET_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
 
 SEVERITY_ORDER = {
     Severity.CRITICAL: 0,
@@ -260,6 +278,9 @@ def as_dict(finding: Finding, facts: dict = None) -> dict:
             "ecosystem": finding.ecosystem or "",
             "fixed_in": finding.fixed_in or "",
             "image": finding.image_ref or "",
+            # The manifest or lock file that asks for it.  A package has no line
+            # of code to open, so this is the only location the kind carries.
+            "declared_in": finding.manifest_path or "",
         "malicious": finding.malicious_signal if finding.malicious else "",
         }
         if finding.malicious:
@@ -355,7 +376,49 @@ def as_row(finding: Finding, facts: dict = None) -> dict:
         # columns, and somebody always does that at least once.
         "holds": " | ".join(asset["holds"]),
         "visibility": asset["visibility"],
+        "declared_in": finding.manifest_path or "",
     }
+
+
+def csv_text(session, findings: list, *, for_spreadsheet: bool = False,
+             facts: dict = None) -> str:
+    """These findings as a CSV, in the same columns as the file on disk.
+
+    One place builds a CSV, so the file written after a scan and the copy
+    attached to a message can never drift into two different shapes.
+
+    for_spreadsheet is for the copy that gets mailed.  It escapes the cells a
+    spreadsheet would otherwise run and puts a byte order mark in front, which
+    is what makes Excel on Windows read anything outside ASCII correctly.
+    Neither belongs in the file on disk, which is parsed rather than opened.
+    """
+    # Read once where the caller has not already, since an estate puts
+    # thousands of findings in a few hundred repositories.
+    facts = facts if facts is not None else repo_facts(session, findings)
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=CSV_COLUMNS,
+                            extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    for finding in findings:
+        row = as_row(finding, facts)
+        if for_spreadsheet:
+            row = {name: _quote_formula(value) for name, value in row.items()}
+        writer.writerow(row)
+    return ("\ufeff" if for_spreadsheet else "") + buffer.getvalue()
+
+
+def _quote_formula(value):
+    """A cell a spreadsheet will show rather than run.
+
+    An apostrophe in front is what every spreadsheet reads as "this is text",
+    and it is not shown in the cell.  Numbers are safe to pass through because
+    none of these columns can hold a negative one, so a leading minus is always
+    somebody else's text rather than arithmetic.
+    """
+    if isinstance(value, (int, float)):
+        return value
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in SPREADSHEET_TRIGGERS else text
 
 
 def _write_atomic(path: Path, data: str) -> None:
@@ -577,13 +640,8 @@ def write_reports(session, reports_dir: Path = None) -> dict:
     _write_atomic(reports_dir / "vulnerabilities.json",
                   json.dumps(document, indent=2) + "\n")
 
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=CSV_COLUMNS,
-                            extrasaction="ignore", lineterminator="\n")
-    writer.writeheader()
-    for finding in findings:
-        writer.writerow(as_row(finding, facts))
-    _write_atomic(reports_dir / "vulnerabilities.csv", buffer.getvalue())
+    _write_atomic(reports_dir / "vulnerabilities.csv",
+                  csv_text(session, findings, facts=facts))
 
     # The same decisions, in the format a customer's procurement team reads.
     # Written here rather than on a schedule so it can never describe a set of

@@ -15,6 +15,18 @@
       }
       applyProvider(trigger.getAttribute("data-provider") || "github");
 
+      /* The generic filler only fills fields that hold text, because writing a
+       * row's value onto a tick box replaces the value it submits.  So the two
+       * digest boxes are ticked here, and cleared here: the last connection's
+       * answer left in this one's form is a quiet way to start mailing the
+       * wrong people. */
+      [["notify_application_owner", "data-notify_application_owner"],
+       ["notify_technical_owner", "data-notify_technical_owner"]]
+        .forEach(function (pair) {
+          var box = form.querySelector('[name="' + pair[0] + '"]');
+          if (box) { box.checked = trigger.getAttribute(pair[1]) === "1"; }
+        });
+
       /* Several labels can apply at once, so they are tick boxes rather than a
        * field the generic filler understands. */
       var carried = (trigger.getAttribute("data-sensitivity") || "")

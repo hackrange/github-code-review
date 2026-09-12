@@ -341,6 +341,22 @@ DEFAULTS = {
     "notify.mail_transport":   ("smtp", False,
                                 "smtp, or graph for Microsoft 365 through the Graph API."),
     "notify.email_to":         ("", False, "Where mail goes. Several, separated by commas."),
+    # Plain text or a page.  Text is the default because it is what every
+    # client renders and what a ticket queue parses; HTML is worth choosing for
+    # the links, since a digest of twenty findings carries sixty of them and
+    # nobody copies an address out of plain text sixty times.
+    "notify.email_format":     ("text", False,
+                                "text or html. HTML makes the links in a digest "
+                                "clickable; text is what every client renders."),
+    # Off by default.  The body carries the same masked preview the report files
+    # do; the spreadsheet also carries the matched line and the author's
+    # address, and it lands in mailboxes with a wider readership than the page
+    # has.  That is a decision for an administrator rather than a default
+    # somebody discovers.
+    "notify.attach_csv":       (False, False,
+                                "Attach the digest's new findings as a CSV, in "
+                                "the same columns as vulnerabilities.csv. The "
+                                "digest only, never an urgent message."),
     # Microsoft 365, through the Graph API rather than SMTP.  Tenants with
     # basic authentication switched off have no SMTP to offer, and an app
     # registration with Mail.Send is the supported way in.

@@ -438,9 +438,10 @@ def _filtered_findings(db, user, params):
     # last week wants both.
     #
     # The commit date is not known for every kind: it is recorded for
-    # credentials and for most code findings, and never for a vulnerable
-    # package or a misconfiguration, which have no line in a file to blame.
-    # Those still match on the date they were first seen, so nothing is
+    # credentials, for most code findings, and for a vulnerable package whose
+    # declaring file the scanner could date, which is the last change to that
+    # file rather than to any one line.  A misconfiguration has nothing to blame
+    # at all.  Those still match on the date they were first seen, so nothing is
     # excluded for want of a date it could never have had.
     since_days = (params.get("since", "") or "").strip()
     if since_days in ("1", "7", "14", "30"):

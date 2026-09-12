@@ -1034,6 +1034,18 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         finding.package_source = (package.get("source")
                                   or package.get("name") or "")[:255]
         finding.ecosystem = package.get("type") or ""
+        # Which file asked for it.  Every engine that can say, says: grype
+        # reports the manifest or lock file it read, osv-scanner reports
+        # the manifest it resolved, and the provider alert feed reports the
+        # manifest path on the alert.  A package scanned out of a container
+        # image reports the image reference instead, and that is already kept
+        # as image_ref, so it is not copied here where it would read as a path
+        # somebody could open.
+        declared = [str(where).strip() for where in _as_list(package.get("locations"))
+                    if str(where).strip()]
+        image = str(row.get("image") or "").strip()
+        finding.manifest_path = next((where for where in declared
+                                      if where != image), "")[:LONG_TEXT]
         finding.vulnerability_id = row.get("id") or ""
         finding.fixed_in = row.get("fixed_in") or ""
         finding.known_exploited = bool(row.get("known_exploited"))
@@ -1066,6 +1078,23 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         finding.malicious_signal = (bad.get("signal") or "")[:32]
         finding.malicious_reason = (bad.get("reason") or "")[:LONG_TEXT]
         finding.malicious_evidence = (bad.get("evidence") or "")[:LONG_TEXT]
+        # When the file that declares it last changed, and who by.
+        #
+        # A package has no line of code to blame, so this kind arrived with no
+        # date at all and every report could only say when this tool first
+        # noticed it.  The scanner now dates the manifest out of the clone,
+        # which is a ceiling rather than an exact date: the package was being
+        # asked for on or before the day that file was last edited.  Kept in the
+        # same columns as every other kind's blame, because it answers the same
+        # question a reader is asking, and the one it does not answer, which
+        # line introduced it, has no answer for a package anywhere.
+        declared = row.get("declared") or {}
+        if declared.get("committed_at"):
+            finding.committed_at = _when(declared.get("committed_at"))
+            finding.author_name = (declared.get("author_name") or "")[:255]
+            finding.author_email = (declared.get("author_email") or "")[:255]
+            if declared.get("commit") and not finding.commit_sha:
+                finding.commit_sha = str(declared["commit"])[:64]
         reach = row.get("reachability") or {}
         finding.reachability = (reach.get("verdict") or "")[:16]
         finding.reachability_reason = (reach.get("reason") or "")[:LONG_TEXT]

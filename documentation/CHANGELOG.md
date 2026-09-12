@@ -4,6 +4,67 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-09-12
+
+**The digest says what the finding is.**  A message named the rule, the
+repository and the file, and left out most of what somebody reads a finding for.
+Every message now describes each finding the way the page does: what kind of
+thing it is, the branch it is on and whether there are others, the package with
+its version and the version that fixes it, whether the application can reach it
+and the reason that was concluded, what was committed and when and by whom, and
+three links, to the finding on this installation, to the file on the host, and
+to the advisory itself.  Chat stays one line per finding, because a channel that
+gets twelve lines per finding is a channel people mute.
+
+**A vulnerable package says which file asked for it.**  Every engine that can
+say, says: the manifest or lock file grype read, the manifest osv-scanner
+resolved, the path on a provider alert.  None of it was kept, so a report could
+say a repository depends on a bad version of something and not whether that came
+from package.json or from a lock file six directories down.  It is recorded now,
+shown on the finding page as a link to the file, and named in every message.
+Existing findings get it on their next scan.
+
+**Mail can be sent as HTML.**  Plain text is still the default, because it is
+what every client renders and what a ticket queue can parse.  HTML is worth
+choosing for the links: a digest of twenty findings carries sixty of them, and in
+plain text those are addresses somebody has to copy.  HTML mail goes with a plain
+text copy inside it, so a reader whose client will not render it still gets the
+whole message.
+
+**A connection can name who hears about it.**  The addresses on the
+Notifications page are one list for the whole installation, which stops being the
+right shape as soon as there is more than one application: the team that owns the
+payment gateway does not want the brochure site's findings.  Each connection now
+has a tick box beside its application owner and its technical owner, and a field
+for anybody else, a rota address or a ticket queue.  Those are added to the
+installation wide list rather than replacing it, and they only hear about their
+own account.  Every box is off on upgrade, because a release that starts mailing
+named people who never asked for it is a release that gets the sender blocked.
+
+**The digest can carry a spreadsheet of what it is about.**  The message
+describes the first twenty five findings and then points at the page, which left
+the rest of a busy night unsaid, and the people a connection now mails often have
+no account here to go and look.  Off by default, on the Notifications page: when
+it is on, a digest carries that scan's new findings as a CSV in the same columns
+as vulnerabilities.csv, so it opens in Excel and can be split across a team.
+Never the standing backlog, and never on the three urgent kinds, which read
+better as four lines of text.  Cells a spreadsheet would otherwise run as a
+formula are escaped, because every value in the file came out of a repository
+this tool does not control, and the file on disk is deliberately left alone
+because another tool parses it.  The row count is capped and the body says how
+many did not fit.
+
+**vulnerabilities.csv gained a column, at the end.**  `declared_in`, which file
+asks for a vulnerable package.  Appended rather than inserted, so a tool reading
+by position finds every column exactly where it was.  The JSON carries the same
+answer inside its package block.
+
+**Every message says to archive or purge what is no longer in use.**  The
+largest single reason a report is too long to work through is repositories nobody
+works on.  An archived repository is read only, and its findings stop counting as
+work somebody is expected to do; a purged one stops appearing at all.  This tool
+only ever reads, so it is the one part of the answer that has to be asked for.
+
 ## 2026-09-10
 
 **The trends page says why a scope is not certified, and its branch box names

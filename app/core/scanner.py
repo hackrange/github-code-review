@@ -1011,8 +1011,11 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
                     from app.core import notify
                     if notify.enabled(db):
                         label = getattr(connection, "name", "") or ""
+                        # The account row, not the handle the scan was started
+                        # with.  It carries who asked to hear about this one,
+                        # and it is already loaded on this session.
                         notify.announce(db, counts.get("new_findings") or [],
-                                        scan_label=label)
+                                        scan_label=label, connection=tagged)
                 except Exception:            # noqa: BLE001
                     log.warning("could not send notifications", exc_info=True)
 

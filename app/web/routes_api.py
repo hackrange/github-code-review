@@ -1263,6 +1263,22 @@ async def save_connection(request: Request, user: User = Depends(current_user)):
     application_owner = clean_email(form.get("application_owner"),
                                     "Application owner")
     technical_owner = clean_email(form.get("technical_owner"), "Technical owner")
+    # Anybody else who should hear about this account.  A rota address, a ticket
+    # queue, the vendor who maintains it.
+    notify_extra = clean_email(form.get("notify_extra"), "Other addresses")
+    notify_app = _checked(form, "notify_application_owner")
+    notify_tech = _checked(form, "notify_technical_owner")
+    # A tick box with nothing beside it would be a setting that silently does
+    # nothing, and the person who ticked it would find out by never being told
+    # about a critical.
+    if notify_app and not application_owner:
+        raise HTTPException(
+            status_code=400,
+            detail="Fill in the application owner before sending them the digest.")
+    if notify_tech and not technical_owner:
+        raise HTTPException(
+            status_code=400,
+            detail="Fill in the technical owner before sending them the digest.")
 
     organizations = ", ".join(_csv_list(clean_text(
         form.get("organizations"), "Organizations", limit=4000, required=False)))
@@ -1322,6 +1338,9 @@ async def save_connection(request: Request, user: User = Depends(current_user)):
         row.application_name = application_name
         row.application_owner = application_owner
         row.technical_owner = technical_owner
+        row.notify_application_owner = notify_app
+        row.notify_technical_owner = notify_tech
+        row.notify_extra = notify_extra
         # Only labels this install actually uses, so a renamed one cannot leave
         # a connection carrying a tag nothing matches any more.
         row.sensitivity = ", ".join(
@@ -1346,6 +1365,12 @@ async def save_connection(request: Request, user: User = Depends(current_user)):
         db.flush()
 
         scope_detail = f"{method}, {organizations or 'every org it can reach'}"
+        # Who gets mailed is worth a line in the audit log.  An address added
+        # here starts receiving findings from the next scan, and somebody will
+        # eventually ask when that began.
+        told = row.notify_addresses()
+        if told:
+            scope_detail += f", notifying {', '.join(told)}"
         # Worth saying out loud in the log: narrowing the branches narrows what
         # a scan can possibly find, and somebody reading a thin report later
         # needs to see when that happened.
@@ -3764,6 +3789,11 @@ async def save_notifications(request: Request,
         raise HTTPException(status_code=400,
                             detail="Mail goes by SMTP or Microsoft 365.")
 
+    fmt = str(form.get("notify.email_format", "text")).strip().lower()
+    if fmt not in {"text", "html"}:
+        raise HTTPException(status_code=400,
+                            detail="Mail is plain text or HTML.")
+
     port = clean_int(form.get("notify.smtp_port", 587) or 587, "Port",
                      low=1, high=65535)
 
@@ -3799,6 +3829,8 @@ async def save_notifications(request: Request,
                                            required=False))
 
         put("notify.mail_transport", transport)
+        put("notify.email_format", fmt)
+        put("notify.attach_csv", _checked(form, "notify.attach_csv"))
         put("notify.graph_tenant", clean_text(form.get("notify.graph_tenant"),
                                               "Tenant id", limit=100,
                                               required=False))

@@ -98,8 +98,46 @@
       <label>To
         <input type="text" name="notify.email_to" value="{{ values['notify.email_to'] }}"
                placeholder="security@example.com, oncall@example.com">
-        <span class="faint small">Several, separated by commas.  Used by both.</span>
+        <span class="faint small">Several, separated by commas.  Used by both.
+          A <a href="{{ base }}/connections">connection</a> can add its own
+          owners on top of this list, so the team that owns one application
+          hears about that one rather than all of them.</span>
       </label>
+
+      <label>Format
+        <select name="notify.email_format">
+          <option value="text" {{ 'selected' if values['notify.email_format'] != 'html' }}>Plain text</option>
+          <option value="html" {{ 'selected' if values['notify.email_format'] == 'html' }}>HTML</option>
+        </select>
+        <span class="faint small">HTML is worth choosing for the links.  Every
+          finding in a digest carries three, to the finding here, to the file on
+          the host and to the advisory itself, and in plain text those are
+          addresses somebody has to copy.  Text is what every client renders and
+          what a ticket queue can parse, so it stays the default.  HTML mail is
+          sent with a plain text copy inside it either way.</span>
+      </label>
+
+      <label class="check">
+        <input type="checkbox" name="notify.attach_csv" value="1"
+               {{ 'checked' if values['notify.attach_csv'] }}>
+        Attach the new findings as a spreadsheet
+      </label>
+      <p class="faint small">The digest describes the first few findings and
+        then points here, which leaves the rest of a busy night unsaid.  The
+        attachment is every new finding in that scan, in the same columns as the
+        <span class="mono">vulnerabilities.csv</span> this installation writes,
+        so it opens in Excel and can be split across a team by somebody who has
+        no account here.  Never the standing backlog, and never on the three
+        urgent kinds, which go out on their own and are easier to read as four
+        lines of text.</p>
+      <p class="faint small">Two things worth knowing before you turn it on.  It
+        carries more than the message body does, the matched line and the
+        author's address as well as the masked preview, and it lands wherever
+        mail lands.  And it is a snapshot of one scan rather than the current
+        list, so the file name carries the date and the page stays the thing to
+        work from.  Cells that a spreadsheet would otherwise run as a formula
+        are escaped, because every value in it came out of a repository this
+        tool does not control.</p>
 
       <div data-mail="smtp">
         <label>From

@@ -526,6 +526,21 @@ class Finding(Base):
     # upgrade.
     package_source = Column(String(255), default="", index=True)
     ecosystem = Column(String(64), default="")
+    # Which file asked for the package, when the engine said.
+    #
+    # A vulnerable package has no line of code to open, so the first question
+    # anybody asks of one is where it was declared, and the answer was thrown
+    # away on the way in: grype, osv-scanner and the provider alert feed all
+    # report the manifest they matched and nothing here read it.  A report that
+    # says a repository depends on a bad version of something, and cannot say
+    # whether that came from package.json or from a lock file six directories
+    # down, hands the reader a search rather than a location.
+    #
+    # Separate from file_path on purpose.  That column means the file the
+    # finding is in, which every page and every report already reads as
+    # something to open at a line, and a manifest is neither.  Text because it
+    # is only ever printed, and this table sits near the row size ceiling.
+    manifest_path = Column(Text, default="")
     vulnerability_id = Column(String(128), default="", index=True)
     cvss_score = Column(Float)
     fixed_in = Column(String(255), default="")
@@ -1375,6 +1390,25 @@ class Connection(Base):
     # else an organization needs to say.
     sensitivity = Column(String(400), default="")
 
+    # Who hears about what this account finds, on top of the addresses on the
+    # Notifications page.
+    #
+    # Those addresses are one list for the whole installation, which is the
+    # wrong shape as soon as there is more than one application: the team that
+    # owns the payment gateway does not want the brochure site's findings, and
+    # a security mailbox that gets both learns to filter the sender.  The two
+    # owners are already recorded here, so a tick box is all it takes to send
+    # each of them the digest for their own account.
+    #
+    # Off by default, including on every connection that already exists.  A
+    # release that starts mailing named people who never asked for it is a
+    # release that gets the sender blocked.
+    notify_application_owner = Column(Boolean, default=False, nullable=False)
+    notify_technical_owner = Column(Boolean, default=False, nullable=False)
+    # Anybody else this account's findings should go to.  A rota address, a
+    # ticket queue, the vendor who maintains it.  Comma separated.
+    notify_extra = Column(String(500), default="")
+
     api_url = Column(String(300), default="https://api.github.com")
     web_url = Column(String(300), default="https://github.com")
 
@@ -1423,6 +1457,36 @@ class Connection(Base):
         """
         raw = (self.branches or "").replace("\r", "\n").replace(",", "\n")
         return [item.strip() for item in raw.split("\n") if item.strip()]
+
+    def notify_addresses(self) -> list:
+        """Who hears about this account, beyond the installation wide list.
+
+        Each owner only if somebody ticked the box beside them.  An owner
+        address is recorded so a question can be sent later, which is not the
+        same as agreeing to a nightly message, and treating the one as the
+        other would mail a few hundred people on upgrade.
+        """
+        wanted = []
+        if self.notify_application_owner:
+            wanted.append(self.application_owner or "")
+        if self.notify_technical_owner:
+            wanted.append(self.technical_owner or "")
+        wanted.append(self.notify_extra or "")
+
+        out = []
+        for entry in wanted:
+            for part in str(entry).replace(";", ",").split(","):
+                address = part.strip()
+                # The same person can be both owners, and one of them can also
+                # be in the extra list.  Two copies of a message read as two
+                # findings.
+                #
+                # And it has to be an address.  A dash is the word the forms use
+                # to clear a field, and a mail server handed one rejects the
+                # whole message rather than the one recipient.
+                if "@" in address and address not in out:
+                    out.append(address)
+        return out
 
 
 class Setting(Base):

@@ -305,6 +305,67 @@ vulns_malicious() {
     } ]' 2>/dev/null || echo '[]'
 }
 
+# vulns_dated <findings_json> <repo_dir> -> findings with the declaring file dated
+#
+# When was this vulnerable package asked for.  A credential and a code finding
+# are blamed down to the line, and a package has no line, so the whole kind
+# arrived with no date on it and the product could only say when it first
+# noticed.  "A critical turned up last night" and "a critical has been sitting
+# in this repository since 2021" are different problems, and the queue was
+# showing them the same way.
+#
+# The file that declares it is the nearest honest answer: whoever last changed
+# package.json last changed what this repository asks for, and the package was
+# being asked for on or before that day.  That is a ceiling rather than an exact
+# date, since the line itself can be older than the last edit to the file, and
+# it is still worth far more than nothing.
+#
+# One git log per distinct file, which is a handful even on a large repository.
+# A shallow clone says nothing at all rather than guessing: git log -1 there
+# answers with the boundary commit, which would date every package in the
+# repository to the day of the scan and read as somebody having added it
+# yesterday.
+vulns_dated() {
+  local findings="$1" dir="$2"
+  [[ -n "$findings" && "$findings" != "[]" ]] || { printf '%s' "$findings"; return 0; }
+  [[ -d "$dir/.git" ]] || { printf '%s' "$findings"; return 0; }
+
+  if [[ "$(git -C "$dir" rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]]; then
+    log_debug "the clone is shallow, so no dependency gets a commit date"
+    printf '%s' "$findings"; return 0
+  fi
+
+  # Every distinct file named by a finding.  A package read out of a container
+  # image names the image rather than a path, and there is nothing in the
+  # repository to date, so those drop out here on the -f test.
+  local paths
+  paths=$(printf '%s' "$findings" | jq -r '
+    [ .[]? | (.package.locations // [])[0] // empty ] | unique | .[]' 2>/dev/null)
+  [[ -n "$paths" ]] || { printf '%s' "$findings"; return 0; }
+
+  local map='{}' path meta
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    [[ -f "$dir/$path" ]] || continue
+    meta=$(git -C "$dir" log -1 --format='%cI%x1f%an%x1f%ae%x1f%H' -- "$path" 2>/dev/null \
+           | head -1 \
+           | jq -Rc 'split("\u001f") | {committed_at: .[0], author_name: .[1],
+                                        author_email: .[2], commit: .[3]}')
+    [[ -n "$meta" && "$meta" != "null" ]] || continue
+    map=$(jq -cn --argjson m "$map" --arg p "$path" --argjson v "$meta" \
+            '$m + {($p): $v}')
+  done <<< "$paths"
+
+  printf '%s' "$findings" | jq -c --argjson dates "$map" '
+    [ .[]?
+      | . as $f
+      | (($f.package.locations // [])[0] // "") as $p
+      | ($dates[$p] // {}) as $d
+      | if ($d.committed_at // "") == "" then $f
+        else $f + {declared: ($d + {path: $p})} end ]' \
+    || printf '%s' "$findings"
+}
+
 # vulns_reachability <findings_json> <repo_dir> -> findings with a verdict on each
 #
 # Most of a vulnerability count sits in packages the application never calls.

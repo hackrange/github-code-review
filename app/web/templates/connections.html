@@ -102,6 +102,9 @@
                     data-application_name="{{ c.application_name or '' }}"
                     data-application_owner="{{ c.application_owner or '' }}"
                     data-technical_owner="{{ c.technical_owner or '' }}"
+                    data-notify_application_owner="{{ '1' if c.notify_application_owner else '' }}"
+                    data-notify_technical_owner="{{ '1' if c.notify_technical_owner else '' }}"
+                    data-notify_extra="{{ c.notify_extra or '' }}"
                     data-sensitivity="{{ c.sensitivity or '' }}"
                     data-repositories="{{ c.repositories }}"
                     data-branches="{{ c.branches or '' }}">Edit</button>
@@ -370,9 +373,31 @@
           <input type="email" name="application_owner" placeholder="a.person@example.com">
           <span class="faint small">Who answers for the risk.</span>
         </label>
+        {# Off unless somebody asks for it.  An owner address is recorded so a
+           question can be sent in a year, which is not the same as agreeing to
+           a message after every scan, and treating the one as the other would
+           start mailing a few hundred named people on upgrade. #}
+        <label class="check">
+          <input type="checkbox" name="notify_application_owner" value="1">
+          Send them the digest for this account
+        </label>
         <label>Technical owner
           <input type="email" name="technical_owner" placeholder="a.person@example.com">
           <span class="faint small">Who fixes it.</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" name="notify_technical_owner" value="1">
+          Send them the digest for this account
+        </label>
+        <label>Also notify
+          <input type="text" name="notify_extra"
+                 placeholder="oncall@example.com, tickets@example.com">
+          <span class="faint small">Optional, several separated by commas.  A
+            rota address, a ticket queue, the vendor who maintains it.  These
+            are added to the addresses on the
+            <a href="{{ base }}/notifications">Notifications page</a> rather
+            than replacing them, and they only hear about this account.  None of
+            it is sent unless notifications are switched on there.</span>
         </label>
         <label>What it holds
           <div class="check-grid">

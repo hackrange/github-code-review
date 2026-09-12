@@ -497,6 +497,19 @@
         </td></tr>
         {% endif %}
         {% if f.file_path %}<tr><th>File</th><td class="mono">{{ f.file_path }}{% if f.line %}:{{ f.line }}{% endif %}</td></tr>{% endif %}
+        {# Which file asked for the package.
+           A vulnerable package has no line of code to open, and the first thing
+           anybody asks of one is where it came from.  The engines report the
+           manifest or lock file they matched, so the answer is a link rather
+           than a search through the repository. #}
+        {% if f.manifest_path and f.manifest_path != f.file_path %}
+        <tr><th>Declared in</th><td>
+          {%- set repo_home = repo_info.html_url | web_url if repo_info else '' -%}
+          {% if repo_home %}<a class="mono" rel="noopener noreferrer" target="_blank"
+             href="{{ repo_home }}/blob/{{ f.branch or repo_info.default_branch or 'HEAD' }}/{{ f.manifest_path }}">{{ f.manifest_path }}</a>
+          {% else %}<span class="mono">{{ f.manifest_path }}</span>{% endif %}
+        </td></tr>
+        {% endif %}
         {% if f.snippet %}
         {# The line the engine matched, as the scanner read it, with anything
            credential shaped masked before it was ever stored.  A file and a
@@ -662,10 +675,23 @@
         {# When the code itself last changed, as opposed to when this product
            last looked at it.  Shown even when it is not known, because a row
            that disappears reads as "nothing has changed" rather than as "we
-           did not record it".  A vulnerable package and a misconfiguration
-           have no line in a file to blame, so neither ever carries one. #}
+           did not record it".
+
+           A vulnerable package has no line in a file to blame, so the date is
+           the last change to the file that declares it, and the note says so.
+           That is a ceiling rather than an exact date: the package was being
+           asked for on or before then.  A misconfiguration still carries
+           nothing, and a dependency read out of a container image has no file
+           in the repository to date. #}
         <tr><th>Last modified</th><td>
           {%- if f.committed_at %}{{ f.committed_at | dt('%Y-%m-%d') }}
+          {% if f.kind.value == 'dependency' %}
+          <div class="faint small">When
+            {%- if f.manifest_path %} <span class="mono">{{ f.manifest_path }}</span>
+            {%- else %} the file that declares it{% endif %} last changed, so the
+            package was being asked for on or before then. A package has no line
+            of code to blame.</div>
+          {% endif %}
           {%- else %}<span class="faint">not recorded for a
             {{ f.kind.value if f.kind else 'finding' }}</span>{% endif %}</td></tr>
         <tr><th>First found</th><td>{{ f.first_found_at | dt('%Y-%m-%d %H:%M') if f.first_found_at }}</td></tr>
