@@ -250,6 +250,21 @@ def visible_findings(session: OrmSession, user: User):
     return query
 
 
+def visible(session: OrmSession, user: User, model=None):
+    """visible_findings for any table carrying organization and repository.
+
+    The summary tables are narrowed by exactly the same condition, so a count
+    read from one can never include a repository the reader cannot open.
+    """
+    if model is None or model is Finding:
+        return visible_findings(session, user)
+    query = session.query(model)
+    condition = _scope_filter(user, session, model=model)
+    if condition is not None:
+        query = query.filter(condition)
+    return query
+
+
 def visible_trends(session: OrmSession, user: User):
     """The history this user may see, narrowed the same way the findings are.
 

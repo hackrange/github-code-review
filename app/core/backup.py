@@ -46,9 +46,11 @@ FORMAT = "gcr-backup-1"
 
 # Left out on purpose.  Sessions are short lived and restoring one is not a
 # feature anybody asked for.  Utilization is how busy this machine was, which
-# means nothing on the machine a backup is restored to.
+# means nothing on the machine a backup is restored to.  The finding summaries
+# are worked out from the findings, and rebuilt after a restore on their own.
 SKIP_TABLES = {"sessions", "utilization_minute", "utilization_2min",
-               "utilization_10min"}
+               "utilization_10min", "finding_counts", "finding_groups",
+               "finding_branches"}
 
 # Columns holding something encrypted with this installation's key.  They come
 # out in the clear inside the encrypted archive and go back in encrypted with

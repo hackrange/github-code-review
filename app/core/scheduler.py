@@ -241,6 +241,16 @@ def start() -> None:
     log.info("catch up looks for unfinished history every %d minutes",
              CATCHUP_MINUTES)
 
+    # The finding summaries.  Rebuilt a few seconds after any write to the
+    # findings, and checked every ten minutes in case a rebuild failed.
+    from app.core import summary
+
+    summary.enable()
+    _scheduler.add_job(lambda: summary.fresh() or summary.rebuild(),
+                       IntervalTrigger(minutes=10), id="summary-check",
+                       replace_existing=True, misfire_grace_time=120,
+                       coalesce=True, max_instances=1)
+
     # CPU, memory, disk and network for the Utilization page.  The sample is
     # a few file reads, the breakdown asks the database how big it is, and
     # the rollup averages minutes into the wider tables.

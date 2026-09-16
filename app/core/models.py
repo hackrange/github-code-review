@@ -1629,3 +1629,95 @@ class Utilization2Min(_UtilizationRow, Base):
 class Utilization10Min(_UtilizationRow, Base):
     __tablename__ = "utilization_10min"
 
+
+
+class FindingCount(Base):
+    """How many findings share one combination of everything a page filters on.
+
+    Written by app.core.summary from the findings table, never by hand.  A
+    dashboard that counts forty thousand wide rows on every visit reads a few
+    thousand narrow ones here instead.  The columns carry the same names as
+    on Finding, so the same filters apply to either.
+    """
+
+    __tablename__ = "finding_counts"
+
+    id = Column(Integer, primary_key=True)
+    organization = Column(String(255))
+    repository = Column(String(320))
+    connection = Column(String(120))
+    branch = Column(String(255))
+    kind = Column(Enum(FindingKind))
+    severity = Column(Enum(Severity))
+    state = Column(Enum(FindingState))
+    excepted = Column(Boolean)
+    triage = Column(String(16))
+    reachability = Column(String(16))
+    confidence = Column(String(16))
+    known_exploited = Column(Boolean)
+    malicious = Column(Boolean)
+    verified = Column(Boolean)
+    impact = Column(String(16))
+    likelihood = Column(String(16))
+    findings = Column(Integer, nullable=False, default=0)
+
+
+class FindingGroup(Base):
+    """One piece of work on the findings list, for open findings only.
+
+    The grouping key is the one app.core.grouping uses.  Split further by the
+    columns a page filters on, so a filtered page groups these rows again
+    rather than the findings themselves.  member_ids lists the findings in
+    the row, so a page fetches its members by id.
+    """
+
+    __tablename__ = "finding_groups"
+
+    id = Column(Integer, primary_key=True)
+    repository = Column(String(320))
+    branch = Column(String(255))
+    head = Column(String(255))
+    package_version = Column(String(128))
+    fixed_in = Column(String(255))
+    image_ref = Column(String(500))
+    alone = Column(BigInteger)
+    # The seven columns above as one number, the same for every row of one
+    # group, so a page groups on an integer rather than on long strings.
+    group_key = Column(BigInteger, index=True)
+    organization = Column(String(255))
+    connection = Column(String(120))
+    kind = Column(Enum(FindingKind))
+    severity = Column(Enum(Severity))
+    state = Column(Enum(FindingState))
+    excepted = Column(Boolean)
+    triage = Column(String(16))
+    reachability = Column(String(16))
+    confidence = Column(String(16))
+    known_exploited = Column(Boolean)
+    malicious = Column(Boolean)
+    verified = Column(Boolean)
+    impact = Column(String(16))
+    likelihood = Column(String(16))
+    worst = Column(Integer, nullable=False, default=0)
+    score = Column(Integer, nullable=False, default=0)
+    members = Column(Integer, nullable=False, default=0)
+    member_ids = Column(LONG_JSON, default="")
+
+
+class FindingBranch(Base):
+    """Every branch name the findings mention, with the last time one was seen.
+
+    Built in Python rather than grouped in the database, because the branch
+    list is a long text column and the database compares only the start of
+    one.  Two lists that differ past that point would fold into one row.
+    """
+
+    __tablename__ = "finding_branches"
+
+    id = Column(Integer, primary_key=True)
+    organization = Column(String(255))
+    repository = Column(String(320))
+    connection = Column(String(120))
+    state = Column(Enum(FindingState))
+    name = Column(String(255))
+    last_found_at = Column(DateTime(timezone=True))

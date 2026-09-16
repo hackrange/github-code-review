@@ -48,8 +48,15 @@ def _archived_names():
         Repository.full_name.isnot(None))
 
 
+def _tally(model):
+    """How many findings a row stands for: one on Finding, a count on a summary."""
+    if model is None or model is Finding:
+        return func.count(Finding.id)
+    return func.sum(model.findings)
+
+
 def _scoped(query, organization="", repository="", branch="", connection="",
-            include_archived=False):
+            include_archived=False, model=None):
     """The same narrowing the page did, applied to findings.
 
     Archived repositories are set aside here, the same way the dashboard sets
@@ -64,31 +71,36 @@ def _scoped(query, organization="", repository="", branch="", connection="",
     so that the page can say so out loud.  Pass include_archived to get the
     unfiltered set, which is what that count is worked out from.
     """
-    query = query.filter(Finding.state == FindingState.OPEN)
+    model = model or Finding
+    query = query.filter(model.state == FindingState.OPEN)
     if not include_archived:
-        query = query.filter(Finding.repository.notin_(_archived_names()))
+        query = query.filter(model.repository.notin_(_archived_names()))
     if connection:
-        query = query.filter(Finding.connection == connection)
+        query = query.filter(model.connection == connection)
     if organization:
-        query = query.filter(Finding.organization == organization)
+        query = query.filter(model.organization == organization)
     if repository:
-        query = query.filter(Finding.repository == repository)
+        query = query.filter(model.repository == repository)
     if branch:
+        # Matching the branch list needs the findings themselves.
+        assert model is Finding, "a branch filter needs the findings table"
         # Both readings of what branch a finding is on.  See branch_scope.
         query = query.filter(branch_scope.matches(branch))
     return query
 
 
 def archived_aside(query, organization="", repository="", branch="",
-                   connection="") -> int:
+                   connection="", model=None) -> int:
     """How many open findings this scope left out because the host retired them.
 
     Shown wherever the scoped figures are, because a number that quietly got
     smaller is the thing nobody notices and later cannot explain.
     """
+    model = model or Finding
     scoped = _scoped(query, organization, repository, branch, connection,
-                     include_archived=True)
-    return scoped.filter(Finding.repository.in_(_archived_names())).count()
+                     include_archived=True, model=model)
+    return int(scoped.filter(model.repository.in_(_archived_names()))
+               .with_entities(_tally(model)).scalar() or 0)
 
 
 def resolved_since(base_query, organization="", repository="", branch="",
@@ -294,7 +306,7 @@ def _by_branch(query) -> dict:
     return counts
 
 
-def hotspots(query, axis="repository", limit=TOP_N) -> list:
+def hotspots(query, axis="repository", limit=TOP_N, model=None) -> list:
     """The heatmap, from the findings rather than from the daily rollup.
 
     Built here rather than read from the trend table because a report drills
@@ -305,16 +317,17 @@ def hotspots(query, axis="repository", limit=TOP_N) -> list:
     because a document has a page size; a screen that sorts and pages has to
     be given the whole set or it would be paging over a truncation.
     """
+    model = model or Finding
     if axis == "branch":
         counts = _by_branch(query)
     else:
-        column = {"organization": Finding.organization,
-                  "repository": Finding.repository}.get(axis,
-                                                        Finding.repository)
+        column = {"organization": model.organization,
+                  "repository": model.repository}.get(axis, model.repository)
         counts = {}
         for name, severity, total in (query.with_entities(
-                column, Finding.severity, func.count(Finding.id))
-                .group_by(column, Finding.severity).all()):
+                column, model.severity, _tally(model))
+                .group_by(column, model.severity).all()):
+            total = int(total or 0)
             entry = counts.setdefault(
                 name or "(none)",
                 {level.value: 0 for level in SEVERITY_ORDER})
@@ -452,7 +465,7 @@ IMPACT_ROWS = ("high", "medium", "low")
 LIKELIHOOD_COLUMNS = ("unlikely", "possible", "likely", "happening now")
 
 
-def risk_matrix(query) -> dict:
+def risk_matrix(query, model=None) -> dict:
     """-> the grid, its coverage, and what is not on it.
 
     Only findings carrying both axes in the risk vocabulary are placed.  Rows
@@ -482,10 +495,11 @@ def risk_matrix(query) -> dict:
 
     counts = {}
     worst_at = {}
+    model = model or Finding
     for impact, likelihood, severity, total in (query.with_entities(
-            Finding.impact, Finding.likelihood, Finding.severity,
-            func.count(Finding.id))
-            .group_by(Finding.impact, Finding.likelihood, Finding.severity).all()):
+            model.impact, model.likelihood, model.severity, _tally(model))
+            .group_by(model.impact, model.likelihood, model.severity).all()):
+        total = int(total or 0)
         key = ((impact or "").lower(), (likelihood or "").lower())
         counts[key] = counts.get(key, 0) + total
         if RANK.get(severity, 0) > RANK.get(worst_at.get(key), -1):
@@ -518,7 +532,7 @@ def risk_matrix(query) -> dict:
         row["total"] = sum(cell["count"] for cell in row["cells"])
         grid.append(row)
 
-    everything = query.count()
+    everything = int(query.with_entities(_tally(model)).scalar() or 0)
     return {
         "rows": grid,
         "columns": LIKELIHOOD_COLUMNS,

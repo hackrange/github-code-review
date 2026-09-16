@@ -60,6 +60,7 @@ def engine():
             cur.execute("PRAGMA busy_timeout=30000")
             cur.close()
 
+        _watch(_engine)
         return _engine
 
     # MariaDB or MySQL.  Recycle connections well inside the server's own idle
@@ -73,7 +74,15 @@ def engine():
         pool_size=10,
         max_overflow=5,
     )
+    _watch(_engine)
     return _engine
+
+
+def _watch(eng) -> None:
+    """Mark the finding summaries stale whenever a write to findings commits."""
+    from app.core import summary
+
+    summary.watch(eng)
 
 
 def session_factory():

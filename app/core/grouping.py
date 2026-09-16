@@ -191,10 +191,13 @@ def page_of_groups(db, query, offset: int, limit: int) -> tuple:
 
     # The number of groups rides along on every row as a window count, so
     # the grouping runs once instead of once to count and once to page.
+    # Every key in the order, so groups that tie on severity and score still
+    # come back in one fixed order.  Without it a tie could land on page one
+    # and again on page two, while another never showed at all.
     rows = (grouped.add_columns(func.count().over().label("groups"))
             .order_by(func.max(rank).desc(),
                       func.max(Finding.risk_score).desc(),
-                      Finding.repository.asc())
+                      *[key.asc() for key in keys])
             .offset(offset).limit(limit).all())
     if not rows:
         # Past the last page there is no row to carry it.
@@ -229,21 +232,86 @@ def page_of_groups(db, query, offset: int, limit: int) -> tuple:
         members += (query.filter(Finding.repository.in_(sorted(repos)))
                     .filter(or_(*clauses)).all())
 
-    # Back into the page order the group query decided.
-    order = {tuple(r[0:7]): i for i, r in enumerate(rows)}
-    buckets = {}
-    for f in members:
-        k = (f.repository or "", f.branch or "",
-             ((f.package_source or f.package_name or "")
-              if f.kind in GROUPABLE else ""),
-             f.package_version or "", f.fixed_in or "", f.image_ref or "",
-             0 if f.kind in GROUPABLE else f.id)
-        buckets.setdefault(k, []).append(f)
+    return _in_page_order(rows, members, _folds(db)), total
 
-    out = []
-    for key in sorted(buckets, key=lambda k: order.get(k, 10 ** 9)):
-        out.append(summarize(buckets[key]))
-    return out, total
+
+def _folds(db) -> bool:
+    """Whether this database groups text without regard to case."""
+    return db.get_bind().dialect.name != "sqlite"
+
+
+def _in_page_order(rows, members, fold=False) -> list:
+    """Members bucketed into their groups, in the order the page query chose.
+
+    `fold` compares names without case, which is how MariaDB grouped them.
+    Without it jQuery and jquery in one repository were one group to the
+    database and two here, and the second landed at the bottom of the page.
+    """
+    def same(value):
+        value = value or ""
+        return value.casefold() if fold and isinstance(value, str) else value
+
+    order = {}
+    for i, r in enumerate(rows):
+        order.setdefault(tuple(same(v) for v in r[0:7]), i)
+    buckets = {}
+    # By id, so the lead of a group whose members tie on severity is the same
+    # finding every time rather than whichever the database returned first.
+    for f in sorted(members, key=lambda f: f.id):
+        k = tuple(same(v) for v in (
+            f.repository, f.branch,
+            ((f.package_source or f.package_name or "")
+             if f.kind in GROUPABLE else ""),
+            f.package_version, f.fixed_in, f.image_ref,
+            0 if f.kind in GROUPABLE else f.id))
+        buckets.setdefault(k, []).append(f)
+    return [summarize(buckets[key])
+            for key in sorted(buckets, key=lambda k: order.get(k, 10 ** 9))]
+
+
+def page_of_groups_from_summary(db, query, groups, offset: int, limit: int):
+    """page_of_groups, with the grouping read from finding_groups.
+
+    `groups` is a finding_groups query carrying the same filters as `query`.
+    The page is decided from those narrow rows, and its members are fetched
+    from the findings by id.  -> (summaries, total), or None when a member
+    list came back short and the page has to be worked out live.
+    """
+    from app.core import summary
+    from app.core.models import FindingGroup as G
+
+    # Grouped on the one number that stands for the seven key columns.  The
+    # key columns themselves are the same on every row of a group, up to the
+    # case the database ignores, so any one of them names it.  After severity
+    # and score it is ordered on that number, which was ranked in key order,
+    # so the page comes out in the live query's order without sorting on
+    # seven long strings.
+    keys = summary.group_keys()
+    grouped = groups.with_entities(
+        G.group_key, func.max(G.worst).label("worst"),
+        func.max(G.score).label("score")).group_by(G.group_key)
+    paged = (grouped.add_columns(func.count().over().label("groups"))
+             .order_by(func.max(G.worst).desc(), func.max(G.score).desc(),
+                       G.group_key.asc())
+             .offset(offset).limit(limit).all())
+    if not paged:
+        return [], (grouped.count() if offset else 0)
+    total = paged[0][-1]
+
+    # Then the key columns, for the page's groups only.
+    named = {row[-1]: tuple(row[:-1]) for row in
+             groups.filter(G.group_key.in_([r[0] for r in paged]))
+             .with_entities(*[func.min(key) for key in keys], G.group_key)
+             .group_by(G.group_key).all()}
+    rows = [named[r[0]] + (r[1], r[2], r[0]) for r in paged]
+
+    ids = summary.member_ids(
+        groups.filter(G.group_key.in_([r[9] for r in rows]))
+        .with_entities(G.member_ids, G.members).all())
+    if ids is None:
+        return None
+    members = query.filter(Finding.id.in_(ids)).all() if ids else []
+    return _in_page_order(rows, members, _folds(db)), total
 
 
 def counts_by_severity(query) -> tuple:

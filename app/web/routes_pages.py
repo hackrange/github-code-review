@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
-from sqlalchemy import case, func, or_ as sa_or
+from sqlalchemy import case, func, literal, or_ as sa_or
 
 from app.config import APP_NAME, VERSION, settings
 from app.core import baseline as baseline_filter
@@ -357,47 +357,31 @@ def _priority_order():
     Worked out in the query rather than stored, so it is right for the
     thousands of findings that were scanned before confidence was recorded.
     """
-    severity_rank = case(
-        (Finding.severity == Severity.CRITICAL, 5),
-        (Finding.severity == Severity.HIGH, 4),
-        (Finding.severity == Severity.MEDIUM, 3),
-        (Finding.severity == Severity.LOW, 2),
-        else_=1)
+    # Unrated confidence sits between medium and high rather than at the
+    # bottom: nothing is known about it, which is not the same as knowing it
+    # is weak.  A credential somebody proved still works outranks everything,
+    # and a vulnerability on the CISA exploited list is not theoretical.  A
+    # package nothing imports moves down the list rather than out of it.
+    #
+    # The formula lives in app.core.summary, so the summary tables rank a
+    # page exactly the way this does.
+    from app.core import summary
 
-    # Unrated sits between medium and high rather than at the bottom: nothing
-    # is known about it, which is not the same as knowing it is weak.
-    confidence_weight = case(
-        (Finding.confidence == "high", 100),
-        (Finding.confidence == "medium", 70),
-        (Finding.confidence == "low", 40),
-        else_=85)
-
-    # A credential somebody proved still works outranks everything, and a
-    # vulnerability on the CISA exploited list is not theoretical.
-    verified_bonus = case((Finding.verified.is_(True), 250), else_=0)
-    exploited_bonus = case((Finding.known_exploited.is_(True), 150), else_=0)
-
-    # A vulnerability in a package nothing imports is a real vulnerability in
-    # nothing, and a critical one in a test framework should not sit above a
-    # medium in code that ships.  This moves it down the list rather than out
-    # of it: no verdict is worth the same as reachable, so a scan from before
-    # there was one ranks exactly where it used to.
-    reachability_weight = case(
-        (Finding.reachability == "unlikely", -120),
-        (Finding.reachability == "unknown", -30),
-        else_=0)
-
-    return (severity_rank * confidence_weight + verified_bonus
-            + exploited_bonus + reachability_weight).desc()
+    return summary.priority(Finding).desc()
 
 
-def _filtered_findings(db, user, params):
+def _filtered_findings(db, user, params, model=None):
     """The findings query behind the Findings page, filters and all.
 
     Shared with the export, so the number in the file is the number on the
     screen.  Two copies of this logic would drift within a week.
+
+    `model` is Finding by default.  A summary table carrying the same column
+    names can be passed instead, once _summary_can_filter has said every
+    filter asked for is one that table can answer.
     """
-    query = rbac.visible_findings(db, user)
+    model = model or Finding
+    query = rbac.visible(db, user, model)
 
     severity = params.get("severity", "")
     kind = params.get("kind", "")
@@ -419,28 +403,28 @@ def _filtered_findings(db, user, params):
         exception = "without"
 
     if severity in SEVERITIES:
-        query = query.filter(Finding.severity == Severity(severity))
+        query = query.filter(model.severity == Severity(severity))
     if kind in {k.value for k in FindingKind}:
-        query = query.filter(Finding.kind == FindingKind(kind))
+        query = query.filter(model.kind == FindingKind(kind))
     if state in {s.value for s in FindingState}:
-        query = query.filter(Finding.state == FindingState(state))
+        query = query.filter(model.state == FindingState(state))
     if connection:
-        query = query.filter(Finding.connection == connection)
+        query = query.filter(model.connection == connection)
     if exception == "without":
-        query = query.filter(Finding.excepted.is_(False))
+        query = query.filter(model.excepted.is_(False))
     elif exception == "with":
-        query = query.filter(Finding.excepted.is_(True))
+        query = query.filter(model.excepted.is_(True))
 
     # These two were shown as badges on every row and could not be filtered on,
     # so the only way to see just them was to read the whole list.  They are
     # the two the dashboard puts a number against, and a number nobody can
     # click is a number nobody can act on.
     if str(params.get("malicious", "")) == "1":
-        query = query.filter(Finding.malicious.is_(True))
+        query = query.filter(model.malicious.is_(True))
     if str(params.get("exploited", "")) == "1":
-        query = query.filter(Finding.known_exploited.is_(True))
+        query = query.filter(model.known_exploited.is_(True))
     if str(params.get("verified", "")) == "1":
-        query = query.filter(Finding.verified.is_(True))
+        query = query.filter(model.verified.is_(True))
     # Findings on repositories that have been archived.  Kept out of the
     # dashboard's counts because nobody can act on them, and reachable here so
     # that the number set aside is a number somebody can open.  Never filtered
@@ -465,35 +449,35 @@ def _filtered_findings(db, user, params):
     since_days = (params.get("since", "") or "").strip()
     if since_days in ("1", "7", "14", "30"):
         cutoff = datetime.now(timezone.utc) - timedelta(days=int(since_days))
-        query = query.filter(sa_or(Finding.first_found_at >= cutoff,
-                                   Finding.committed_at >= cutoff))
+        query = query.filter(sa_or(model.first_found_at >= cutoff,
+                                   model.committed_at >= cutoff))
 
     archived_want = str(params.get("archived", ""))
     if archived_want in ("0", "1"):
         _archived = (db.query(Repository.full_name)
                      .filter(Repository.archived.is_(True)).scalar_subquery())
-        query = (query.filter(Finding.repository.in_(_archived))
+        query = (query.filter(model.repository.in_(_archived))
                  if archived_want == "1"
-                 else query.filter(Finding.repository.notin_(_archived)))
+                 else query.filter(model.repository.notin_(_archived)))
 
     # The engine's own confidence.  A rule from an audit ruleset says "somebody
     # should look at this", not "this is a bug", and being able to set those
     # aside as a group is the difference between triage and an exception per
     # finding.  Anything scanned before this was recorded is unrated.
     if confidence == "unrated":
-        query = query.filter(sa_or(Finding.confidence.is_(None),
-                                   Finding.confidence == ""))
+        query = query.filter(sa_or(model.confidence.is_(None),
+                                   model.confidence == ""))
     elif confidence:
-        query = query.filter(Finding.confidence == confidence)
+        query = query.filter(model.confidence == confidence)
 
     # Anything scanned before there was a fidelity pass has no verdict, and has
     # to stay in the work list rather than quietly leave it.
     if triage == "work":
-        query = query.filter(sa_or(Finding.triage.is_(None),
-                                   Finding.triage == "",
-                                   Finding.triage == "review"))
+        query = query.filter(sa_or(model.triage.is_(None),
+                                   model.triage == "",
+                                   model.triage == "review"))
     elif triage != "any":
-        query = query.filter(Finding.triage == triage)
+        query = query.filter(model.triage == triage)
 
     # Whether the application can reach the vulnerable package.  Anything
     # scanned before there was a verdict is unrated and stays in the list: a
@@ -501,10 +485,10 @@ def _filtered_findings(db, user, params):
     # hide the backlog.
     reach = (params.get("reach", "") or "").strip().lower()
     if reach == "unrated":
-        query = query.filter(sa_or(Finding.reachability.is_(None),
-                                   Finding.reachability == ""))
+        query = query.filter(sa_or(model.reachability.is_(None),
+                                   model.reachability == ""))
     elif reach in {"reachable", "unlikely", "unknown"}:
-        query = query.filter(Finding.reachability == reach)
+        query = query.filter(model.reachability == reach)
     elif reach == "any":
         pass
     else:
@@ -520,8 +504,8 @@ def _filtered_findings(db, user, params):
         # indistinguishable from a scanner that missed something.  A blank
         # verdict still shows - it means nobody worked it out, which is not the
         # same claim as unreachable.
-        query = query.filter(sa_or(Finding.reachability.is_(None),
-                                   Finding.reachability != "unlikely"))
+        query = query.filter(sa_or(model.reachability.is_(None),
+                                   model.reachability != "unlikely"))
 
     # Which side of the baseline.  The work by default.  This does nothing at
     # all until somebody draws a line, because an organization without one has
@@ -533,7 +517,7 @@ def _filtered_findings(db, user, params):
     query = baseline_filter.apply(db, query, since)
 
     if org:
-        query = query.filter(Finding.organization == org)
+        query = query.filter(model.organization == org)
     # A repository and a branch, exactly rather than by search.
     #
     # These exist so the heatmap on the trends page can hand somebody the rows
@@ -544,7 +528,7 @@ def _filtered_findings(db, user, params):
     repo = clean_text(params.get("repo", ""), "Repository", limit=320,
                       required=False)
     if repo:
-        query = query.filter(Finding.repository == repo)
+        query = query.filter(model.repository == repo)
     branch = clean_text(params.get("branch", ""), "Branch", limit=255,
                         required=False)
     if branch:
@@ -558,10 +542,10 @@ def _filtered_findings(db, user, params):
     # long.
     impact = (params.get("impact", "") or "").strip().lower()
     if impact in ("low", "medium", "high"):
-        query = query.filter(Finding.impact == impact)
+        query = query.filter(model.impact == impact)
     likelihood = (params.get("likelihood", "") or "").strip().lower()
     if likelihood in ("unlikely", "possible", "likely", "happening now"):
-        query = query.filter(Finding.likelihood == likelihood)
+        query = query.filter(model.likelihood == likelihood)
     if search:
         like = f"%{search}%"
         bare = search.strip().upper()
@@ -587,6 +571,27 @@ def _filtered_findings(db, user, params):
             | Finding.author_email.ilike(like)
             | Finding.commit_sha.ilike(like))
     return query
+
+
+def _summary_can_filter(db, params) -> bool:
+    """Whether every filter in these params is one the summary tables answer.
+
+    A text search, a recent-days window and a branch all need columns the
+    summaries do not keep.  A baseline only matters once somebody has drawn
+    one, and then it needs the dates.  Any of those and the page asks the
+    findings table, the way it always did.
+    """
+    if (params.get("q", "") or "").strip():
+        return False
+    if (params.get("since", "") or "").strip() in ("1", "7", "14", "30"):
+        return False
+    if (params.get("branch", "") or "").strip():
+        return False
+    mode = (params.get("baseline", "new") or "new").strip().lower()
+    if mode in ("new", "backlog", "") or mode not in baseline_filter.MODES:
+        if baseline_filter.dates(db):
+            return False
+    return True
 
 
 def _ago(when) -> str:
@@ -629,12 +634,27 @@ def dashboard(request: Request, user: User = Depends(current_user)):
                           .filter(Repository.archived.is_(True))
                           .with_entities(Repository.full_name).all()]
         query = everything_open
-        set_aside = 0
         if archived_names:
             query = query.filter(Finding.repository.notin_(archived_names))
-            set_aside = (everything_open
-                         .filter(Finding.repository.in_(archived_names))
-                         .count())
+
+        # From the summary tables while they match the findings exactly, and
+        # from the findings otherwise.  Both give the same numbers; one reads
+        # a few thousand narrow rows and the other forty thousand wide ones.
+        from app.core import grouping, summary
+        from app.core.models import FindingCount, FindingGroup
+
+        use_summary = summary.fresh()
+        tally_model = FindingCount if use_summary else Finding
+        tally = (rbac.visible(db, user, FindingCount)
+                 .filter(FindingCount.state == FindingState.OPEN)
+                 if use_summary else everything_open)
+        live = tally
+        if archived_names:
+            live = tally.filter(tally_model.repository.notin_(archived_names))
+        set_aside = 0
+        if archived_names:
+            aside = tally.filter(tally_model.repository.in_(archived_names))
+            set_aside = summary.total(aside) if use_summary else aside.count()
 
         # Two counts, and the headline is the one somebody can act on.
         #
@@ -648,22 +668,35 @@ def dashboard(request: Request, user: User = Depends(current_user)):
         # there" is answered in actions; "are we affected by this advisory" is
         # answered in advisories, and an auditor asking the second will not
         # take a group as an answer.
-        from app.core import grouping
-
-        counts, advisory_counts = grouping.counts_by_severity(query)
+        if use_summary:
+            groups_live = (rbac.visible(db, user, FindingGroup)
+                           .filter(FindingGroup.state == FindingState.OPEN))
+            if archived_names:
+                groups_live = groups_live.filter(
+                    FindingGroup.repository.notin_(archived_names))
+            counts = summary.actions_by_severity(groups_live)
+            advisory_counts = summary.by_severity(live)
+            weight = FindingCount.findings
+        else:
+            counts, advisory_counts = grouping.counts_by_severity(query)
+            weight = literal(1)
 
         # Four tallies in one pass over the same rows, rather than four.
         # Malicious is counted apart from exploited because nothing about
         # upgrading a package that is itself the attack helps.
         by_kind = {}
         exploited = malicious = verified = 0
-        for kind, total, known, bad, real in (query.with_entities(
-                Finding.kind, func.count(Finding.id),
-                func.sum(case((Finding.known_exploited.is_(True), 1), else_=0)),
-                func.sum(case((Finding.malicious.is_(True), 1), else_=0)),
-                func.sum(case((Finding.verified.is_(True), 1), else_=0)))
-                .group_by(Finding.kind).all()):
-            by_kind[getattr(kind, "value", str(kind))] = total
+        for kind, total, known, bad, real in (live.with_entities(
+                tally_model.kind,
+                func.sum(weight),
+                func.sum(case((tally_model.known_exploited.is_(True), weight),
+                              else_=0)),
+                func.sum(case((tally_model.malicious.is_(True), weight),
+                              else_=0)),
+                func.sum(case((tally_model.verified.is_(True), weight),
+                              else_=0)))
+                .group_by(tally_model.kind).all()):
+            by_kind[getattr(kind, "value", str(kind))] = int(total or 0)
             exploited += int(known or 0)
             malicious += int(bad or 0)
             verified += int(real or 0)
@@ -700,14 +733,25 @@ def dashboard(request: Request, user: User = Depends(current_user)):
             certified["visible_repositories"] = (
                 rbac.visible_repositories(db, user).count())
 
-        worst = (query.order_by(_priority_order(), Finding.last_found_at.desc())
+        # The fifteen worst.  The summary narrows the candidates to the
+        # findings that can possibly be among them, and the findings table
+        # still does the ordering, so ties break on last seen as they always
+        # did.
+        ranked = query
+        if use_summary:
+            candidates = summary.top_candidates(groups_live, 15)
+            if candidates is not None:
+                ranked = query.filter(Finding.id.in_(candidates or [0]))
+        worst = (ranked.order_by(_priority_order(), Finding.last_found_at.desc())
                  .limit(15).all())
 
-        top_repos = (query.with_entities(Finding.repository,
-                                         func.count(Finding.id).label("n"))
-                     .group_by(Finding.repository)
-                     .order_by(func.count(Finding.id).desc())
-                     .limit(8).all())
+        top_repos = [(name, int(n or 0)) for name, n in
+                     live.with_entities(tally_model.repository,
+                                        func.sum(weight).label("n"))
+                     .group_by(tally_model.repository)
+                     .order_by(func.sum(weight).desc(),
+                               tally_model.repository)
+                     .limit(8).all()]
 
         runs = (db.query(ScanRun).order_by(ScanRun.started_at.desc())
                 .limit(5).all())
@@ -838,24 +882,34 @@ def trends_page(request: Request, user: User = Depends(current_user)):
         # and pages now, and paging over a list that was already cut to twelve
         # would offer a second page of a truncation: the rows nobody can reach
         # are exactly the ones somebody sorting by a column is looking for.
+        # Counted from the summary table while it matches the findings.  Not
+        # for a branch: matching one needs each finding's branch list.
+        from app.core import summary
+        from app.core.models import FindingBranch, FindingCount
+
+        counted = (FindingCount if summary.fresh() and not branch
+                   and axis != "branch" else Finding)
         every_row = [row for row in report_data.hotspots(
-            report_data._scoped(rbac.visible_findings(db, user),
-                                organization, repository, branch, connection),
-            axis=axis, limit=None) if row["name"] in named]
+            report_data._scoped(rbac.visible(db, user, counted),
+                                organization, repository, branch, connection,
+                                model=counted),
+            axis=axis, limit=None, model=counted) if row["name"] in named]
         grid = {"axis": axis, "rows": every_row}
         # The matrix names no repository and no branch, so there is nothing on
         # it for the period to remove, and it is the same query the totals in
         # the table are counted from.  Narrowing one and not the other is how
         # two panels on one screen start disagreeing.
         matrix = report_data.risk_matrix(
-            report_data._scoped(rbac.visible_findings(db, user),
-                                organization, repository, branch, connection))
+            report_data._scoped(rbac.visible(db, user, counted),
+                                organization, repository, branch, connection,
+                                model=counted),
+            model=counted)
         # What the two panels above left out because the host retired the
         # repository.  Said on the page rather than left to be noticed: a
         # figure that quietly got smaller is the one nobody can explain later.
         set_aside = report_data.archived_aside(
-            rbac.visible_findings(db, user),
-            organization, repository, branch, connection)
+            rbac.visible(db, user, counted),
+            organization, repository, branch, connection, model=counted)
         # A seal, only where everything on screen is signed off.
         #
         # Scoped through the same three queries the dashboard tile uses, so a
@@ -897,13 +951,22 @@ def trends_page(request: Request, user: User = Depends(current_user)):
         # branches the last scan walked count only when that scan itself
         # landed inside the window, or this union would put straight back
         # every name the period had just taken out.
-        options["branches"] = sorted(
-            set(options.get("branches") or [])
-            | set(branch_scope.names(report_data._scoped(
+        if summary.branches_fresh():
+            # Not DISTINCT, for the same reason as on the findings list.
+            mentioned = {name for (name,) in report_data._scoped(
+                rbac.visible(db, user, FindingBranch), organization,
+                repository, "", connection, model=FindingBranch)
+                .filter(FindingBranch.repository.in_(sorted(here)))
+                .filter(FindingBranch.last_found_at >= since)
+                .with_entities(FindingBranch.name).all() if name}
+        else:
+            mentioned = set(branch_scope.names(report_data._scoped(
                 rbac.visible_findings(db, user), organization, repository,
                 "", connection)
                 .filter(Finding.repository.in_(sorted(here)))
                 .filter(Finding.last_found_at >= since)))
+        options["branches"] = sorted(
+            set(options.get("branches") or []) | mentioned
             | _branches_read_in(db, user, repository, since))
 
         # Where the recorded history starts.  Everything before it was worked
@@ -1236,9 +1299,41 @@ def findings(request: Request, user: User = Depends(current_user)):
         # rows in the file are always the same set.
         query = _filtered_findings(db, user, params)
 
+        # The summary tables answer the default view and most filtered ones,
+        # and only while they match the findings exactly.  Anything else is
+        # asked of the findings table, which is always right and slower.
+        from app.core import summary
+        from app.core.models import FindingBranch, FindingCount, FindingGroup
+
+        counted = summary.fresh() and _summary_can_filter(db, params)
+
+        def _how_many(wanted, narrow=None):
+            """Findings matching these params, from the summary when it can."""
+            if summary.fresh() and _summary_can_filter(db, wanted):
+                picked = _filtered_findings(db, user, wanted, model=FindingCount)
+                return summary.total(narrow(FindingCount, picked)
+                                     if narrow else picked)
+            picked = _filtered_findings(db, user, wanted)
+            return (narrow(Finding, picked) if narrow else picked).count()
+
+        def _visible_count(narrow=None):
+            model = FindingCount if summary.fresh() else Finding
+            picked = rbac.visible(db, user, model)
+            if narrow:
+                picked = narrow(model, picked)
+            return (summary.total(picked) if model is FindingCount
+                    else picked.count())
+
         if grouped == "action":
             from app.core import grouping
-            groups, total = grouping.page_of_groups(db, query, offset, limit)
+            paged = None
+            if counted and state == "open":
+                paged = grouping.page_of_groups_from_summary(
+                    db, query,
+                    _filtered_findings(db, user, params, model=FindingGroup),
+                    offset, limit)
+            groups, total = (paged if paged is not None else
+                             grouping.page_of_groups(db, query, offset, limit))
             rows = [g["lead"] for g in groups]
             # Findings behind the page, for the tick boxes and the counts.
             folded = sum(g["count"] for g in groups) - len(groups)
@@ -1266,9 +1361,8 @@ def findings(request: Request, user: User = Depends(current_user)):
             wider["reach"] = "any"
             # The default leaves out exactly the unlikely ones, so counting
             # those is the difference, in one scan instead of two.
-            hidden_unreachable = (_filtered_findings(db, user, wider)
-                                  .filter(Finding.reachability == "unlikely")
-                                  .count())
+            hidden_unreachable = _how_many(
+                wider, lambda m, q: q.filter(m.reachability == "unlikely"))
 
         # The lists behind the four "where" dropdowns.
         #
@@ -1282,28 +1376,41 @@ def findings(request: Request, user: User = Depends(current_user)):
         # These deliberately ignore severity, state, triage and the rest.  A
         # repository whose findings are all waived should still be pickable, or
         # the filter that would show you them is the one that hid it.
-        def _narrowed(**fixed):
-            picked = rbac.visible_findings(db, user)
+        # Read from the summaries when they are current, since these ignore
+        # every filter but the three above them.
+        where = FindingCount if summary.fresh() else Finding
+
+        def _narrowed(model=None, **fixed):
+            model = model or where
+            picked = rbac.visible(db, user, model)
             if fixed.get("connection"):
-                picked = picked.filter(Finding.connection == fixed["connection"])
+                picked = picked.filter(model.connection == fixed["connection"])
             if fixed.get("org"):
-                picked = picked.filter(Finding.organization == fixed["org"])
+                picked = picked.filter(model.organization == fixed["org"])
             if fixed.get("repo"):
-                picked = picked.filter(Finding.repository == fixed["repo"])
+                picked = picked.filter(model.repository == fixed["repo"])
             return picked
 
-        def _choices(column, **fixed):
+        def _choices(name, **fixed):
+            column = getattr(where, name)
             picked = _narrowed(**fixed)
             return sorted({r[0] for r in
                            picked.with_entities(column).distinct().all() if r[0]})
 
-        orgs = _choices(Finding.organization, connection=connection)
-        repo_choices = _choices(Finding.repository, connection=connection, org=org)
+        orgs = _choices("organization", connection=connection)
+        repo_choices = _choices("repository", connection=connection, org=org)
         # Not the primary branch column: a branch that only ever comes second
         # in a finding's list still has findings on it, and a box that cannot
         # offer it reads as a branch nobody has scanned.
-        branch_choices = branch_scope.names(
-            _narrowed(connection=connection, org=org, repo=repo_filter))
+        if summary.branches_fresh():
+            # Not DISTINCT: the database would fold two names that differ
+            # only by case into one, and git treats them as two branches.
+            branch_choices = sorted({r[0] for r in _narrowed(
+                FindingBranch, connection=connection, org=org, repo=repo_filter)
+                .with_entities(FindingBranch.name).all() if r[0]})
+        else:
+            branch_choices = branch_scope.names(_narrowed(
+                Finding, connection=connection, org=org, repo=repo_filter))
         # A selection that the narrowing has made unavailable still has to be
         # in its own list, or the box would show something other than what is
         # actually being filtered on and the page would be lying about itself.
@@ -1330,10 +1437,10 @@ def findings(request: Request, user: User = Depends(current_user)):
             hidden_unreachable=hidden_unreachable,
             groups=groups, grouped=grouped, folded=folded,
             page_sizes=PAGE_SIZES,
-            connections=[c[0] for c in
-                         rbac.visible_findings(db, user)
-                         .with_entities(Finding.connection).distinct().all()
-                         if c[0]],
+            connections=sorted({c[0] for c in
+                                rbac.visible(db, user, where)
+                                .with_entities(where.connection).distinct().all()
+                                if c[0]}),
             # Everything except offset, so the paging links keep the filters
             # without carrying the old page number along with them.
             page_query=urlencode({name: value for name, value in
@@ -1351,23 +1458,22 @@ def findings(request: Request, user: User = Depends(current_user)):
                                    ("sort", sort if sort != "priority" else ""),
                                    ("dir", direction if sort != "priority" else ""))
                                   if value}),
-            excepted_total=(rbac.visible_findings(db, user)
-                            .filter(Finding.excepted.is_(True)).count()),
+            excepted_total=_visible_count(
+                lambda m, q: q.filter(m.excepted.is_(True))),
             # How much the fidelity pass set aside, so nothing feels concealed.
             #
             # Counted with the lane filter lifted and everything else kept: the
             # builder applies the lane too, so asking it for the work list and
             # then counting what is not in the work list always gave zero.
-            set_aside=(_filtered_findings(
-                db, user, dict(params, triage="any"))
-                .filter(Finding.triage.in_(
-                    ["third_party", "advisory", "not_applicable"])).count()
+            set_aside=(_how_many(
+                dict(params, triage="any"),
+                lambda m, q: q.filter(m.triage.in_(
+                    ["third_party", "advisory", "not_applicable"])))
                 if triage == "work" else 0),
             # What is behind the line, counted with every other filter still
             # on, so switching the filter over lands on this same number.
-            backlog_total=(_filtered_findings(
-                db, user, dict(params, baseline="backlog")).count()
-                if since == "new" else 0),
+            backlog_total=(_how_many(dict(params, baseline="backlog"))
+                           if since == "new" else 0),
             baseline_dates=baseline_filter.dates(db),
             can_set_baseline=rbac.can(user, "settings.write"),
             can_waive=rbac.can(user, "waiver.request"),
@@ -1376,7 +1482,7 @@ def findings(request: Request, user: User = Depends(current_user)):
             # Not the filtered count.  The delete-everything dialog has to
             # say how many rows actually go, which is rarely the number on
             # screen.
-            all_total=(rbac.visible_findings(db, user).count()
+            all_total=(_visible_count()
                        if rbac.can(user, "findings.delete") else 0),
             **_expiry_window(90),
         )
