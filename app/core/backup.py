@@ -45,8 +45,10 @@ log = logging.getLogger("gcr.backup")
 FORMAT = "gcr-backup-1"
 
 # Left out on purpose.  Sessions are short lived and restoring one is not a
-# feature anybody asked for.
-SKIP_TABLES = {"sessions"}
+# feature anybody asked for.  Utilization is how busy this machine was, which
+# means nothing on the machine a backup is restored to.
+SKIP_TABLES = {"sessions", "utilization_minute", "utilization_2min",
+               "utilization_10min"}
 
 # Columns holding something encrypted with this installation's key.  They come
 # out in the clear inside the encrypted archive and go back in encrypted with

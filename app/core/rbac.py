@@ -75,6 +75,7 @@ PERMISSIONS = {
         # for it, whatever role they hold.
         "rule.mute.request", "rule.mute.approve",
         "audit.read",
+        "utilization.read",
     },
     UserRole.DEVELOPER: {
         "findings.read", "findings.export",

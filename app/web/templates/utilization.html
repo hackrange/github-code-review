@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Utilization &middot; Git Code Review{% endblock %}
+{% block content %}
+{# Everything below the heading is drawn by utilization.js from the live and
+   history routes, so the gauges move without a reload. #}
+<div id="utilization" data-live="{{ base }}/utilization/live"
+     data-history="{{ base }}/utilization/history"
+     data-page="{{ base }}/utilization">
+  <div class="page-head">
+    <div><h1>Utilization</h1>
+      <div class="faint small">CPU, memory, disk and network for this server
+        and for Git Code Review itself, scans included.  The gauges are live,
+        and the trends cover the range you pick.  Click a trend to open it in
+        its own tab, where you can drag across it to zoom in.</div></div>
+  </div>
+  <noscript><div class="empty">This page needs JavaScript to draw its gauges and charts.</div></noscript>
+</div>
+<script src="{{ base }}/static/utilization.js?v={{ asset_v('utilization.js') }}"></script>
+{% endblock %}

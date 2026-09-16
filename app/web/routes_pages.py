@@ -68,14 +68,33 @@ def _scanning_now_ids() -> set:
         return set()
 
 
-def _branch_finding_count(db, user, repository: str, branch: str) -> int:
-    """How many open findings this reader can see on one branch."""
-    q = (rbac.visible_findings(db, user)
-         .filter(Finding.state == FindingState.OPEN)
-         .filter(Finding.repository == repository))
-    if branch:
-        q = q.filter(Finding.branch == branch)
-    return q.count()
+def _branch_finding_counts(db, user):
+    """-> count(repository, branch).  Open findings this reader can see.
+
+    One grouped query for the whole page.  Counting each badge on its own was
+    two thousand queries and four seconds on the repositories page.  A badge
+    with no branch counts the whole repository.  Names match without case,
+    the way MariaDB compares them.
+    """
+    by_branch, by_repo = {}, {}
+    for repository, branch, total in (
+            rbac.visible_findings(db, user)
+            .filter(Finding.state == FindingState.OPEN)
+            .with_entities(Finding.repository, Finding.branch,
+                           func.count(Finding.id))
+            .group_by(Finding.repository, Finding.branch).all()):
+        repo_key = (repository or "").casefold()
+        key = (repo_key, (branch or "").casefold())
+        by_branch[key] = by_branch.get(key, 0) + total
+        by_repo[repo_key] = by_repo.get(repo_key, 0) + total
+
+    def count(repository: str, branch: str) -> int:
+        repo_key = (repository or "").casefold()
+        if not branch:
+            return by_repo.get(repo_key, 0)
+        return by_branch.get((repo_key, branch.casefold()), 0)
+
+    return count
 
 
 def _compare_url(db, row) -> str:
@@ -633,18 +652,21 @@ def dashboard(request: Request, user: User = Depends(current_user)):
 
         counts, advisory_counts = grouping.counts_by_severity(query)
 
+        # Four tallies in one pass over the same rows, rather than four.
+        # Malicious is counted apart from exploited because nothing about
+        # upgrading a package that is itself the attack helps.
         by_kind = {}
-        for kind, total in (query.with_entities(
-                Finding.kind, func.count(Finding.id))
+        exploited = malicious = verified = 0
+        for kind, total, known, bad, real in (query.with_entities(
+                Finding.kind, func.count(Finding.id),
+                func.sum(case((Finding.known_exploited.is_(True), 1), else_=0)),
+                func.sum(case((Finding.malicious.is_(True), 1), else_=0)),
+                func.sum(case((Finding.verified.is_(True), 1), else_=0)))
                 .group_by(Finding.kind).all()):
             by_kind[getattr(kind, "value", str(kind))] = total
-
-        exploited = query.filter(Finding.known_exploited.is_(True)).count()
-        # A package that is itself the attack.  Counted separately from the
-        # exploited list because nothing about upgrading it helps, which makes
-        # it a different piece of work.
-        malicious = query.filter(Finding.malicious.is_(True)).count()
-        verified = query.filter(Finding.verified.is_(True)).count()
+            exploited += int(known or 0)
+            malicious += int(bad or 0)
+            verified += int(real or 0)
 
         # Where the security sign offs stand.  Amber is counted apart from
         # green on purpose: a review that no longer describes the code is the
@@ -1242,8 +1264,11 @@ def findings(request: Request, user: User = Depends(current_user)):
         if not (params.get("reach", "") or "").strip():
             wider = dict(params)
             wider["reach"] = "any"
-            hidden_unreachable = max(
-                0, _filtered_findings(db, user, wider).count() - query.count())
+            # The default leaves out exactly the unlikely ones, so counting
+            # those is the difference, in one scan instead of two.
+            hidden_unreachable = (_filtered_findings(db, user, wider)
+                                  .filter(Finding.reachability == "unlikely")
+                                  .count())
 
         # The lists behind the four "where" dropdowns.
         #
@@ -1550,10 +1575,11 @@ def waivers(request: Request, q: str = "", status: str = "", page_no: int = 1,
     page_no = max(1, page_no)
 
     with session_scope() as db:
-        visible_ids = [f.id for f in rbac.visible_findings(db, user).all()]
-        base = (db.query(Waiver)
-                .filter(Waiver.finding_id.in_(visible_ids) if visible_ids
-                        else Waiver.id.is_(None)))
+        # A subquery, not a list.  Reading every finding the user can see into
+        # Python to collect its id took three and a half seconds on its own.
+        visible_ids = (rbac.visible_findings(db, user)
+                       .with_entities(Finding.id).scalar_subquery())
+        base = db.query(Waiver).filter(Waiver.finding_id.in_(visible_ids))
         # And, for anybody who cannot approve one, only their own.
         #
         # The repository scope above is the wrong test on its own.  Two
@@ -1576,15 +1602,15 @@ def waivers(request: Request, q: str = "", status: str = "", page_no: int = 1,
             needle = f"%{query}%"
             # The reason and the ticket live on the waiver; the repository and
             # the path live on the finding, so that half is matched by id.
-            matching = [f.id for f in db.query(Finding).filter(
-                Finding.id.in_(visible_ids) if visible_ids else Finding.id.is_(None))
-                .filter(sa_or(Finding.repository.ilike(needle),
-                              Finding.file_path.ilike(needle),
-                              Finding.package_name.ilike(needle))).all()]
+            matching = (rbac.visible_findings(db, user)
+                        .filter(sa_or(Finding.repository.ilike(needle),
+                                      Finding.file_path.ilike(needle),
+                                      Finding.package_name.ilike(needle)))
+                        .with_entities(Finding.id).scalar_subquery())
             base = base.filter(sa_or(Waiver.reason.ilike(needle),
                                      Waiver.ticket.ilike(needle),
                                      Waiver.requested_by.ilike(needle),
-                                     Waiver.finding_id.in_(matching or [0])))
+                                     Waiver.finding_id.in_(matching)))
 
         total = base.count()
         pages = max(1, (total + per - 1) // per)
@@ -1711,6 +1737,7 @@ def repositories(request: Request, user: User = Depends(current_user)):
         badges = []
         mine = [row for row in _cert.all_certifications(db)
                 if row.repository in seen]
+        finding_count = _branch_finding_counts(db, user)
         for row, state in zip(mine, _cert.statuses(db, mine)):
             badges.append({"repository": row.repository, "branch": row.branch,
                            "state": state["state"], "why": state.get("why", ""),
@@ -1734,8 +1761,8 @@ def repositories(request: Request, user: User = Depends(current_user)):
                            # name is a way in when there is something to read
                            # and plain text when there is not.  A link that
                            # opens an empty page is worse than no link.
-                           "findings": _branch_finding_count(
-                               db, user, row.repository, row.branch)})
+                           "findings": finding_count(
+                               row.repository, row.branch)})
         # Branches nobody is expected to sign off, listed beside the sign
         # offs.  They belong on the same page: this is the only place an
         # administrator can find what has been marked, and a decision that
@@ -2613,7 +2640,7 @@ def tagging_page(request: Request, q: str = "", org: str = "",
                                  Repository.technical_owner.isnot(None))
 
         rows = query.order_by(Repository.organization, Repository.name).limit(500).all()
-        resolved = {row.id: tagging.effective(db, row) for row in rows}
+        resolved = tagging.effective_many(db, rows)
         total = db.query(Repository).count()
         untagged = tagging.untagged(db).count()
 
@@ -3021,6 +3048,59 @@ def blast_radius_export(organization: str, request: Request,
     return Response(content=buffer.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition":
                              f'attachment; filename="{name}"'})
+
+
+@router.get("/utilization")
+def utilization_page(request: Request, user: User = Depends(current_user)):
+    """CPU, memory, disk and network, for this server and for this app.
+
+    The page is a shell.  utilization.js fills it from the two JSON routes
+    below, so the gauges move without a reload.
+    """
+    rbac.require(user, "utilization.read")
+    with session_scope() as db:
+        context = _shared(db, user)
+        context.update(active_page="utilization")
+        return page(request, "utilization.html", **context)
+
+
+def _whole_ms(value, low, high, fallback):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(low, min(high, number))
+
+
+@router.get("/utilization/live")
+def utilization_live(since: str = "0", user: User = Depends(current_user)):
+    """The latest reading, for the gauges."""
+    from app.core import utilization
+
+    rbac.require(user, "utilization.read")
+    return utilization.current(_whole_ms(since, 0, 2 ** 53, 0))
+
+
+@router.get("/utilization/history")
+def utilization_history(start: str = "", end: str = "",
+                        user: User = Depends(current_user)):
+    """The trend over a range, in epoch milliseconds, at most a year."""
+    import time as _time
+
+    from app.core import utilization
+
+    rbac.require(user, "utilization.read")
+    now = int(_time.time() * 1000)
+    to = _whole_ms(end, 0, now + 60000, now)
+    frm = _whole_ms(start, 0, now, to - 86400000)
+    if not to > frm:
+        raise HTTPException(status_code=400,
+                            detail="The end of the range has to be after the start.")
+    if to - frm > utilization.MAX_SPAN_SEC * 1000:
+        raise HTTPException(status_code=400,
+                            detail="That range is longer than the history kept, "
+                                   "a year at most.")
+    return utilization.history(frm, to)
 
 
 @router.get("/backup")

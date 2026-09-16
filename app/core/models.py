@@ -11,8 +11,8 @@ import enum
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, Enum, Float, ForeignKey, Index, Integer,
-    String, Table, Text, UniqueConstraint,
+    BigInteger, Boolean, Column, DateTime, Enum, Float, ForeignKey, Index,
+    Integer, String, Table, Text, UniqueConstraint,
 )
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import declarative_base, relationship
@@ -1591,3 +1591,41 @@ class AuditEvent(Base):
     detail = Column(Text, default="")
     source_ip = Column(String(64), default="")
     outcome = Column(String(32), default="ok")
+
+
+class _UtilizationRow:
+    """One slot of CPU, memory, disk and network, for the Utilization page.
+
+    The same columns at three resolutions: a minute kept two days, two
+    minutes kept a month, ten minutes kept a year.  The time is whole epoch
+    seconds rather than a DATETIME, so SQLite and MariaDB bucket it the same
+    way and nobody has to think about zones.
+    """
+
+    node = Column(String(64), primary_key=True)
+    ts = Column(BigInteger, primary_key=True, autoincrement=False, index=True)
+    host_cpu = Column(Float, nullable=False, default=0)
+    host_cpu_max = Column(Float, nullable=False, default=0)
+    app_cpu = Column(Float, nullable=False, default=0)
+    host_mem_used = Column(BigInteger, nullable=False, default=0)
+    host_mem_total = Column(BigInteger, nullable=False, default=0)
+    app_mem = Column(BigInteger, nullable=False, default=0)
+    disk_used = Column(BigInteger, nullable=False, default=0)
+    disk_total = Column(BigInteger, nullable=False, default=0)
+    net_rx_bps = Column(BigInteger, nullable=False, default=0)
+    net_tx_bps = Column(BigInteger, nullable=False, default=0)
+    net_rx_max = Column(BigInteger, nullable=False, default=0)
+    net_tx_max = Column(BigInteger, nullable=False, default=0)
+
+
+class UtilizationMinute(_UtilizationRow, Base):
+    __tablename__ = "utilization_minute"
+
+
+class Utilization2Min(_UtilizationRow, Base):
+    __tablename__ = "utilization_2min"
+
+
+class Utilization10Min(_UtilizationRow, Base):
+    __tablename__ = "utilization_10min"
+

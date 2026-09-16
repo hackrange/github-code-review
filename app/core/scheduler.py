@@ -241,6 +241,25 @@ def start() -> None:
     log.info("catch up looks for unfinished history every %d minutes",
              CATCHUP_MINUTES)
 
+    # CPU, memory, disk and network for the Utilization page.  The sample is
+    # a few file reads, the breakdown asks the database how big it is, and
+    # the rollup averages minutes into the wider tables.
+    from datetime import datetime, timedelta
+
+    from app.core import utilization
+
+    now = datetime.now(_UTC)
+    for job_id, func, trigger, first in (
+            ("utilization-sample", utilization.sample,
+             IntervalTrigger(seconds=utilization.PERIOD_SEC), now),
+            ("utilization-breakdown", utilization.refresh_breakdown,
+             IntervalTrigger(minutes=5), now),
+            ("utilization-rollup", utilization.rollup,
+             IntervalTrigger(minutes=10), now + timedelta(minutes=1))):
+        _scheduler.add_job(func, trigger, id=job_id, replace_existing=True,
+                           next_run_time=first, misfire_grace_time=30,
+                           coalesce=True, max_instances=1)
+
 
 def shutdown() -> None:
     global _scheduler

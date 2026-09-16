@@ -189,34 +189,45 @@ def page_of_groups(db, query, offset: int, limit: int) -> tuple:
         func.max(Finding.risk_score).label("score"),
     ).group_by(*keys)
 
-    total = grouped.count()
-
-    rows = (grouped.order_by(func.max(rank).desc(),
-                             func.max(Finding.risk_score).desc(),
-                             Finding.repository.asc())
+    # The number of groups rides along on every row as a window count, so
+    # the grouping runs once instead of once to count and once to page.
+    rows = (grouped.add_columns(func.count().over().label("groups"))
+            .order_by(func.max(rank).desc(),
+                      func.max(Finding.risk_score).desc(),
+                      Finding.repository.asc())
             .offset(offset).limit(limit).all())
     if not rows:
-        return [], total
+        # Past the last page there is no row to carry it.
+        return [], (grouped.count() if offset else 0)
+    total = rows[0][-1]
 
     # Everything in those groups, in one statement.  An OR of the key tuples
     # rather than a fetch per group, which on a page of a hundred would be a
     # hundred round trips.
     from sqlalchemy import and_, or_
-    clauses = []
+    # A finding that groups with nothing is fetched by its id.  A hundred
+    # ORed conditions read the whole table; an id list and a repository list
+    # both use an index.
+    singles, clauses, repos = [], [], set()
     for r in rows:
         repo, branch, name, version, fixed, image, one = r[0:7]
-        parts = [Finding.repository == repo, Finding.branch == branch,
-                 Finding.package_version == version,
-                 Finding.fixed_in == fixed, Finding.image_ref == image]
         if one:                      # a finding that groups with nothing
-            parts.append(Finding.id == one)
-        else:
-            parts.append(func.coalesce(Finding.package_source,
-                                       Finding.package_name) == name)
-            parts.append(Finding.kind.in_(GROUPABLE))
-        clauses.append(and_(*parts))
+            singles.append(one)
+            continue
+        repos.add(repo)
+        clauses.append(and_(
+            Finding.branch == branch, Finding.repository == repo,
+            Finding.package_version == version,
+            Finding.fixed_in == fixed, Finding.image_ref == image,
+            func.coalesce(Finding.package_source, Finding.package_name) == name,
+            Finding.kind.in_(GROUPABLE)))
 
-    members = query.filter(or_(*clauses)).all()
+    members = []
+    if singles:
+        members += query.filter(Finding.id.in_(singles)).all()
+    if clauses:
+        members += (query.filter(Finding.repository.in_(sorted(repos)))
+                    .filter(or_(*clauses)).all())
 
     # Back into the page order the group query decided.
     order = {tuple(r[0:7]): i for i, r in enumerate(rows)}

@@ -228,11 +228,22 @@ def inventory(session, user, *, page=1, vulnerable=False, **filters) -> dict:
         page = min(max(1, int(page or 1)), pages)
         shown = rows[(page - 1) * PAGE_SIZE:page * PAGE_SIZE]
     else:
-        total = grouped.count()
+        # The total rides along as a window count, so the grouping runs once
+        # rather than once to count and again to page.
+        def fetch(number):
+            return (grouped.add_columns(func.count().over())
+                    .limit(PAGE_SIZE).offset((number - 1) * PAGE_SIZE).all())
+
+        page = max(1, int(page or 1))
+        found = fetch(page)
+        if not found and page > 1:
+            # Past the last page there is no row to carry the total.
+            total = grouped.count()
+            page = max(1, -(-total // PAGE_SIZE))
+            found = fetch(page)
+        total = found[0][-1] if found else 0
         pages = max(1, -(-total // PAGE_SIZE))
-        page = min(max(1, int(page or 1)), pages)
-        shown = [decorate(*row) for row in
-                 grouped.limit(PAGE_SIZE).offset((page - 1) * PAGE_SIZE).all()]
+        shown = [decorate(*row[:-1]) for row in found]
 
     return {"rows": shown, "total": total, "page": page, "pages": pages,
             "summary": summary(session, clauses)}
