@@ -253,12 +253,103 @@ def head_of(session, repository: str, branch: str, repo=None) -> str:
     return str(heads.get(repo.default_branch or "", "") or "")
 
 
-def status(session, row, head_sha: str = "") -> dict:
+class _Lookups:
+    """What status() reads, fetched once for a whole list of sign offs.
+
+    One badge asks for its repository row and a count of findings since the
+    review.  Two thousand badges asked two thousand times each, and the
+    dashboard sent four thousand queries to draw one tile.  This reads the
+    same things in a few queries and answers from memory.
+
+    Names are matched without case, the way MariaDB compares them, so a badge
+    reads the same here as it does one at a time.
+    """
+
+    CHUNK = 500
+
+    def __init__(self, session, rows):
+        import bisect
+        from collections import defaultdict
+
+        from app.core.models import Repository
+
+        self._bisect = bisect
+        rows = [row for row in rows if row is not None]
+        names = sorted({row.repository for row in rows if row.repository})
+
+        self.repos = {}
+        for chunk in _chunks(names, self.CHUNK):
+            for repo in (session.query(Repository)
+                         .filter(Repository.full_name.in_(chunk)).all()):
+                self.repos.setdefault(_fold(repo.full_name), repo)
+
+        # Only the three columns the count needs, and only findings newer
+        # than the oldest review, which is the most any badge can look at.
+        oldest = min((_aware(row.certified_at) for row in rows
+                      if row.certified_at is not None), default=None)
+        found = defaultdict(list)
+        if oldest is not None:
+            for chunk in _chunks(names, self.CHUNK):
+                query = (session.query(Finding.repository, Finding.branch,
+                                       Finding.first_found_at)
+                         .filter(Finding.repository.in_(chunk))
+                         .filter(Finding.state == FindingState.OPEN)
+                         .filter(Finding.excepted.is_(False))
+                         .filter(Finding.first_found_at > oldest))
+                for repository, branch, first in query.all():
+                    found[(_fold(repository), _fold(branch or ""))].append(
+                        _aware(first))
+        for times in found.values():
+            times.sort()
+        self.found = found
+
+    def repo(self, repository):
+        return self.repos.get(_fold(repository))
+
+    def since(self, repository, named, certified_at) -> int:
+        """Open findings first seen after the review, on this branch or on
+        none.  The same count the single badge query makes."""
+        after = _aware(certified_at)
+        if after is None:
+            return 0
+        repository = _fold(repository)
+        if named:
+            places = {"", _fold(named)}
+        else:
+            # No branch to narrow by, so every branch counts.
+            places = {branch for (repo, branch) in self.found
+                      if repo == repository}
+        total = 0
+        for branch in places:
+            times = self.found.get((repository, branch), ())
+            total += len(times) - self._bisect.bisect_right(times, after)
+        return total
+
+
+def _fold(value) -> str:
+    return (value or "").casefold()
+
+
+def _chunks(items, size):
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
+
+
+def statuses(session, rows) -> list:
+    """status() for every row, in order, in a few queries instead of two each."""
+    rows = list(rows)
+    lookups = _Lookups(session, rows)
+    return [status(session, row, lookups=lookups) for row in rows]
+
+
+def status(session, row, head_sha: str = "", lookups=None) -> dict:
     """-> {state, why, ...}.  What this badge should say today.
 
     Answers with a sentence rather than a color, because the interesting cases
     are the ones where it is no longer true and the reader needs to know which
     kind of no longer true it is.
+
+    Pass `lookups` from statuses() when asking about a lot of them at once.
     """
     if row is None:
         return {"state": NONE, "why": "", "certification": None}
@@ -273,7 +364,8 @@ def status(session, row, head_sha: str = "") -> dict:
     # Before the date and before the commits, because both of those are
     # questions about a branch, and this is the question of whether the branch
     # is there to ask them about.
-    repo = _repo_row(session, row.repository)
+    repo = (lookups.repo(row.repository) if lookups is not None
+            else _repo_row(session, row.repository))
     gone = _out_of_reach(session, row, repo)
     if gone:
         return {"state": UNKNOWN, "certification": row, "why": gone}
@@ -337,16 +429,19 @@ def status(session, row, head_sha: str = "") -> dict:
     # errs towards amber, which is the safe direction for a claim that
     # something has been read.
     named = row.branch or _default_branch_of(session, row.repository, repo)
-    since_q = (session.query(Finding)
-               .filter(Finding.repository == row.repository)
-               .filter(Finding.state == FindingState.OPEN)
-               .filter(Finding.excepted.is_(False))
-               .filter(Finding.first_found_at > _aware(row.certified_at)))
-    if named:
-        since_q = since_q.filter(or_(Finding.branch == named,
-                                     Finding.branch.is_(None),
-                                     Finding.branch == ""))
-    since = since_q.count()
+    if lookups is not None:
+        since = lookups.since(row.repository, named, row.certified_at)
+    else:
+        since_q = (session.query(Finding)
+                   .filter(Finding.repository == row.repository)
+                   .filter(Finding.state == FindingState.OPEN)
+                   .filter(Finding.excepted.is_(False))
+                   .filter(Finding.first_found_at > _aware(row.certified_at)))
+        if named:
+            since_q = since_q.filter(or_(Finding.branch == named,
+                                         Finding.branch.is_(None),
+                                         Finding.branch == ""))
+        since = since_q.count()
     if since:
         return {"state": STALE, "certification": row, "new_findings": since,
                 "why": ("%d finding%s has arrived since the review, so it no "
@@ -722,12 +817,12 @@ def coverage(session, repos, certifications=None, exemptions=None) -> dict:
             exempt.add(key)
 
     certified = 0
-    for row in (certifications if certifications is not None
-                else session.query(Certification)).all():
-        key = _resolve(row.repository, row.branch)
-        if key not in population or key in exempt:
-            continue
-        if status(session, row).get("state") == ACTIVE:
+    wanted = [row for row in (certifications if certifications is not None
+                              else session.query(Certification)).all()
+              if _resolve(row.repository, row.branch) in population
+              and _resolve(row.repository, row.branch) not in exempt]
+    for state in statuses(session, wanted):
+        if state.get("state") == ACTIVE:
             certified += 1
 
     certifiable = len(population) - len(exempt)
@@ -804,13 +899,14 @@ def scope_seal(session, repos, certifications=None, exemptions=None,
 
     signed, automatic, newest, who = 0, 0, None, ""
     done = set()
-    for row in (certifications if certifications is not None
-                else session.query(Certification)).all():
+    wanted = [row for row in (certifications if certifications is not None
+                              else session.query(Certification)).all()
+              if _resolve(row.repository, row.branch) in population
+              and _resolve(row.repository, row.branch) not in exempt]
+    for row, state in zip(wanted, statuses(session, wanted)):
+        if state.get("state") != ACTIVE:
+            continue
         key = _resolve(row.repository, row.branch)
-        if key not in population or key in exempt:
-            continue
-        if status(session, row).get("state") != ACTIVE:
-            continue
         signed += 1
         done.add(key)
         if row.automatic:
@@ -906,14 +1002,13 @@ def sealed_repositories(session, repos, certifications=None,
         if key in population}
 
     done = set()
-    for row in (certifications if certifications is not None
-                else session.query(Certification)).all():
-        key = _resolve(row.repository, row.branch)
-        if key not in population or key in exempt:
-            continue
-        if status(session, row).get("state") != ACTIVE:
-            continue
-        done.add(key)
+    wanted = [row for row in (certifications if certifications is not None
+                              else session.query(Certification)).all()
+              if _resolve(row.repository, row.branch) in population
+              and _resolve(row.repository, row.branch) not in exempt]
+    for row, state in zip(wanted, statuses(session, wanted)):
+        if state.get("state") == ACTIVE:
+            done.add(_resolve(row.repository, row.branch))
 
     owed, signed = {}, {}
     for key in population - exempt:
@@ -954,8 +1049,8 @@ def counts(session, base=None) -> dict:
     rows = (base if base is not None else session.query(Certification)).all()
     out = {ACTIVE: 0, STALE: 0, RESCANNING: 0, UNKNOWN: 0, LAPSED: 0,
            REVOKED: 0, "automatic": 0}
-    for row in rows:
-        state = status(session, row).get("state", "")
+    for row, found in zip(rows, statuses(session, rows)):
+        state = found.get("state", "")
         if state in out:
             out[state] += 1
         if state == ACTIVE and row.automatic:

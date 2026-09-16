@@ -1709,10 +1709,9 @@ def repositories(request: Request, user: User = Depends(current_user)):
         # not anybody has looked at it since.
         seen = set(row.full_name for row in rows)
         badges = []
-        for row in _cert.all_certifications(db):
-            if row.repository not in seen:
-                continue
-            state = _cert.status(db, row)
+        mine = [row for row in _cert.all_certifications(db)
+                if row.repository in seen]
+        for row, state in zip(mine, _cert.statuses(db, mine)):
             badges.append({"repository": row.repository, "branch": row.branch,
                            "state": state["state"], "why": state.get("why", ""),
                            "by": row.certified_by, "at": row.certified_at,

@@ -174,8 +174,9 @@ def _certification_by_branch(session) -> dict:
     out = {}
     try:
         from app.core.models import Certification
-        for row in session.query(Certification).all():
-            state = certification.status(session, row).get("state", "")
+        rows = session.query(Certification).all()
+        for row, found in zip(rows, certification.statuses(session, rows)):
+            state = found.get("state", "")
             if state:
                 out[(row.repository, row.branch)] = state
     except Exception:            # a trend row is not worth failing a scan for

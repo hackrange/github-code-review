@@ -38,10 +38,22 @@ services:
     # install.sh writes from GCR_DB_ENCRYPTION_KEY in .env.  Tables, redo log
     # and temporary tables are all covered, so the files under the volume are
     # no use to anybody who copies them.
+    #
+    # The buffer pool is where MariaDB keeps table data in memory.  The stock
+    # 128M is smaller than the findings table on a real estate, so every page
+    # of the dashboard read from disk and decrypted as it went.  2G holds a
+    # few hundred thousand findings.  Set GCR_DB_BUFFER_POOL in .env to change
+    # it, and keep it under the memory the host can spare.
+    #
+    # Anything slower than two seconds is written to the slow query log in
+    # the data volume, so a slow page can be traced to what caused it.
     command: >
       --character-set-server=utf8mb4
       --collation-server=utf8mb4_unicode_ci
       --innodb-file-per-table=1
+      --innodb-buffer-pool-size=${GCR_DB_BUFFER_POOL:-2G}
+      --slow-query-log=ON
+      --long-query-time=2
       --max-connections=200
       --plugin-load-add=file_key_management
       --file-key-management-filename=/etc/mysql/encryption/keyfile
