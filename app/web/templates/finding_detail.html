@@ -212,7 +212,7 @@
        somebody on the front page of a repository to go and find it is most of
        a link rather than a link.  The scanner already knew the path. #}
     {% if f.dockerfile %}
-    <a class="btn" href="{{ repo_home }}/blob/{{ f.branch or repo_info.default_branch or 'HEAD' }}/{{ f.dockerfile }}"
+    <a class="btn" href="{{ repo_home }}/blob/{{ f.branch or repo_info.default_branch or 'HEAD' }}/{{ f.dockerfile.lstrip('/') }}"
        rel="noopener noreferrer" target="_blank">
       {%- if host_name %}Open the Dockerfile on {{ host_name }}
       {%- else %}Open the Dockerfile{% endif %}</a>
@@ -506,7 +506,7 @@
         <tr><th>Declared in</th><td>
           {%- set repo_home = repo_info.html_url | web_url if repo_info else '' -%}
           {% if repo_home %}<a class="mono" rel="noopener noreferrer" target="_blank"
-             href="{{ repo_home }}/blob/{{ f.branch or repo_info.default_branch or 'HEAD' }}/{{ f.manifest_path }}">{{ f.manifest_path }}</a>
+             href="{{ repo_home }}/blob/{{ f.branch or repo_info.default_branch or 'HEAD' }}/{{ f.manifest_path.lstrip('/') }}">{{ f.manifest_path }}</a>
           {% else %}<span class="mono">{{ f.manifest_path }}</span>{% endif %}
         </td></tr>
         {% endif %}
@@ -549,7 +549,7 @@
              what that file does and the reader has to be able to check it. #}
           {% set repo_home = repo_info.html_url | web_url if repo_info else '' %}
           <div class="faint small">asked for by
-            {% if repo_home %}<a href="{{ repo_home }}/blob/{{ f.branch or repo_info.default_branch or 'HEAD' }}/{{ f.dockerfile }}"
+            {% if repo_home %}<a href="{{ repo_home }}/blob/{{ f.branch or repo_info.default_branch or 'HEAD' }}/{{ f.dockerfile.lstrip('/') }}"
                rel="noopener noreferrer" target="_blank"><span class="mono">{{ f.dockerfile }}</span></a>
             {%- else %}<span class="mono">{{ f.dockerfile }}</span>{% endif %}</div>
           {% endif %}

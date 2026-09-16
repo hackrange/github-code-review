@@ -15,6 +15,7 @@ import hashlib
 import re
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -156,6 +157,109 @@ def _as_list(value) -> list:
     if isinstance(value, str):
         return [value]
     return [str(item) for item in value]
+
+
+def _work_roots() -> list:
+    """Where a scan clones a repository: <root>/gcr-scan-<run>-<random>/work/<org>__<repo>/.
+
+    The root is the work directory, or the system temp directory when that is
+    missing, which is where scanner.run_scan puts it.  Both spellings of each,
+    in case one is reached through a link.
+    """
+    import tempfile
+
+    from app.config import settings
+
+    roots = []
+    for root in (str(settings.work_dir), tempfile.gettempdir()):
+        for spelling in (root, os.path.realpath(root)):
+            spelling = spelling.strip("/")
+            if spelling and spelling not in roots:
+                roots.append(spelling)
+    return roots
+
+
+def in_repository(path) -> str:
+    """A path as it is inside the repository, without the scan's clone folder.
+
+    osv-scanner reports the manifest it read as an absolute path even when it
+    is run from inside the clone.  Kept as it came, the path named a folder
+    that only existed during one scan: every link to it was a 404, and the
+    folder name is random per run, so anything keyed on it changed identity
+    every night.
+
+    Only a clone folder under a root a scan actually uses is taken out, so a
+    repository that happens to hold a folder with a similar name keeps it, and
+    a link keeps its repository address.
+    """
+    text = str(path or "")
+    if "gcr-scan-" not in text:
+        return text
+    for root in _work_roots():
+        folder = re.escape(root) + r"/gcr-scan-[^/]+/work/[^/]+/"
+        if "://" in text:
+            text = re.sub(r"/+" + folder, "/", text)
+        else:
+            text = re.sub(r"^/+" + folder, "", text, count=1)
+    return text
+
+
+def _strip_clone_paths(row: dict) -> None:
+    """Every path on an arriving row, made relative to the repository."""
+    for key in ("file", "url"):
+        if isinstance(row.get(key), str) and row[key]:
+            row[key] = in_repository(row[key])
+    package = row.get("package")
+    if isinstance(package, dict) and package.get("locations"):
+        package["locations"] = [in_repository(where) if isinstance(where, str)
+                                else where for where in _as_list(package["locations"])]
+    bad = row.get("malicious")
+    if isinstance(bad, dict) and bad.get("manifest"):
+        bad["manifest"] = in_repository(bad["manifest"])
+
+
+def repair_clone_paths(session) -> int:
+    """Findings already stored with a clone folder in a path, put right.
+
+    The path is corrected on every one.  An open finding for a malicious
+    package also carried that folder in its fingerprint, so each scan closed
+    it and opened it again as new.  Those move to the fingerprint the
+    corrected path gives, which is the one the next scan will arrive with, so
+    the finding and anything decided about it carry on.  Only when the old
+    fingerprint recomputes exactly from the stored columns, and nothing
+    already holds the new one: a guess here would split a finding in two.
+    """
+    like = "%/gcr-scan-%/work/%"
+    rows = (session.query(Finding)
+            .filter((Finding.manifest_path.like(like))
+                    | (Finding.file_path.like(like))
+                    | (Finding.url.like(like))).all())
+    rekeyed = 0
+    for finding in rows:
+        old_manifest = finding.manifest_path or ""
+        if (finding.state == FindingState.OPEN and finding.malicious
+                and finding.kind == FindingKind.DEPENDENCY and old_manifest):
+            parts = [finding.repository, finding.package_name,
+                     finding.package_version, finding.rule]
+            if finding.image_ref:
+                parts.append(finding.image_ref)
+            if finding.fingerprint == "dep:" + _digest(*parts, old_manifest):
+                wanted = "dep:" + _digest(*parts, in_repository(old_manifest))
+                taken = (session.query(Finding.id)
+                         .filter(Finding.fingerprint == wanted).first())
+                if taken is None:
+                    finding.fingerprint = wanted
+                    rekeyed += 1
+        finding.manifest_path = in_repository(old_manifest)
+        if finding.file_path:
+            finding.file_path = in_repository(finding.file_path)
+        if finding.url:
+            finding.url = in_repository(finding.url)
+    if rows:
+        log.info("took the scan's clone folder out of %d finding path(s), "
+                 "and kept %d malicious package finding(s) under a stable "
+                 "fingerprint", len(rows), rekeyed)
+    return len(rows)
 
 
 def fingerprint_for(kind: str, row: dict) -> str:
@@ -796,6 +900,8 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             repo = _repo_for(session, row.get("organization"), full_name, cache,
                              connection=connection)
 
+            # Before the fingerprint, which some kinds build from a path.
+            _strip_clone_paths(row)
             marker = fingerprint_for(kind_name, row)
             seen_fingerprints.add(marker)
 

@@ -196,6 +196,13 @@ def init_db() -> None:
         # knows where a walk actually reached.  A reader that infers it is
         # guessing, and this is not a thing worth guessing about.
 
+        # Paths an engine reported with the scan's clone folder in front.
+        # Cheap once done: the query finds nothing to change.
+        from app.core.ingest import repair_clone_paths
+
+        with session_scope() as session:
+            repair_clone_paths(session)
+
     if settings.uses_sqlite:
         try:
             Path(settings.db_path).chmod(0o600)

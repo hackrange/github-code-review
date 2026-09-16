@@ -211,7 +211,20 @@ vulns_osv() {
   ( cd "$dir" && with_timeout 600 osv-scanner scan source "${args[@]}" . ) > "$out" 2>/dev/null || true
   [[ -s "$out" ]] || { echo '[]'; return; }
 
-  jq -c '[ (.results // [])[] | .source.path as $manifest | (.packages // [])[]
+  # osv-scanner names each manifest by its absolute path, clone folder and
+  # all, even run from inside the clone.  That folder is gone after the scan
+  # and its name is random, so the path is cut back to the repository.
+  # Both spellings of the clone, because osv-scanner keeps a path reached
+  # through a link as it was given rather than resolving it.
+  local root real
+  root=$(cd "$dir" && pwd -L); real=$(cd "$dir" && pwd -P)
+
+  jq -c --arg root "$root" --arg real "$real" '[ (.results // [])[]
+           | ((.source.path // "")
+              | if startswith($root + "/") then ltrimstr($root + "/")
+                elif startswith($real + "/") then ltrimstr($real + "/")
+                else . end) as $manifest
+           | (.packages // [])[]
            | .package as $pkg | (.vulnerabilities // [])[]
            | . as $v | {
       source: "osv",
