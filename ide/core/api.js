@@ -137,6 +137,41 @@ class Api {
 
   ping() { return this.json("/ping"); }
 
+  /* Does this same address answer over plain http?
+   *
+   * Asked only after a secure connection has already failed, to tell "your
+   * server is not using TLS" apart from "your server's certificate is wrong".
+   * Deliberately sends no token: an answer here means the connection is
+   * cleartext, and a credential must never be the thing that finds that out.
+   * A 401 is the answer being looked for, because it is this API saying no
+   * rather than something else saying anything.
+   */
+  plainHttpAnswers() {
+    return new Promise((resolve) => {
+      let target;
+      try {
+        target = new URL(this.server.replace(/^https:/i, "http:") + "/ping");
+      } catch (err) {
+        resolve(false);
+        return;
+      }
+      if (target.protocol !== "http:") { resolve(false); return; }
+      const call = http.request({
+        method: "GET",
+        hostname: target.hostname,
+        port: target.port || 80,
+        path: target.pathname + target.search,
+        headers: { "Accept": "application/json", "User-Agent": USER_AGENT }
+      }, (response) => {
+        response.resume();
+        resolve(response.statusCode === 401 || response.statusCode === 200);
+      });
+      call.setTimeout(5000, () => { call.destroy(); resolve(false); });
+      call.on("error", () => resolve(false));
+      call.end();
+    });
+  }
+
   /* The triage rules, exclusions and muted rules this installation uses.
    *
    * Kept so the editor can agree with the server about what is noise even
@@ -212,6 +247,26 @@ function explain(err, target) {
   if (code === "ETIMEDOUT" || code === "ECONNRESET") {
     return new ApiError("The connection to " + where + " did not hold.",
                         { kind: "network" });
+  }
+  /* The handshake itself failed, before any certificate was judged.
+   *
+   * The editor runs on BoringSSL and prints a line of C++ file names and an
+   * alert number, which tells somebody who already knows TLS what happened and
+   * tells everybody else nothing at all.  There are only three causes worth
+   * naming and they are told apart by asking, which the connection check
+   * does. */
+  const text = String(err && err.message || "");
+  if (code === "EPROTO" || code === "ERR_SSL_WRONG_VERSION_NUMBER"
+      || /wrong version number|handshake fail|alert number 40|SSLV3_ALERT/i.test(text)) {
+    return new ApiError(
+      "The secure connection to " + where + " could not be set up.  Either the "
+      + "address begins with https:// and that server speaks plain http, or "
+      + "the server has no certificate for the name you used, which is what "
+      + "happens when an address is an IP rather than a hostname, or something "
+      + "between the two is inspecting the traffic.  Run Git Code Review: "
+      + "Check the connection, which asks the server and says which of those "
+      + "it is.",
+      { kind: "tls" });
   }
   if (code.indexOf("CERT") !== -1 || code === "SELF_SIGNED_CERT_IN_CHAIN"
       || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {

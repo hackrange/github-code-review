@@ -206,7 +206,23 @@ class Session {
       return { ok: true, detail: "Connected to " + this.api.server
                                  + (who ? " as " + who : "") + "." };
     } catch (err) {
-      return { ok: false, detail: err instanceof ApiError ? err.message : String(err) };
+      const message = err instanceof ApiError ? err.message : String(err);
+      /* A secure connection that will not start is the one failure worth a
+       * second question, because the commonest cause has a one line fix and
+       * the message cannot tell on its own. */
+      if (err instanceof ApiError && err.kind === "tls") {
+        const plain = await this.api.plainHttpAnswers();
+        if (plain) {
+          return { ok: false,
+                   detail: "That server answers on plain http, not https.  "
+                           + "Change gitCodeReview.server to "
+                           + this.api.server.replace(/^https:/i, "http:")
+                           + " and check again.  Anything you edit then "
+                           + "travels unencrypted, so it wants a network you "
+                           + "trust, or a certificate on the server." };
+        }
+      }
+      return { ok: false, detail: message };
     }
   }
 }

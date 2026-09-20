@@ -310,6 +310,32 @@ async function main() {
   });
   seen.scopes = ["review", "rules"];
 
+  /* The failure a first time user actually hits: the address says https and
+   * the server speaks plain http.  The editor's own message for that is a
+   * BoringSSL alert number, which is unusable. */
+  console.log("\n== https to a plain http server is named, not dumped ==");
+  const plainSettings = settingsOf.resolve(
+    { server: "https://127.0.0.1:" + port + "/api/v1", token: "t" }, {});
+  const plainSession = new Session({ settings: plainSettings });
+  const tls = await plainSession.check();
+  check("it fails rather than pretending to work", () =>
+    assert.strictEqual(tls.ok, false));
+  check("and says the server is plain http, with the address to use", () => {
+    assert.ok(/plain http/i.test(tls.detail), tls.detail);
+    assert.ok(tls.detail.indexOf("http://127.0.0.1:" + port + "/api/v1") !== -1,
+              tls.detail);
+  });
+  check("without any of the editor's TLS internals in it", () =>
+    assert.ok(!/boringssl|SSLV3|alert number|tls_record/i.test(tls.detail),
+              tls.detail));
+  /* The probe must never carry the token: finding out that a connection is
+   * cleartext is not a thing to spend a credential on.  The stub records the
+   * header of every request it takes, so the last one recorded is the probe's
+   * and it has to be empty. */
+  check("and the question it asked carried no token", () =>
+    assert.strictEqual(seen.authorization, "",
+                       "the probe sent: " + seen.authorization));
+
   client.send({ id: 99, method: "shutdown", params: {} });
   await client.wait((m) => m.id === 99, "shutdown");
   client.send({ method: "exit", params: {} });
