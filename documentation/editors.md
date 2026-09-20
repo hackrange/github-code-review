@@ -31,6 +31,33 @@ codebases, and a fix that lands in one of them.
 Neither package has any dependencies.  The language server needs Node 18 or
 newer, which Visual Studio Code and Cursor already carry.
 
+## Visual Studio Code, step by step
+
+Written out for somebody who has not installed an editor extension before.
+Cursor is identical and takes the same file.
+
+1. On the server, open **IDE tokens** and make one with **review** and
+   **rules** both ticked.  Copy it when it is shown; only its hash is kept.
+2. On the same server, open **Editor plugins** and download the `.vsix`.
+3. In the editor press `Ctrl+Shift+P`, or `Cmd+Shift+P` on a Mac.  That is the
+   command palette, and every step below starts there.
+4. Type `Install from VSIX`, choose **Extensions: Install from VSIX**, and pick
+   the file you just downloaded.
+5. Command palette again.  Type `Git Code Review: Set the token` and paste the
+   token in.  It goes into the editor's own secret storage rather than into a
+   settings file.
+6. Open settings with `Ctrl+,`, search for `gitCodeReview`, and put your
+   server's address in **Server**.  It ends in `/api/v1` and the Editor plugins
+   page prints it.
+7. Command palette, then `Git Code Review: Check the connection`.  It answers
+   in a notification and names what is wrong when something is.
+8. Open one of your own files and save it.  Findings appear underlined in the
+   file and in the Problems panel, which is `Ctrl+Shift+M`.
+
+If nothing appears, the file may have no findings on the lines you changed,
+which is the default.  `Git Code Review: Review this file` checks the whole
+file on demand.
+
 ## What it needs to be told
 
 Two things, the same everywhere:
