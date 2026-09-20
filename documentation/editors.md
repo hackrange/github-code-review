@@ -39,18 +39,22 @@ Cursor is identical and takes the same file.
 1. On the server, open **IDE tokens** and make one with **review** and
    **rules** both ticked.  Copy it when it is shown; only its hash is kept.
 2. On the same server, open **Editor plugins** and download the `.vsix`.
-3. In the editor press `Ctrl+Shift+P`, or `Cmd+Shift+P` on a Mac.  That is the
-   command palette, and every step below starts there.
-4. Type `Install from VSIX`, choose **Extensions: Install from VSIX**, and pick
-   the file you just downloaded.
-5. Command palette again.  Type `Git Code Review: Set the token` and paste the
+3. In the editor press `Ctrl+Shift+P`, or `Cmd+Shift+P` on a Mac.  A search
+   box drops down from the top of the window.  Anything the editor can do can
+   be found by typing its name in there.  The editor calls it the command
+   palette; the steps below call it the search box, and every one of them
+   starts by opening it.
+4. Type `Install from VSIX`, choose **Extensions: Install from VSIX** from the
+   list underneath, and pick the file you just downloaded.
+5. Search box again.  Type `Git Code Review: Set the token` and paste the
    token in.  It goes into the editor's own secret storage rather than into a
    settings file.
 6. Open settings with `Ctrl+,`, search for `gitCodeReview`, and put your
    server's address in **Server**.  It ends in `/api/v1` and the Editor plugins
    page prints it.
-7. Command palette, then `Git Code Review: Check the connection`.  It answers
-   in a notification and names what is wrong when something is.
+7. Search box, then `Git Code Review: Check the connection`.  It answers in a
+   message at the bottom right of the window, and names what is wrong when
+   something is.
 8. Open one of your own files and save it.  Findings appear underlined in the
    file and in the Problems panel, which is `Ctrl+Shift+M`.
 
@@ -61,7 +65,7 @@ file on demand.
 Step 4 has a terminal equivalent, `code --install-extension <file>`, for people
 who would rather type it.  It only works when that command is on your PATH, and
 on a Mac it is not until you run **Shell Command: Install 'code' command in
-PATH** from the command palette.  Cursor has the same entry for `cursor`.  The
+PATH** from that same search box.  Cursor has the same entry for `cursor`.  The
 palette step above needs none of that, which is why it is the one written
 out.
 

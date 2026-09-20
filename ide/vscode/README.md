@@ -9,13 +9,15 @@ what you see here is what the report will say.
 1. Open your Git Code Review server and go to **IDE tokens**.  Make a token
    with **review** and **rules** both ticked.  One without both connects and
    then fails on the first save.
-2. Install the package: command palette (`Ctrl+Shift+P`, or `Cmd+Shift+P` on a
-   Mac), then **Extensions: Install from VSIX**, and pick the file.  The
+2. Install the package.  Press `Ctrl+Shift+P`, or `Cmd+Shift+P` on a Mac: a
+   search box drops down from the top of the window, which is where the editor
+   keeps everything it can do.  Type **Install from VSIX**, choose
+   **Extensions: Install from VSIX**, and pick the file.  The
    `code --install-extension` command does the same thing, when that command is
    on your PATH.  On a Mac it is not until you run **Shell Command: Install
-   'code' command in PATH** from the palette.
-3. In the editor, run **Git Code Review: Set the token** from the command
-   palette and paste it.  It is kept in the editor's secret storage, not in a
+   'code' command in PATH** from that same box.
+3. Open the search box again and run **Git Code Review: Set the token**, then
+   paste the token in.  It is kept in the editor's secret storage, not in a
    settings file.
 4. Set the address in settings:
 
