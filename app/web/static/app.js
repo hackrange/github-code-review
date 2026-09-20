@@ -85,6 +85,11 @@
     }).observe(node, {attributes: true, attributeFilter: ["hidden"]});
   });
 
+  /* What a data attribute has to say for a tick box to be ticked.  A row
+   * writes 1 or 0 from a template, and true or yes are what somebody writing
+   * one by hand reaches for. */
+  var TRUTHY = ["1", "true", "on", "yes"];
+
   /* Modals.  Anything with data-modal opens the panel with that id. */
   function closeModals() {
     document.querySelectorAll(".modal-backdrop").forEach(function (node) {
@@ -101,17 +106,47 @@
        * run until the current task finishes: the prefill and the focus below
        * both happen before that, and neither works on a disabled field. */
       unpark(panel);
+      /* Back to what the panel ships with, before this row is put into it.
+       *
+       * One panel serves every row's Edit button and the Add button as well,
+       * so whatever was in it last time is still there: the name of a row
+       * somebody looked at and cancelled, a tick box turned off two rows ago,
+       * and the id of the row that was being edited, which would make Add
+       * save over it.  A field this row says nothing about has to be the
+       * panel's own default rather than somebody else's answer. */
+      panel.querySelectorAll("input, textarea, select").forEach(function (field) {
+        if (field.type === "checkbox" || field.type === "radio") {
+          field.checked = field.defaultChecked;
+        } else if (field.tagName === "SELECT") {
+          var preset = field.querySelector("option[selected]");
+          field.value = preset ? preset.value
+                               : (field.options.length ? field.options[0].value : "");
+        } else {
+          field.value = field.defaultValue;
+        }
+      });
       /* Carry the row this came from into the form. */
       Object.keys(trigger.dataset).forEach(function (name) {
         if (name === "modal" || name === "post" || name === "confirm" ||
             name === "busy" || name === "body") { return; }
         var field = panel.querySelector('[name="' + name + '"]');
-        /* A tick box carries its own value and the tick is what says yes.
-         * Writing the row's value onto one replaces the thing it submits,
-         * so a set of them named for the attribute that fills them in, like
-         * the scanning groups, quietly stops saving.  Whoever opens the
-         * panel ticks those; this only fills in fields that hold text. */
-        if (field && field.type !== "checkbox" && field.type !== "radio") {
+        /* A tick box carries its own value and the tick is what says yes, so
+         * the row decides whether it is ticked rather than what it sends.
+         * Writing the row's value onto one replaces the thing it submits and
+         * it quietly stops saving, which is why this used to skip them
+         * entirely.  Skipping them meant a panel that always showed the
+         * template's answer instead of the row's: a schedule that was off
+         * opened with Turned on ticked, and turning it on meant clicking the
+         * box, which turned it off. */
+        if (field && field.type === "checkbox") {
+          field.checked = TRUTHY.indexOf(
+            String(trigger.dataset[name]).toLowerCase()) !== -1;
+        } else if (field && field.type === "radio") {
+          /* A group shares one name, so the value picks which of them. */
+          panel.querySelectorAll('[name="' + name + '"]').forEach(function (one) {
+            one.checked = (one.value === String(trigger.dataset[name]));
+          });
+        } else if (field) {
           field.value = trigger.dataset[name];
         }
         /* Every slot, not the first one.  A dialog that names the thing it

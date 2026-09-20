@@ -44,9 +44,17 @@
           <td class="small faint nowrap">{{ s.next_run_at | dt('%Y-%m-%d %H:%M') if s.next_run_at else '' }}</td>
           <td class="nowrap">
             {% if can_edit %}
+              {# Every field the form will submit, because the panel is one
+                 panel serving every row.  A field this button does not name
+                 keeps the panel's default, which for kind is "run a scan" and
+                 for the tick box is on: editing a feeds job would have turned
+                 it into a scan, and a schedule that was off opened with Turned
+                 on already ticked. #}
               <button class="btn sm" type="button" data-modal="schedule-modal"
                       data-schedule_id="{{ s.id }}" data-name="{{ s.name }}"
-                      data-cron="{{ s.cron }}" data-scope_orgs="{{ s.scope_orgs }}">Edit</button>
+                      data-kind="{{ s.kind }}" data-cron="{{ s.cron }}"
+                      data-enabled="{{ '1' if s.enabled else '0' }}"
+                      data-scope_orgs="{{ s.scope_orgs }}">Edit</button>
               <form method="post" action="{{ base }}/schedules/{{ s.id }}/run" style="display:inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button class="btn sm" type="submit">Run now</button>

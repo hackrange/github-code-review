@@ -105,6 +105,11 @@
                     data-notify_application_owner="{{ '1' if c.notify_application_owner else '' }}"
                     data-notify_technical_owner="{{ '1' if c.notify_technical_owner else '' }}"
                     data-notify_extra="{{ c.notify_extra or '' }}"
+                    {# Whether it is in scans, because the panel's own default
+                       is ticked.  Without this, opening a connection somebody
+                       turned off showed it as on, and saving turned it back on
+                       without anybody asking for that. #}
+                    data-enabled="{{ '1' if c.enabled else '0' }}"
                     data-sensitivity="{{ c.sensitivity or '' }}"
                     data-repositories="{{ c.repositories }}"
                     data-branches="{{ c.branches or '' }}">Edit</button>
