@@ -2,6 +2,26 @@
 # The per-repo pipeline: clone, branches, secrets, triage, SBOM, access, vulns.
 # shellcheck shell=bash
 
+# A window edge as an instant rather than a date.
+#
+# The markers are written as YYYY-MM-DD, and git's date parser fills the parts
+# it was not given from the current clock.  So a bare date means "that day, at
+# the time it is now", which quietly moves all day and excludes everything
+# committed before this moment.  start is the first instant of the day and end
+# the last, so an edge can only ever widen the walk, never narrow it: a repeat
+# of a commit already read costs nothing and a commit never read is the whole
+# failure this pass exists to prevent.  A marker that already carries a time is
+# left exactly as it is.
+_walk_instant() {
+  local marker="$1" edge="${2:-start}"
+  [[ -z "$marker" ]] && return 0
+  case "$marker" in
+    *T*|*:*) printf '%s' "$marker"; return 0 ;;
+  esac
+  if [[ "$edge" == "end" ]]; then printf '%sT23:59:59Z' "$marker"
+  else printf '%sT00:00:00Z' "$marker"; fi
+}
+
 # Per-repository worker
 scan_one_repo() {
   local repo_json="$1" results_dir="$2" work_root="$3"
@@ -319,16 +339,25 @@ scan_one_repo() {
     fi
 
     # The git log options that bound this run's walk.
+    #
+    # The edges are said as instants, never as bare dates.  git fills the time
+    # it was not given from the clock rather than from midnight, so at ten at
+    # night "--since=2026-09-20" means "since ten o'clock this morning" and
+    # every commit made earlier that day is walked straight past.  That is the
+    # worst possible thing for this pass to get wrong: somebody commits a
+    # credential, scans, and is told there is nothing there.  Measured on a
+    # repository whose three commits were all made that afternoon: the bare
+    # date matched none of them, the instant matched all three.
     local range_opts="--all --full-history"
-    [[ -n "$since_arg" ]] && range_opts="$range_opts --since=$since_arg"
-    [[ -n "$until_arg" ]] && range_opts="$range_opts --until=$until_arg"
+    [[ -n "$since_arg" ]] && range_opts="$range_opts --since=$(_walk_instant "$since_arg" start)"
+    [[ -n "$until_arg" ]] && range_opts="$range_opts --until=$(_walk_instant "$until_arg" end)"
     walk_ranges=("$range_opts")
 
     # Everything new since the last run, when this repository is part way
     # through its history.  Without this the front of the repository goes
     # unexamined for as many runs as the walk to the far end takes.
     if [[ "$history_done" != "true" && -n "$head_marker" && -n "$until_arg" ]]; then
-      walk_ranges+=("--all --full-history --since=$head_marker")
+      walk_ranges+=("--all --full-history --since=$(_walk_instant "$head_marker" start)")
       log_info "[$full_name] and everything pushed since $head_marker"
     fi
     export GHSCAN_LOG_OPTS="$range_opts"
@@ -338,7 +367,8 @@ scan_one_repo() {
     # walking everything, which is the unwindowed case.
     GHSCAN_TH_SINCE_COMMIT=""
     if [[ -n "$since_arg" ]] && (( need_clone )); then
-      GHSCAN_TH_SINCE_COMMIT=$(git -C "$clone_dir" rev-list --all --before="$since_arg" \
+      GHSCAN_TH_SINCE_COMMIT=$(git -C "$clone_dir" rev-list --all \
+                                 --before="$(_walk_instant "$since_arg" start)" \
                                  --max-count=1 2>/dev/null || true)
     fi
     export GHSCAN_TH_SINCE_COMMIT
@@ -533,7 +563,13 @@ scan_one_repo() {
       HISTORY_FROM="${since_arg:-}"
       # Nothing older than this window means the beginning has been reached.
       local older
-      older=$(git -C "$clone_dir" rev-list --all --before="${since_arg:-1970-01-01}" \
+      # The same instant the walk used, so this answer and that walk agree
+      # about where the window began.  A bare date here drifts with the clock
+      # in the other direction: commits made earlier today would count as
+      # older than the window and the history would be called complete when
+      # it is not.
+      older=$(git -C "$clone_dir" rev-list --all \
+                --before="$(_walk_instant "${since_arg:-1970-01-01}" start)" \
                 --max-count=1 2>/dev/null || true)
       [[ -z "$older" ]] && HISTORY_COMPLETE="true"
       if [[ "$HISTORY_COMPLETE" == "true" ]]; then
