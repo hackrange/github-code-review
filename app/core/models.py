@@ -1373,8 +1373,9 @@ class Connection(Base):
     name = Column(String(120), nullable=False, unique=True, index=True)
     enabled = Column(Boolean, default=True, nullable=False)
 
-    # github, gitlab or bitbucket.  Everything that predates this column is
-    # GitHub, which is why that is the default rather than something empty.
+    # github, gitlab, bitbucket, gitea, forgejo and the rest of what the
+    # Connections page offers.  Everything that predates this column is GitHub,
+    # which is why that is the default rather than something empty.
     provider = Column(String(16), default="github", nullable=False)
 
     # Who owns the thing being scanned, and what it holds.

@@ -71,6 +71,18 @@
                  label: "Region", placeholder: "us-east-1",
                  addressLabel: "Console address",
                  token: "not used; the AWS CLI signs its own calls"},
+    gitea: {api: "", web: "",
+            apiHint: "https://git.example.com/api/v1",
+            webHint: "https://git.example.com",
+            label: "Organization", placeholder: "acme",
+            addressLabel: "Gitea address",
+            token: "a token from Settings, Applications"},
+    forgejo: {api: "", web: "",
+              apiHint: "https://code.example.org/api/v1",
+              webHint: "https://code.example.org",
+              label: "Organization", placeholder: "acme",
+              addressLabel: "Forgejo address",
+              token: "a token from Settings, Applications"},
     gcsr: {api: "https://sourcerepo.googleapis.com/v1",
            web: "https://source.cloud.google.com",
            label: "Project", placeholder: "acme-prod",
@@ -90,15 +102,22 @@
      rather than after a scan comes back thinner than expected. */
   var NO_HISTORY = {subversion: true, perforce: true};
 
+  /* A hint can name more than one host, because some of them are the same
+   * thing twice: Forgejo is a fork of Gitea and the token, the address and the
+   * scopes are identical, so the alternative is two copies to keep in step. */
+  function names(el, attr, wanted) {
+    return (el.getAttribute(attr) || "").split(/\s+/).indexOf(wanted) !== -1;
+  }
+
   function applyProvider(name) {
     if (!DEFAULTS[name]) { name = "github"; }
     if (select) { select.value = name; }
 
     form.querySelectorAll("[data-for]").forEach(function (el) {
-      el.hidden = el.getAttribute("data-for") !== name;
+      el.hidden = !names(el, "data-for", name);
     });
     form.querySelectorAll("[data-help]").forEach(function (el) {
-      el.hidden = el.getAttribute("data-help") !== name;
+      el.hidden = !names(el, "data-help", name);
     });
 
     var note = form.querySelector("[data-provider-note]");
@@ -128,7 +147,9 @@
       if (!input.value || others.indexOf(input.value) !== -1) {
         input.value = spec[key];
       }
-      input.placeholder = spec[key];
+      /* A host that is always somebody's own server has no address worth
+       * filling in, so it shows an example instead of pretending to know. */
+      input.placeholder = spec[key + "Hint"] || spec[key];
     });
 
     /* A GitHub App cannot be chosen anywhere else, so do not leave it selected
@@ -137,11 +158,13 @@
     if (method && name !== "github" && method.value === "app") { method.value = "pat"; }
   }
 
-  /* GitLab's API address is the instance address with /api/v4 on the end, so
-   * asking for both is asking somebody to type the same host twice and get one
+  /* Some hosts serve the API from the instance itself, with the version on
+   * the end: /api/v4 for GitLab, /api/v1 for Gitea and Forgejo.  Asking for
+   * both addresses is asking somebody to type the same host twice and get one
    * of them subtly wrong.  It fills itself in as you type the address, and
    * stops the moment anybody edits it by hand: an instance that serves the API
    * somewhere else must still be able to say so. */
+  var API_SUFFIX = {gitlab: "/api/v4", gitea: "/api/v1", forgejo: "/api/v1"};
   var apiInput = form.querySelector('[name="api_url"]');
   var webInput = form.querySelector('[name="web_url"]');
 
@@ -161,20 +184,22 @@
 
   function deriveApi() {
     if (!apiInput || !webInput) { return; }
-    if (!select || select.value !== "gitlab") { return; }
+    var suffix = select ? API_SUFFIX[select.value] : null;
+    if (!suffix) { return; }
     if (apiInput.dataset.touched === "1") { return; }
     var host = tidy(webInput.value);
-    if (host) { apiInput.value = host + "/api/v4"; }
+    if (host) { apiInput.value = host + suffix; }
   }
 
   /* And if somebody pastes the endpoint they just tried in a browser, cut it
    * back to the base rather than saving something that cannot work. */
   function tidyApi() {
-    if (!apiInput || !select || select.value !== "gitlab") { return; }
+    var suffix = select ? API_SUFFIX[select.value] : null;
+    if (!apiInput || !suffix) { return; }
     var value = tidy(apiInput.value);
     if (!value) { return; }
     var match = value.match(/^(.*?\/api\/v\d+)(\/.*)?$/);
-    apiInput.value = match ? match[1] : value + "/api/v4";
+    apiInput.value = match ? match[1] : value + suffix;
   }
 
   if (webInput) {

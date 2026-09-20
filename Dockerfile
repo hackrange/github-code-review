@@ -157,6 +157,9 @@ COPY --chown=root:root bin/       /opt/gcr/bin/
 COPY --chown=root:root lib/       /opt/gcr/lib/
 COPY --chown=root:root config/    /opt/gcr/config/
 COPY --chown=root:root schema/    /opt/gcr/schema/
+# The editor packages are built from this on request, so the source has to
+# be in the image.  It is a few files of JavaScript and no dependencies.
+COPY --chown=root:root ide/       /opt/gcr/ide/
 COPY --chown=root:root LICENSE README.md /opt/gcr/
 RUN chmod +x /opt/gcr/bin/ghscan
 

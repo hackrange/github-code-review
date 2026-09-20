@@ -64,7 +64,8 @@ run_zizmor() {
 # line number says where to look.
 normalize_zizmor() {
   local in="$1" repo="$2" branch="$3" web="$4"
-  jq -c --arg repo "$repo" --arg br "$branch" --arg web "$web" '
+  jq -c --arg repo "$repo" --arg br "$branch" --arg web "$web" \
+        --argjson link "$(provider_link_parts)" '
     def clean($p): ($p // "") | sub("^\\./"; "");
 
     [ .[]?
@@ -113,8 +114,8 @@ normalize_zizmor() {
           confidence: (($f.determinations.confidence // "unknown") | ascii_downcase),
           references: [],
           url: (if $file == "" then $web + "/" + $repo
-                else $web + "/" + $repo + "/blob/" + $br + "/" + $file
-                     + "#L" + ($line | tostring) end),
+                else $web + "/" + $repo + "/" + $link.blob + "/" + $br + "/" + $file
+                     + $link.line + ($line | tostring) end),
           help_url: ($f.url // ""),
           # A workflow is not a place with examples and fixtures in it the way a
           # terraform tree is, so there is nothing here to grade aside.  Saying

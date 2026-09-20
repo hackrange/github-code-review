@@ -242,6 +242,9 @@ triage_findings() {
   | {
 
   # --- per-finding git enrichment (branches, liveness, commit metadata) -------
+  # How this host spells a link to a file, a commit and a blame.  Once, rather
+  # than once per finding: it is the same answer every time round the loop.
+  local link; link=$(provider_link_parts)
   local line sha branches_json live_json meta
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
@@ -249,9 +252,20 @@ triage_findings() {
 
     branches_json=$(_branches_for_commit "$dir" "$sha")
 
-    # Keep only branches that survived the branch filter for this repo.
-    branches_json=$(printf '%s' "$branches_json" | jq -c --argjson keep "${GHSCAN_BRANCH_SET:-[]}" '
-      if ($keep | length) == 0 then . else map(select(. as $b | $keep | index($b))) end')
+    # The branches it is really on, less any an exclude pattern names.
+    #
+    # Against the branches that are there, not the ones this run walked: a
+    # branch skipped for being quiet still holds the key, and the history walk
+    # found it there.  And when every branch it is on is excluded, those are
+    # still where it is.  Stamping it onto the default branch instead told a
+    # developer to look for a key in code that never had it.
+    branches_json=$(printf '%s' "$branches_json" | jq -c \
+      --argjson keep "${GHSCAN_BRANCH_SET_PRESENT:-${GHSCAN_BRANCH_SET:-[]}}" '
+      . as $all
+      | if ($keep | length) == 0 then $all
+        else (map(select(. as $b | $keep | index($b))) as $kept
+              | if ($kept | length) > 0 then $kept else $all end)
+        end')
 
     local -a barr=()
     while IFS= read -r b; do [[ -n "$b" ]] && barr+=("$b"); done \
@@ -293,17 +307,19 @@ triage_findings() {
       --argjson live "$live_json" \
       --argjson meta "$meta" \
       --arg web "$web" \
+      --argjson link "$link" \
       --arg repo "$full_name" \
       --arg defbr "$default_branch" '
       . as $f
       | ($meta | with_entries(select(.value != null and .value != ""))) as $m
       | ($branches | if length == 0 then [$defbr] else . end) as $brs
       | ($brs[0]) as $primary
+      | (if ($f.start_line // 0) > 0 then $link.line + ($f.start_line|tostring) else "" end) as $anchor
       | (if ($f.file // "") == "" then null
          elif ($f.commit // "") != "" then
-           $web + "/" + $repo + "/blob/" + $f.commit + "/" + $f.file + (if ($f.start_line // 0) > 0 then "#L" + ($f.start_line|tostring) else "" end)
+           $web + "/" + $repo + "/" + $link.blob_commit + "/" + $f.commit + "/" + $f.file + $anchor
          else
-           $web + "/" + $repo + "/blob/" + $primary + "/" + $f.file + (if ($f.start_line // 0) > 0 then "#L" + ($f.start_line|tostring) else "" end)
+           $web + "/" + $repo + "/" + $link.blob + "/" + $primary + "/" + $f.file + $anchor
          end) as $permalink
       | $f + $m + {
           organization: ($repo | split("/")[0]),
@@ -316,14 +332,16 @@ triage_findings() {
           exposure: (if ($live | length) > 0 then "current_and_history" else "git_history_only" end),
           url: ($permalink // $f.alert_url // ($web + "/" + $repo)),
           permalink: $permalink,
-          commit_url: (if ($f.commit // "") != "" then $web + "/" + $repo + "/commit/" + $f.commit else null end),
+          commit_url: (if ($f.commit // "") != "" then $web + "/" + $repo + "/" + $link.commit + "/" + $f.commit else null end),
           repository_url: ($web + "/" + $repo),
-          branch_urls: [ $brs[] | { branch: ., url: ($web + "/" + $repo + "/blob/" + . + "/" + ($f.file // "") + (if ($f.start_line // 0) > 0 then "#L" + ($f.start_line|tostring) else "" end)) } ],
-          blame_url: (if ($f.file // "") == "" then null
-                      else $web + "/" + $repo + "/blame/" + (if ($f.commit // "") != "" then $f.commit else $primary end)
-                           + "/" + $f.file + (if ($f.start_line // 0) > 0 then "#L" + ($f.start_line|tostring) else "" end) end),
-          file_history_url: (if ($f.file // "") == "" then null
-                             else $web + "/" + $repo + "/commits/" + $primary + "/" + $f.file end)
+          branch_urls: [ $brs[] | { branch: ., url: ($web + "/" + $repo + "/" + $link.blob + "/" + . + "/" + ($f.file // "") + $anchor) } ],
+          blame_url: (if ($f.file // "") == "" or ($link.blame // "") == "" then null
+                      elif ($f.commit // "") != "" then
+                        $web + "/" + $repo + "/" + $link.blame_commit + "/" + $f.commit + "/" + $f.file + $anchor
+                      else
+                        $web + "/" + $repo + "/" + $link.blame + "/" + $primary + "/" + $f.file + $anchor end),
+          file_history_url: (if ($f.file // "") == "" or ($link.history // "") == "" then null
+                             else $web + "/" + $repo + "/" + $link.history + "/" + $primary + "/" + $f.file end)
         }
       | del(._key)
       '

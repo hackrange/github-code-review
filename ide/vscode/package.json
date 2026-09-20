@@ -1,0 +1,72 @@
+{
+  "name": "git-code-review",
+  "displayName": "Git Code Review",
+  "description": "Reviews the file you are editing against your own Git Code Review server: credentials, code analysis and the same triage the nightly scan uses.",
+  "version": "1.0.1",
+  "publisher": "gitcodereview",
+  "license": "SEE LICENSE IN LICENSE",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Linters", "Other"],
+  "keywords": ["security", "sast", "secrets", "credentials", "code review"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "The file being edited is sent to the server this is pointed at, so the workspace has to be one you trust."
+    }
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Git Code Review",
+      "properties": {
+        "gitCodeReview.server": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "The address of your Git Code Review server, ending in `/api/v1`. It is printed on the **IDE tokens** page of the server itself.",
+          "scope": "machine-overridable"
+        },
+        "gitCodeReview.token": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Your API token. Better left empty: run **Git Code Review: Set the token** instead and it is kept in the editor's secret storage rather than in a settings file that ends up in backups and sometimes in a repository.",
+          "scope": "machine-overridable"
+        },
+        "gitCodeReview.reviewOn": {
+          "type": "string",
+          "enum": ["save", "type", "manual"],
+          "enumDescriptions": [
+            "When you save, and when you open a file.",
+            "As you type, once you stop for a moment.",
+            "Only when you ask, with the command."
+          ],
+          "default": "save",
+          "description": "When to review. A review runs the engines on the server, which is seconds rather than milliseconds, so 'type' costs the server real work on every pause."
+        },
+        "gitCodeReview.changedLinesOnly": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show findings only on lines you changed against HEAD. A repository with two thousand findings in it will otherwise show you two thousand findings, and none of them are yours."
+        },
+        "gitCodeReview.only": {
+          "type": "string",
+          "enum": ["secrets,code", "secrets", "code"],
+          "default": "secrets,code",
+          "description": "Which passes to ask for."
+        },
+        "gitCodeReview.allowInsecureTls": {
+          "type": "boolean",
+          "default": false,
+          "description": "Accept a server certificate this machine does not trust. Off, and worth leaving off: install the certificate authority instead."
+        }
+      }
+    },
+    "commands": [
+      { "command": "gitCodeReview.reviewFile", "title": "Git Code Review: Review this file", "category": "Git Code Review" },
+      { "command": "gitCodeReview.setToken", "title": "Git Code Review: Set the token", "category": "Git Code Review" },
+      { "command": "gitCodeReview.forgetToken", "title": "Git Code Review: Forget the token", "category": "Git Code Review" },
+      { "command": "gitCodeReview.check", "title": "Git Code Review: Check the connection", "category": "Git Code Review" },
+      { "command": "gitCodeReview.showOutput", "title": "Git Code Review: Show what it is doing", "category": "Git Code Review" }
+    ]
+  }
+}

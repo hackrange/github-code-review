@@ -282,6 +282,7 @@ secrets_skipped_findings() {
   sort -u "$dropped" \
   | jq -R -s -c \
       --arg repo "$full_name" --arg br "$branch" --arg web "$web" \
+      --argjson link "$(provider_link_parts)" \
       --arg org "${full_name%%/*}" '
     def kind:
       if test("\\.[A-Za-z0-9]+$") then (capture("\\.(?<e>[A-Za-z0-9]+)$").e | ascii_downcase)
@@ -326,7 +327,7 @@ secrets_skipped_findings() {
         paths: (.[0:50]),
         occurrences: length,
         triage: "review",
-        url: ($web + "/" + $repo + "/blob/" + $br + "/" + .[0])
+        url: ($web + "/" + $repo + "/" + $link.blob + "/" + $br + "/" + .[0])
       })
   ' || {
     log_warn "$full_name: could not build the skipped-file finding, so this run does not say what the credential pass left out"
@@ -396,7 +397,8 @@ derive_secret_facts() {
   # parsing a value that never changed.
   local -a allbr=()
   while IFS= read -r _b; do [[ -n "$_b" ]] && allbr+=("$_b"); done \
-    < <(printf '%s' "${GHSCAN_BRANCH_SET:-[]}" | jq -r '.[]?' 2>/dev/null)
+    < <(printf '%s' "${GHSCAN_BRANCH_SET_HEADS:-${GHSCAN_BRANCH_SET:-[]}}" \
+        | jq -r '.[]?' 2>/dev/null)
 
   # Buffered so the live-at-head question can be asked once for every secret
   # rather than once per secret.  In this directory, which is shared memory and

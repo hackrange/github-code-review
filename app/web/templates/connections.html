@@ -233,6 +233,8 @@
             <option value="github">GitHub</option>
             <option value="gitlab">GitLab</option>
             <option value="bitbucket">Bitbucket Cloud</option>
+            <option value="gitea">Gitea</option>
+            <option value="forgejo">Forgejo</option>
             <option value="azure">Azure Repos</option>
             <option value="assembla">Assembla</option>
             <option value="beanstalk">Beanstalk</option>
@@ -278,6 +280,21 @@
             <a href="{{ base }}/docs/connections-bitbucket" target="_blank">How to set one up</a>.</div>
         </div>
 
+        <div class="notice info" data-help="gitea forgejo" hidden>
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+          <div>Forgejo is a fork of Gitea and speaks the same API, so the two
+            are set up identically and only the name differs. A token reaches
+            <strong>everything its account can see</strong>, so one connection
+            usually covers the whole instance. Make it under
+            <em>Settings, Applications</em> with
+            <span class="mono">read:repository</span>,
+            <span class="mono">read:organization</span> and
+            <span class="mono">read:user</span>. There are no dependency
+            alerts, code scanning or secret scanning alerts here, so those are
+            skipped rather than reported as empty.
+            <a href="{{ base }}/docs/connections-gitea" target="_blank">How to set one up</a>.</div>
+        </div>
+
         <div class="notice info" data-help="gitlab" hidden>
           <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
           <div>A GitLab token usually reaches <strong>every group the account can
@@ -307,6 +324,11 @@
             <strong>workspace</strong> slug, as it appears in the URL. A
             repository or project access token cannot list workspaces, so name
             it here for those. A workspace token can find its own.</span>
+          <span class="faint small" data-for="gitea forgejo" hidden>The
+            <strong>organization</strong> as it appears in the URL. Comma
+            separated for several. Empty scans every organization the token can
+            see, plus the account's own repositories and anything it has been
+            added to, which is usually what you want.</span>
           <span class="faint small" data-for="gitlab" hidden><strong>Optional, and
             usually best left empty.</strong> It narrows the scan to one part of
             the instance: the group's full path, such as
@@ -322,6 +344,13 @@
             (<span class="mono">github_pat_</span>) or classic
             (<span class="mono">ghp_</span>) token. Encrypted here, never written
             to a file. Leave it empty when editing to keep the one already stored.</span>
+          <span class="faint small" data-for="gitea forgejo" hidden>An access
+            token from <em>Settings, Applications</em>, with
+            <span class="mono">read:repository</span>,
+            <span class="mono">read:organization</span> and
+            <span class="mono">read:user</span>. Nothing needs write.
+            Encrypted here, never written to a file. Leave it empty when
+            editing to keep the one already stored.</span>
           <span class="faint small" data-for="gitlab" hidden>A personal, group or
             project access token (<span class="mono">glpat-</span>) with
             <span class="mono">read_api</span> and
@@ -342,10 +371,20 @@
           <span class="faint small" data-for="gitlab" hidden>Your instance, on its
             own &mdash; <span class="mono">https://gitlab.com</span> or your own
             host. The API address below is worked out from it.</span>
+          <span class="faint small" data-for="gitea forgejo" hidden>Your server,
+            on its own &mdash; <span class="mono">https://git.example.com</span>.
+            Finding links are built from it, and they are
+            <span class="mono">/src/branch/</span> links rather than
+            <span class="mono">/blob/</span> ones, which is what this host
+            serves. The API address below is worked out from it.</span>
         </label>
         <label>API address
           <input type="text" name="api_url" placeholder="https://api.github.com">
           <span class="faint small" data-for="github">Change it for GitHub Enterprise Server.</span>
+          <span class="faint small" data-for="gitea forgejo" hidden>Filled in
+            from the address above: the same host with
+            <span class="mono">/api/v1</span> on the end. Only change it if
+            your instance serves the API somewhere else.</span>
           <span class="faint small" data-for="gitlab" hidden>Filled in from the
             address above, and the same shape on gitlab.com or your own server.
             Opening it in a browser shows <span class="mono">404</span> &mdash;

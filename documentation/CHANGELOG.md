@@ -4,6 +4,57 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-09-20
+
+**Gitea and Forgejo can be scanned.**  Both are on the Connections page beside
+GitHub and GitLab, with a setup guide of their own.  A token from Settings,
+Applications reaches everything its account can see, so one connection usually
+covers the whole instance rather than one per organization the way a fine
+grained GitHub token does.  Type the address of your server and the API address
+fills itself in.
+
+Forgejo is a fork of Gitea and speaks the same API, so one implementation
+answers for both.  The two names are kept apart everywhere a person reads one,
+because somebody running Forgejo should not be told they are running Gitea.
+
+Neither has dependency alerts, code scanning or secret scanning of its own, so
+those passes are skipped rather than called and reported as empty.  Members,
+teams and pull requests exist there and are not wired up: their member listing
+has no role filter, so asking it for the administrators returns everybody, and
+a report saying the whole organization owns it is worse than one that does not
+say.  Who can reach each repository is still collected, with each person's real
+permission asked for one at a time, because the listing itself does not carry
+it.
+
+**Finding links now point at pages that exist.**  Every link a scan wrote was
+GitHub shaped: `/blob/main/app.py#L12`.  GitLab redirects that one, Bitbucket
+does not, and Gitea and Forgejo have no `/blob/` route at all, so those links
+were a 404.  Each host now says where it puts a file, a commit and a blame, in
+one place, and the eleven writers that used to assume GitHub read it from
+there.  Gitea links are `/src/branch/main/app.py#L12`, or `/src/commit/<sha>/`
+for a credential found at the commit it was committed in.  A host with no
+equivalent page, such as Bitbucket's file history, now gets no link rather than
+one that goes nowhere.
+
+**The editor plugin, from your own server.**  A new Editor plugins page hands
+out the `.vsix` for Visual Studio Code and Cursor, and the language server for
+the JetBrains IDEs, Eclipse and anything else that speaks the protocol.  Not
+from a marketplace: this server holds your rules, and plenty of these
+installations have no way out to the internet.
+
+Open or save a file and its text goes to `/api/v1/review`, is read by the same
+engines a scan uses, graded by the same triage, and deleted.  Nothing is
+stored: a review creates no finding, no exception and no scan.  A credential is
+shown in red whatever its severity, with the value masked.  By default only the
+lines you changed against `HEAD` carry findings, because a plugin that opens
+showing two thousand of somebody else's is a plugin nobody keeps.
+
+One language server does the work in every editor, and the Visual Studio Code
+extension is a thin front end on the same code.  Neither package has any
+dependencies, and building the same release twice gives the same bytes, so the
+checksums on the page are worth comparing.  Neither is signed; if your policy
+needs a signature, sign it on the way into your own catalog.
+
 ## 2026-09-13
 
 **A hash of content is no longer reported as a credential.**  Several detectors

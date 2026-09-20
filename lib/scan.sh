@@ -226,6 +226,22 @@ scan_one_repo() {
     else
       BRANCHES_PRESENT_JSON="$BRANCHES_JSON"
     fi
+    # What is said about a credential comes from these, not from the walked
+    # list.  The history walk reads every ref whatever the quiet branch filter
+    # did, so a key on a branch that was skipped is still found, and labeling
+    # it from the walked list stamped it onto the default branch, where it is
+    # not.  Skipping a branch is meant to save a checkout, not to change what
+    # is reported about the code on it.
+    export GHSCAN_BRANCH_SET_PRESENT="$BRANCHES_PRESENT_JSON"
+    # Every branch head, for whether a credential is still in the code.  The
+    # ones the exclude patterns leave in come first, so a cap on how many are
+    # searched drops excluded branches before it drops anything else.
+    export GHSCAN_BRANCH_SET_HEADS
+    GHSCAN_BRANCH_SET_HEADS=$(
+      { printf '%s\n' "${present[@]}"
+        git -C "$clone_dir" for-each-ref --format='%(refname:strip=2)' \
+            --sort=-committerdate refs/heads/ 2>/dev/null; } \
+        | awk 'NF && !seen[$0]++' | jq -R . | jq -sc '.')
 
     log_info "[$full_name] ${#branches[@]} branch(es) in scope"
   fi

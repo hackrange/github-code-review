@@ -18,7 +18,7 @@ provider_name() {
   local p; p=$(cfg '.provider' 'github')
   case "$p" in
     github|gitlab|bitbucket|azure|assembla|beanstalk|codecommit|gcsr|\
-    subversion|perforce) printf '%s' "$p" ;;
+    gitea|forgejo|subversion|perforce) printf '%s' "$p" ;;
     *) log_warn "unknown provider '$p', treating it as github"; printf 'github' ;;
   esac
 }
@@ -48,10 +48,27 @@ provider_checkout_kind() {
   esac
 }
 
-# Call provider_<name>_<fn> if it exists, else provider_github_<fn>.
+# Which file answers for this host.
+#
+# Forgejo is a fork of Gitea and still speaks the same /api/v1, so one
+# implementation serves both.  The two names stay apart everywhere a person
+# reads one, because somebody running Forgejo should not be told they are
+# running Gitea, and they are joined here, where the only question is which
+# functions to call.
+provider_impl_name() {
+  # Read once.  provider_call runs for every API request, and provider_name
+  # shells out to jq, so asking twice here doubles that for the whole scan.
+  local p; p=$(provider_name)
+  case "$p" in
+    forgejo) printf 'gitea' ;;
+    *)       printf '%s' "$p" ;;
+  esac
+}
+
+# Call provider_<impl>_<fn> if it exists, else provider_github_<fn>.
 provider_call() {
   local fn="$1"; shift
-  local impl="provider_$(provider_name)_${fn}"
+  local impl="provider_$(provider_impl_name)_${fn}"
   if declare -F "$impl" >/dev/null 2>&1; then
     "$impl" "$@"
     return $?
@@ -99,6 +116,17 @@ provider_supports() {
       # so here rather than claiming them keeps an empty answer meaning empty.
       return 1
       ;;
+    gitea|forgejo)
+      # No dependency alerts, no code scanning, no secret scanning alerts and
+      # no dependency graph: none of that exists here, so there is nothing to
+      # read.  Members, teams and pull requests do exist, and are spelled
+      # differently enough that the GitHub calls come back wrong rather than
+      # empty - the member listing has no role filter, so asking it for the
+      # administrators returns everybody, and a report saying every member is
+      # an owner is worse than a report that does not say.  Claiming those
+      # means writing them, not switching them on here.
+      return 1
+      ;;
     assembla|beanstalk|codecommit|gcsr|subversion|perforce)
       # None of these has an equivalent this scanner reads.  CodeCommit and
       # Cloud Source Repositories have no code scanning of their own at all;
@@ -119,9 +147,55 @@ provider_group_noun() {
     beanstalk)  printf 'account' ;;
     codecommit) printf 'region' ;;
     gcsr)       printf 'project' ;;
+    gitea|forgejo) printf 'organization' ;;
     subversion) printf 'server' ;;
     perforce)   printf 'depot' ;;
     *)          printf 'organization' ;;
+  esac
+}
+
+# Where a host puts a file, a commit and a line of history in its own URLs.
+#
+# Nearly every link this scanner writes is the same three parts: the instance,
+# the repository, and a path saying "this file at this ref".  Only the last
+# part differs, and it differed in eleven jq programs that all assumed GitHub.
+# So it is described once, here, and read from there.
+#
+#   blob         the path to a file at a branch
+#   blob_commit  the same at a commit, which some hosts spell differently
+#   commit       the path to a commit on its own
+#   blame        line by line authorship of a file at a branch
+#   blame_commit the same at a commit
+#   history      the commits that touched one file
+#   line         what goes in front of a line number in the anchor
+#
+# An empty value means this host has no such link, and the writer emits
+# nothing rather than a URL that returns a 404.  A host that is not named here
+# gets the GitHub shape, which is what it had before this existed: wrong for
+# some of them, and not made wrong by this.
+provider_link_parts() {
+  case "$(provider_name)" in
+    gitlab)
+      jq -cn '{blob:"-/blob", blob_commit:"-/blob", commit:"-/commit",
+               blame:"-/blame", blame_commit:"-/blame",
+               history:"-/commits", line:"#L"}' ;;
+    gitea|forgejo)
+      # Gitea says which kind of ref it is being handed rather than working it
+      # out, so a branch and a commit are different paths.  There is no /blob/
+      # route at all: a GitHub shaped link is not a redirect here, it is a 404.
+      jq -cn '{blob:"src/branch", blob_commit:"src/commit", commit:"commit",
+               blame:"blame/branch", blame_commit:"blame/commit",
+               history:"commits/branch", line:"#L"}' ;;
+    bitbucket)
+      # Bitbucket anchors a line as #lines-12, and has no file history page
+      # worth linking to, so that one is left out rather than guessed at.
+      jq -cn '{blob:"src", blob_commit:"src", commit:"commits",
+               blame:"annotate", blame_commit:"annotate",
+               history:"", line:"#lines-"}' ;;
+    *)
+      jq -cn '{blob:"blob", blob_commit:"blob", commit:"commit",
+               blame:"blame", blame_commit:"blame",
+               history:"commits", line:"#L"}' ;;
   esac
 }
 

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Connecting Gitea and Forgejo &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Connecting Gitea and Forgejo</h1>
+  <div class="faint small">One page for both, because they are the same to set up.</div></div>
+  <div class="page-actions"><a class="btn" href="{{ base }}/connections">Back to connections</a></div>
+</div>
+
+<div class="notice info">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+  <div>Forgejo was forked from Gitea and still speaks the same API, so the
+    token, the addresses and the scopes below are identical for the two of
+    them. <strong>Pick the one you actually run</strong> in the connection: it
+    is the name that appears on every finding and in every report, and being
+    told you are running the other one is the kind of small wrongness that
+    makes somebody doubt the rest of the page.</div>
+</div>
+
+<div class="card"><div class="card-body">
+  <h2>Making the token</h2>
+  <ol class="small">
+    <li>Sign in as the account that can see what you want scanned.</li>
+    <li><strong>Settings</strong>, then <strong>Applications</strong>.</li>
+    <li>Under <em>Manage access tokens</em>, give it a name and tick these
+      permissions, all of them read:
+      <div class="faint"><span class="mono">read:repository</span>,
+        <span class="mono">read:organization</span>,
+        <span class="mono">read:user</span></div></li>
+    <li>Generate it and copy it now. Neither of these shows a token twice.</li>
+  </ol>
+  <p class="small">Nothing needs write. The scanner only ever reads: the one
+    write in the whole codebase is GitHub's installation token call, which has
+    no equivalent here and is never made.</p>
+  <p class="small">A token reaches everything its account can see rather than
+    one organization, so <strong>one connection usually covers the whole
+    instance</strong>. That is the opposite of a fine grained GitHub token,
+    which is pinned to a single owner and needs one connection each.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Filling in the connection</h2>
+  <ul class="small">
+    <li><strong>Web address</strong> &mdash; your server on its own, for example
+      <span class="mono">https://git.example.com</span>. Finding links are built
+      from it.</li>
+    <li><strong>API address</strong> &mdash; the same host with
+      <span class="mono">/api/v1</span> on the end, filled in for you as you
+      type the one above.
+      <div class="faint">Opening it in a browser shows a page of API
+        documentation or a <span class="mono">404</span>, depending on the
+        version. Either is normal: it is a prefix rather than a page. Use the
+        <strong>Test</strong> button to check it.</div></li>
+    <li><strong>Organization</strong> &mdash; optional. Empty scans every
+      organization the token can see, along with the account's own repositories
+      and anything it has been added to as a collaborator, which is usually what
+      you want. Name one to narrow it.</li>
+  </ul>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Links go to /src/branch/, not /blob/</h2>
+  <p class="small">Neither of these has a <span class="mono">/blob/</span> route
+    at all, so a GitHub shaped link is a 404 rather than a redirect. Findings
+    from this connection are written with the paths the host actually serves:
+    <span class="mono">/src/branch/main/app.py#L12</span> for a file on a branch
+    and <span class="mono">/src/commit/&lt;sha&gt;/app.py#L12</span> for one at
+    the commit a credential was found in.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>What is not available</h2>
+  <p class="small">Dependency alerts, code scanning, secret scanning alerts and
+    the dependency graph are GitHub features. Neither Gitea nor Forgejo has an
+    equivalent, so this <strong>skips them</strong> rather than calling an
+    endpoint that is not there and reading the empty answer as good news.</p>
+  <p class="small">Organization members, teams and pull requests do exist here,
+    and are not wired up yet. They are spelled differently enough that the
+    GitHub calls would come back <em>wrong</em> rather than empty &mdash; the
+    member listing has no role filter, so asking it for the administrators
+    returns everybody &mdash; and a report saying every member owns the
+    organization is worse than a report that does not say. Who can reach each
+    repository is still collected, with each person's real permission asked for
+    one at a time, because the listing itself does not carry it.</p>
+  <p class="small">What runs, which is the bulk of it: credentials across the
+    full git history, code analysis, infrastructure as code, workflows, SBOM
+    and dependency vulnerabilities, licenses, triage, exceptions, and both
+    report files.</p>
+</div></div>
+{% endblock %}

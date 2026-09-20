@@ -1580,7 +1580,13 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                         else "bitbucket" if "bitbucket" in host
                         else "github" if "github" in host else "")
         host_name = {"github": "GitHub", "gitlab": "GitLab",
-                     "bitbucket": "Bitbucket"}.get(provider, "")
+                     "bitbucket": "Bitbucket", "azure": "Azure Repos",
+                     "assembla": "Assembla", "beanstalk": "Beanstalk",
+                     "codecommit": "AWS CodeCommit",
+                     "gcsr": "Cloud Source Repositories",
+                     "gitea": "Gitea", "forgejo": "Forgejo",
+                     "subversion": "Subversion",
+                     "perforce": "Perforce"}.get(provider, "")
 
         # What the repository is and who can reach it.  A hardcoded password
         # means one thing in the payment gateway and another in a brochure
@@ -3361,6 +3367,86 @@ def notifications_page(request: Request, msg: str = "", kind: str = "",
         return page(request, "notifications.html", **context)
 
 
+@router.get("/editors")
+def editors_page(request: Request, user: User = Depends(current_user)):
+    """The packages for the editors, and how to point each one at this server.
+
+    A developer here cannot install this from a marketplace.  Most of these
+    installations sit on a private network and a fair number on one with no
+    way out at all, so the server hands out its own packages rather than
+    sending somebody to Microsoft for them.
+
+    Everybody signed in can have them.  A plugin reaches what its owner's token
+    reaches, which is what their account already sees on these pages, so there
+    is nothing here to keep from a reader.
+    """
+    from app.core import editor_plugins
+
+    # The address they reached this on, which is the one that works for them.
+    # A value in a settings table is one more thing to be wrong behind a proxy.
+    base_url = str(request.base_url).rstrip("/") + (settings.base_path or "")
+
+    packages = []
+    problem = ""
+    if editor_plugins.available():
+        try:
+            packages = [editor_plugins.describe(key)
+                        for key in ("vsix", "lsp")]
+        except OSError as exc:
+            # Worth saying out loud rather than showing an empty page: the
+            # usual cause is a read only data directory, and the fix is not
+            # something a developer can guess at.
+            log.warning("could not build the editor packages: %s", exc)
+            problem = ("The packages could not be built on this server.  "
+                       "Whoever runs it will find the reason in the log.")
+    else:
+        problem = ("This installation was built without the editor source, so "
+                   "there is nothing to hand out.  The language server and the "
+                   "extension both live in ide/ in the release.")
+
+    with session_scope() as db:
+        context = _shared(db, user)
+        context.update(
+            active_page="editors",
+            packages={row["key"]: row for row in packages},
+            problem=problem,
+            api_url=f"{base_url}/api/v1",
+            lsp_root=editor_plugins.LSP_ROOT,
+            version=VERSION)
+        return page(request, "editors.html", **context)
+
+
+@router.get("/editors/download/{which}")
+def download_editor_package(which: str, request: Request,
+                            user: User = Depends(current_user)):
+    """Hand over one of the packages.
+
+    Built on the way out if it is not there, which keeps it in step with the
+    version of the server serving it.  Nothing in either package is secret:
+    it is the same JavaScript that ships in the image, and it is useless
+    without a token the person has to make for themselves.
+    """
+    from fastapi.responses import FileResponse
+
+    from app.core import editor_plugins
+
+    if which not in editor_plugins.BUILDERS:
+        raise HTTPException(status_code=404, detail="No such package.")
+    if not editor_plugins.available():
+        raise HTTPException(
+            status_code=404,
+            detail="This installation was built without the editor source.")
+
+    name, _builder, media = editor_plugins.BUILDERS[which]
+    try:
+        path = editor_plugins.build(which)
+    except OSError as exc:
+        log.warning("could not build %s: %s", which, exc)
+        raise HTTPException(status_code=500,
+                            detail="The package could not be built here.")
+    return FileResponse(path, media_type=media, filename=name)
+
+
 @router.get("/docs/connections-{provider}")
 def connection_docs(provider: str, request: Request,
                     user: User = Depends(current_user)):
@@ -3371,7 +3457,11 @@ def connection_docs(provider: str, request: Request,
     in rather than afterwards.
     """
     pages = {"github": "docs_github.html", "gitlab": "docs_gitlab.html",
-             "bitbucket": "docs_bitbucket.html"}
+             "bitbucket": "docs_bitbucket.html",
+             # One page for the two of them: Forgejo is a fork of Gitea and
+             # everything on it - the token, the address, the scopes - is the
+             # same, so a second copy would be one more thing to keep in step.
+             "gitea": "docs_gitea.html", "forgejo": "docs_gitea.html"}
     template = pages.get((provider or "").strip().lower())
     if template is None:
         raise HTTPException(status_code=404, detail="No guide for that one yet.")

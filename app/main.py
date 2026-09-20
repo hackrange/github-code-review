@@ -28,6 +28,13 @@ def _configure_logging() -> None:
         datefmt="%Y-%m-%dT%H:%M:%SZ",
         stream=sys.stdout,
     )
+    # The scheduler logs every run of every job at INFO.  With the utilization
+    # sample every five seconds that was two lines every five seconds, tens of
+    # thousands a day, burying the lines anybody reads the log for.  A job that
+    # fails is still logged, at ERROR, and a schedule firing is logged by
+    # gcr.scheduler itself.
+    logging.getLogger("apscheduler.executors").setLevel(logging.WARNING)
+    logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
 
 
 def create_app() -> FastAPI:

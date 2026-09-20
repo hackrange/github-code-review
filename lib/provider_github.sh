@@ -213,5 +213,13 @@ provider_github_list_branches() {
   printf '%s' "$body" | jq -c '[ .[]? | {name: .name, protected: (.protected // false)} ]' 2>/dev/null || echo '[]'
 }
 
+# GitHub says what each collaborator is allowed to do in the listing itself,
+# so there is nothing to fill in.  Here so that every provider has one and the
+# hosts that do need it are the ones that override it.  The list arrives as a
+# file because a large one is past what an argument holds.
+provider_github_collaborator_permissions() {
+  [[ -s "${2:-}" ]] && cat "$2" || printf '[]'
+}
+
 provider_github_whoami_path()  { printf 'user'; }
 provider_github_whoami_field() { printf '.login'; }

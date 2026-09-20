@@ -79,6 +79,8 @@ def build_document(entries: list) -> dict:
         "partial": True,
         "repositories": [],
         "partial_code_repositories": [],
+        "placeholders_filtered": [],
+        "allowlist_suppressed": [],
     }
     for key in LISTS:
         document[key] = []
@@ -89,6 +91,19 @@ def build_document(entries: list) -> dict:
             rows = take(entry)
             if isinstance(rows, list):
                 document[key].extend(rows)
+        # What the scanner read and ruled out, as report.sh collects it.
+        #
+        # Ingest keeps a credential set aside on this evidence and closes one
+        # it cannot find.  Left out here, every set aside credential in a
+        # salvaged repository read as gone: fifty six were closed as fixed on
+        # one interrupted run and came back on the next scan.
+        block = entry.get("secrets")
+        if isinstance(block, dict):
+            for key, name in (("placeholders_filtered", "filtered"),
+                              ("allowlist_suppressed", "suppressed")):
+                rows = block.get(name)
+                if isinstance(rows, list):
+                    document[key].extend(rows)
 
         # The same guard the full report writes: a repository whose code pass
         # was cut short must not have its old code findings counted as fixed.

@@ -221,8 +221,8 @@ def normalize_urls(provider: str, web: str, api: str) -> tuple:
     slash and sometimes without a scheme.  All of that is the same intent, so
     it is translated rather than refused.
 
-    The API base has to be /api/v4 and nothing deeper: the scanner appends its
-    own paths, so a base ending in /projects turns every request into
+    The API base has to be the version and nothing deeper: the scanner appends
+    its own paths, so a base ending in /projects turns every request into
     /api/v4/projects/groups/... and finds nothing.
     """
     import re
@@ -240,17 +240,21 @@ def normalize_urls(provider: str, web: str, api: str) -> tuple:
     web = tidy(web)
     api = tidy(api)
 
-    if provider == "gitlab":
+    if provider in ("gitlab", "gitea", "forgejo"):
+        # All three serve the API from the instance itself and differ only in
+        # which version is on the end: /api/v4 for GitLab, /api/v1 for Gitea
+        # and Forgejo.  Either way there is one host to type, not two.
+        version = "/api/v4" if provider == "gitlab" else "/api/v1"
         if not web and api:
-            # Work backwards: the instance is whatever sits above /api/v4.
+            # Work backwards: the instance is whatever sits above the version.
             web = re.sub(r"/api/v\d+(/.*)?$", "", api).rstrip("/")
         if api:
             # Cut anything below the version back to the base, and add the base
             # when it is missing entirely.
             match = re.search(r"^(.*?/api/v\d+)(/.*)?$", api)
-            api = match.group(1) if match else api.rstrip("/") + "/api/v4"
+            api = match.group(1) if match else api.rstrip("/") + version
         elif web:
-            api = web + "/api/v4"
+            api = web + version
     elif provider == "bitbucket":
         # Bitbucket Cloud is one address for everybody; there is no self hosted
         # variant of it to point somewhere else.

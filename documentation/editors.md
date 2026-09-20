@@ -1,0 +1,98 @@
+# In the editor
+
+Version 1.0.1.
+
+The nightly scan tells somebody about a credential that has been in the
+history for three months and now has to be rotated.  The editor is the only
+place where it can still be stopped instead.  That is the whole argument for
+this part of the product.
+
+## What a developer installs
+
+Everything comes from the **Editor plugins** page of your own server, at
+`/editors`.  Not from a marketplace: this server is the one that holds your
+rules and your exclusions, plenty of these installations sit on a network
+with no way out, and a developer should not have to fetch a security tool for
+your code from somebody else's catalog.
+
+| Editor | What they install |
+|---|---|
+| Visual Studio Code | The `.vsix` from that page |
+| Cursor | The same `.vsix`.  It is a fork of Visual Studio Code and takes the same file |
+| IntelliJ, PyCharm, GoLand, WebStorm, Rider | LSP4IJ from the JetBrains Marketplace, pointed at our language server |
+| Eclipse | LSP4E from the Eclipse Marketplace, pointed at the same server |
+| Neovim, Helix, Sublime Text | The same language server, configured the way that editor configures any other |
+
+One language server does the work in all of them, and the Visual Studio Code
+extension is a thin front end around the same code.  There is not a plugin per
+IDE to keep in step, which is how this sort of thing usually dies: four
+codebases, and a fix that lands in one of them.
+
+Neither package has any dependencies.  The language server needs Node 18 or
+newer, which Visual Studio Code and Cursor already carry.
+
+## What it needs to be told
+
+Two things, the same everywhere:
+
+* the address, which is printed on the page and ends in `/api/v1`
+* a token, made by the developer on the **IDE tokens** page
+
+In Visual Studio Code the token goes in the editor's secret storage, through
+the *Git Code Review: Set the token* command, rather than in a settings file.
+Everywhere else it goes in the environment of the language server as
+`GCR_TOKEN`.
+
+## What happens when a file is saved
+
+The text of that one file goes to `/api/v1/review`.  The server writes it to a
+temporary directory, runs the credential and code passes over it, grades the
+result with the same triage the nightly scan uses, and deletes it.
+
+Nothing is stored.  A review creates no finding, no exception and no scan, so
+there is nothing for anybody to explain afterwards and nothing a stolen token
+can change.  That is what makes it safe to run on every save.
+
+## Only what they touched
+
+By default the editor shows findings on lines that differ from `HEAD`, and
+says how many older ones are in the file without drawing them.
+
+This matters more than it sounds.  A plugin that opens showing two thousand
+findings is uninstalled that afternoon, and none of those two thousand are
+the work of the person looking at them.  The setting is
+`gitCodeReview.changedLinesOnly`, and `GCR_CHANGED_LINES_ONLY` for the
+language server.
+
+## What a developer sees
+
+A credential is red whatever its severity says, because a live key in a file
+about to be committed is the one thing here that cannot wait for a review.
+The value is shown masked, never whole.
+
+Everything else is graded the way the server grades it, and each finding
+carries the triage's own sentence for why it survived the filter.  Anything
+the triage set aside is shown struck through rather than hidden, so a
+developer can disagree with it rather than wonder what was dropped.
+
+## Before the commit, without a token
+
+A hook runs where the code already is, so it needs nothing from the server:
+
+```
+ghscan review . --diff HEAD --fail-on secrets
+```
+
+Exit code 3 means it found something.  [pipelines.md](pipelines.md) has the
+same command in a build.
+
+## For whoever runs the server
+
+The packages are built from the source in `ide/`, on request, and cached under
+the data directory.  Building the same release twice gives the same bytes, so
+the checksums printed on the page are worth comparing against what somebody
+downloaded.
+
+Neither package is signed.  A marketplace signs what it distributes and this
+server is not one; if your policy requires a signature, sign the file on the
+way into your own catalog.

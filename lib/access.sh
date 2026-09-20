@@ -17,6 +17,20 @@ access_collaborators() {
   local all
   all=$(api_paginate "/repos/${full_name}/collaborators?affiliation=all" 100) || return 1
 
+  # Some hosts answer this with people and nothing else: no permissions object,
+  # no role.  Left alone every row reads "unknown" and a repository with three
+  # administrators on it reports none, which is a quiet zero somebody makes an
+  # access decision on.  The provider fills the permission in where its API
+  # makes that possible.  GitHub's answer already carries it and passes
+  # straight through.
+  #
+  # Through a file, never argv.  A repository with a few hundred collaborators
+  # on it is past what a single argument holds, and the failure would arrive
+  # here as a non-zero exit that the caller reports as "collaborator listing
+  # denied", which is a wrong answer rather than a missing one.
+  local f_all; f_all=$(json_file "$all" allcollab)
+  all=$(provider_call collaborator_permissions "$full_name" "$f_all") || return 1
+
   local f_direct f_outside
   f_direct=$(json_file "$direct" direct)
   f_outside=$(json_file "$outside" outside)
@@ -142,6 +156,14 @@ access_org_outside_collaborators() {
 
 access_org_members() {
   local org="$1"
+  # Asking a host that has no role filter for the administrators returns every
+  # member, and a report saying the whole organization owns it is worse than a
+  # report that does not say.  The same rule as the two step listing below: a
+  # question this host cannot answer is not asked.
+  if ! provider_supports org_members; then
+    log_debug "$(provider_name) has no member listing this reads, so it is not asked for"
+    echo '[]'; return 0
+  fi
   local members admins
   members=$(api_paginate "/orgs/${org}/members" 100) || { echo '[]'; return 0; }
   admins=$(api_paginate "/orgs/${org}/members?role=admin" 100) || admins='[]'
@@ -182,8 +204,12 @@ access_org_profile() {
   local org="$1"
   local body; body=$(api_get_quiet "/orgs/${org}")
   [[ -z "$body" ]] && { echo 'null'; return 0; }
+  # login is what GitHub calls the short name and it is the key everything
+  # downstream joins on.  Other hosts call it username, and reading only the
+  # one gave an organization with no name on it rather than a field that is
+  # spelled differently.
   printf '%s' "$body" | jq -c '{
-    login, id,
+    login: (.login // .username // .name), id,
     name: (.name // null),
     two_factor_requirement_enabled: (.two_factor_requirement_enabled // null),
     default_repository_permission: (.default_repository_permission // null),

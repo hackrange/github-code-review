@@ -151,8 +151,13 @@
     <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">curl -H "Authorization: Bearer &lt;your token&gt;" \
      {{ api_url }}/ping</pre>
 
-    <h2 style="margin-top:1.2rem">Visual Studio Code</h2>
-    <p>Install the Git Code Review extension, then in
+    <h2 style="margin-top:1.2rem">Visual Studio Code, and Cursor</h2>
+    <p>The extension is on the
+      <a href="{{ base }}/editors">Editor plugins</a> page of this server
+      rather than in a marketplace, because this server is the one that knows
+      your rules and plenty of installations have no way out to the internet.
+      Cursor takes the same file.  Install it, run
+      <em>Git Code Review: Set the token</em>, then in
       <span class="mono">settings.json</span>:</p>
     <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">"gitCodeReview.server": "{{ api_url }}",
 "gitCodeReview.token": "&lt;your token&gt;",
@@ -162,20 +167,15 @@
       repository with two thousand findings in it will show you two thousand
       findings, and none of them are yours.</p>
 
-    <h2 style="margin-top:1.2rem">JetBrains, IntelliJ and the rest</h2>
-    <p>Settings, then Tools, then Git Code Review.  Same address, same token.
-      The plugin registers itself as an LSP client, so nothing else is needed.</p>
-
-    <h2 style="margin-top:1.2rem">Eclipse</h2>
-    <p>Eclipse speaks LSP through LSP4E rather than a plugin of its own.
-      Install LSP4E from the marketplace, then add a server with the address
-      above and the token as a header.</p>
-
-    <h2 style="margin-top:1.2rem">Neovim, Helix, Sublime and anything else</h2>
-    <p>Any client that speaks the Language Server Protocol works.  Point it at
-      the address, send the token as an
-      <span class="mono">Authorization</span> header, and it will behave like
-      any other language server.</p>
+    <h2 style="margin-top:1.2rem">JetBrains, Eclipse, and anything else</h2>
+    <p>All of them run the same language server, which is on the
+      <a href="{{ base }}/editors">Editor plugins</a> page beside the
+      extension.  JetBrains runs it through LSP4IJ and Eclipse through LSP4E,
+      and both are told about it with the same two things: the address above,
+      and this token in <span class="mono">GCR_TOKEN</span>.  The steps for
+      each are on that page.</p>
+    <p class="faint">Any other client that speaks the Language Server Protocol
+      works the same way, Neovim, Helix and Sublime Text included.</p>
 
     <h2 style="margin-top:1.2rem">Before a commit, and in a pipeline</h2>
     <p>An editor is not the only place this is useful, and a hook needs no

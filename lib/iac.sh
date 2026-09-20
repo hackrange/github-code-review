@@ -62,7 +62,8 @@ run_trivy_config() {
 # is not the feature to start with.  The line number says where to look.
 normalize_trivy_config() {
   local in="$1" repo="$2" branch="$3" web="$4"
-  jq -c --arg repo "$repo" --arg br "$branch" --arg web "$web" '
+  jq -c --arg repo "$repo" --arg br "$branch" --arg web "$web" \
+     --argjson link "$(provider_link_parts)" '
     def aslist: if . == null then [] elif type == "array" then . else [.] end;
 
     # A path that is an example, a fixture or a vendored module is still a real
@@ -117,8 +118,8 @@ normalize_trivy_config() {
           confidence: "high",
           references: ($m.References | aslist),
           url: (if $file == "" then $web + "/" + $repo
-                else $web + "/" + $repo + "/blob/" + $br + "/" + $file
-                     + (if ($c.StartLine // 0) > 0 then "#L" + (($c.StartLine // 0) | tostring) else "" end) end),
+                else $web + "/" + $repo + "/" + $link.blob + "/" + $br + "/" + $file
+                     + (if ($c.StartLine // 0) > 0 then $link.line + (($c.StartLine // 0) | tostring) else "" end) end),
           help_url: ($m.PrimaryURL // ""),
           triage: $v[0],
           triage_reason: $v[1],

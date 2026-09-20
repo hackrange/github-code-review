@@ -147,6 +147,21 @@ wipe_file() {
   rm -f -- "$f"
 }
 
+# Where a host puts a file, a commit and a line of history in its own URLs.
+#
+# The real answer is in lib/provider.sh, which defines this again and replaces
+# this one the moment it is loaded; bin/ghscan loads it four lines later, so a
+# scan always gets the real thing.  This exists for the other case: something
+# that sources one library on its own, a test or a hook, where a missing
+# function makes the jq that builds a finding fail and the caller reads the
+# empty result as a file with nothing wrong in it.  A link of the wrong shape
+# is a poor answer.  No findings at all is the one answer this tool must never
+# give by accident, so the fallback is GitHub's shape rather than nothing.
+provider_link_parts() {
+  jq -cn '{blob:"blob", blob_commit:"blob", commit:"commit",
+           blame:"blame", blame_commit:"blame", history:"commits", line:"#L"}'
+}
+
 # Hand jq a big JSON value through a file instead of on the command line.
 #
 # argv has a size limit, and a repository with a thousand findings goes

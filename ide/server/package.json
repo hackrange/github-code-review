@@ -1,0 +1,10 @@
+{
+  "name": "git-code-review-lsp",
+  "version": "1.0.1",
+  "description": "Language server for Git Code Review: reviews the file you are editing against your own server.",
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "bin": { "git-code-review-lsp": "./main.js" },
+  "main": "./main.js",
+  "engines": { "node": ">=18" },
+  "dependencies": {}
+}

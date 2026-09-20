@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}Editor plugins &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Editor plugins</h1>
+    <div class="faint small">The same review this server runs nightly, on the
+      file you are editing, before the commit exists.  Download it here rather
+      than from a marketplace: this server is the one that knows your rules,
+      and plenty of installations have no way out to the internet at all.</div>
+  </div>
+  <div class="page-actions">
+    <a class="btn" href="{{ base }}/tokens">Make a token</a>
+  </div>
+</div>
+
+{% if problem %}
+<div class="notice bad">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+  <div>{{ problem }}</div>
+</div>
+{% endif %}
+
+<div class="notice info">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+  <div>Two things are the same everywhere: the address
+    <span class="mono">{{ api_url }}</span>, and a token from the
+    <a href="{{ base }}/tokens">IDE tokens</a> page with
+    <strong>review</strong> and <strong>rules</strong> both ticked.  A token
+    with only one of them connects and then fails on the first save.  Have
+    both before you start.  One language server does the work in every editor, so what differs
+    below is only how each one is told to run it.</div>
+</div>
+
+<div class="settings">
+
+<div class="card">
+  <div class="card-head">Visual Studio Code, and Cursor</div>
+  <div class="card-body small">
+    {% if packages.vsix %}
+    <p>
+      <a class="btn primary" href="{{ base }}/editors/download/vsix">
+        Download {{ packages.vsix.name }}</a>
+      <span class="faint">{{ packages.vsix.kilobytes }} KB, version
+        {{ packages.vsix.version }}, the same version as this server.</span>
+    </p>
+    {% endif %}
+    <p><strong>Cursor installs the same file.</strong>  It is a fork of Visual
+      Studio Code and takes the same package; there is no separate download and
+      no separate plugin to keep in step.</p>
+
+    <h2 style="margin-top:1rem">Installing it</h2>
+    <ol>
+      <li>Command palette, then <em>Extensions: Install from VSIX</em>, and pick
+        the file you just downloaded.  Or from a terminal:
+        <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">code --install-extension {{ packages.vsix.name if packages.vsix else 'git-code-review.vsix' }}
+cursor --install-extension {{ packages.vsix.name if packages.vsix else 'git-code-review.vsix' }}</pre></li>
+      <li>Command palette, then <em>Git Code Review: Set the token</em>.  It is
+        kept in the editor's secret storage rather than in a settings file that
+        ends up in backups and sometimes in a repository.</li>
+      <li>In <span class="mono">settings.json</span>:
+        <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">"gitCodeReview.server": "{{ api_url }}",
+"gitCodeReview.reviewOn": "save",
+"gitCodeReview.changedLinesOnly": true</pre></li>
+      <li>Command palette, then <em>Git Code Review: Check the connection</em>.
+        It says what is wrong, if anything is.</li>
+    </ol>
+    <p class="faint">Keep <span class="mono">changedLinesOnly</span> on.  A
+      repository with two thousand findings in it will show you two thousand
+      findings, and none of them are yours.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">JetBrains: IntelliJ, PyCharm, GoLand, WebStorm, Rider</div>
+  <div class="card-body small">
+    {% if packages.lsp %}
+    <p>
+      <a class="btn primary" href="{{ base }}/editors/download/lsp">
+        Download {{ packages.lsp.name }}</a>
+      <span class="faint">{{ packages.lsp.kilobytes }} KB.  Needs Node 18 or
+        newer, and nothing else: there is nothing to install.</span>
+    </p>
+    {% endif %}
+    <ol>
+      <li>Unpack it somewhere that will stay put, such as your home directory.</li>
+      <li>In the IDE, install <strong>LSP4IJ</strong> from the JetBrains
+        Marketplace.  It is free, it works in the Community editions, and it is
+        what lets an IDE run a language server it was not built with.</li>
+      <li><em>Settings</em>, <em>Languages &amp; Frameworks</em>,
+        <em>Language Servers</em>, then add a <em>user defined</em> server:
+        <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">Name:     Git Code Review
+Command:  node /path/to/{{ lsp_root }}/server/main.js
+Env:      GCR_SERVER={{ api_url }}
+          GCR_TOKEN=&lt;your token&gt;</pre></li>
+      <li>Under <em>Mappings</em>, give it the file name pattern
+        <span class="mono">*</span>, or just the languages you care about.</li>
+    </ol>
+    <p class="faint">The token goes in the run configuration for that server,
+      which is a file on your machine.  Give it the shortest expiry you can
+      live with.</p>
+    <p class="faint">LSP4IJ is the one piece here that does not come from this
+      server: it is a JetBrains Marketplace plugin and we cannot hand it out.
+      On a machine with no way out to the internet, download it once from a
+      machine that has one and install it from disk.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">Eclipse</div>
+  <div class="card-body small">
+    <p>Eclipse speaks this through <strong>LSP4E</strong> rather than a plugin
+      of its own.  That is not a shortcut: LSP4E is the Eclipse Foundation's
+      own language server client, and a plugin of ours would be a wrapper
+      around it.</p>
+    <ol>
+      <li>Download and unpack the language server above.</li>
+      <li><em>Help</em>, <em>Eclipse Marketplace</em>, install
+        <strong>LSP4E</strong>.</li>
+      <li><em>Preferences</em>, <em>Language Servers</em>, add a server:
+        <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">Command:  node /path/to/{{ lsp_root }}/server/main.js
+Env:      GCR_SERVER={{ api_url }}
+          GCR_TOKEN=&lt;your token&gt;</pre></li>
+      <li>Associate it with the content types you want reviewed, on the same
+        page.</li>
+    </ol>
+    <p class="faint">LSP4E comes from the Eclipse Marketplace rather than from
+      here, for the same reason.  On a machine with no way out, fetch it once
+      elsewhere and install it from the archive.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">Neovim, Helix, Sublime Text, and anything else</div>
+  <div class="card-body small">
+    <p>Any client that speaks the Language Server Protocol runs the same
+      server.  Point it at
+      <span class="mono">node /path/to/{{ lsp_root }}/server/main.js</span>
+      with <span class="mono">GCR_SERVER</span> and
+      <span class="mono">GCR_TOKEN</span> in its environment, and it behaves
+      like any other language server.  The README in the package has the rest
+      of the settings.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">What it does, and what it does not</div>
+  <div class="card-body small">
+    <p>Open or save a file and its text is sent to
+      <span class="mono">{{ api_url }}/review</span>.  It is written to a
+      temporary directory there, read by the same engines a scan uses, graded
+      by the same triage, and deleted.  <strong>Nothing is stored.</strong>  A
+      review creates no finding, no exception and no scan, which is why it is
+      safe to run on every save and why a stolen token cannot change anything
+      here.</p>
+    <p>It does not scan your repository.  That is the nightly job, and an
+      editor showing a repository's whole backlog is an editor somebody turns
+      off by Friday.  By default only the lines you changed against
+      <span class="mono">HEAD</span> carry findings, and the status bar says how
+      many older ones are in the file.</p>
+    <p>A credential is shown in red whatever its severity, because a live key
+      in a file you are about to commit is the one thing here that cannot wait
+      for a review.  Anything the triage set aside is shown struck through
+      rather than hidden, so you can disagree with it.</p>
+  </div>
+</div>
+
+{% if packages.vsix %}
+<div class="card">
+  <div class="card-head">Checking what you downloaded</div>
+  <div class="card-body small">
+    <p>Both packages are built from the source in this release, and building
+      the same release twice gives the same bytes, so these do not move on
+      their own:</p>
+    <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">{{ packages.vsix.sha256 }}  {{ packages.vsix.name }}
+{% if packages.lsp %}{{ packages.lsp.sha256 }}  {{ packages.lsp.name }}{% endif %}</pre>
+    <p class="faint">Neither is signed.  A marketplace signs what it
+      distributes and this server is not one, so if your policy requires a
+      signature, sign it yourself on the way into your own catalog.</p>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head">Before the commit, and in the build</div>
+  <div class="card-body small">
+    <p>An editor is not the only place this is useful, and a hook needs no
+      token at all because it runs where the code already is:</p>
+    <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">ghscan review . --diff HEAD --fail-on secrets</pre>
+    <p class="faint">Exit 3 means it found something.  That is the only point
+      where a credential can still be stopped rather than rotated.</p>
+  </div>
+</div>
+
+</div>
+{% endblock %}

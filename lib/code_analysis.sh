@@ -246,6 +246,7 @@ code_blame() {
 normalize_semgrep() {
   local in="$1" repo="$2" branch="$3" web="$4"
   jq -c --arg repo "$repo" --arg br "$branch" --arg web "$web" \
+        --argjson link "$(provider_link_parts)" \
         --argjson alias "$(detector_alias_map)" "$JQ_CANON_DETECTOR"'
     # semgrep gives these as a string when there is one and an array when there
     # are several.  Anything that iterates them falls over on the string.
@@ -343,7 +344,7 @@ normalize_semgrep() {
         fix: ($r.extra.fix // null),
         commit: (($r.blame.commit // "")),
         commit_url: (if ($r.blame.commit // "") == "" then ""
-                     else $web + "/" + $repo + "/commit/" + $r.blame.commit end),
+                     else $web + "/" + $repo + "/" + $link.commit + "/" + $r.blame.commit end),
         author_name: (($r.blame.author_name // "")),
         author_email: (($r.blame.author_email // "")),
         committed_at: (($r.blame.committed_at // "")),
@@ -363,7 +364,7 @@ normalize_semgrep() {
         # it out of the source using the column offsets, so this is carrying
         # something already computed rather than computing anything.
         matched: (($r.triage.matched // "")),
-        url: ($web + "/" + $repo + "/blob/" + $br + "/" + (($r.path // "") | sub("^\\./"; "")) + "#L" + (($r.start.line // 0) | tostring)),
+        url: ($web + "/" + $repo + "/" + $link.blob + "/" + $br + "/" + (($r.path // "") | sub("^\\./"; "")) + $link.line + (($r.start.line // 0) | tostring)),
         state: "open"
       } ]
     | sort_by([ (if .severity == "critical" then 0 elif .severity == "high" then 1
@@ -431,7 +432,8 @@ run_gosec() {
   ( cd "$dir" && GOPROXY=off GOFLAGS=-mod=mod       GOPATH="${GHSCAN_TMPROOT:-/tmp}/go" GOCACHE="${GHSCAN_TMPROOT:-/tmp}/gocache"       with_timeout 600 gosec -quiet -fmt json -no-fail ./... ) > "$out" 2>/dev/null || true
   [[ -s "$out" ]] || { echo '[]'; return 0; }
 
-  jq -c --arg repo "$repo" --arg br "$branch" --arg web "$web" --arg root "$dir" '
+  jq -c --arg repo "$repo" --arg br "$branch" --arg web "$web" --arg root "$dir" \
+        --argjson link "$(provider_link_parts)" '
     [ (.Issues // [])[] | {
         organization: ($repo | split("/")[0]),
         repository: $repo,
@@ -461,9 +463,9 @@ run_gosec() {
         fix: null, commit: "", commit_url: "",
         author_name: "", author_email: "", committed_at: "",
         triage: "review", triage_reason: "", triage_rule: "",
-        url: ($web + "/" + $repo + "/blob/" + $br + "/"
+        url: ($web + "/" + $repo + "/" + $link.blob + "/" + $br + "/"
               + ((.file // "") | sub("^" + $root + "/?"; "") | sub("^\\./"; ""))
-              + "#L" + ((.line // "0") | tostring | split("-")[0])),
+              + $link.line + ((.line // "0") | tostring | split("-")[0])),
         state: "open"
       } ]' "$out" 2>/dev/null || echo '[]'
 }
@@ -479,7 +481,8 @@ run_bandit() {
       -x './node_modules,./vendor,./.venv,./venv,./.git' ) > "$out" 2>/dev/null || true
   [[ -s "$out" ]] || { echo '[]'; return 0; }
 
-  jq -c --arg repo "$repo" --arg br "$branch" --arg web "$web" '
+  jq -c --arg repo "$repo" --arg br "$branch" --arg web "$web" \
+        --argjson link "$(provider_link_parts)" '
     [ (.results // [])[] | {
         organization: ($repo | split("/")[0]),
         repository: $repo,
@@ -507,8 +510,8 @@ run_bandit() {
         fix: null, commit: "", commit_url: "",
         author_name: "", author_email: "", committed_at: "",
         triage: "review", triage_reason: "", triage_rule: "",
-        url: ($web + "/" + $repo + "/blob/" + $br + "/"
-              + ((.filename // "") | sub("^\\./"; "")) + "#L" + ((.line_number // 0) | tostring)),
+        url: ($web + "/" + $repo + "/" + $link.blob + "/" + $br + "/"
+              + ((.filename // "") | sub("^\\./"; "")) + $link.line + ((.line_number // 0) | tostring)),
         state: "open"
       } ]' "$out" 2>/dev/null || echo '[]'
 }
@@ -522,7 +525,8 @@ run_njsscan() {
   ( cd "$dir" && with_timeout 600 "$bin" --json -o /dev/stdout . ) > "$out" 2>/dev/null || true
   [[ -s "$out" ]] || { echo '[]'; return 0; }
 
-  jq -c --arg repo "$repo" --arg br "$branch" --arg web "$web" '
+  jq -c --arg repo "$repo" --arg br "$branch" --arg web "$web" \
+        --argjson link "$(provider_link_parts)" '
     [ (.nodejs // {}) as $n | ($n | to_entries[]) | .key as $rule | .value as $v
       | ($v.files // [])[] | {
         organization: ($repo | split("/")[0]),
@@ -552,8 +556,8 @@ run_njsscan() {
         fix: null, commit: "", commit_url: "",
         author_name: "", author_email: "", committed_at: "",
         triage: "review", triage_reason: "", triage_rule: "",
-        url: ($web + "/" + $repo + "/blob/" + $br + "/"
-              + ((.file_path // "") | sub("^\\./"; "")) + "#L" + (((.match_lines // [0])[0] // 0) | tostring)),
+        url: ($web + "/" + $repo + "/" + $link.blob + "/" + $br + "/"
+              + ((.file_path // "") | sub("^\\./"; "")) + $link.line + (((.match_lines // [0])[0] // 0) | tostring)),
         state: "open"
       } ]' "$out" 2>/dev/null || echo '[]'
 }

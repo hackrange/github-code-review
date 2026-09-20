@@ -35,8 +35,11 @@ _slots = threading.Semaphore(2)
 CLONE_TIMEOUT = 90
 ENGINE_TIMEOUT = 120
 
-# Which username the host wants when the password is a token.
-_GIT_USERNAME = {"github": "x-access-token", "gitlab": "oauth2"}
+# Which username the host wants when the password is a token.  Gitea and
+# Forgejo read the token out of the password and pay no attention to the
+# username, so the default is as good an answer there as any.
+_GIT_USERNAME = {"github": "x-access-token", "gitlab": "oauth2",
+                 "bitbucket": "x-token-auth"}
 
 
 def _credential_args(token_file: Path, provider: str) -> list:

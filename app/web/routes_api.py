@@ -1232,10 +1232,11 @@ async def save_connection(request: Request, user: User = Depends(current_user)):
 
     provider = str(form.get("provider", "github")).strip().lower()
     if provider not in {"github", "gitlab", "bitbucket", "azure", "assembla",
-                        "beanstalk", "codecommit", "gcsr", "subversion",
-                        "perforce"}:
-        raise HTTPException(status_code=400,
-                            detail="Pick GitHub, GitLab or Bitbucket.")
+                        "beanstalk", "codecommit", "gcsr", "gitea", "forgejo",
+                        "subversion", "perforce"}:
+        raise HTTPException(
+            status_code=400,
+            detail="That is not a host this knows about. Pick one from the list.")
 
     # Whatever was pasted, turned into the two addresses this needs.  Somebody
     # who pastes the /api/v4/projects URL they just checked in a browser, with a
@@ -1251,8 +1252,9 @@ async def save_connection(request: Request, user: User = Depends(current_user)):
     if method not in {"pat", "app"}:
         raise HTTPException(status_code=400, detail="Pick a token or a GitHub App.")
     if provider != "github" and method == "app":
-        raise HTTPException(status_code=400,
-                            detail="A GitHub App is a GitHub thing. GitLab takes a token.")
+        raise HTTPException(
+            status_code=400,
+            detail="A GitHub App is a GitHub thing. Everywhere else takes a token.")
 
     from app.core import settings_store as store_mod
 

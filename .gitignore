@@ -133,3 +133,7 @@ first-admin.txt
 # publish the one thing this file is trying not to say, so it is excluded per
 # clone instead, in .git/info/exclude.
 tests/
+
+# Editor packages are built from ide/, never committed
+ide/**/node_modules/
+ide/**/*.vsix

@@ -180,7 +180,34 @@ def _http(value) -> str:
     return text if text.lower().startswith(("https://", "http://")) else ""
 
 
-def code_link(finding) -> str:
+# Where each host puts a file in its own URLs, and what it puts in front of a
+# line number.  Gitea and Forgejo have no /blob/ route at all, so the GitHub
+# shape is a 404 there rather than a redirect to the right page.  A host that
+# is not named here gets the GitHub shape, which is what every host got before
+# this existed.
+_BLOB_PATH = {"gitlab": "-/blob", "bitbucket": "src",
+              "gitea": "src/branch", "forgejo": "src/branch"}
+_LINE_ANCHOR = {"bitbucket": "#lines-"}
+
+
+def provider_of(session, finding) -> str:
+    """Which host a finding came from, by way of the connection that found it.
+
+    Empty for a finding that predates connections, which is a GitHub one:
+    there was nothing else then.
+    """
+    name = (getattr(finding, "connection", "") or "").strip()
+    if not name:
+        return ""
+    try:
+        from app.core import connections as connection_store
+        row = connection_store.by_name(session, name)
+    except Exception:            # noqa: BLE001
+        return ""
+    return (getattr(row, "provider", "") or "") if row is not None else ""
+
+
+def code_link(finding, provider: str = "") -> str:
     """The file on the host, on the branch the scan read.
 
     A code or credential finding already carries one: the scanner writes the
@@ -217,8 +244,10 @@ def code_link(finding) -> str:
 
     branch = ((finding.branch or "").strip()
               or (getattr(repo, "default_branch", "") or "").strip() or "HEAD")
-    anchor = f"#L{finding.line}" if finding.line else ""
-    return (f"{home}/blob/{urllib.parse.quote(branch, safe='/')}"
+    blob = _BLOB_PATH.get((provider or "").lower(), "blob")
+    mark = _LINE_ANCHOR.get((provider or "").lower(), "#L")
+    anchor = f"{mark}{finding.line}" if finding.line else ""
+    return (f"{home}/{blob}/{urllib.parse.quote(branch, safe='/')}"
             f"/{urllib.parse.quote(where.lstrip('/'), safe='/')}{anchor}")
 
 
@@ -526,7 +555,7 @@ def details(session, finding) -> list:
     link = finding_link(session, finding)
     if link:
         rows.append(("This finding", link, link))
-    code = code_link(finding)
+    code = code_link(finding, provider_of(session, finding))
     if code:
         rows.append(("The code", code, code))
     # An advisory with no id to hang it off, which the alert feeds produce.
