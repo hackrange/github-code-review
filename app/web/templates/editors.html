@@ -50,10 +50,21 @@
 
     <h2 style="margin-top:1rem">Installing it</h2>
     <ol>
-      <li>Command palette, then <em>Extensions: Install from VSIX</em>, and pick
-        the file you just downloaded.  Or from a terminal:
+      <li>Command palette (<span class="mono">Ctrl</span>+<span class="mono">Shift</span>+<span class="mono">P</span>,
+        or <span class="mono">Cmd</span>+<span class="mono">Shift</span>+<span class="mono">P</span>
+        on a Mac), then <em>Extensions: Install from VSIX</em>, and pick the
+        file you just downloaded.  This always works and needs nothing on your
+        PATH.  If you would rather use a terminal:
         <pre class="mono" style="overflow-x:auto;padding:.7rem;background:var(--bg-soft);border:1px solid var(--border);border-radius:var(--radius)">code --install-extension {{ packages.vsix.name if packages.vsix else 'git-code-review.vsix' }}
-cursor --install-extension {{ packages.vsix.name if packages.vsix else 'git-code-review.vsix' }}</pre></li>
+cursor --install-extension {{ packages.vsix.name if packages.vsix else 'git-code-review.vsix' }}</pre>
+        <span class="faint">Says <span class="mono">command not found: code</span>?
+        Nothing is wrong.  On a Mac that command is not on your PATH until you
+        ask for it: command palette, then
+        <em>Shell Command: Install 'code' command in PATH</em>, then open a new
+        terminal.  Cursor has the same entry.  On Windows it means the
+        installer ran without <em>Add to PATH</em>, or the window was open
+        before it was installed.  Either way the palette step above does the
+        same job.</span></li>
       <li>Command palette, then <em>Git Code Review: Set the token</em>.  It is
         kept in the editor's secret storage rather than in a settings file that
         ends up in backups and sometimes in a repository.</li>

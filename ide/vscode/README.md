@@ -9,16 +9,21 @@ what you see here is what the report will say.
 1. Open your Git Code Review server and go to **IDE tokens**.  Make a token
    with **review** and **rules** both ticked.  One without both connects and
    then fails on the first save.
-2. In the editor, run **Git Code Review: Set the token** from the command
+2. Install the package: command palette (`Ctrl+Shift+P`, or `Cmd+Shift+P` on a
+   Mac), then **Extensions: Install from VSIX**, and pick the file.  The
+   `code --install-extension` command does the same thing, when that command is
+   on your PATH.  On a Mac it is not until you run **Shell Command: Install
+   'code' command in PATH** from the palette.
+3. In the editor, run **Git Code Review: Set the token** from the command
    palette and paste it.  It is kept in the editor's secret storage, not in a
    settings file.
-3. Set the address in settings:
+4. Set the address in settings:
 
    ```json
    "gitCodeReview.server": "https://your-server/api/v1"
    ```
 
-4. Run **Git Code Review: Check the connection**.  It says what is wrong, if
+5. Run **Git Code Review: Check the connection**.  It says what is wrong, if
    anything is.
 
 ## What it does

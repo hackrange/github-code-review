@@ -58,6 +58,13 @@ If nothing appears, the file may have no findings on the lines you changed,
 which is the default.  `Git Code Review: Review this file` checks the whole
 file on demand.
 
+Step 4 has a terminal equivalent, `code --install-extension <file>`, for people
+who would rather type it.  It only works when that command is on your PATH, and
+on a Mac it is not until you run **Shell Command: Install 'code' command in
+PATH** from the command palette.  Cursor has the same entry for `cursor`.  The
+palette step above needs none of that, which is why it is the one written
+out.
+
 ## What it needs to be told
 
 Two things, the same everywhere:
