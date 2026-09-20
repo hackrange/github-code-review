@@ -97,8 +97,13 @@ provider_gitlab_list_repos() {
       # needs the run to say what it covered, because the whole worry is that
       # it covered more.
       log_warn "scanning only: $_want"
-      _one=$(api_get "/repos/${_want}") || {
-        log_warn "cannot access repo '$_want'"; continue; }
+      # GitLab keys a project by its encoded path, the same way the explicit
+      # include below does.  This asked for GitHub's /repos/owner/name, which
+      # is a 404 here, so naming one project to scan reported nothing in scope
+      # and the run stopped without scanning anything at all.
+      local _enc; _enc=$(_gl_encode "$_want")
+      _one=$(api_get "/projects/${_enc}") || {
+        log_warn "cannot access project '$_want'"; continue; }
       printf '%s' "$_one" | jq -c '[.]' > "$_tmp"
       jq -c --slurpfile c "$_tmp" '. + $c[0]' "$_raw" > "${_raw}.n" && mv -f "${_raw}.n" "$_raw"
     done < <(cfg_arr '.github.scope.only_repos')

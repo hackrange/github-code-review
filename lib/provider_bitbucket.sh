@@ -117,8 +117,11 @@ provider_bitbucket_list_repos() {
       # needs the run to say what it covered, because the whole worry is that
       # it covered more.
       log_warn "scanning only: $_want"
-      _one=$(api_get "/repos/${_want}") || {
-        log_warn "cannot access repo '$_want'"; continue; }
+      # Bitbucket calls them repositories, the same as the explicit include
+      # below.  GitHub's /repos/ is a 404 here, so naming one repository to
+      # scan reported nothing in scope rather than scanning it.
+      _one=$(api_get "/repositories/${_want}") || {
+        log_warn "cannot access repository '$_want'"; continue; }
       printf '%s' "$_one" | jq -c '[.]' > "$_tmp"
       jq -c --slurpfile c "$_tmp" '. + $c[0]' "$_raw" > "${_raw}.n" && mv -f "${_raw}.n" "$_raw"
     done < <(cfg_arr '.github.scope.only_repos')
