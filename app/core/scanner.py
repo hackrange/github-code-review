@@ -1211,7 +1211,7 @@ def run_catchup(triggered_by: str = "catchup") -> dict:
 
 
 def run_every_connection(triggered_by: str = "", trigger: str = "manual",
-                        only=None, connection_id=None,
+                        only=None, connection_id=None, orgs=None, repos=None,
                         _holds_lock: bool = False) -> dict:
     """Scan each account in turn, one run apiece.
 
@@ -1236,7 +1236,8 @@ def run_every_connection(triggered_by: str = "", trigger: str = "manual",
         mine = True
 
     try:
-        return _every_connection(triggered_by, trigger, only, connection_id)
+        return _every_connection(triggered_by, trigger, only, connection_id,
+                                 orgs, repos)
     finally:
         if mine:
             _gate.release()
@@ -1277,7 +1278,8 @@ def _rotate(chosen: list, cursor: str) -> list:
     return chosen
 
 
-def _every_connection(triggered_by, trigger, only, connection_id) -> dict:
+def _every_connection(triggered_by, trigger, only, connection_id,
+                      orgs=None, repos=None) -> dict:
     """The sweep itself, with the gate already held."""
     from app.core import connections as connection_store
 
@@ -1301,7 +1303,7 @@ def _every_connection(triggered_by, trigger, only, connection_id) -> dict:
 
     if not chosen:
         return run_scan(triggered_by=triggered_by, trigger=trigger, only=only,
-                        _holds_lock=True)
+                        orgs=orgs, repos=repos, _holds_lock=True)
 
     total = {"ok": True, "connections": 0, "new": 0, "updated": 0,
              "resolved": 0, "repositories": 0, "failed": [], "empty_connections": []}
@@ -1324,7 +1326,8 @@ def _every_connection(triggered_by, trigger, only, connection_id) -> dict:
                     "stopped": True, "skipped": True}
         log.info("scanning connection %s", row.name)
         result = run_scan(triggered_by=triggered_by, trigger=trigger,
-                          only=only, connection=row, _holds_lock=True)
+                          only=only, orgs=orgs, repos=repos, connection=row,
+                          _holds_lock=True)
         # Move the mark as we go, not at the end.  A run that dies half way
         # through is exactly the run this is here for, and one that saved
         # nothing would start from the same place again.  A connection that
@@ -1491,10 +1494,27 @@ def start_background(triggered_by: str = "", trigger: str = "manual",
             from app.core import connections as connection_store
             with session_scope() as db:
                 named = connection_store.by_id(db, connection_id)
-        target, kwargs = run_scan, {
-            "triggered_by": triggered_by, "trigger": trigger,
-            "orgs": orgs, "repos": repos, "only": only,
-            "connection": named, "branch_names": branch_names}
+        if named is None:
+            # A scope with no account named.  This is what EVERY developer
+            # scan looks like: the scope comes from their assignments and they
+            # cannot see the Connections page, so they have no id to send.
+            # Falling through to run_scan with connection=None handed the scan
+            # the settings credential, which on an install that keeps its
+            # credentials on connections does not exist, so the run died with
+            # "configuration is invalid: method=pat but neither $GITHUB_TOKEN
+            # is set nor token_file is readable" and the learner was told the
+            # scanner had refused its own configuration.  Sweeping instead
+            # gives each account its own credential and applies the scope to
+            # each, which is the same answer by a route that can authenticate.
+            target, kwargs = run_every_connection, {
+                "triggered_by": triggered_by, "trigger": trigger,
+                "only": only, "connection_id": None,
+                "orgs": orgs, "repos": repos}
+        else:
+            target, kwargs = run_scan, {
+                "triggered_by": triggered_by, "trigger": trigger,
+                "orgs": orgs, "repos": repos, "only": only,
+                "connection": named, "branch_names": branch_names}
     else:
         target, kwargs = run_every_connection, {
             "triggered_by": triggered_by, "trigger": trigger, "only": only,
