@@ -180,8 +180,18 @@ provider_gitea_list_repos() {
     log_info "enumerating repositories for organization: $org"
     local body
     body=$(_gitea_paginate "/orgs/${org}/repos") || {
-      log_warn "could not list repositories for organization '$org' (see errors above)"
-      continue
+      # In Gitea and Forgejo a name is either an organization or a user, and a
+      # scope entry does not say which.  GitHub has the same split and mostly
+      # hides it; here /orgs/{name}/repos simply fails for a personal account.
+      # That matters because a developer's assignment is stored as an
+      # organization whatever it actually names, so a learner scanning their
+      # own repositories was told the account could not be listed while the
+      # repositories sat in plain sight under /users/{name}/repos.
+      body=$(_gitea_paginate "/users/${org}/repos") || {
+        log_warn "could not list repositories for '$org': it is neither an organization nor a user this credential can see"
+        continue
+      }
+      log_info "'$org' is a user rather than an organization"
     }
     _gt_merge "$(printf '%s' "$body" | jq -c '.')"
   done < <(printf '%s' "$orgs_json" | jq -r '.[]?')
