@@ -136,10 +136,8 @@ or turn auto_discover_orgs on to scan everything the credential can reach")
   fi
 
   local prov; prov=$(cfg '.provider' 'github')
-  case "$prov" in
-    github|gitlab|bitbucket) ;;
-    *) errs+=("provider must be one of: github, gitlab, bitbucket (got '$prov')") ;;
-  esac
+  provider_supported "$prov" || \
+    errs+=("provider must be one of: ${GHSCAN_PROVIDERS//$'\n'/ } (got '$prov')")
 
   local method; method=$(cfg '.github.auth.method' 'pat')
   # A GitHub App is a GitHub thing.  Asking for one anywhere else would fail

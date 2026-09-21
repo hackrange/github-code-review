@@ -7,6 +7,26 @@ set -o pipefail
 : "${GHSCAN_LOG_LEVEL:=info}"
 : "${GHSCAN_COLOR:=auto}"
 
+# Every provider this scanner speaks, in one place.
+#
+# It lived in two places before, and they drifted: provider_name() learned nine
+# new providers and config_validate() did not, so a connection could be created
+# in the web interface, saved, and then fail EVERY scan with "provider must be
+# one of: github, gitlab, bitbucket".  The web interface offered the provider,
+# the scanner implemented it, and the validator in between rejected it.  One
+# list means the next provider cannot be half added.
+GHSCAN_PROVIDERS="github gitlab bitbucket azure assembla beanstalk codecommit \
+gcsr gitea forgejo subversion perforce"
+
+# Is this a provider we speak?
+provider_supported() {
+  local want="$1" p
+  for p in $GHSCAN_PROVIDERS; do
+    [[ "$p" == "$want" ]] && return 0
+  done
+  return 1
+}
+
 _ghs_color_on() {
   case "$GHSCAN_COLOR" in
     always) return 0 ;;

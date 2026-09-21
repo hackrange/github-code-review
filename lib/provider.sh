@@ -16,11 +16,12 @@
 # GitHub, so that is the default rather than an error.
 provider_name() {
   local p; p=$(cfg '.provider' 'github')
-  case "$p" in
-    github|gitlab|bitbucket|azure|assembla|beanstalk|codecommit|gcsr|\
-    gitea|forgejo|subversion|perforce) printf '%s' "$p" ;;
-    *) log_warn "unknown provider '$p', treating it as github"; printf 'github' ;;
-  esac
+  if provider_supported "$p"; then
+    printf '%s' "$p"
+  else
+    log_warn "unknown provider '$p', treating it as github"
+    printf 'github'
+  fi
 }
 
 # Does this host keep git history, in a form the credential engines can walk?
