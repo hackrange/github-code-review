@@ -356,21 +356,32 @@ vulns_dated() {
     [ .[]? | (.package.locations // [])[0] // empty ] | unique | .[]' 2>/dev/null)
   [[ -n "$paths" ]] || { printf '%s' "$findings"; return 0; }
 
-  local map='{}' path meta
+  # One object per file, appended as it is worked out.  This used to fold each
+  # one into a shell variable and hand the whole map back to jq on the command
+  # line on the next turn round the loop, which grows with the number of
+  # manifests in the repository: a big enough tree and the run ends on an
+  # argument list too long, a long way from the line that caused it.  What
+  # grows goes in a file.
+  local pairs; pairs=$(tmp_file dates_in)
+  local path
   while IFS= read -r path; do
     [[ -n "$path" ]] || continue
     [[ -f "$dir/$path" ]] || continue
-    meta=$(git -C "$dir" log -1 --format='%cI%x1f%an%x1f%ae%x1f%H' -- "$path" 2>/dev/null \
-           | head -1 \
-           | jq -Rc 'split("\u001f") | {committed_at: .[0], author_name: .[1],
-                                        author_email: .[2], commit: .[3]}')
-    [[ -n "$meta" && "$meta" != "null" ]] || continue
-    map=$(jq -cn --argjson m "$map" --arg p "$path" --argjson v "$meta" \
-            '$m + {($p): $v}')
+    # An empty answer, from a file git has never recorded, selects itself out
+    # rather than being tested for afterwards.
+    git -C "$dir" log -1 --format='%cI%x1f%an%x1f%ae%x1f%H' -- "$path" 2>/dev/null \
+      | head -1 \
+      | jq -Rc --arg p "$path" 'select(length > 0) | split("\u001f")
+          | {($p): {committed_at: .[0], author_name: .[1],
+                    author_email: .[2], commit: .[3]}}' >> "$pairs"
   done <<< "$paths"
 
-  printf '%s' "$findings" | jq -c --argjson dates "$map" '
-    [ .[]?
+  local map; map=$(tmp_file dates)
+  jq -cs 'add // {}' "$pairs" > "$map"
+
+  printf '%s' "$findings" | jq -c --slurpfile dates_in "$map" '
+    ($dates_in[0] // {}) as $dates
+    | [ .[]?
       | . as $f
       | (($f.package.locations // [])[0] // "") as $p
       | ($dates[$p] // {}) as $d
