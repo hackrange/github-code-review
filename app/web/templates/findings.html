@@ -155,6 +155,9 @@
     <div class="field">
       <label for="state">State</label>
       <select id="state" name="state" data-autosubmit>
+        {# Every state, for somebody looking back over what was fixed or
+           waived as well as what is still open. #}
+        <option value="any" {{ 'selected' if filters.state == 'any' }}>All states</option>
         {% for s in states %}
           <option value="{{ s }}" {{ 'selected' if filters.state == s }}>{{ s }}</option>
         {% endfor %}

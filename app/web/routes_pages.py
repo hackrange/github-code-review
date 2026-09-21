@@ -1228,7 +1228,12 @@ def findings(request: Request, user: User = Depends(current_user)):
     params = request.query_params
     severity = params.get("severity", "")
     kind = params.get("kind", "")
+    # "any" is every state.  The query already reads anything it does not
+    # recognise as no state filter at all, so it is named that here and the
+    # dropdown says what the list underneath it is actually showing.
     state = params.get("state", "open")
+    if state not in {s.value for s in FindingState}:
+        state = "any"
     org = params.get("org", "")
     # Carried so the paging links keep them.  The builder applies these;
     # they are read here only so a second page of a drilled down list is
