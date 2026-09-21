@@ -380,8 +380,20 @@ def redirect(path: str, status_code: int = 303) -> RedirectResponse:
 # ---------------------------------------------------------------------------
 def clean_text(value, what: str = "value", limit: int = 500,
                required: bool = True) -> str:
-    """Trim it, cap it, and refuse control characters."""
-    text = (value or "").strip()
+    """Trim it, cap it, and refuse control characters.
+
+    Line endings are settled first.  A browser submits a textarea with CRLF,
+    which the HTML form specification requires of it, and a carriage return is
+    a control character, so every box somebody typed more than one line into
+    was refused with "has characters that do not belong".  The person then
+    discovers that commas work and never mentions it.  That is how the group
+    of repositories ended up being written on one line.
+
+    Normalized rather than rejected, because CR is not something a person
+    typed: it is what the browser sends on their behalf, and refusing it
+    blames them for it.
+    """
+    text = (value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if required and not text:
         raise HTTPException(status_code=400, detail=f"{what} is required.")
     if len(text) > limit:
