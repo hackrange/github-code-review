@@ -800,6 +800,32 @@ Any string can contain `${ENV_VAR}`. Relative paths resolve against the config
 file's own directory. Do not put a token in the config file, use `token_env` or
 `token_file`.
 
+### AI validation
+
+Not in `config/config.json`.  It belongs to the web application and lives in
+its database, set on the **AI analysis** page: sidebar, **Administration**,
+**AI analysis**, or `/ai`, administrators only.  Pick one provider: a hosted
+provider's own API, anything that speaks the OpenAI chat API, or your own
+inference service described as curl headers and a body with `SAMPLE` where the
+question goes.  Keys and the custom secret header are stored encrypted, the
+same as every other credential in Settings.
+
+Off until a provider is chosen.  Once one is set up, each finding carries one
+**Validate with AI** button, and nothing runs without somebody pressing it.
+
+| Setting | Default | What it does |
+|---|---|---|
+| Provider | off | which model answers, one at a time |
+| Send the code | on | the lines around a finding, or where a package is used; never for a credential |
+| Lines either side | `40` | how much code goes with a finding |
+| Read the advisory from osv.dev | on | only the public advisory id is sent |
+| Longest answer | `16000` tokens | the cap on one answer |
+| Time limit | `300` seconds | how long to wait for one |
+
+Turning on a provider with code sending on means source leaves the
+installation for that provider.  [documentation/ai-validation.md](documentation/ai-validation.md)
+lists the providers, what each needs, and exactly what is and is not sent.
+
 ## 11. Operational notes
 
 **Read only.** Every API call is a GET. The single exception in the whole

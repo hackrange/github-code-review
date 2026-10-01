@@ -9,7 +9,12 @@ exception, and Validate with AI asks it of a language model.
 
 ## Setting it up
 
-AI analysis, in the admin menu.  Pick one provider:
+Sign in as an administrator, open the sidebar, expand **Administration** and
+choose **AI analysis**, between Notifications and Triage rules.  The address is
+`/ai` on your installation.  The section only appears for administrators: a
+developer or reader sees neither the menu entry nor the page.
+
+Pick one provider:
 
 | Provider | What it needs |
 |---|---|
