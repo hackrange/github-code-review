@@ -35,6 +35,9 @@ segno==1.6.6
 # keys, httpx fetches the discovery document and swaps the code for tokens.
 PyJWT[crypto]==2.13.0
 httpx==0.28.1
+# Claude, for the AI validation on a finding.  Its own HTTP stack (httpx2),
+# which sits beside the httpx above without either noticing the other.
+anthropic==1.11.0
 cryptography==50.0.1
 
 # Scheduling.  Cron expressions for scans and for refreshing the vulnerability

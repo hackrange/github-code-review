@@ -265,6 +265,21 @@
     });
   });
 
+  /* A form whose answer takes a while.  The button says so and cannot be
+   * pressed twice, because a second press is a second paid request and the
+   * page gives no other sign that the first one is still going.  Registered
+   * after the confirmation above, so a cancelled confirmation never gets
+   * here. */
+  document.querySelectorAll("form[data-busy]").forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      if (event.defaultPrevented) { return; }
+      form.querySelectorAll("button[type=submit]").forEach(function (button) {
+        button.disabled = true;
+        button.textContent = form.dataset.busy;
+      });
+    });
+  });
+
   /* Filter bars that apply as soon as something is picked.
    *
    * Same reason as above: this was an onchange attribute and the policy

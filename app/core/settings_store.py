@@ -380,6 +380,13 @@ DEFAULTS = {
                                 "GMT leaves everything on UTC."),
 }
 
+# AI validation's settings, kept with the code that reads them.  Which
+# providers there are, and what each one needs, is that module's business;
+# here they are just more rows on the same table.
+from app.core.ai import SETTINGS as _AI_SETTINGS  # noqa: E402
+
+DEFAULTS.update(_AI_SETTINGS)
+
 # The settings the app reads on every request rather than only at scan time.
 # live.py caches these.
 LIVE_KEYS = [

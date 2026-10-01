@@ -50,6 +50,11 @@ PERMISSIONS = {
         # Regrading one finding, which severity_rules cannot do: a rule level
         # override moves every finding that rule ever produced.
         "finding.regrade",
+        # Asking a language model about one finding.  It costs money per
+        # question and sends what the finding is about outside this
+        # installation, so it is a permission of its own rather than something
+        # every reader can press.
+        "finding.validate",
         "repo.certify",
         # Saying a branch is not one anybody is expected to sign off.  A
         # separate permission from certifying, and administrators only,
@@ -87,6 +92,9 @@ PERMISSIONS = {
         # A developer can ask for a noisy rule to be set aside.  Somebody else
         # has to agree, the same as an exception.
         "rule.mute.request",
+        # A developer is the person working out whether a finding in their own
+        # repository is real, which is exactly what this is for.
+        "finding.validate",
         # Deliberately not here: the schedules, the exclusions and the report
         # files.  Each of those is a statement about the whole estate rather
         # than about this person's repositories, and a page that shows one

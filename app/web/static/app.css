@@ -974,3 +974,12 @@ table.heat .heat-actions .btn { margin-left: .3rem; }
 @keyframes util-pulse { 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .gauge-fill { transition: none; } .util-live::before { animation: none; } }
 .util-error { padding: .75rem 1rem; border: 1px solid var(--bad); border-radius: var(--radius); background: var(--bad-bg); color: var(--bad); font-size: .9rem; }
+
+/* ---- what a model said about a finding ----------------------------------- */
+/* Plain text with the line breaks the model wrote, so the numbered steps and
+   section names read as they were written without trusting it with markup. */
+.ai-answer {
+    white-space: pre-wrap; word-break: break-word; max-width: 90ch;
+    line-height: 1.5; padding: .6rem .8rem; border-radius: 4px;
+    background: var(--bg-soft); font-size: .92rem;
+}

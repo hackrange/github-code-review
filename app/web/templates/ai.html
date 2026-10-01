@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}AI analysis &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>AI analysis</h1>
+    <div class="faint small">A second reader for one finding at a time.  Somebody
+      presses Validate with AI on a finding, and the model configured here reads the
+      finding, the code around it and the decisions already made nearby, and
+      says whether it is as bad as its grade and why.  The answer is kept on the
+      finding with the model's name on it.  It never changes a grade, a state or
+      an exception: those still take a person.</div></div>
+</div>
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+  <div class="small">{{ message }}</div>
+</div>
+{% elif problem %}
+<div class="card bad"><div class="small">{{ problem }}</div></div>
+{% endif %}
+
+<form method="post" action="{{ base }}/ai/save" id="ai-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <div class="card">
+    <div class="card-head">Which model</div>
+    <div class="card-body">
+      <label>Provider
+        <select name="ai.provider" id="ai-provider" {{ 'disabled' if not can_write }}>
+          <option value="disabled" {{ 'selected' if values['ai.provider'] not in ['anthropic', 'openai', 'custom'] }}>Off</option>
+          <option value="anthropic" {{ 'selected' if values['ai.provider'] == 'anthropic' }}>Anthropic (Claude)</option>
+          <option value="openai" {{ 'selected' if values['ai.provider'] == 'openai' }}>OpenAI, or anything with the same API</option>
+          <option value="custom" {{ 'selected' if values['ai.provider'] == 'custom' }}>Custom, described as curl headers and a body</option>
+        </select>
+        <span class="faint small">One at a time.  The settings for the others are
+          kept, so switching back does not mean typing a key in again.</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="card" data-ai="anthropic" hidden>
+    <div class="card-head">Anthropic (Claude)</div>
+    <div class="card-body">
+      <label>API key
+        <input type="password" name="ai.anthropic_key" autocomplete="new-password"
+               placeholder="{{ 'stored, leave empty to keep it' if values['ai.anthropic_key'] else 'sk-ant-api03-...' }}">
+        <span class="faint small">Stored encrypted and never shown back.</span>
+      </label>
+      <label>Model
+        <input type="text" name="ai.anthropic_model" id="ai-anthropic-model"
+               value="{{ values['ai.anthropic_model'] }}" placeholder="claude-opus-5-5">
+        <span class="ai-model-pick" data-provider="anthropic" data-target="ai-anthropic-model"></span>
+      </label>
+      <label>Effort
+        <select name="ai.anthropic_effort">
+          <option value="" {{ 'selected' if not values['ai.anthropic_effort'] }}>Do not send</option>
+          {% for level in efforts %}
+          <option value="{{ level }}" {{ 'selected' if values['ai.anthropic_effort'] == level }}>{{ level }}</option>
+          {% endfor %}
+        </select>
+        <span class="faint small">How hard the model works at each question.
+          high is a sound default for security review; max for when an answer
+          being right matters more than what it costs.  Leave it unsent for an
+          older model that does not take it.</span>
+      </label>
+      <label>API address
+        <input type="url" name="ai.anthropic_base_url" value="{{ values['ai.anthropic_base_url'] }}"
+               placeholder="https://api.anthropic.com">
+        <span class="faint small">Only change this for a gateway in front of
+          Claude.  Pointed at Anthropic itself, a question the model declines is
+          passed to a fallback model automatically rather than coming back
+          empty, which matters here because security analysis is exactly what
+          the safety checks look at hardest.</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="card" data-ai="openai" hidden>
+    <div class="card-head">OpenAI</div>
+    <div class="card-body">
+      <label>API key
+        <input type="password" name="ai.openai_key" autocomplete="new-password"
+               placeholder="{{ 'stored, leave empty to keep it' if values['ai.openai_key'] else 'sk-...' }}">
+        <span class="faint small">Stored encrypted and never shown back.</span>
+      </label>
+      <label>Model
+        <input type="text" name="ai.openai_model" id="ai-openai-model"
+               value="{{ values['ai.openai_model'] }}" placeholder="the model name">
+        <span class="ai-model-pick" data-provider="openai" data-target="ai-openai-model"></span>
+      </label>
+      <label>Chat completions address
+        <input type="url" name="ai.openai_url" value="{{ values['ai.openai_url'] }}"
+               placeholder="https://api.openai.com/v1/chat/completions">
+        <span class="faint small">Anything that speaks the same API works here:
+          Azure OpenAI, a self hosted model behind an OpenAI compatible server,
+          or a gateway.</span>
+      </label>
+      <label>Temperature
+        <input type="text" name="ai.openai_temperature" inputmode="decimal"
+               value="{{ values['ai.openai_temperature'] }}" placeholder="leave empty">
+        <span class="faint small">Empty sends none, which is what reasoning
+          models want; they refuse the request otherwise.</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="card" data-ai="custom" hidden>
+    <div class="card-head">Custom</div>
+    <div class="card-body">
+      <p class="faint small">For an organization's own inference service.  Paste
+        the headers and body the way curl would send them.  The word
+        <span class="mono">SAMPLE</span> inside the body is replaced with the
+        question, escaped to sit safely inside a JSON string, and the answer is
+        read back out of the reply.</p>
+      <label>Address
+        <input type="url" name="ai.custom_url" value="{{ values['ai.custom_url'] }}"
+               placeholder="https://ai.example.com/v1/infer">
+      </label>
+      <label>Headers and body
+        <textarea name="ai.custom_template" rows="10" class="mono" spellcheck="false"
+                  placeholder="{{ custom_example }}">{{ values['ai.custom_template'] }}</textarea>
+        <span class="faint small">One <span class="mono">-H 'Name: value'</span>
+          per header and one <span class="mono">--data-raw '...'</span> body.  Put
+          the secret in the fields below rather than here: this box is shown back
+          on the page, and the secret is not.</span>
+      </label>
+      <button class="btn" type="button" id="ai-copy-example">Use the example</button>
+      <label>Secret header name
+        <input type="text" name="ai.custom_secret_header_name"
+               value="{{ values['ai.custom_secret_header_name'] }}" placeholder="x-app-secret">
+      </label>
+      <label>Secret header value
+        <input type="password" name="ai.custom_secret_header_value" autocomplete="new-password"
+               placeholder="{{ 'stored, leave empty to keep it' if values['ai.custom_secret_header_value'] else 'the secret' }}">
+        <span class="faint small">Stored encrypted, added to the request when it
+          goes, and never shown back.  A header of the same name in the template
+          is replaced by this one.</span>
+      </label>
+      <label>Where the answer is
+        <input type="text" name="ai.custom_response_path"
+               value="{{ values['ai.custom_response_path'] }}" placeholder="output_text">
+        <span class="faint small">A dotted path into the reply, such as
+          <span class="mono">output_text</span> or
+          <span class="mono">choices.0.message.content</span>.  Empty tries
+          those and the other common shapes in turn.</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">What goes out</div>
+    <div class="card-body">
+      <p class="faint small">Every question carries the finding, the reasons
+        behind its grade, what is recorded about the repository, and other
+        findings nearby with the reasons people gave when they decided about
+        them.  Never the people who can reach the repository, and never the
+        author of the commit.</p>
+      <label class="check">
+        <input type="checkbox" name="ai.send_code" value="1"
+               {{ 'checked' if values['ai.send_code'] }}>
+        Send the code that bears on the finding
+      </label>
+      <p class="faint small">The lines around a code or configuration finding,
+        and for a vulnerable package the places in the repository that use it.
+        Fetched from the branch at the moment of asking, not stored.  This is
+        what makes the answer worth having, and it is also your source code
+        leaving this installation for the provider above, so it is worth
+        checking that is somewhere your organization allows it to go.  Never
+        sent for a credential, whatever this says, because the lines around a
+        credential contain the credential.</p>
+      <label>Lines either side
+        <input type="number" name="ai.context_lines" min="5" max="200"
+               value="{{ values['ai.context_lines'] }}">
+      </label>
+      <label class="check">
+        <input type="checkbox" name="ai.fetch_advisories" value="1"
+               {{ 'checked' if values['ai.fetch_advisories'] }}>
+        Read the advisory from osv.dev for a vulnerable package
+      </label>
+      <p class="faint small">Only the advisory id goes to osv.dev, and it is a
+        public identifier.  The advisory's own description is usually what says
+        which part of a package is broken.</p>
+      <label>Longest answer, in tokens
+        <input type="number" name="ai.max_tokens" min="1000" max="128000"
+               value="{{ values['ai.max_tokens'] }}">
+      </label>
+      <label>Time limit, in seconds
+        <input type="number" name="ai.timeout" min="30" max="1800"
+               value="{{ values['ai.timeout'] }}">
+      </label>
+    </div>
+  </div>
+
+  {% if can_write %}
+  <div class="page-actions">
+    <button class="btn primary" type="submit">Save</button>
+  </div>
+  {% endif %}
+</form>
+
+{% if can_write %}
+<div class="card">
+  <div class="card-head">Prove it works</div>
+  <div class="card-body">
+    <p class="faint small">Asks the saved provider one short question, with
+      nothing from any repository in it.  Save first: this uses what is
+      stored, not what is typed above.</p>
+    <form method="post" action="{{ base }}/ai/test">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit">Send a test question</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+<script src="{{ base }}/static/ai.js?v={{ asset_v('ai.js') }}"></script>
+{% endblock %}

@@ -17,7 +17,7 @@ from app.core import live, rbac
 from app.core.audit import record
 from app.core.db import session_scope
 from app.core.models import (
-    Finding, FindingState, RuleMute as m_RuleMute,
+    Finding, FindingAnalysis, FindingState, RuleMute as m_RuleMute,
     ApiToken as m_ApiToken, Severity,
     SeverityRule as m_SeverityRule, User, UserRole, Waiver, WaiverStatus,
     utcnow,
@@ -441,6 +441,9 @@ async def delete_many(request: Request, user: User = Depends(current_user)):
             # Waivers go with them.  The column is ON DELETE CASCADE, but not
             # every engine enforces that by default, so say it out loud.
             db.query(Waiver).filter(Waiver.finding_id.in_(chunk)).delete(
+                synchronize_session=False)
+            db.query(FindingAnalysis).filter(
+                FindingAnalysis.finding_id.in_(chunk)).delete(
                 synchronize_session=False)
             removed += db.query(Finding).filter(Finding.id.in_(chunk)).delete(
                 synchronize_session=False)
@@ -3901,6 +3904,166 @@ async def test_notifications(request: Request,
             f"Could not send to {', '.join(failed)}. The log says why."))
     return redirect("/notifications?msg=" + quote(
         f"Sent to {', '.join(worked)}."))
+
+
+@router.post("/ai/save")
+async def save_ai(request: Request, user: User = Depends(current_user)):
+    """Which model reads a finding, and how to reach it."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+
+    from urllib.parse import quote
+
+    from app.core import ai, settings_store as store
+
+    form = await request.form()
+
+    try:
+        values = ai.read_form(
+            form,
+            text=lambda v, what, limit: clean_text(v, what, limit=limit,
+                                                   required=False),
+            number=lambda v, what, low, high: clean_int(v, what, low=low,
+                                                        high=high),
+            url=lambda v, what: clean_remote_url(v, what, required=False),
+            checked=lambda name: _checked(form, name))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    with session_scope() as db:
+        moved = []
+
+        def put(key, value):
+            if store.set_value(db, key, value, user.username):
+                moved.append(key)
+
+        for key, value in values.items():
+            put(key, value)
+
+        # A secret left empty keeps the one already stored.
+        for key in ai.SECRET_KEYS:
+            typed = str(form.get(key, "")).strip()
+            if typed:
+                if len(typed) > 4000 or any(c in typed for c in "\r\n"):
+                    raise HTTPException(status_code=400,
+                                        detail="That key does not look like a key.")
+                put(key, typed)
+
+        # Names of what changed, never values: the template can carry
+        # identifiers, and the keys are keys.
+        record(db, "ai.changed", actor=user.username,
+               detail=(f"{len(moved)} setting(s) changed: "
+                       + ", ".join(sorted(moved)))[:2000] if moved
+                      else "saved with nothing changed",
+               source_ip=client_ip(request))
+
+        cfg = ai.config(db)
+        problem = ai.missing(cfg) if ai.enabled(cfg) else ""
+
+    if problem:
+        return redirect("/ai?kind=error&msg=" + quote("Saved, but " + problem[0].lower()
+                                                      + problem[1:]))
+    return redirect("/ai?msg=" + quote("Saved."))
+
+
+@router.post("/ai/test")
+async def test_ai(request: Request, user: User = Depends(current_user)):
+    """One small question, before a real one costs anything."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+
+    from urllib.parse import quote
+
+    from starlette.concurrency import run_in_threadpool
+
+    from app.core import ai
+
+    with session_scope() as db:
+        cfg = ai.config(db)
+
+    result = await run_in_threadpool(ai.test, cfg)
+
+    with session_scope() as db:
+        record(db, "ai.tested", actor=user.username,
+               detail=(f"{result['provider']} {result.get('model') or ''}: "
+                       + ("ok" if result["ok"] else result["error"]))[:400],
+               outcome="ok" if result["ok"] else "error",
+               source_ip=client_ip(request))
+
+    if not result["ok"]:
+        return redirect("/ai?kind=error&msg=" + quote(result["error"]))
+    return redirect("/ai?msg=" + quote(
+        f"{result.get('model') or result['provider']} answered in "
+        f"{result['duration_ms'] / 1000:.1f}s: {result['text'][:80]}"))
+
+
+@router.post("/ai/models")
+async def ai_models(request: Request, user: User = Depends(current_user)):
+    """The models a provider offers the saved key, for the picker."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+
+    from fastapi.responses import JSONResponse
+    from starlette.concurrency import run_in_threadpool
+
+    from app.core import ai
+
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    provider = str((body or {}).get("provider", "")).strip().lower()
+    if provider not in ai.PROVIDERS[1:]:
+        return JSONResponse({"ok": False, "models": [],
+                             "error": "Pick a provider first."})
+
+    with session_scope() as db:
+        cfg = ai.config(db)
+    result = await run_in_threadpool(ai.list_models, cfg, provider)
+    return JSONResponse(result)
+
+
+@router.post("/findings/{finding_id}/validate")
+async def validate_finding(finding_id: int, request: Request,
+                          user: User = Depends(current_user)):
+    """Ask the configured model about one finding, and keep what it says.
+
+    Nothing about the finding changes.  The answer sits on the page with the
+    model's name on it until somebody acts on it, the same as the scanner's
+    own recommendation does.
+    """
+    await check_csrf(request)
+    rbac.require(user, "finding.validate")
+
+    from urllib.parse import quote
+
+    from starlette.concurrency import run_in_threadpool
+
+    from app.core import analysis
+
+    with session_scope() as db:
+        # Scope is applied in the query, so a finding outside it is simply not
+        # there rather than refused.
+        row = (rbac.visible_findings(db, user)
+               .filter(Finding.id == finding_id).one_or_none())
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such finding.")
+        vuln_id = row.vuln_id
+
+    # Off the event loop: a clone and a model's answer can take minutes, and
+    # every other request would wait behind it.
+    result = await run_in_threadpool(analysis.run, finding_id, user)
+
+    with session_scope() as db:
+        record(db, "finding.validated", actor=user.username,
+               target=vuln_id, detail=result.get("detail", "")[:400],
+               outcome="ok" if result.get("ok") else "error",
+               source_ip=client_ip(request))
+
+    kind = "ok" if result.get("ok") else "error"
+    anchor = "#validation" if result.get("ok") else ""
+    return redirect(f"/findings/{finding_id}?msg={quote(result.get('detail', ''))}"
+                    f"&kind={kind}{anchor}")
 
 
 @router.post("/triage/add")

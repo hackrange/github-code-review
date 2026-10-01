@@ -14,6 +14,7 @@ answer with a partial one.  So the answer is shown and then discarded.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -238,6 +239,46 @@ def _semgrep_hits(root: Path, rel_path: str, configs: list) -> tuple:
 # this the recheck still answers, it just answers about the branch it was asked
 # about and does not offer to close anything.
 MAX_BRANCHES = 20
+
+
+@contextlib.contextmanager
+def branch_tip(connection_name: str, repository: str, branch: str):
+    """A read only copy of one branch tip, gone again on the way out.
+
+    -> yields (path, "") on success, (None, why) when it could not be fetched.
+
+    For anything else that needs to read the code behind a finding, which is
+    the same fetch a recheck does and should not be a second copy of how the
+    credential reaches git.  Never raises for a fetch that fails: the caller is
+    usually going to carry on without the code and say so.
+    """
+    from app.core import connections as connection_store, scanner_config
+
+    with session_scope() as db:
+        connection = (connection_store.by_name(db, connection_name)
+                      if connection_name else None)
+        provider = (getattr(connection, "provider", None) or "github")
+        web = (connection.web_url if connection is not None else None) \
+            or "https://github.com"
+        env = scanner_config.scanner_env(db, {}, connection=connection)
+
+    token = env.get("GHSCAN_TOKEN", "")
+    if not token:
+        yield None, "no credential for that account"
+        return
+
+    with tempfile.TemporaryDirectory(prefix="gcr-read-") as tmp:
+        work = Path(tmp)
+        token_file = work / "token"
+        token_file.write_text(token)
+        token_file.chmod(0o600)
+        dest = work / "repo"
+        ok, why = _shallow_clone("%s/%s.git" % (web.rstrip("/"), repository),
+                                 branch or "HEAD", dest,
+                                 _credential_args(token_file, provider))
+        # The token has done its job.  Nothing that reads the copy needs it.
+        token_file.unlink(missing_ok=True)
+        yield (dest, "") if ok else (None, why)
 
 
 def recheck(finding_id: int, actor: str = "") -> dict:

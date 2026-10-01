@@ -4,6 +4,27 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-10-01
+
+**Validate a finding with AI.**  A new AI analysis page connects one language
+model: a hosted provider's own API, anything that speaks the OpenAI chat API,
+or your own inference service described as curl headers and a body with
+SAMPLE where the question goes.  [ai-validation.md](ai-validation.md) lists
+the providers and what each needs.  Once one is set up, a finding carries one button, Validate with AI.  The
+model reads the finding, the reasons behind its grade, what the repository
+holds, the decisions already made on findings nearby with their reasons, the
+advisory for a vulnerable package, and the code that bears on it, and answers
+with a rating, how it would be exploited, what to check, the fix and the
+compensating controls.  The answer is kept on the finding with the model's
+name on it and changes nothing: the grade still moves only when somebody
+regrades it.
+
+Off until an administrator turns it on, and nothing runs by itself: every
+question is somebody pressing the button, because every question costs money.
+The code around a finding is sent only while sending code is ticked, never for
+a credential, and is not stored.  Administrators and developers can press it;
+readers see the answers.
+
 ## 2026-09-20
 
 **Gitea and Forgejo can be scanned.**  Both are on the Connections page beside

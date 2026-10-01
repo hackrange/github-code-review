@@ -1643,6 +1643,13 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                         "visibility": about.get("visibility"),
                         "people_total": about.get("people_total")} if about else {}
 
+        # What a language model said about this finding, when somebody asked,
+        # and whether asking again is on offer here.
+        from app.core import ai, analysis
+
+        ai_cfg = ai.config(db)
+        analyses = analysis.for_finding(db, row.id)
+
         context = _shared(db, user)
         context.update(active_page="findings", f=row, waiver=waiver,
                        host_name=host_name,
@@ -1668,6 +1675,16 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        assessment=risk.assess(row, risk_context),
                        recommendation=recommendation.for_finding(row,
                                                                  risk_context),
+                       analyses=analyses,
+                       # Offered only when a provider is on and complete.
+                       # Half set up shows nothing here; the AI page is where
+                       # that gets said.
+                       can_validate=(rbac.can(user, "finding.validate")
+                                     and ai.enabled(ai_cfg)
+                                     and not ai.missing(ai_cfg)),
+                       ai_model=ai.describe_model(ai_cfg),
+                       ai_sends_code=(bool(ai_cfg.get("ai.send_code"))
+                                      and row.kind != FindingKind.CREDENTIAL),
                        flash=clean_text(msg, "message", limit=300,
                                         required=False),
                        flash_kind=notice_class(kind),
@@ -3370,6 +3387,37 @@ def notifications_page(request: Request, msg: str = "", kind: str = "",
             message=clean_text(msg, "message", limit=300, required=False),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "notifications.html", **context)
+
+
+@router.get("/ai")
+def ai_page(request: Request, msg: str = "", kind: str = "",
+            user: User = Depends(current_user)):
+    """Which language model reads a finding when somebody asks it to."""
+    rbac.require(user, "settings.read")
+    from app.core import ai, settings_store as store
+
+    keys = [name for name in store.DEFAULTS if name.startswith("ai.")]
+    with session_scope() as db:
+        values = {}
+        for key in keys:
+            # The same rule as everywhere else: a stored secret is never sent
+            # back to the browser, only whether there is one.
+            if store.is_secret(key):
+                values[key] = bool(store.get(db, key))
+            else:
+                values[key] = store.get(db, key)
+        cfg = ai.config(db)
+        context = _shared(db, user)
+        context.update(
+            active_page="ai",
+            values=values,
+            efforts=ai.EFFORTS,
+            custom_example=ai.CUSTOM_EXAMPLE,
+            problem=ai.missing(cfg) if ai.enabled(cfg) else "",
+            can_write=rbac.can(user, "settings.write"),
+            message=clean_text(msg, "message", limit=300, required=False),
+            message_kind="error" if kind == "error" else "ok")
+        return page(request, "ai.html", **context)
 
 
 @router.get("/editors")

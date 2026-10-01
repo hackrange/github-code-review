@@ -916,6 +916,53 @@ class Waiver(Base):
         return self.status == WaiverStatus.REQUESTED
 
 
+class FindingAnalysis(Base):
+    """What a language model said about one finding, when somebody asked.
+
+    Kept, rather than shown once and thrown away, because the question it
+    answers is the one an exception is argued from, and an argument somebody
+    cannot go back and read is not much of a record.  Every one is kept: the
+    newest leads, and an older one stays readable beside it, because a model
+    that changed its mind is worth knowing about.
+
+    It never moves anything.  The grade, the state and the waiver are all
+    decisions with a person's name on them, and this has a model's.
+
+    The code that was sent is not stored.  This table would otherwise be the
+    only place in the database holding source, which is a change in what the
+    database is that nobody asked for.  What is kept is a list of where the
+    evidence came from, so somebody can see what went out without it being
+    copied in.
+    """
+
+    __tablename__ = "finding_analyses"
+
+    id = Column(Integer, primary_key=True)
+    finding_id = Column(Integer, ForeignKey("findings.id", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_by = Column(String(120), nullable=False, default="")
+
+    provider = Column(String(32), nullable=False, default="")
+    # Whichever model actually answered, which a fallback can make different
+    # from the one asked for.
+    model = Column(String(120), nullable=False, default="")
+
+    # Read off the answer's first lines, so the page can badge it.  Empty when
+    # the model did not say one in the shape it was asked for.
+    rating = Column(String(32), default="")
+    confidence = Column(String(16), default="")
+    content = Column(LONG_JSON, nullable=False, default="")
+
+    # JSON list of sentences, one per piece of evidence that went out.
+    sources = Column(Text, default="")
+    code_included = Column(Boolean, default=False)
+
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    duration_ms = Column(Integer, default=0)
+
+
 class TrendPoint(Base):
     """What one branch of one repository looked like on one day.
 

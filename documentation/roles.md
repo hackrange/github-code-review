@@ -13,6 +13,8 @@ Three of them, and the gaps between them are on purpose.
 | Withdraw a certification | yes | no | no |
 | Mark a branch not applicable | yes | no | no |
 | Write a custom severity rule | yes | no | no |
+| Validate a finding with AI | yes | yes | no |
+| Configure AI validation | yes | no | no |
 | See an exclusion | yes | no | no |
 | Write an exclusion | yes | no | no |
 | Start a scan | yes | yes | no |
