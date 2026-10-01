@@ -42,7 +42,7 @@ browser and no enrolled device, so it cannot do FastPass. What it can do is use
 a credential that FastPass already vouched for, or one that bypasses the SSO
 check entirely.
 
-### Using a PAT
+### Using a classic PAT
 
 This is the quickest way to get going.
 
@@ -74,6 +74,38 @@ with the unauthorized org's repositories quietly missing, plus an
 `X-GitHub-SSO: partial-results` header. ghscan watches for that header, warns
 loudly, and sets `scan.sso_results_truncated` in the report. If that flag is
 true, the report is incomplete.
+
+### Using a fine-grained PAT
+
+A fine-grained token asks for named permissions rather than broad scopes. It is
+scoped to one organization, so add one connection per org. Set the resource
+owner to the organization, not your own account; if the form shows no
+Organization permissions section, the resource owner is wrong.
+
+1. GitHub, Settings, Developer settings, Personal access tokens, Fine-grained
+   tokens. Resource owner: the organization. Repository access: all
+   repositories.
+
+2. Repository permissions, all read-only:
+
+   | Permission | What it gets you | Needed for |
+   |---|---|---|
+   | Contents | clone and read the git history | required, the scan itself |
+   | Metadata | basic repository details | required, GitHub selects it for you |
+   | Dependabot alerts | vulnerable dependency findings | that finding type |
+   | Secret scanning alerts | GitHub's own secret alerts | that finding type |
+   | Code scanning alerts | GitHub's code scanning alerts | that finding type |
+   | Pull requests | pull request history | the pull history feature |
+   | Administration | teams and deploy keys | the access inventory |
+
+3. Organization permissions: Members (read). This is the one organization
+   level permission the application needs, and it is what the access inventory
+   (who can reach what) is built from.
+
+Contents and Metadata on their own are enough to scan. Each of the others
+lights up one feature; leave it off and that feature is skipped rather than
+failing the scan. Paste the token into a connection whose Organization matches
+the token's resource owner.
 
 ### Using a GitHub App instead
 
