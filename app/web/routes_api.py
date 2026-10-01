@@ -1523,6 +1523,13 @@ async def scan_connection(connection_id: int, request: Request,
     """Scan one account now."""
     await check_csrf(request)
     rbac.require(user, "scan.run")
+    # A whole account, with its credential, is the estate rather than one
+    # person's repositories.  scan.run alone let a developer start a full scan
+    # of any team's account by id and read the run back on their own scan
+    # history.  Developers scan what they can see from the repository pages.
+    # Not found rather than refused, so the ids that exist are not answered.
+    if not rbac.can(user, "scan.read.any"):
+        raise HTTPException(status_code=404, detail="No such connection.")
 
     from app.core import connections as connection_store, scanner
 
@@ -2700,11 +2707,14 @@ async def add_user(request: Request, user: User = Depends(current_user)):
                detail=f"{role.value}, {source.value}", source_ip=client_ip(request))
 
     if password:
-        message = (f"Made {username}. The starting password is {password} . "
-                   "It is shown once, so pass it on now.")
-    else:
-        message = (f"Made {username}. They sign in through the provider, so "
-                   "there is no password to hand over.")
+        # The password goes by way of oneshot, never the URL, which every log
+        # on the way would keep.
+        from app.web import oneshot
+        key = oneshot.put(user.id, f"Made {username}. The starting password is "
+                                   f"{password} . It is shown once, so pass it on now.")
+        return redirect(f"/users?once={quote(key)}&kind=ok")
+    message = (f"Made {username}. They sign in through the provider, so "
+               "there is no password to hand over.")
     return redirect(f"/users?msg={quote(message)}&kind=ok")
 
 
@@ -2863,9 +2873,12 @@ async def create_token(request: Request, user: User = Depends(current_user)):
         record(db, "api_token.created", actor=user.username, target=row.name,
                detail=f"{row.scopes}, {days} day(s)", source_ip=client_ip(request))
 
-    # The only time it is ever readable.  It goes in the address once and the
-    # page tells somebody to copy it now.
-    return redirect(f"/tokens?shown={quote(raw)}&msg=" + quote(
+    # The only time it is ever readable.  It used to go in the address, which
+    # left a live bearer token in every access log; now only a one time key
+    # does, and the page takes the token out of memory once.
+    from app.web import oneshot
+    key = oneshot.put(user.id, raw)
+    return redirect(f"/tokens?shown={quote(key)}&msg=" + quote(
         "Copy it now.  It cannot be shown again."))
 
 
@@ -4243,6 +4256,18 @@ async def mute_from_noise(request: Request, user: User = Depends(current_user)):
         # the Settings page uses: showing more findings is never the dangerous
         # direction, so nobody waits for permission to undo one.
         if (form.get("action", "") or "") == "unmute":
+            # Undoing a mute is estate wide: it revokes a decision two
+            # administrators made.  Somebody who cannot approve mutes may only
+            # withdraw their own request that nobody has decided yet.
+            live_mute = rule_mutes.current(db, rule)
+            own_request = (live_mute is not None
+                           and live_mute.status == rule_mutes.REQUESTED
+                           and (live_mute.requested_by or "").lower()
+                           == user.username.lower())
+            if not rbac.can(user, "rule.mute.approve") and not own_request:
+                message = ("Only an administrator can put a rule that is set "
+                           "aside back in the work list.")
+                return redirect(f"{back}&msg={quote(message)}&kind=error")
             if rule_mutes.revoke(db, rule, user.username):
                 record(db, "rule.mute.revoked", actor=user.username,
                        target=rule, source_ip=client_ip(request))
@@ -4323,6 +4348,11 @@ async def recheck_finding(finding_id: int, request: Request,
     must not overwrite a complete one.
     """
     await check_csrf(request)
+    # A recheck fetches the repository with the account's credential and can
+    # close or reopen the finding, which is a scan in miniature.  It had no
+    # permission check at all, so a reader, whose role is read only, could
+    # change finding state and hold both recheck slots.
+    rbac.require(user, "scan.run")
 
     from urllib.parse import quote
 
@@ -4472,9 +4502,11 @@ async def reset_user_password(user_id: int, request: Request,
                target=row.username, source_ip=client_ip(request))
         username = row.username
 
-    message = (f"New password for {username}: {password} . It is shown once, "
-               "and they have to change it at the next sign in.")
-    return redirect(f"/users?msg={quote(message)}&kind=ok")
+    from app.web import oneshot
+    key = oneshot.put(user.id, f"New password for {username}: {password} . It is "
+                               "shown once, and they have to change it at the next "
+                               "sign in.")
+    return redirect(f"/users?once={quote(key)}&kind=ok")
 
 
 @router.post("/users/{user_id}/totp")

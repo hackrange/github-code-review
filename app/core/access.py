@@ -156,32 +156,54 @@ def owner_context(session) -> dict:
     return out
 
 
-def organizations(session) -> list:
-    """One row per organization, worst first."""
+def _within(query, column, repositories):
+    """Narrow a query to the repositories somebody may see.
+
+    None means everything.  An empty set means nothing, and is said as a
+    condition that matches no row rather than an empty IN, which some engines
+    refuse.
+    """
+    if repositories is None:
+        return query
+    if not repositories:
+        return query.filter(column.is_(None))
+    return query.filter(column.in_(list(repositories)))
+
+
+def organizations(session, repositories=None) -> list:
+    """One row per organization, worst first.
+
+    `repositories` is rbac.visible_repository_names: None for the whole
+    estate, otherwise only those repositories are counted, and an organization
+    the person has none of in does not appear at all.
+    """
     from sqlalchemy import func
 
-    rows = (session.query(
+    def scoped(query):
+        return _within(query, RepoAccess.repository, repositories)
+
+    rows = (scoped(session.query(
                 RepoAccess.organization,
                 func.count(func.distinct(RepoAccess.repository)),
-                func.count(func.distinct(RepoAccess.login)))
+                func.count(func.distinct(RepoAccess.login))))
             .group_by(RepoAccess.organization).all())
 
     out = []
     for org, repo_count, people in rows:
-        admins = (session.query(func.count(func.distinct(RepoAccess.login)))
+        admins = (scoped(session.query(func.count(func.distinct(RepoAccess.login))))
                   .filter(RepoAccess.organization == org,
                           RepoAccess.permission == "admin").scalar() or 0)
-        outside = (session.query(func.count(func.distinct(RepoAccess.login)))
+        outside = (scoped(session.query(func.count(func.distinct(RepoAccess.login))))
                    .filter(RepoAccess.organization == org,
                            RepoAccess.outside_collaborator.is_(True)).scalar() or 0)
-        writers = (session.query(func.count(func.distinct(RepoAccess.login)))
+        writers = (scoped(session.query(func.count(func.distinct(RepoAccess.login))))
                    .filter(RepoAccess.organization == org,
                            RepoAccess.permission.in_(["write", "maintain", "admin"]))
                    .scalar() or 0)
         out.append({"organization": org, "repositories": repo_count,
                     "people": people, "admins": admins, "writers": writers,
                     "outside": outside,
-                    "unprotected": unprotected_repos(session, org)})
+                    "unprotected": unprotected_repos(session, org, repositories)})
 
     context = owner_context(session)
     for row in out:
@@ -189,7 +211,7 @@ def organizations(session) -> list:
     return sorted(out, key=lambda row: (-row["admins"], -row["people"]))
 
 
-def unprotected_repos(session, organization: str = "") -> int:
+def unprotected_repos(session, organization: str = "", repositories=None) -> int:
     """Repositories somebody can push to whose default branch is not protected.
 
     On its own an unprotected branch is a policy question.  With a list of
@@ -198,8 +220,9 @@ def unprotected_repos(session, organization: str = "") -> int:
     """
     from app.core.models import Repository
 
-    query = session.query(Repository).filter(
-        Repository.default_branch_protected.is_(False))
+    query = _within(session.query(Repository).filter(
+        Repository.default_branch_protected.is_(False)),
+        Repository.full_name, repositories)
     if organization:
         query = query.filter(Repository.organization == organization)
     names = {r.full_name for r in query.all()}
@@ -212,13 +235,13 @@ def unprotected_repos(session, organization: str = "") -> int:
     return len(reachable)
 
 
-def people(session, organization: str = "") -> list:
+def people(session, organization: str = "", repositories=None) -> list:
     """Everybody with any access, worst first.  Empty organization means all.
 
     One row per person, because the question is about the person: how much of
     this organization does their account reach, and what can it do there.
     """
-    query = session.query(RepoAccess)
+    query = _within(session.query(RepoAccess), RepoAccess.repository, repositories)
     if organization:
         query = query.filter(RepoAccess.organization == organization)
     rows = query.all()
@@ -257,9 +280,9 @@ def people(session, organization: str = "") -> list:
                                       -e["repo_count"], e["login"].lower()))
 
 
-def rows_for_export(session, organization: str = "") -> list:
+def rows_for_export(session, organization: str = "", repositories=None) -> list:
     """One row per person per repository, which is what a spreadsheet wants."""
-    query = session.query(RepoAccess)
+    query = _within(session.query(RepoAccess), RepoAccess.repository, repositories)
     if organization:
         query = query.filter(RepoAccess.organization == organization)
     # Resolved once per repository rather than once per row.  A repository
@@ -269,7 +292,7 @@ def rows_for_export(session, organization: str = "") -> list:
     from app.core import tagging
     from app.core.models import Repository
 
-    repos = session.query(Repository)
+    repos = _within(session.query(Repository), Repository.full_name, repositories)
     if organization:
         repos = repos.filter(Repository.organization == organization)
     tags = {}

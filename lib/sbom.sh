@@ -13,7 +13,15 @@ sbom_syft() {
   [[ -n "$out_spdx" ]] && out_spdx=$(readlink -f "$out_spdx" 2>/dev/null || printf '%s' "$out_spdx")
 
   local rev; rev=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  local args=(scan "dir:." --quiet --source-name "$full_name" --source-version "$rev")
+  # Our configuration, named outright.  syft otherwise looks for one in its
+  # working directory, which is the repository being scanned.
+  local syft_cfg="${GHSCAN_HOME:-.}/config/syft.yaml"
+  if [[ ! -r "$syft_cfg" ]]; then
+    log_warn "$full_name: $syft_cfg is missing, so there is no SBOM rather than one built with the repository's own syft settings"
+    return 1
+  fi
+  local args=(scan "dir:." --quiet --config "$syft_cfg"
+              --source-name "$full_name" --source-version "$rev")
 
   local cat; cat=$(cfg '.scan.sbom.catalogers' '')
   [[ -n "$cat" ]] && args+=(--select-catalogers "$cat")

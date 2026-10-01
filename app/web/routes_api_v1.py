@@ -172,11 +172,14 @@ def list_reports(caller=Depends(caller_for("reports"))):
     from app.core import rbac
     from app.core import reports as reports_mod
 
-    if not rbac.sees_everything(caller.user):
+    # report.files, the permission the Reports page itself asks for, rather
+    # than sees_everything, which readers pass too: the roles document gives
+    # these files to administrators only.
+    if not rbac.can(caller.user, "report.files"):
         raise HTTPException(status_code=403,
                             detail="These files cover every organization on "
                                    "this install, so they need an account "
-                                   "that sees all of it.")
+                                   "allowed the report files.")
     with session_scope() as db:
         directory = reports_mod.output_dir(db)
 
@@ -199,11 +202,14 @@ def download_one_report(name: str, caller=Depends(caller_for("reports"))):
     from app.core import rbac
     from app.core import reports as reports_mod
 
-    if not rbac.sees_everything(caller.user):
+    # report.files, the permission the Reports page itself asks for, rather
+    # than sees_everything, which readers pass too: the roles document gives
+    # these files to administrators only.
+    if not rbac.can(caller.user, "report.files"):
         raise HTTPException(status_code=403,
                             detail="These files cover every organization on "
                                    "this install, so they need an account "
-                                   "that sees all of it.")
+                                   "allowed the report files.")
     # Matched against the list rather than cleaned up.  A name that is not on
     # it is refused whatever it looks like, so nothing here has to reason about
     # dots and slashes.
@@ -246,7 +252,7 @@ def rules(request: Request,
     answer changes about once a month.
     """
     from app.core import exclusions as exclusions_store
-    from app.core import rule_mutes, triage_rules
+    from app.core import rbac, rule_mutes, triage_rules
 
     with session_scope() as db:
         effective = triage_rules.effective(db)
@@ -262,6 +268,14 @@ def rules(request: Request,
             "exclusions": exclusions_store.as_dicts(
                 db, rules=exclusions_store.visible(db, caller.user)),
         }
+        # A client needs what an exclusion matches, not why it exists.  The
+        # reason, the ticket and who reviewed it are the decision itself,
+        # which the Exclusions page keeps to administrators; through here
+        # every role could read them.
+        if not rbac.can(caller.user, "exclusion.read"):
+            for row in body["exclusions"]:
+                for private in ("reason", "ticket", "reviewed_by", "reviewed_date"):
+                    row.pop(private, None)
 
     payload = json.dumps(body, sort_keys=True, default=str)
     etag = '"' + hashlib.sha256(payload.encode()).hexdigest()[:32] + '"'

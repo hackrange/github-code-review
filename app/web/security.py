@@ -42,29 +42,39 @@ def client_ip(request: Request) -> str:
     limiter.
     """
     peer = request.client.host if request.client else ""
-    if not live.trusted_proxies():
+    proxies = live.trusted_proxies()
+    if not proxies:
         return peer
 
-    try:
-        peer_addr = ipaddress.ip_address(peer)
-    except ValueError:
-        return peer
-
-    trusted = False
-    for entry in live.trusted_proxies():
+    networks = []
+    for entry in proxies:
         try:
-            if peer_addr in ipaddress.ip_network(entry, strict=False):
-                trusted = True
-                break
+            networks.append(ipaddress.ip_network(entry, strict=False))
         except ValueError:
             continue
-    if not trusted:
+
+    def trusted(address: str) -> bool:
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+        return any(parsed in network for network in networks)
+
+    if not trusted(peer):
         return peer
 
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return peer
+    # Read from the right.  Each proxy appends the address it heard from, so
+    # the entries on the right were written by machines we trust and the ones
+    # on the left by whoever sent the request, which is anybody.  The first
+    # entry that is not one of our proxies is the caller.  Taking the leftmost,
+    # as this used to, believed exactly the part a caller gets to write: nginx
+    # with $proxy_add_x_forwarded_for keeps whatever arrived and adds to it.
+    hops = [hop.strip() for hop in
+            request.headers.get("x-forwarded-for", "").split(",") if hop.strip()]
+    for hop in reversed(hops):
+        if not trusted(hop):
+            return hop
+    return hops[0] if hops else peer
 
 
 # ---------------------------------------------------------------------------
@@ -185,8 +195,26 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.window = window
         self._hits = defaultdict(deque)
 
+    # How many distinct callers are remembered before the stale ones are swept.
+    # Every address that ever made a request used to stay in the table for the
+    # life of the process, so a stream of distinct addresses grew it without
+    # bound.
+    _SWEEP_AT = 10_000
+
+    def _sweep(self, now: float) -> None:
+        cutoff = now - self.window
+        for key in [k for k, bucket in self._hits.items()
+                    if not bucket or bucket[-1] < cutoff]:
+            del self._hits[key]
+
     def _allowed(self, key: str, limit: int) -> bool:
         now = time.monotonic()
+        if (len(self._hits) >= self._SWEEP_AT and key not in self._hits
+                and now - getattr(self, "_swept_at", 0.0) > 5):
+            # At most every few seconds, so a full table of live callers does
+            # not turn every new one into a walk over all of them.
+            self._swept_at = now
+            self._sweep(now)
         bucket = self._hits[key]
         while bucket and bucket[0] < now - self.window:
             bucket.popleft()

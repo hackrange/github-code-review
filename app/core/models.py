@@ -134,6 +134,14 @@ class User(Base):
     totp_secret = Column(String(255), default="")
     totp_confirmed = Column(Boolean, default=False, nullable=False)
     recovery_hashes = Column(Text, default="")
+    # Wrong codes at the second step, counted apart from wrong passwords.
+    # A right password clears that counter, so sharing it let somebody with
+    # the password guess codes forever by signing in again every few tries.
+    totp_failures = Column(Integer, default=0)
+    # The last time step a code was accepted for.  A code is good for about a
+    # minute and a half; without this the same one could be used again inside
+    # that window by anybody who saw it.
+    totp_last_step = Column(BigInteger, default=0)
 
     must_change_password = Column(Boolean, default=False, nullable=False)
     disabled = Column(Boolean, default=False, nullable=False)

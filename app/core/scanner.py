@@ -230,6 +230,16 @@ def _scanner_env() -> dict:
     extra = Path(venv) / "bin"
 
     env = os.environ.copy()
+    # The web app's own keys stay with the web app.  Everything below this
+    # reads files somebody pushed, through a dozen parsers, and any one of them
+    # misbehaving would otherwise hand over the key that signs sessions, the key
+    # that decrypts every stored credential, and the database password.  The
+    # scanner reads none of them.
+    for name in list(env):
+        if name in ("GCR_SECRET_KEY", "GCR_ENCRYPTION_KEY", "GCR_DATABASE_URL",
+                    "GCR_DB_PASSWORD", "GCR_DB_PASS", "GCR_DB_USER") \
+                or name.startswith("GCR_OIDC_CLIENT_SECRET"):
+            del env[name]
     if extra.is_dir():
         env["PATH"] = f"{extra}:{env.get('PATH', '')}"
     env.setdefault("GHSCAN_LOG_LEVEL", "info")

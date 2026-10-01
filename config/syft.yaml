@@ -1,0 +1,11 @@
+# syft's whole configuration when the scanner runs it.
+#
+# syft runs inside the clone so that component locations come out relative to
+# the repository.  Without a file named here it would also read .syft.yaml or
+# .syft/config.yaml from that directory, which is the repository being
+# scanned: whoever can commit to it could choose where syft writes its log,
+# point the license lookups at an internal address, or exclude every file and
+# make the dependency findings look fixed.  Naming this file stops that search.
+#
+# Enrichment is still switched on per scan from the settings, with --enrich.
+check-for-app-update: false

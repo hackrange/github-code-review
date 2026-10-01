@@ -28,6 +28,8 @@ from app.core.models import (
     Schedule, Severity, User, UserRole, Waiver, WaiverStatus,
 )
 from app.web.render import notice_class, page, render_partial
+from app.core.reports import spreadsheet_row
+from app.web import oneshot as _oneshot
 from app.web.security import clean_text, current_user
 
 log = logging.getLogger("gcr.pages")
@@ -1147,7 +1149,11 @@ def trends_report(request: Request, user: User = Depends(current_user)):
         # certification covers one branch, and putting a seal on a report
         # covering forty of them would be claiming something nobody said.
         seal = None
-        if repository and branch:
+        # Only a repository this person may see.  The seal carries the
+        # reviewer's name and note, and whether one exists at all says the
+        # repository and branch do; asking for somebody else's printed both.
+        allowed = rbac.visible_repository_names(db, user)
+        if repository and branch and (allowed is None or repository in allowed):
             row = _cert.for_branch(db, repository, branch)
             if row is not None:
                 state = _cert.status(db, row)
@@ -1194,7 +1200,8 @@ def trends_report(request: Request, user: User = Depends(current_user)):
             "basis_note": report_text.basis_note(basis),
             "history_note": report_text.history_note(points),
             "hotspot_note": report_text.hotspot_note(data["hotspots"], axis),
-            "certified_note": report_text.certified_note(_cert.counts(db)),
+            "certified_note": report_text.certified_note(
+                _cert.counts(db, rbac.visible_certifications(db, user))),
             "seal": seal,
             "recommendations": report_text.what_matters(data),
             "data": data,
@@ -1548,7 +1555,7 @@ def export_findings(request: Request, user: User = Depends(current_user)):
                                            lineterminator="\n")
             writer.writeheader()
             for row in rows:
-                writer.writerow(as_row(row, facts))
+                writer.writerow(spreadsheet_row(as_row(row, facts)))
             body = buffer.getvalue()
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
@@ -1569,6 +1576,13 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
             raise HTTPException(status_code=404, detail="No such finding.")
 
         waiver = db.query(Waiver).filter(Waiver.finding_id == row.id).one_or_none()
+        # The same rule as the Exceptions page: somebody who cannot approve
+        # one sees only their own.  An exception is an argument a person made,
+        # with their reasons in it, and two developers sharing a repository
+        # were reading each other's here.
+        if (waiver is not None and not rbac.can(user, "waiver.approve")
+                and (waiver.requested_by or "").lower() != user.username.lower()):
+            waiver = None
 
         # Which host it came from, so the link out is not labeled GitHub for
         # everybody.  The connection knows; fall back on the link itself for a
@@ -2056,7 +2070,7 @@ def reports(request: Request, user: User = Depends(current_user)):
                        cyclonedx_file=describe(report_dir / "vex.cyclonedx.json"),
                        sbom_rows=sbom_files(report_dir),
                        reports_dir=str(report_dir),
-                       can_download=rbac.sees_everything(user))
+                       can_download=rbac.can(user, "report.files"))
         return page(request, "reports.html", **context)
 
 
@@ -2192,7 +2206,8 @@ def export_tagging(request: Request, user: User = Depends(current_user)):
     organization = clean_text(request.query_params.get("org", ""),
                               "Organization", limit=255, required=False)
     with session_scope() as db:
-        body = tagging.to_csv(db, organization)
+        body = tagging.to_csv(db, organization,
+                              base=rbac.visible_repositories(db, user))
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
     name = f"tagging-{organization or 'all'}-{stamp}.csv"
@@ -2303,7 +2318,7 @@ def export_scans(request: Request, user: User = Depends(current_user)):
                 start = run.started_at if run.started_at.tzinfo else run.started_at.replace(tzinfo=timezone.utc)
                 end = run.finished_at if run.finished_at.tzinfo else run.finished_at.replace(tzinfo=timezone.utc)
                 minutes = round((end - start).total_seconds() / 60, 1)
-            writer.writerow({
+            writer.writerow(spreadsheet_row({
                 "run_id": run.id,
                 "status": run.status or "",
                 "trigger": run.trigger or "",
@@ -2320,7 +2335,7 @@ def export_scans(request: Request, user: User = Depends(current_user)):
                 "findings_updated": run.findings_updated or 0,
                 "findings_resolved": run.findings_resolved or 0,
                 "exit_code": "" if run.exit_code is None else run.exit_code,
-            })
+            }))
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
     if wants == "json":
@@ -2364,7 +2379,7 @@ def download_report(which: str, request: Request,
     from fastapi.responses import FileResponse
 
     rbac.require(user, "findings.export")
-    if not rbac.sees_everything(user):
+    if not rbac.can(user, "report.files"):
         raise HTTPException(
             status_code=403,
             detail="These files cover every organization. Use the Findings "
@@ -2418,8 +2433,12 @@ def download_report(which: str, request: Request,
 
 @router.get("/users")
 def users(request: Request, msg: str = "", kind: str = "", tab: str = "",
-          user: User = Depends(current_user)):
+          once: str = "", user: User = Depends(current_user)):
     rbac.require(user, "user.read")
+    # A new or reset password arrives as a one time key rather than in msg,
+    # so it never sits in a URL.
+    if once:
+        msg = _oneshot.take(once, user.id) or msg
 
     from app.core.models import ScanGroup
 
@@ -2736,8 +2755,9 @@ def tokens_page(request: Request, msg: str = "", kind: str = "",
             max_days=api_tokens.MAX_DAYS,
             sees_all=rbac.can(user, "user.write"),
             me=user.username,
-            # Shown once, straight after it is made, and never again.
-            fresh=clean_text(shown, "token", limit=120, required=False),
+            # Shown once, straight after it is made, and never again.  What
+            # arrives in the address is a one time key, not the token.
+            fresh=_oneshot.take(shown, user.id) if shown else "",
             api_url=f"{base_url}/api/v1",
             message=clean_text(msg, "message", limit=300, required=False),
             message_kind="error" if kind == "error" else "ok")
@@ -2756,7 +2776,11 @@ def tagging_page(request: Request, q: str = "", org: str = "",
     organization = clean_text(org, "Organization", limit=255, required=False)
 
     with session_scope() as db:
-        query = db.query(Repository)
+        # Everything on this page starts from what this person may see: the
+        # rows, the counts and the organization list alike.  It was the whole
+        # estate's owners and data labels for anybody with repo.read.
+        visible = rbac.visible_repositories(db, user)
+        query = visible
         if organization:
             query = query.filter(Repository.organization == organization)
         if search:
@@ -2775,10 +2799,10 @@ def tagging_page(request: Request, q: str = "", org: str = "",
 
         rows = query.order_by(Repository.organization, Repository.name).limit(500).all()
         resolved = tagging.effective_many(db, rows)
-        total = db.query(Repository).count()
-        untagged = tagging.untagged(db).count()
+        total = visible.count()
+        untagged = tagging.untagged(db, base=visible).count()
 
-        orgs = [o[0] for o in db.query(Repository.organization)
+        orgs = [o[0] for o in visible.with_entities(Repository.organization)
                 .distinct().order_by(Repository.organization).all() if o[0]]
 
         context = _shared(db, user)
@@ -2806,7 +2830,10 @@ def blast_radius(request: Request, user: User = Depends(current_user)):
     from app.core import access as access_store
 
     with session_scope() as db:
-        rows = access_store.organizations(db)
+        # Only what this person may see.  The access map is the estate's list
+        # of who can push where, which is a target list as much as an audit.
+        rows = access_store.organizations(
+            db, rbac.visible_repository_names(db, user))
         context = _shared(db, user)
         context.update(
             active_page="blast-radius",
@@ -3043,7 +3070,7 @@ def software_export(request: Request, format: str = "csv", q: str = "",
                                    fieldnames=software_store.EXPORT_COLUMNS,
                                    extrasaction="ignore", lineterminator="\n")
     writer.writeheader()
-    writer.writerows(rows)
+    writer.writerows(spreadsheet_row(row) for row in rows)
     return Response(content=buffer.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition":
                              f'attachment; filename="{filename}"'})
@@ -3065,7 +3092,9 @@ def blast_radius_org(organization: str, request: Request, view: str = "people",
         view = "people"
 
     with session_scope() as db:
-        everybody = access_store.people(db, "" if everything else organization)
+        allowed = rbac.visible_repository_names(db, user)
+        everybody = access_store.people(db, "" if everything else organization,
+                                        allowed)
 
         if view == "admins":
             shown = [p for p in everybody if p["highest"] == "admin"]
@@ -3092,7 +3121,8 @@ def blast_radius_org(organization: str, request: Request, view: str = "people",
             Repository.default_branch_protected.is_(False))
         if not everything:
             protection = protection.filter(Repository.organization == organization)
-        unprotected = {r.full_name for r in protection.all()}
+        unprotected = {r.full_name for r in protection.all()
+                       if allowed is None or r.full_name in allowed}
         if view == "unprotected":
             by_repo = {name: people_here for name, people_here in by_repo.items()
                        if name in unprotected
@@ -3126,7 +3156,12 @@ def blast_radius_org(organization: str, request: Request, view: str = "people",
             everybody=everybody,
             by_repo=dict(sorted(by_repo.items())),
             unprotected=unprotected,
-            owner=access_store.owner_context(db).get(organization, {}),
+            # Who answers for an organization is about the organization, so
+            # it is shown only to somebody who can see something in it.
+            owner=(access_store.owner_context(db).get(organization, {})
+                   if allowed is None
+                   or any(name.split("/", 1)[0] == organization for name in allowed)
+                   else {}),
             counts={
                 "people": len(everybody),
                 "admins": sum(1 for p in everybody if p["highest"] == "admin"),
@@ -3151,7 +3186,8 @@ def blast_radius_export(organization: str, request: Request,
         format = "csv"
 
     with session_scope() as db:
-        rows = access_store.rows_for_export(db, wanted)
+        rows = access_store.rows_for_export(
+            db, wanted, rbac.visible_repository_names(db, user))
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
     name = f"blast-radius-{(wanted or 'all').replace('/', '-')}-{stamp}.{format}"
@@ -3178,7 +3214,7 @@ def blast_radius_export(organization: str, request: Request,
         writer = csv_module.DictWriter(buffer, fieldnames=list(rows[0]),
                                        lineterminator="\n")
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(spreadsheet_row(row) for row in rows)
     return Response(content=buffer.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition":
                              f'attachment; filename="{name}"'})

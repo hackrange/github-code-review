@@ -17,6 +17,7 @@ import io
 import json
 import logging
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -115,11 +116,41 @@ def check_totp(user: User, code: str) -> bool:
         return False
 
     if user.totp_secret and len(code) == 6 and code.isdigit():
-        # One step either side, so a slightly wrong clock still works.
-        if pyotp.TOTP(user.totp_secret).verify(code, valid_window=1):
-            return True
+        # One step either side, so a slightly wrong clock still works.  Each
+        # step is accepted once and never again, and never one older than the
+        # last accepted, so a code that has been seen cannot be replayed.
+        totp = pyotp.TOTP(user.totp_secret)
+        now_step = int(time.time()) // totp.interval
+        last = int(getattr(user, "totp_last_step", 0) or 0)
+        for step in (now_step - 1, now_step, now_step + 1):
+            if step <= last:
+                continue
+            if hmac.compare_digest(totp.at(step * totp.interval), code):
+                user.totp_last_step = step
+                return True
+        return False
 
     return _consume_recovery_code(user, code)
+
+
+def totp_failed(session, user: User, source_ip: str = "") -> bool:
+    """Count a wrong code.  -> whether the account is now locked.
+
+    The same limit and lockout as wrong passwords, on a counter of its own.
+    """
+    user.totp_failures = (user.totp_failures or 0) + 1
+    if user.totp_failures >= live.login_attempt_limit():
+        user.locked_until = utcnow() + timedelta(
+            minutes=live.login_lockout_minutes())
+        user.totp_failures = 0
+        record(session, "login.totp_lockout", actor=user.username,
+               source_ip=source_ip, outcome="denied")
+        return True
+    return False
+
+
+def totp_locked(user: User) -> bool:
+    return _locked(user)
 
 
 def make_recovery_codes() -> tuple:

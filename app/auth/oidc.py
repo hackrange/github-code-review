@@ -304,6 +304,14 @@ def sync_user(session, profile: dict) -> User:
 
     user = session.query(User).filter(User.username == username).one_or_none()
 
+    # Turned off here stays off, whatever the provider says.  Signing in used
+    # to clear the flag, so disabling an SSO account lasted until that person
+    # next signed in, which is when it mattered.  An administrator turns it
+    # back on from the Users page.
+    if user is not None and user.disabled:
+        raise OIDCError("that account is turned off here. "
+                        "Ask an administrator if that is a mistake.")
+
     if user is not None and user.source != AuthSource.OIDC:
         # A local account already owns that name.  Refusing is safer than
         # quietly turning a password account into an SSO one.
@@ -334,7 +342,6 @@ def sync_user(session, profile: dict) -> User:
     user.email = (profile.get("email") or "")[:255]
     user.display_name = (profile.get("full_name") or "")[:255]
     user.role = role
-    user.disabled = False
     user.last_login_at = utcnow()
     session.flush()
     return user

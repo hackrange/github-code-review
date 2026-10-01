@@ -129,9 +129,13 @@ def tag(session, repo_ids, values: dict, actor: str = "") -> int:
     return len(rows)
 
 
-def untagged(session, organization: str = ""):
-    """Repositories nobody has said anything about."""
-    query = session.query(Repository).filter(
+def untagged(session, organization: str = "", base=None):
+    """Repositories nobody has said anything about.
+
+    `base` is the query to start from, rbac.visible_repositories for anybody
+    who does not see the whole estate.
+    """
+    query = (base if base is not None else session.query(Repository)).filter(
         (Repository.technical_owner == "") | (Repository.technical_owner.is_(None)),
         (Repository.sensitivity == "") | (Repository.sensitivity.is_(None)))
     if organization:
@@ -150,7 +154,7 @@ CSV_COLUMNS = ["repository", "application_name", "application_owner",
 MAX_IMPORT_ROWS = 20000
 
 
-def to_csv(session, organization: str = "") -> str:
+def to_csv(session, organization: str = "", base=None) -> str:
     """Every repository and what is said about it, as a spreadsheet.
 
     Exported with what is set on the repository itself, not what it inherits.
@@ -161,7 +165,9 @@ def to_csv(session, organization: str = "") -> str:
     import csv
     import io
 
-    query = session.query(Repository)
+    # Only the repositories the caller may see, when the caller passes them.
+    # The file names every owner, contact and data label it covers.
+    query = base if base is not None else session.query(Repository)
     if organization:
         query = query.filter(Repository.organization == organization)
 

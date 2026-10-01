@@ -286,8 +286,14 @@ def _anthropic_client(cfg: dict, timeout: float):
     import anthropic
 
     base = (cfg.get("ai.anthropic_base_url") or ANTHROPIC_DEFAULT_BASE).rstrip("/")
-    return anthropic.Anthropic(api_key=cfg.get("ai.anthropic_key"),
-                               base_url=base, timeout=timeout, max_retries=2)
+    # No redirects.  The address was checked as https and not link-local when
+    # it was saved; following a redirect would let wherever it points send the
+    # request, key and all, somewhere that check never saw.  The SDK follows
+    # them by default, which the OpenAI and custom paths here already do not.
+    return anthropic.Anthropic(
+        api_key=cfg.get("ai.anthropic_key"), base_url=base, timeout=timeout,
+        max_retries=2,
+        http_client=anthropic.DefaultHttpxClient(follow_redirects=False))
 
 
 def _is_anthropic_itself(cfg: dict) -> bool:

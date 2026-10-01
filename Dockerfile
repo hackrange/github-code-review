@@ -185,6 +185,11 @@ VOLUME ["/data", "/out", "/home/gcr/.cache"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD curl -fsS "http://127.0.0.1:${GCR_PORT}/healthz" || exit 1
 
+# No proxy headers at this layer.  With them on and every address trusted,
+# uvicorn copied whatever X-Forwarded-For a caller sent into the client address
+# before the app saw the request, so the app's own check against
+# GCR_TRUSTED_PROXIES was reading a value the caller had already chosen.  The
+# rate limits and the audit log both stood on it.  client_ip() is the one place
+# that decides whose forwarding header to believe.
 CMD ["/opt/gcr/venv/bin/python", "-m", "uvicorn", "app.main:app", \
-     "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", \
-     "--forwarded-allow-ips", "*"]
+     "--host", "0.0.0.0", "--port", "8080", "--no-proxy-headers"]

@@ -122,13 +122,25 @@ async def totp_submit(request: Request, code: str = Form("")):
         if row is None:
             return redirect("/login")
 
+        # Locked by too many wrong codes, or by wrong passwords since this half
+        # session began: the code step does not get to run past either.
+        if auth_service.totp_locked(row):
+            auth_service.revoke_session(db, token, "second step while locked")
+            return redirect("/login")
+
         if not auth_service.check_totp(row, code):
             record(db, "login.totp_failed", actor=row.username, source_ip=ip,
                    outcome="denied")
+            if auth_service.totp_failed(db, row, ip):
+                # Out of tries.  The half session goes too, so the next guess
+                # needs the password again and then waits out the lock.
+                auth_service.revoke_session(db, token, "too many wrong codes")
+                return redirect("/login")
             return page(request, "login.html", stage="totp", auth=live.auth_config(),
                         username=row.username,
                         error="That code did not work. Try the next one.")
 
+        row.totp_failures = 0
         auth_service.promote_session(db, token)
         row.last_login_at = auth_service.utcnow()
         # Who signed in from what.  A sign in that records only the address is
@@ -151,6 +163,11 @@ def totp_setup_form(request: Request):
     user = half_auth_user(request)
     if user is None:
         return redirect("/login")
+    # Enrollment is for an account that has no second factor yet.  Offering it
+    # to one that does let anybody holding the password swap in their own
+    # authenticator and walk past the code they did not have.
+    if user.totp_confirmed:
+        return redirect("/auth/totp")
 
     enrollment = auth_service.enroll_totp(user)
     response = page(request, "totp_setup.html",
@@ -173,6 +190,8 @@ async def totp_setup_submit(request: Request, code: str = Form("")):
     user = half_auth_user(request)
     if user is None:
         return redirect("/login")
+    if user.totp_confirmed:
+        return redirect("/auth/totp")
 
     secret = request.cookies.get("gcr_totp_enroll", "")
     if not secret:
@@ -189,6 +208,10 @@ async def totp_setup_submit(request: Request, code: str = Form("")):
         row = db.query(User).filter(User.id == user.id).one_or_none()
         if row is None:
             return redirect("/login")
+        # Asked again on the row itself, inside the write, so two enrollments
+        # racing each other cannot both land.
+        if row.totp_confirmed:
+            return redirect("/auth/totp")
         auth_service.save_totp(row, secret, hashes)
         auth_service.promote_session(db, token)
         row.last_login_at = auth_service.utcnow()

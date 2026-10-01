@@ -208,7 +208,7 @@ def _repository_facts(about: dict) -> str:
     return "\n".join(rows)
 
 
-def _related(db, base_query, f) -> list:
+def _related(db, base_query, f, user=None) -> list:
     """Decisions already made near this finding.  -> list of sentences.
 
     The same file, the same package or the same rule in the same repository,
@@ -237,6 +237,15 @@ def _related(db, base_query, f) -> list:
 
     waivers = {w.finding_id: w for w in db.query(Waiver).filter(
         Waiver.finding_id.in_([r.id for r in rows])).all()}
+    # Only the exceptions this person could read on the page.  The answer is
+    # stored and shown to everybody who opens the finding, so a reason that
+    # went into the question is one that came back out to all of them.
+    if user is not None:
+        from app.core import rbac
+        if not rbac.can(user, "waiver.approve"):
+            mine = (getattr(user, "username", "") or "").lower()
+            waivers = {k: w for k, w in waivers.items()
+                       if (w.requested_by or "").lower() == mine}
 
     def decided(row) -> int:
         if waivers.get(row.id) or row.excepted or row.custom_severity:
@@ -469,7 +478,7 @@ def _code(f, cfg: dict, branch: str, connection: str) -> tuple:
                 [f"Lines around {rel}:{f['line']} on {branch}."], [])
 
 
-def gather(db, base_query, row, cfg: dict) -> dict:
+def gather(db, base_query, row, cfg: dict, user=None) -> dict:
     """Everything that goes into the question.  -> {prompt, sources, code}
 
     Read from the database while the session is open; the clone and the
@@ -494,7 +503,7 @@ def gather(db, base_query, row, cfg: dict) -> dict:
     ]
     sources = ["The finding and the reasons behind its grade.",
                "What is recorded about the repository."]
-    related = _related(db, base_query, row)
+    related = _related(db, base_query, row, user)
     if related:
         sections.append(("Other findings nearby, and what people decided about them",
                          "\n".join(related)))
@@ -592,7 +601,7 @@ def _run(finding_id: int, user) -> dict:
         row = base.filter(Finding.id == finding_id).one_or_none()
         if row is None:
             return {"ok": False, "detail": "That finding is gone."}
-        evidence = gather(db, base, row, cfg)
+        evidence = gather(db, base, row, cfg, user)
 
     advisory, advisory_source = "", ""
     notes = []

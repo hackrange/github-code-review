@@ -402,8 +402,13 @@ def visible_repositories(session: OrmSession, user: User):
     clauses = []
     for org, repo in scope_pairs(user):
         if repo:
+            # A scope can name the repository either way, the same as the
+            # finding filter above accepts.  Matching only the short form left
+            # a scope written as org/name seeing its findings and none of its
+            # repositories.
             clauses.append((Repository.organization == org)
                            & (or_(Repository.name == repo,
+                                  Repository.full_name == repo,
                                   Repository.full_name == f"{org}/{repo}")))
         else:
             clauses.append(Repository.organization == org)
@@ -414,3 +419,19 @@ def visible_repositories(session: OrmSession, user: User):
     if not clauses:
         return query.filter(Repository.id.is_(None))
     return query.filter(or_(*clauses))
+
+
+def visible_repository_names(session: OrmSession, user: User):
+    """The full names this person may see.  -> None when that is everything.
+
+    For the pages built from tables that hold no findings, such as who can
+    reach what and how repositories are tagged.  Those were read whole for
+    anybody with repo.read, so a developer given one repository got the access
+    map and the owners of every repository on the estate.  None rather than a
+    set of every name, so the roles that see everything do not pay for
+    building one.
+    """
+    if sees_everything(user):
+        return None
+    return {name for (name,) in
+            visible_repositories(session, user).with_entities(Repository.full_name)}

@@ -421,6 +421,16 @@ def _quote_formula(value):
     return "'" + text if text[:1] in SPREADSHEET_TRIGGERS else text
 
 
+def spreadsheet_row(row: dict) -> dict:
+    """A CSV row with every cell made safe to open in a spreadsheet.
+
+    For the downloads people open in Excel.  A commit author, a branch or a
+    file path is whatever somebody pushed, and a cell that starts with = runs
+    as a formula the moment the file opens.
+    """
+    return {name: _quote_formula(value) for name, value in row.items()}
+
+
 def _write_atomic(path: Path, data: str) -> None:
     """Write to a temp file in the same directory, then rename over the top.
 

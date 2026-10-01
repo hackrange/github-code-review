@@ -253,7 +253,7 @@
       </form>
       {% endif %}
     {% endif %}
-    {% if f.kind.value in ['credential', 'code'] and f.file_path %}
+    {% if can_scan and f.kind.value in ['credential', 'code'] and f.file_path %}
       {# Read only, and it does not take the scan lock, so it works while a
          scan is running.  It cannot change the finding: see the note it
          prints. #}
