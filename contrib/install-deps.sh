@@ -163,20 +163,21 @@ install_system_packages() {
 # Scanners
 fetch() { curl -fsSL --retry 3 --retry-delay 2 "$1"; }
 
-latest_tag() {
-  # Unauthenticated API calls are rate limited, so fall back to the pinned tag.
-  local repo="$1" fallback="$2" tag
-  tag=$(fetch "https://api.github.com/repos/${repo}/releases/latest" 2>/dev/null | jq -r '.tag_name // empty')
-  if [[ -z "$tag" ]]; then
-    warn "could not resolve the latest $repo release (rate limited?), using $fallback"
-    tag="$fallback"
-  fi
-  printf '%s' "$tag"
+pinned_tag() {
+  # The version to install, fixed.  This used to ask GitHub for the latest
+  # release and only fall back to the pinned tag when that call was rate
+  # limited, which meant a normal run installed whatever the upstream had
+  # tagged most recently rather than a version anybody here had chosen.  A
+  # build should install the version it was tested against; bump the pins
+  # deliberately.  The repository is kept as a first argument so the call
+  # sites still read as "this tool, this version".
+  local _repo="$1" pinned="$2"
+  printf '%s' "$pinned"
 }
 
 install_gitleaks() {
   local ver url tmp
-  ver=$(latest_tag gitleaks/gitleaks v8.30.1); ver="${ver#v}"
+  ver=$(pinned_tag gitleaks/gitleaks v8.30.1); ver="${ver#v}"
   url="https://github.com/gitleaks/gitleaks/releases/download/v${ver}/gitleaks_${ver}_${OS}_${GL_ARCH}.tar.gz"
   say "gitleaks $ver"
   (( DRY )) && { printf '   + download %s\n' "$url"; return 0; }
@@ -200,7 +201,7 @@ install_via_vendor_script() {
 
 install_osv_scanner() {
   local ver url tmp
-  ver=$(latest_tag google/osv-scanner v2.5.1)
+  ver=$(pinned_tag google/osv-scanner v2.5.1)
   url="https://github.com/google/osv-scanner/releases/download/${ver}/osv-scanner_${OS}_${GO_ARCH}"
   say "osv-scanner $ver"
   (( DRY )) && { printf '   + download %s\n' "$url"; return 0; }
@@ -215,7 +216,7 @@ install_osv_scanner() {
 
 install_trivy() {
   local ver url tmp os
-  ver=$(latest_tag aquasecurity/trivy v0.74.0); ver="${ver#v}"
+  ver=$(pinned_tag aquasecurity/trivy v0.74.0); ver="${ver#v}"
   # Trivy names the platform with a capital, unlike everything else here.
   os=$(uname -s)
   url="https://github.com/aquasecurity/trivy/releases/download/v${ver}/trivy_${ver}_${os}-${TV_ARCH}.tar.gz"
@@ -236,7 +237,7 @@ install_zizmor() {
     warn "zizmor publishes no build for this architecture, skipping it"
     return 0
   fi
-  ver=$(latest_tag zizmorcore/zizmor v1.29.0)
+  ver=$(pinned_tag zizmorcore/zizmor v1.29.0)
   url="https://github.com/zizmorcore/zizmor/releases/download/${ver}/zizmor-${ZZ_ARCH}-unknown-linux-gnu.tar.gz"
   say "zizmor $ver"
   (( DRY )) && { printf '   + download %s\n' "$url"; return 0; }
@@ -283,13 +284,12 @@ install_python_deps() {
   # A venv built without the python3-venv package has no pip. Put one in.
   if ! "$VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
     say "venv has no pip, bootstrapping one"
-    if ! "$VENV_DIR/bin/python" -m ensurepip --upgrade >/dev/null 2>&1; then
-      local getpip; getpip=$(mktemp)
-      if fetch https://bootstrap.pypa.io/get-pip.py > "$getpip" 2>/dev/null; then
-        "$VENV_DIR/bin/python" "$getpip" --quiet >/dev/null 2>&1 || true
-      fi
-      rm -f "$getpip"
-    fi
+    # ensurepip, and only ensurepip.  Downloading get-pip.py from the network
+    # and running it is fetching an unpinned script straight into the
+    # interpreter; a missing pip is a packaging problem the operator fixes by
+    # installing python3-venv, not something to paper over with a remote
+    # bootstrap.
+    "$VENV_DIR/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
   fi
   if ! "$VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
     err "no pip in $VENV_DIR and bootstrapping failed"
