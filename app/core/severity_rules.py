@@ -44,7 +44,8 @@ FIELDS = (
     ("value", "Value", "The masked value of a leaked credential"),
     ("exposure", "Exposure", "current_and_history or git_history_only"),
     ("author", "Committed by", "The name, login or email on the commit"),
-    ("confidence", "Confidence", "How sure the engine was: low, medium or high"),
+    ("confidence", "Confidence", "How sure the engine was: low, medium, high, "
+                                 "or unrated where it did not say"),
     ("engine", "Found by", "The engine that reported it, such as semgrep or trivy"),
     ("snippet", "Code", "Text in the line the engine matched"),
     ("fingerprint", "Fingerprint", "The finding's own fingerprint, which names "
@@ -77,7 +78,10 @@ FINGERPRINT = re.compile(r"(?:[a-z]+:)?[0-9a-f]{8,64}$")
 ALLOWED = {
     "kind": ("credential", "code", "dependency", "misconfiguration"),
     "state": ("open", "waived", "fixed"),
-    "confidence": ("low", "medium", "high"),
+    # unrated is a value somebody can ask for, not one an engine writes.  It
+    # stands for the empty field: a CVE match, a Trivy check, or a rule that
+    # never said how sure it was.
+    "confidence": ("low", "medium", "high", "unrated"),
 }
 
 COMBINE = ("all", "any")
@@ -399,6 +403,8 @@ def _one_matches(field: str, pattern: str, finding) -> bool:
                 return True
         return False
     actual = _field_of(finding, field)
+    if field == "confidence" and pattern == "unrated":
+        return not actual
     if not actual:
         return False
     # A star is what somebody reaches for when they mean "any of these", and a
@@ -516,6 +522,9 @@ def _sql_for(field: str, pattern: str):
         # writes a rule about.
         actual = func.lower(func.coalesce(Finding.snippet, ""))
         return (actual != "") & actual.contains(pattern, autoescape=True)
+    if field == "confidence" and pattern == "unrated":
+        # The same reading as `_one_matches`: nothing recorded at all.
+        return func.coalesce(Finding.confidence, "") == ""
     column = {"rule": Finding.rule, "value": Finding.secret_preview,
               "exposure": Finding.exposure,
               "confidence": Finding.confidence}.get(field)

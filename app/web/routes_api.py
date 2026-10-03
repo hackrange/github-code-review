@@ -70,6 +70,12 @@ def _safe_back(raw: str) -> str:
     return path + ("?" + "&".join(kept) if kept else "")
 
 
+def _findings_back(form) -> str:
+    """The findings list as the reader had it filtered, or the whole list."""
+    where = _safe_back(str(form.get("back", "") or ""))
+    return where if where.startswith("/findings") else "/findings"
+
+
 def _back_with(where: str, message: str, kind: str = "ok") -> str:
     """That page, with the line to show the reader when it opens."""
     from urllib.parse import quote
@@ -275,7 +281,6 @@ async def waive_many(request: Request, user: User = Depends(current_user)):
     await check_csrf(request)
     rbac.require(user, "waiver.request")
 
-    from urllib.parse import quote
 
     form = await request.form()
     reason_text = clean_text(form.get("reason"), "Reason", limit=2000)
@@ -367,7 +372,7 @@ async def waive_many(request: Request, user: User = Depends(current_user)):
     if counts["already"]:
         parts.append(f"{counts['already']} already had one")
 
-    return redirect(f"/findings?msg={quote('. '.join(parts))}&kind=ok")
+    return redirect(_back_with(_findings_back(form), '. '.join(parts)))
 
 
 # Deleting in chunks rather than one enormous statement, so a delete-the-lot
@@ -3456,7 +3461,6 @@ async def regrade_many(request: Request, user: User = Depends(current_user)):
     await check_csrf(request)
     rbac.require(user, "finding.regrade")
 
-    from urllib.parse import quote
 
     form = await request.form()
     # new_severity rather than severity, because the bulk form already carries
@@ -3540,7 +3544,7 @@ async def regrade_many(request: Request, user: User = Depends(current_user)):
     if counts["already"]:
         parts.append(f"{counts['already']} already were")
     parts.append("the engine's grades are still on the record beside them")
-    return redirect(f"/findings?msg={quote('. '.join(parts) + '.')}&kind=ok")
+    return redirect(_back_with(_findings_back(form), '. '.join(parts) + '.'))
 
 
 @router.post("/findings/{finding_id}/regrade/clear")

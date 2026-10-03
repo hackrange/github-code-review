@@ -562,6 +562,79 @@ run_njsscan() {
       } ]' "$out" 2>/dev/null || echo '[]'
 }
 
+# --- CodeQL, read from GitHub rather than run here ---------------------------
+#
+# codeql_alerts <dir> <repo> <branch> <web> <primary_json_file> <out_file>
+#
+# Writes the primary findings with the CodeQL alerts added, as code findings.
+# Called in this shell, not in $( ), so CODEQL_UNREAD survives: it is set when
+# GitHub could not be read, which is not the same as having nothing to say.
+# A 404 means code scanning is not set up here, and is an honest empty.
+# Anything else means the alerts that were open last time were not looked at,
+# and ingest holds them open rather than calling them fixed.
+codeql_alerts() {
+  local dir="$1" repo="$2" branch="$3" web="$4" primary="$5" out="$6"
+  CODEQL_UNREAD=""
+  cp "$primary" "$out"
+  provider_supports code_scanning || return 0
+
+  local first; first=$(tmp_file cq_first)
+  if ! api_get "/repos/${repo}/code-scanning/alerts?state=open&per_page=1" > "$first"; then
+    if [[ "${GHSCAN_API_LAST_CODE:-0}" == "404" ]]; then
+      log_debug "[$repo] no code scanning here"
+      return 0
+    fi
+    CODEQL_UNREAD="GitHub answered ${GHSCAN_API_LAST_CODE:-nothing} for the code scanning alerts"
+    log_warn "[$repo] $CODEQL_UNREAD, so CodeQL findings are held as they were"
+    return 0
+  fi
+  [[ "$(jq 'length' "$first" 2>/dev/null || echo 0)" == "0" ]] && return 0
+
+  local alerts; alerts=$(tmp_file cq_alerts)
+  if ! api_paginate "/repos/${repo}/code-scanning/alerts?state=open" 100 > "$alerts"; then
+    CODEQL_UNREAD="the code scanning alerts could not be read in full"
+    log_warn "[$repo] $CODEQL_UNREAD, so CodeQL findings are held as they were"
+    return 0
+  fi
+
+  # The SARIF for the newest analysis of each category the alerts came from.
+  # It carries CodeQL's precision for each rule and where each data flow
+  # starts.  Missing it costs those two facts and nothing else.
+  local sarif_dir; sarif_dir="$GHSCAN_TMPROOT/cq_sarif.$$"
+  rm -rf "$sarif_dir"; mkdir -p "$sarif_dir"
+  local analyses; analyses=$(tmp_file cq_analyses)
+  if api_get "/repos/${repo}/code-scanning/analyses?per_page=50" > "$analyses"; then
+    local id
+    while IFS= read -r id; do
+      [[ -n "$id" ]] || continue
+      GHSCAN_API_ACCEPT="application/sarif+json" \
+        api_get "/repos/${repo}/code-scanning/analyses/${id}" > "$sarif_dir/$id.sarif" \
+        || rm -f "$sarif_dir/$id.sarif"
+    done < <(jq -r --slurpfile a "$alerts" '
+        ([$a[0][]? | .most_recent_instance.category] | unique) as $want
+        | [ .[]? | select(.category as $c | $want | index($c)) ]
+        | group_by(.category) | map(max_by(.created_at) | .id) | .[]' "$analyses" 2>/dev/null)
+  fi
+
+  local python; python=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
+  [[ -n "$python" ]] || { log_warn "[$repo] no python, so CodeQL alerts are not read"
+                          CODEQL_UNREAD="no python to read the CodeQL alerts"; return 0; }
+  local muted; muted=$(cfg_arr '.scan.code_analysis.muted_rules' | paste -sd, -)
+  if ! "$python" "$GHSCAN_HOME/lib/codeql.py" "$alerts" "$sarif_dir" "$dir" "$repo" \
+         "$branch" "$web" "$muted" "$(provider_link_parts)" "$primary" \
+         > "${out}.new" 2>"$GHSCAN_TMPROOT/codeql.log"; then
+    CODEQL_UNREAD="the CodeQL alerts could not be converted: $(tail -1 "$GHSCAN_TMPROOT/codeql.log" 2>/dev/null)"
+    log_warn "[$repo] $CODEQL_UNREAD"
+    rm -f "${out}.new"
+    return 0
+  fi
+  mv "${out}.new" "$out"
+  rm -rf "$sarif_dir"
+  local n; n=$(jq '[.[] | select(.source == "codeql")] | length' "$out" 2>/dev/null || echo 0)
+  local kept; kept=$(jq '[.[] | select(.source == "codeql" and .triage == "review")] | length' "$out" 2>/dev/null || echo 0)
+  log_info "[$repo] $n CodeQL alert(s), $kept need a person"
+}
+
 # code_merge <primary_json> <extra_json...> -> one list, with agreement recorded
 #
 # Two engines pointing at the same line is the strongest signal either of them

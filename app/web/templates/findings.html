@@ -424,7 +424,13 @@
           <td class="small nowrap">
             {% if f.confidence %}
               <span class="badge {{ 'ok' if f.confidence == 'high' else ('medium' if f.confidence == 'low' else '') }}">{{ f.confidence }}</span>
-            {% else %}<span class="faint">&mdash;</span>{% endif %}
+            {% else %}
+              {# Said in words, with the reason on hover.  A bare dash read as
+                 missing data, when for most kinds nothing rates it at all. #}
+              <span class="faint" title="{{ {'dependency': 'A known vulnerability matched by package version. Nothing rates how sure that is.',
+                                           'misconfiguration': 'The configuration checker does not say how sure it is.',
+                                           'credential': 'Scanned before confidence was recorded for credentials. The next scan fills it in.'}.get(f.kind.value, 'The rule that found this did not say how sure it was.') }}">unrated</span>
+            {% endif %}
           </td>
           <td class="faint small">{{ f.kind.value }}</td>
           <td class="small">{{ f.repository }}</td>
@@ -492,6 +498,9 @@
 <form method="post" id="bulk-form" action="{{ base }}/findings/waive-bulk">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="all_matching" id="all-matching" value="">
+  {# Where to land afterwards: this list, filtered the way it is now.  Without
+     it a regrade or a waive dropped the reader on every finding there is. #}
+  <input type="hidden" name="back" value="/findings{{ '?' ~ request.url.query if request.url.query }}">
   <input type="hidden" name="severity" value="{{ filters.severity }}">
   <input type="hidden" name="kind" value="{{ filters.kind }}">
   <input type="hidden" name="state" value="{{ filters.state }}">

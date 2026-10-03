@@ -79,6 +79,7 @@ def build_document(entries: list) -> dict:
         "partial": True,
         "repositories": [],
         "partial_code_repositories": [],
+        "codeql_unread_repositories": [],
         "placeholders_filtered": [],
         "allowlist_suppressed": [],
     }
@@ -116,6 +117,15 @@ def build_document(entries: list) -> dict:
                     "reason": (entry.get("code_incomplete_reason")
                                or "the code pass did not complete"),
                 })
+        # And the same for CodeQL on its own.  Left out, an interrupted scan
+        # would read every CodeQL alert it never fetched as fixed.
+        if entry.get("codeql_unread_reason"):
+            meta = entry.get("repository") or {}
+            named = meta.get("full_name") if isinstance(meta, dict) else None
+            if named:
+                document["codeql_unread_repositories"].append({
+                    "repository": named,
+                    "reason": entry["codeql_unread_reason"]})
     return document
 
 

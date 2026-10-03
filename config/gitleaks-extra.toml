@@ -80,6 +80,11 @@ keywords = ["jdbc:", "password=", "pwd=", "Data Source", "Server=", "Initial Cat
     '''\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%|\{\{[^}]*\}\}''',
     # A regex or glob fragment is a pattern somebody wrote, not a credential.
     '''\.\*|\[\^|\\[dwsn]''',
+    # Reading the password from somewhere else.  Gradle docs write
+    # password = System.getenv("REPO_TOKEN"), and the capture stops at the
+    # quote, so the "secret" was System.getenv( and it came up high.
+    '''^(os\.|process\.|System\.|config\.|settings\.|env\[|ENV\[|getenv|Deno\.env)''',
+    '''^[A-Za-z_][A-Za-z0-9_.]*\($''',
   ]
 
 # --- hardcoded password assignment in source ---------------------------------

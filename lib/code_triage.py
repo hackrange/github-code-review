@@ -464,6 +464,302 @@ PLACEHOLDER_PATHS = DEFAULTS["paths"]
 # "$key = 'sk_live_xxxx'" would be judging the variable name as well.
 QUOTED_VALUE = re.compile(r"""['"]([^'"\n]{6,})['"]""")
 
+# --- CodeQL, which arrives as GitHub's alerts rather than from a run here ----
+#
+# These rules are written against what was actually reported on a real
+# repository, alert by alert, and each one only speaks on a fact it can read
+# off the code.  CodeQL's own precision for all of them is high, so confidence
+# alone would never have separated the wrong ones from the right ones.
+
+# XSS rules that fired on a line writing a text node.  A text node is never
+# parsed as markup, whatever is in it.
+CODEQL_XSS = frozenset({"js/xss", "js/xss-through-exception",
+                        "js/xss-through-dom", "js/reflected-xss",
+                        "js/stored-xss"})
+TEXT_SINK = re.compile(r"createTextNode\s*\(|\.textContent\s*=|\.innerText\s*=")
+HTML_SINK = re.compile(r"innerHTML|outerHTML|insertAdjacentHTML|document\.write"
+                       r"|\.html\s*\(|dangerouslySetInnerHTML|DOMParser")
+
+# A method looked up by name out of a table.  The rule worries about two
+# things: a name like constructor or toString reaching the prototype, and a
+# value that is not a function.  An own key of an object literal declared in
+# the same file answers both.
+TABLE_LOOKUP = re.compile(r"(?P<table>[A-Za-z_$][\w$]*)\[(?P<key>[A-Za-z_$][\w$]*)\]")
+DYNAMIC_CALL = re.compile(r"(?P<table>[A-Za-z_$][\w$]*)\[(?P<key>[A-Za-z_$][\w$]*)\]\s*\(")
+GUARDED_VAR = re.compile(
+    r"\b(?:const|let|var)\s+(?P<var>[A-Za-z_$][\w$]*)\s*=\s*Object\.prototype\."
+    r"hasOwnProperty\.call\(\s*(?P<table>[A-Za-z_$][\w$]*)\s*,\s*(?P<key>[A-Za-z_$][\w$]*)\s*\)"
+    r"\s*\?\s*(?P=table)\[(?P=key)\]\s*:\s*(?:null|undefined|false)\b")
+
+# Denial of service rules, where who can send the input decides how much it
+# matters.  An administrator slowing their own server down is a low.
+CODEQL_DOS = frozenset({"js/polynomial-redos", "js/redos", "js/regex-injection",
+                        "js/resource-exhaustion", "js/loop-bound-injection",
+                        "js/unvalidated-dynamic-method-call"})
+PRIVILEGED_GUARD = re.compile(
+    r"\b(requirePerm|requirePermission|requireRole|requireAdmin|adminOnly|isAdmin)\s*\(\s*([^)]{0,60})\)")
+
+# What counts as the handler holding back a caller who asks too often.  CodeQL
+# only knows the limiter packages by name; an app that counts in its own
+# database looks unlimited to it.
+#
+# A call to something named for it, and nothing weaker.  A bare 429 was tried
+# and it was wrong: a registry answers 429 to mean "still scanning, come back",
+# which limits nobody, and two pull handlers were set aside on it.
+LIMIT_EVIDENCE = re.compile(
+    r"\b(rateLimit|rateLimiter|limiter|throttle|slowDown)\w*\s*\(")
+REQUIRE_LOCAL = re.compile(
+    r"\b(?:const|let|var)\s+(?:(?P<name>[A-Za-z_$][\w$]*)|\{(?P<names>[^}]*)\})\s*=\s*"
+    r"require\(\s*['\"](?P<path>\.{1,2}/[^'\"]+)['\"]\s*\)")
+MEMBER_CALL = re.compile(r"\b(?P<obj>[A-Za-z_$][\w$]*)\.(?P<fn>[A-Za-z_$][\w$]*)\s*\(")
+BARE_CALL = re.compile(r"(?<![\w$.])(?P<fn>[A-Za-z_$][\w$]*)\s*\(")
+
+
+def _line(source: str, number: int) -> str:
+    lines = (source or "").splitlines()
+    return lines[number - 1] if 1 <= number <= len(lines) else ""
+
+
+def _codeql_guarded_call(source: str, line: int) -> str:
+    """-> the guard, if the method on this line comes from an own key check."""
+    lines = (source or "").splitlines()
+    text = _line(source, line)
+    window = "\n".join(lines[max(0, line - 9):line - 1])
+    for call in DYNAMIC_CALL.finditer(text):
+        table, key = call.group("table"), call.group("key")
+        if not re.search(r"\b(?:const|let|var)\s+%s\s*=\s*\{" % re.escape(table), source):
+            continue
+        guard = re.search(
+            r"hasOwnProperty\.call\(\s*%s\s*,\s*%s\s*\)" % (re.escape(table), re.escape(key)),
+            window)
+        if guard:
+            return guard.group(0)
+    for found in GUARDED_VAR.finditer(window):
+        var, table = found.group("var"), found.group("table")
+        if re.search(r"(?<![\w$.])%s\s*\(" % re.escape(var), text) and \
+                re.search(r"\b(?:const|let|var)\s+%s\s*=\s*\{" % re.escape(table), source):
+            return found.group(0)
+    return ""
+
+
+def _resolve_module(base_file: str, spec: str) -> str:
+    """A relative require, as a file on disk, or empty."""
+    here = os.path.dirname(base_file)
+    target = os.path.normpath(os.path.join(here, spec))
+    for candidate in (target, target + ".js", os.path.join(target, "index.js")):
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
+def _function_text(source: str, name: str) -> str:
+    """The body of a named function in this file, or empty."""
+    pattern = re.compile(
+        r"(?:\bfunction\s+%s\s*\(|\b%s\s*[:=]\s*(?:async\s*)?(?:function\b[^(]*)?\([^)]*\)\s*(?:=>)?\s*\{)"
+        % (re.escape(name), re.escape(name)))
+    found = pattern.search(source or "")
+    if not found:
+        return ""
+    start = source.find("{", found.end() - 1)
+    if start < 0:
+        return ""
+    depth = 0
+    for at in range(start, min(len(source), start + 20000)):
+        if source[at] == "{":
+            depth += 1
+        elif source[at] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:at + 1]
+    return ""
+
+
+def _limit_in(text: str, file_path: str, hops: int, seen: set) -> str:
+    """-> what holds callers back, found in this text or what it calls."""
+    found = LIMIT_EVIDENCE.search(text or "")
+    if found:
+        return found.group(0).strip(" (,")
+    if hops <= 0 or not file_path:
+        return ""
+    source = _read(file_path)
+    modules = {}
+    for req in REQUIRE_LOCAL.finditer(source):
+        resolved = _resolve_module(file_path, req.group("path"))
+        if not resolved:
+            continue
+        if req.group("name"):
+            modules[req.group("name")] = (resolved, None)
+        for part in (req.group("names") or "").split(","):
+            part = part.strip().split(":")[-1].strip()
+            if part:
+                modules[part] = (resolved, part)
+    targets = []
+    for call in MEMBER_CALL.finditer(text or ""):
+        hit = modules.get(call.group("obj"))
+        if hit and hit[1] is None:
+            targets.append((hit[0], call.group("fn")))
+    for call in BARE_CALL.finditer(text or ""):
+        hit = modules.get(call.group("fn"))
+        if hit and hit[1] is not None:
+            targets.append((hit[0], hit[1]))
+    for target, fn in targets:
+        if (target, fn) in seen:
+            continue
+        seen.add((target, fn))
+        body = _function_text(_read(target), fn)
+        if not body:
+            # Re-exported from somewhere else: the module only names it.
+            body = "%s(" % fn if re.search(r"\b%s\b" % re.escape(fn), _read(target)) else ""
+        why = _limit_in(body, target, hops - 1, seen)
+        if why:
+            return why
+    return ""
+
+
+def _codeql_rate_limited(repo_root: str, path: str, source: str,
+                         start: int, end: int) -> str:
+    """-> what limits this handler, for js/missing-rate-limiting, or empty."""
+    lines = (source or "").splitlines()
+    text = "\n".join(lines[max(0, start - 1):max(start, end)])
+    full = path if os.path.isabs(path) else os.path.join(repo_root, path)
+    return _limit_in(text, full, 2, set())
+
+
+def _codeql_privileged_source(repo_root: str, flow_source: dict) -> str:
+    """-> the guard on the route the input comes from, or empty."""
+    if not isinstance(flow_source, dict):
+        return ""
+    path, line = str(flow_source.get("path") or ""), int(flow_source.get("line") or 0)
+    if not path or line <= 0:
+        return ""
+    lines = _read(os.path.join(repo_root, path)).splitlines()
+    for text in reversed(lines[max(0, line - 15):line]):
+        found = PRIVILEGED_GUARD.search(text)
+        if found:
+            return found.group(0)
+        # The start of this route.  Past it is the previous route, and
+        # whatever guards that one does not guard this one.
+        if re.search(r"\b(?:router|app)\.(?:get|post|put|patch|delete|all)\s*\(", text):
+            break
+    return ""
+
+
+def _codeql_guarded_on_flow(repo_root: str, flow_source: dict) -> str:
+    """-> an own key check somewhere along the data flow, or empty.
+
+    The method can be handed in as an argument, so the line that calls it has
+    no lookup on it at all.  The lookup, and the check before it, are on the
+    way there, which is what the flow steps are for.
+    """
+    for step in (flow_source or {}).get("steps") or []:
+        path, line = str(step.get("path") or ""), int(step.get("line") or 0)
+        if not path or line <= 0:
+            continue
+        source = _read(os.path.join(repo_root, path))
+        guard = _codeql_guarded_call(source, line)
+        if guard:
+            return "%s in %s" % (guard, path)
+        # Along the way the lookup is often handed on rather than called,
+        # show(name, VIEWS[name]), so a guarded lookup counts here too.
+        lines = source.splitlines()
+        window = "\n".join(lines[max(0, line - 9):line - 1])
+        for lookup in TABLE_LOOKUP.finditer(_line(source, line)):
+            table, key = lookup.group("table"), lookup.group("key")
+            if not re.search(r"\b(?:const|let|var)\s+%s\s*=\s*\{" % re.escape(table), source):
+                continue
+            found = re.search(r"hasOwnProperty\.call\(\s*%s\s*,\s*%s\s*\)"
+                              % (re.escape(table), re.escape(key)), window)
+            if found:
+                return "%s in %s" % (found.group(0), path)
+    return ""
+
+
+# What a value capped to a length looks like where it enters.  The function
+# is then read to make sure it really refuses or cuts anything longer.
+CAPPED_INPUT = re.compile(
+    r"\b(?P<fn>[A-Za-z_$][\w$]*)\(\s*req\.[\w$.\[\]'\"]+\s*,\s*(?P<n>\d{1,6})\b")
+# Short enough that even a cubic regex is nothing.
+CAP_LIMIT = 256
+
+
+def _codeql_capped_source(repo_root: str, flow_source: dict) -> str:
+    """-> how the input is capped where it enters, if it is, or empty."""
+    if not isinstance(flow_source, dict):
+        return ""
+    path, line = str(flow_source.get("path") or ""), int(flow_source.get("line") or 0)
+    full = os.path.join(repo_root, path)
+    source = _read(full)
+    found = CAPPED_INPUT.search(_line(source, line))
+    if not found or int(found.group("n")) > CAP_LIMIT:
+        return ""
+    name = found.group("fn")
+    target = ""
+    for req in REQUIRE_LOCAL.finditer(source):
+        names = [p.strip().split(":")[-1].strip()
+                 for p in (req.group("names") or "").split(",")]
+        if name in names:
+            target = _resolve_module(full, req.group("path"))
+    body_source = _read(target) if target else source
+    signature = re.search(r"\bfunction\s+%s\s*\(([^)]*)\)" % re.escape(name), body_source)
+    if not signature:
+        return ""
+    params = [p.strip().split("=")[0].strip() for p in signature.group(1).split(",")]
+    if len(params) < 2 or not params[1]:
+        return ""
+    limit = re.escape(params[1])
+    body = _function_text(body_source, name)
+    refuses = re.search(r"\.length\s*>=?\s*%s\b[^\n]*\b(fail|throw)\b" % limit, body)
+    cuts = re.search(r"\.slice\(\s*0\s*,\s*%s\s*\)" % limit, body)
+    if refuses or cuts:
+        return "%s(..., %s)" % (name, found.group("n"))
+    return ""
+
+
+# The variable a comment or tag strip was written into, and the only things
+# its own parser does with it.  None of these can carry it out of the function.
+STRIPPED = re.compile(r"\b(?:const|let|var)\s+(?P<var>[A-Za-z_$][\w$]*)\s*=\s*[^;\n]*\.replace\(")
+READ_ONLY_USE = (r"\.(?:exec|test)\(\s*{v}\s*\)", r"\b{v}\.(?:indexOf|lastIndexOf|slice|substring|"
+                 r"charAt|charCodeAt|startsWith|endsWith|length)\b")
+
+
+def _codeql_parser_only(source: str, line: int) -> str:
+    """-> the variable, if a stripped string is only read by its own parser."""
+    found = STRIPPED.search(_line(source, line))
+    if not found:
+        return ""
+    var = found.group("var")
+    lines = (source or "").splitlines()
+    rest = []
+    for text in lines[line:]:
+        if re.match(r"^\}", text):
+            break
+        rest.append(text)
+    uses = [m for m in re.finditer(r"(?<![\w$.])%s(?![\w$])" % re.escape(var), "\n".join(rest))]
+    if not uses:
+        return ""
+    allowed = sum(len(re.findall(p.format(v=re.escape(var)), "\n".join(rest)))
+                  for p in READ_ONLY_USE)
+    return var if allowed >= len(uses) else ""
+
+
+# A request whose every connection resolves through a lookup that filters the
+# address it is about to connect to.  Checked at connect time, which is the
+# one place DNS rebinding cannot get past, and the defense CodeQL does not
+# model.
+GUARDED_AGENT = re.compile(r"new\s+https?\.Agent\(\s*\{[^}]*\blookup\s*:")
+FILTERED_LOOKUP = re.compile(r"dns\.lookup\([^)]*\)[\s\S]{0,400}?\.filter\(")
+
+
+def _codeql_connect_guard(source: str) -> bool:
+    return bool(GUARDED_AGENT.search(source or "")) and \
+        bool(FILTERED_LOOKUP.search(source or ""))
+
+
+# A key as a key file holds it: the armor, then base64.  A detector's own
+# regex for the armor has a group or a backslash where the base64 would be.
+SERVICE_ACCOUNT_KEY = re.compile(
+    r"-----BEGIN (?:RSA )?PRIVATE KEY-----(?:\\n|\s)+[A-Za-z0-9+/]{40}")
+
 
 # --- running a command, and the two ways PHP makes that safe -----------------
 #
@@ -1284,6 +1580,36 @@ def judge(rule: str, path: str, matched: str, source: str, line: int = 0,
                     "expression. There is no attacker input to inject.",
                     "actions-fixed-input")
 
+    if rule in CODEQL_XSS:
+        written = _line(source, line)
+        if TEXT_SINK.search(written) and not HTML_SINK.search(written):
+            return (NOT_APPLICABLE,
+                    "the value is written into the page as a text node, which "
+                    "the browser never parses as markup, so it cannot inject "
+                    "script",
+                    "codeql-text-node")
+
+    if rule == "js/unvalidated-dynamic-method-call":
+        guard = _codeql_guarded_call(source, line)
+        if guard:
+            return (NOT_APPLICABLE,
+                    "the method is only looked up after %s, so it can only be "
+                    "one of the functions in a table declared in this file, "
+                    "never a prototype method like constructor" % guard[:80],
+                    "codeql-own-key")
+
+    # This rule matches "type": "service_account", which is the label on a
+    # Google key file and not the key.  It fired on a comment in a secret
+    # scanner describing what it looks for.  The file only leaks something if
+    # the private key is in it as well, written out, so that is what decides.
+    if rule == "detected-google-gcm-service-account" \
+            and not SERVICE_ACCOUNT_KEY.search(source or ""):
+        return (NOT_APPLICABLE,
+                "it names the type of a Google service account file, but no "
+                "private key is written out anywhere in this file, so there "
+                "is no credential here",
+                "service-account-without-key")
+
     if PLACEHOLDERS and CREDENTIAL_RULE.search(rule):
         for candidate in [text] + QUOTED_VALUE.findall(text):
             value = candidate.strip()
@@ -2048,8 +2374,73 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
                 verdict = NOT_APPLICABLE
                 reason = not_here
                 decided_by = "framework-not-used"
+        # Two CodeQL questions that need the repository, not just the file.
+        if verdict == REVIEW and rule == "js/missing-rate-limiting":
+            limited = _codeql_rate_limited(
+                repo_root, relative, source,
+                finding.get("start", {}).get("line", 0),
+                finding.get("end", {}).get("line", 0))
+            if limited:
+                verdict = NOT_APPLICABLE
+                reason = ("the handler, or what it calls, holds callers back "
+                          "itself (%s), which CodeQL does not recognize "
+                          "because it only knows limiter packages by name"
+                          % limited[:60])
+                decided_by = "codeql-own-limiter"
+        flow = finding.get("flow_source")
+        if verdict == REVIEW and rule == "js/unvalidated-dynamic-method-call":
+            guard = _codeql_guarded_on_flow(repo_root, flow)
+            if guard:
+                verdict = NOT_APPLICABLE
+                reason = ("the method is looked up after %s, on the way here, "
+                          "so it can only be one of the functions in that "
+                          "table, never a prototype method" % guard[:120])
+                decided_by = "codeql-own-key"
+        if verdict == REVIEW and rule == "js/polynomial-redos":
+            capped = _codeql_capped_source(repo_root, flow)
+            if capped:
+                verdict = NOT_APPLICABLE
+                reason = ("the input is refused where it comes in when it is "
+                          "longer than the cap in %s, and a polynomial regex "
+                          "on a string that short finishes at once" % capped)
+                decided_by = "codeql-capped-input"
         finding["triage"] = {"verdict": verdict, "reason": reason,
                              "rule": decided_by, "matched": matched[:200]}
+        line_no = finding.get("start", {}).get("line", 0)
+        if verdict == REVIEW and rule == "js/incomplete-multi-character-sanitization":
+            var = _codeql_parser_only(source, line_no)
+            if var:
+                finding["triage"]["demote"] = {"severity": "low",
+                                               "rule": "codeql-parser-only"}
+                finding["triage"]["reason"] = (
+                    "graded low: %s is only read by this function's own parser "
+                    "and never returned or written out, so what is left of a "
+                    "stripped comment is not put on a page from here.  What "
+                    "the parser extracts from it is worth a look" % var)
+                finding["triage"]["rule"] = "codeql-parser-only"
+                continue
+        if verdict == REVIEW and rule == "js/request-forgery" \
+                and _codeql_connect_guard(source):
+            finding["triage"]["demote"] = {"severity": "low",
+                                           "rule": "codeql-connect-guard"}
+            finding["triage"]["reason"] = (
+                "graded low: every connection made here resolves through a "
+                "lookup that filters the address at connect time, which is the "
+                "defense against this and is not something CodeQL models.  "
+                "Whether that filter allows the right ranges is the question "
+                "to review")
+            finding["triage"]["rule"] = "codeql-connect-guard"
+            continue
+        if verdict == REVIEW and rule in CODEQL_DOS:
+            guard = _codeql_privileged_source(repo_root, finding.get("flow_source"))
+            if guard:
+                finding["triage"]["demote"] = {"severity": "low",
+                                               "rule": "codeql-privileged-source"}
+                finding["triage"]["reason"] = (
+                    "real, but the input only comes from a route behind %s, so "
+                    "only somebody already trusted with that can send it" % guard)
+                finding["triage"]["rule"] = "codeql-privileged-source"
+                continue
         promoted = _promotion(rule, relative, matched, source,
                               finding.get("start", {}).get("line", 0), corpus)
         if promoted:

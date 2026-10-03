@@ -35,7 +35,7 @@ scan_one_repo() {
   BRANCHES_JSON='[]'; SECRETS_JSON='{"reported":[],"filtered":[],"suppressed":[]}'
   SBOM_JSON='null'; LICENSE_JSON='null'; POLICY_JSON='null'; VULNS_JSON='[]'
   SBOM_BY_BRANCH_JSON='[]'; ACCESS_JSON='null'
-  PULLS_JSON='[]'; CLONE_TRAFFIC_JSON='null'; CODE_FINDINGS_JSON='[]'
+  PULLS_JSON='[]'; CLONE_TRAFFIC_JSON='null'; CODE_FINDINGS_JSON='[]'; CODEQL_UNREAD=''
   MISCONFIG_JSON='[]'; WORKFLOW_JSON='[]'
   # Whether a dynamic pass could ever run here.  null until the question is
   # asked, so a report from before this existed and a repository nobody asked
@@ -105,6 +105,7 @@ scan_one_repo() {
       --argjson dur "$(( $(date +%s) - started ))" \
       --argjson code_ok "${CODE_PASS_COMPLETE:-true}" \
       --arg code_why "${CODE_PASS_INCOMPLETE:-}" \
+      --arg codeql_why "${CODEQL_UNREAD:-}" \
       --arg secrets_why "${SECRETS_PASS_INCOMPLETE:-}" \
       --arg hist_mb "${HISTORY_VOLUME_MB:-}" \
       --argjson sso "${GHSCAN_SSO_TRUNCATED:-0}" \
@@ -138,6 +139,9 @@ scan_one_repo() {
         # report is missing rather than fixed.
         code_complete: $code_ok,
         code_incomplete_reason: (if $code_why == "" then null else $code_why end),
+        # The CodeQL alerts on GitHub could not be read.  Only those findings are
+        # held open: semgrep still read the code, so its answer still stands.
+        codeql_unread_reason: (if $codeql_why == "" then null else $codeql_why end),
         # Which engine died, for whoever has to work out afterwards why a
         # repository went quiet.  This file is the only record that survives
         # the run, and it is what the diagnosis was missing.
@@ -623,6 +627,16 @@ scan_one_repo() {
         (( agreed > 0 )) && log_info "[$full_name] $agreed finding(s) seen by more than one engine"
       fi
     fi
+    # GitHub's CodeQL alerts.  Under the vulnerability sources setting, because
+    # that is where an install already said whether it wants them.
+    if cfg_json '.scan.vulnerabilities.sources // []' | jq -e 'index("github_code_scanning")' >/dev/null; then
+      local cq_in cq_out
+      cq_in=$(json_file "$CODE_FINDINGS_JSON" code_before_codeql)
+      cq_out=$(tmp_file code_with_codeql)
+      codeql_alerts "$clone_dir" "$full_name" "$default_branch" \
+        "$(cfg '.github.web_url' 'https://github.com')" "$cq_in" "$cq_out"
+      CODE_FINDINGS_JSON=$(cat "$cq_out")
+    fi
     local nc; nc=$(printf '%s' "$CODE_FINDINGS_JSON" | jq 'length')
     if (( nc > 0 )); then
       log_warn "[$full_name] $nc code vulnerability finding(s), $(printf '%s' "$CODE_FINDINGS_JSON" | jq '[.[]|select(.severity=="critical")]|length') critical, semgrep used ${GHSCAN_SEMGREP_RULESETS:-an unknown number of} rulesets"
@@ -837,9 +851,9 @@ scan_one_repo() {
     if printf '%s' "$vsources" | jq -e 'index("github_dependabot")' >/dev/null; then
       f=$(tmp_file v_dep); vulns_dependabot "$full_name" > "$f"; parts+=("$f")
     fi
-    if printf '%s' "$vsources" | jq -e 'index("github_code_scanning")' >/dev/null; then
-      f=$(tmp_file v_cs); vulns_code_scanning "$full_name" "$(cfg '.github.web_url' 'https://github.com')" > "$f"; parts+=("$f")
-    fi
+    # github_code_scanning is still read from this list, so an install keeps
+    # whatever it had chosen, but the alerts are code findings and are read in
+    # the code pass above.
     # The layer underneath the application.  Off unless somebody turns it on:
     # this pulls base images from a registry, which is bandwidth and disk that
     # an install scanning two hundred repositories should opt into knowingly.

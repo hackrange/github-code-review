@@ -417,6 +417,10 @@ triage_findings() {
         # as a critical credential on entropy alone, which is what put stubs
         # from fixtures and documentation at the top of the queue.
         | ($f.jwt_signature_stub // false) as $jwt_stub
+        # A public key is shared on purpose and opens nothing by itself.
+        | ($f.public_key // false) as $pubkey
+        # user:token@host, written for somebody to fill in.
+        | ($f.url_stand_in // false) as $url_stub
 
         # A hash of content, in a file full of hashes of content.
         #
@@ -437,7 +441,7 @@ triage_findings() {
            and (($f.digest_siblings // 0) >= $mindig)) as $digest
 
         | (if $f.verified then "confirmed"
-           elif $pat_hit or $too_uniform or $jwt_stub or $digest then "placeholder"
+           elif $pat_hit or $too_uniform or $jwt_stub or $digest or $pubkey or $url_stub then "placeholder"
            elif $too_short or ($low_entropy and ($tri.drop_unverified_below_entropy // true)) then "placeholder"
            elif $noisy_path then "low"
            else "probable" end) as $verdict
@@ -447,6 +451,7 @@ triage_findings() {
             classification: (
               if $f.verified then "verified_live_credential"
               elif $digest then "content_digest"
+              elif $pubkey then "public_key"
               elif $verdict == "placeholder" then "placeholder_or_test_value"
               elif $verdict == "low" then "probable_test_fixture"
               else "unverified_probable_secret" end),
@@ -463,6 +468,7 @@ triage_findings() {
             severity_reason: (
               if $f.verified then "credential verified live against the issuing provider"
               elif $digest then "a content hash, one of \($f.digest_siblings) of its own shape in the same file"
+              elif $pubkey then "a \($f.public_key_type) public key, which is meant to be shared and opens nothing"
               elif $verdict == "low" then "real-shaped credential under a test or fixture path"
               else "credential survived placeholder triage" end),
             suppressed: $allowed,
@@ -475,6 +481,8 @@ triage_findings() {
               low_character_diversity: $too_uniform,
               jwt_signature_stub: $jwt_stub,
               content_digest: $digest,
+              public_key: $pubkey,
+              url_stand_in: $url_stub,
               non_production_path: $noisy_path
             }
           }

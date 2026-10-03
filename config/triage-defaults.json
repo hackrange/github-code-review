@@ -28,6 +28,7 @@
     "\\.{3,}$|\\x{2026}$",
     "^[A-Za-z][A-Za-z ]{6,}$",
     "^[A-Z][A-Z_]{7,}$",
+    "^(?:[a-z]+[_.-])+(?:password|passwd|pwd|secret|token|key|apikey|passphrase|credentials?)(?:[_.-][a-z]+)*$|^[a-z]+(?:[A-Z][a-z]+)*(?:Password|Passwd|Pwd|Secret|Token|Key|ApiKey|Passphrase|Credentials?)$",
     "(?i)^(my|your|our|the)[-_ ]",
     "(?i)^(todo|tbd|fixme|none|null|nil|undefined|unset|n/a|na)\\b"
   ],

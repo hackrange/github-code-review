@@ -337,6 +337,19 @@ def fingerprint_for(kind: str, row: dict) -> str:
     return "dep:" + _digest(*parts)
 
 
+def legacy_codeql_fingerprint(repository: str, rule_id: str) -> str:
+    """What a CodeQL alert was keyed on while it was filed as a dependency.
+
+    The alerts feed gave a package of null and null, so the name was built
+    from the repository and the rule and nothing else.  Worked out by the same
+    function that built it then, so the two cannot drift apart.
+    """
+    return fingerprint_for("dependency", {
+        "repository": repository,
+        "package": {"name": None, "version": None, "type": "source"},
+        "id": rule_id})
+
+
 def legacy_code_fingerprint(row: dict) -> str:
     """What this finding was called before identity stopped using the line.
 
@@ -612,6 +625,12 @@ def _set_aside_placeholders(session, document, seen_at, seen_fingerprints) -> in
     # which are the scanner's own reading of the shape of the string.
     reasons = (
         ("placeholder_pattern_match", "it matches a triage rule"),
+        ("public_key",
+         "it is a public key, which is meant to be shared and opens nothing "
+         "by itself"),
+        ("url_stand_in",
+         "the login in the address is a stand-in for the reader to fill in, "
+         "such as user:token@host, not a real one"),
         ("content_digest",
          "it is a hash of content rather than a credential: bare hex at exactly "
          "one hash length, and one of several of that same shape in the same "
@@ -917,6 +936,28 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                     carried.fingerprint = marker
                     finding = carried
                     counts["renamed"] = counts.get("renamed", 0) + 1
+            # A CodeQL alert that used to be filed as a dependency.  Those
+            # were keyed on rule alone, so one row stood for every alert of
+            # that rule in the repository.  The first alert to arrive takes it
+            # over, with every decision recorded on it, and the rest arrive as
+            # the separate findings they always were.
+            if finding is None and kind_name == "code" \
+                    and row.get("source") == "codeql":
+                old = legacy_codeql_fingerprint(full_name, row.get("rule_id"))
+                carried = (session.query(Finding)
+                           .filter(Finding.fingerprint == old,
+                                   Finding.kind == FindingKind.DEPENDENCY)
+                           .one_or_none())
+                if carried is not None:
+                    carried.fingerprint = marker
+                    carried.kind = FindingKind.CODE
+                    for name in ("package_name", "package_version",
+                                 "package_source", "ecosystem", "manifest_path",
+                                 "vulnerability_id", "fixed_in",
+                                 "reachability", "reachability_reason"):
+                        setattr(carried, name, "")
+                    finding = carried
+                    counts["renamed"] = counts.get("renamed", 0) + 1
 
             if finding is None:
                 finding = Finding(fingerprint=marker,
@@ -1021,6 +1062,12 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         # with no ceiling is a column somebody eventually fills.
         finding.snippet = (row.get("snippet") or "")[:2000]
         finding.verified = bool(row.get("verified"))
+        # Triage works this out from the value and the path, and it was being
+        # dropped here, so every credential read as unrated.  Confirmed means
+        # the provider said yes, which is as high as confidence goes.
+        grade = str(row.get("confidence") or "").strip().lower()
+        finding.confidence = "high" if grade == "confirmed" else (
+            grade if grade in ("low", "medium", "high") else "")
         finding.exposure = row.get("exposure") or ""
         finding.author_name = row.get("author_name") or ""
         finding.author_email = row.get("author_email") or ""
@@ -1246,6 +1293,14 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                         "so nothing is held open for it: %.120r", row)
             continue
         partial_code[named] = row.get("reason") or ""
+    # Repositories whose CodeQL alerts could not be read from GitHub.  Only
+    # findings CodeQL itself reported are held for these: semgrep still read
+    # the code, and what it no longer reports really is gone.
+    codeql_unread = set()
+    for row in (document.get("codeql_unread_repositories") or []):
+        named = row.get("repository") if isinstance(row, dict) else None
+        if isinstance(named, str) and named:
+            codeql_unread.add(named)
     # Before anything is closed, because the whole point of it is to keep a
     # value the scanner looked at out of the set that looks like it went away.
     counts["set_aside"] = _set_aside_placeholders(
@@ -1363,6 +1418,25 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                     and finding.repository in partial_code):
                 counts["held_open"] = counts.get("held_open", 0) + 1
                 continue
+            # CodeQL alerts nobody could fetch this time.  Either the code
+            # finding they became, or one still filed the old way as a
+            # dependency with no package, which only CodeQL ever produced.
+            from_codeql = "codeql" in str(finding.engines or "").lower()
+            legacy_codeql = (finding.kind == FindingKind.DEPENDENCY
+                             and (finding.ecosystem or "") == "source")
+            if (from_codeql or legacy_codeql) and \
+                    finding.repository in codeql_unread:
+                counts["held_open"] = counts.get("held_open", 0) + 1
+                continue
+            # The old dependency rows are retired by the code pass now, so they
+            # wait for it rather than for the vulnerability pass, which no
+            # longer reads CodeQL at all and would otherwise close every one.
+            if legacy_codeql:
+                done = passes_done.get(finding.repository)
+                if (finding.repository in partial_code
+                        or (done is not None and "code" not in done)):
+                    counts["held_open"] = counts.get("held_open", 0) + 1
+                    continue
             # The same argument for credentials.  With a history window a run
             # walks one slice and reports that slice, so a credential sitting
             # in a commit nobody read this time is absent from the report and

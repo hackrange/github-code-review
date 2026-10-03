@@ -192,6 +192,12 @@ report_build() {
           [ $repos[] | select(.code_complete == false)
             | {repository: .repository.full_name, reason: (.code_incomplete_reason // "the code pass did not complete")} ],
 
+        # Repositories whose CodeQL alerts could not be read from GitHub.  Only
+        # findings CodeQL reported are held open for these.
+        codeql_unread_repositories:
+          [ $repos[] | select((.codeql_unread_reason // "") != "")
+            | {repository: .repository.full_name, reason: .codeql_unread_reason} ],
+
 
         misconfigurations: ( $iac | sort_by([ -( .severity | rank ), .repository, .file ]) ),
 
@@ -273,6 +279,9 @@ report_build() {
           # end to end.  Computed and discarded here, that decision would be
           # made on the wrong evidence.
           secrets_incomplete_reason: (.secrets_incomplete_reason // null),
+          # Why the CodeQL alerts were not read, for the same reader: it is
+          # the whole reason those findings were held open rather than closed.
+          codeql_unread_reason: (.codeql_unread_reason // null),
           branches_scanned: .branches_scanned,
           # And every branch that is there, walked or not.  The walked list is
           # narrowed by the quiet branch filter and the per repository cap, so

@@ -577,6 +577,60 @@ derive_secret_facts() {
                    ] | unique)
               }
           end;
+      # A public key is long, base64 and random, which is everything a generic
+      # secret rule looks for, and it is meant to be handed out.  A trust store
+      # of npm registry signing keys was coming up critical for exactly that.
+      #
+      # Every key of a given type and size starts with the same header bytes and
+      # comes out the same length, so the header and the length together say
+      # what it is.  The private forms start with a version number instead and
+      # never share these headers.  Armor around it is allowed, a private one
+      # is not.
+      def spki_types:
+        [["P-256", "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE", 124],
+         ["P-384", "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE", 160],
+         ["P-521", "MIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQ", 212],
+         ["secp256k1", "MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAE", 120],
+         ["Ed25519", "MCowBQYDK2VwAyEA", 60],
+         ["Ed448", "MEMwBQYDK2VxAzoA", 92],
+         ["X25519", "MCowBQYDK2VuAyEA", 60],
+         ["X448", "MEIwBQYDK2VvAzkA", 92],
+         ["RSA 1024", "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQ", 216],
+         ["RSA 2048", "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA", 392],
+         ["RSA 3072", "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA", 564],
+         ["RSA 4096", "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA", 736]];
+      def public_key_type:
+        if test("PRIVATE") then ""
+        else
+          (gsub("-----(BEGIN|END) PUBLIC KEY-----"; "") | gsub("[[:space:]]"; "")) as $b
+          | if ($b | test("^[A-Za-z0-9+/]+={0,2}$") | not) then ""
+            else (first(spki_types[]
+                        | select(. as $t | ($b | startswith($t[1]))
+                                           and ($b | length) == $t[2])
+                        | .[0]) // "")
+            end
+        end;
+      # A login written into an address for the reader to fill in.  A comment
+      # saying the token goes in user:token@host as the password came up critical,
+      # because the URI detector reports the whole address and nothing in it
+      # reads as a placeholder until it is taken apart.  So the password and
+      # the host are judged on their own: a stand-in word, a variable, or a
+      # host that is a word rather than a machine.  localhost is left out on
+      # purpose, since a real password to a local database is still one.
+      def url_stand_in($pp):
+        # Collected into an array on purpose.  capture with no match yields
+        # nothing at all, and nothing here would drop the whole finding.
+        (try ([capture("^[A-Za-z][A-Za-z0-9+.-]*://(?<u>[^:/@\\s]*):(?<p>[^@\\s]*)@(?<h>[^/:?#\\s]+)")][0])
+         catch null) as $u
+        | if $u == null then false
+          else ($u.p) as $p | ($u.h | ascii_downcase) as $h
+            | $p == ""
+              or ($p | test("^(password|passwd|pass|pwd|secret|token|apikey|api_key|key|changeme|change_me|placeholder|example|sample|dummy|test|admin|root|user|username|hunter2|letmein|_+token_+)$"; "i"))
+              or ($p | test("^[$%<{\\[]|\\$\\{|\\{\\{"))
+              or ($p | test("^(x+|\\*+|\\.+|0+)$"; "i"))
+              or any($pp[]?; . as $re | $p | test($re))
+              or ($h | test("^(host|hostname|your[-_]?host|my[-_]?host|server|domain|example)$|(^|\\.)example\\.(com|org|net)$|\\.(example|invalid|test)$"))
+          end;
       def shannon:
         (explode) as $c
         | ($c | length) as $n
@@ -584,6 +638,7 @@ derive_secret_facts() {
           else ($c | group_by(.) | map(length / $n) | map(-(. * log2)) | add)
           end;
       (._secret // "") as $s
+      | ($s | public_key_type) as $pk
       | . + {
           secret_fingerprint: $fp,
           _merge: $merge,
@@ -606,7 +661,11 @@ derive_secret_facts() {
           # share the file.  Facts, not a verdict: triage decides what a value
           # surrounded by four hundred of its own shape is.
           digest_shaped: $dshape,
-          digest_siblings: $dsibs
+          digest_siblings: $dsibs,
+          # Which kind of public key, or empty.  Said here, judged in triage.
+          public_key: ($pk != ""),
+          public_key_type: $pk,
+          url_stand_in: ($s | url_stand_in($pp))
         }
       + ($s | jwt_facts)
       | del(._secret)'

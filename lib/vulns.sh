@@ -99,40 +99,8 @@ vulns_dependabot() {
     } ]' 2>/dev/null || echo '[]'
 }
 
-# vulns_code_scanning <full_name> -> JSON array (SAST findings, incl. hardcoded creds)
-vulns_code_scanning() {
-  local full_name="$1" web="$2"
-  # Same again: an empty result here would read as "nothing wrong".
-  if ! provider_supports code_scanning; then
-    log_debug "$(provider_name) has no code scanning alerts, so it is not asked for"
-    echo '[]'; return 0
-  fi
-  local body
-  body=$(api_paginate "/repos/${full_name}/code-scanning/alerts?state=open" 100) || {
-    log_debug "$full_name: code scanning alerts unavailable"
-    echo '[]'; return
-  }
-  printf '%s' "$body" | jq -c '
-    [ .[]? | {
-      source: "github_code_scanning",
-      id: (.rule.id // "UNKNOWN"),
-      aliases: [],
-      severity: ((.rule.security_severity_level // .rule.severity // "unknown") | ascii_downcase),
-      cvss_score: null,
-      title: (.rule.description // .rule.name // null),
-      package: {name: null, version: null, type: "source", purl: null,
-                locations: ([ .most_recent_instance.location.path // empty ])},
-      file: (.most_recent_instance.location.path // null),
-      start_line: (.most_recent_instance.location.start_line // null),
-      branch: ((.most_recent_instance.ref // "") | sub("^refs/heads/"; "")),
-      tool: (.tool.name // null),
-      reference: (.html_url // null),
-      alert_number: .number,
-      state: (.state // "open"),
-      created_at: .created_at,
-      fix_state: "unknown"
-    } ]' 2>/dev/null || echo '[]'
-}
+# CodeQL alerts used to be read here, as dependency findings with no package.
+# They are code findings and are read by codeql_alerts in code_analysis.sh.
 
 # vulns_merge <arr1> <arr2> ... -> deduped, severity-filtered, sorted array
 # vulns_stamp <repo> <default_branch> - adds organization/repository/branch

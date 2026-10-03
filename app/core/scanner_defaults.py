@@ -163,6 +163,15 @@ TEMPLATE = {
                         "\\.{3,}$|\\x{2026}$",
                         "^[A-Za-z][A-Za-z ]{6,}$",
                         "^[A-Z][A-Z_]{7,}$",
+                        # The name of a secret is not the secret.  A settings
+                        # table writes { secret: 'smtp_password' }, which the
+                        # password rule reads as a hardcoded password, and one
+                        # file like that was three criticals.  A credential
+                        # word on the end of a lowercase name, snake_case or
+                        # camelCase, is what an identifier looks like.  The
+                        # leading parts are letters only, so a weak real
+                        # password like s3cr3t_token is still reported.
+                        "^(?:[a-z]+[_.-])+(?:password|passwd|pwd|secret|token|key|apikey|passphrase|credentials?)(?:[_.-][a-z]+)*$|^[a-z]+(?:[A-Z][a-z]+)*(?:Password|Passwd|Pwd|Secret|Token|Key|ApiKey|Passphrase|Credentials?)$",
                         "(?i)^(my|your|our|the)[-_ ]",
                         "(?i)^(todo|tbd|fixme|none|null|nil|undefined|unset|n/a|na)\\b"
                     ],

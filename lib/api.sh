@@ -186,6 +186,11 @@ api_get() {
     local -a api_headers=()
     local api_header
     while IFS= read -r api_header; do
+      # One call can ask for a different format, such as SARIF.  Replaced
+      # rather than added, because two Accept headers leave the host to pick.
+      if [[ -n "${GHSCAN_API_ACCEPT:-}" && "${api_header,,}" == accept:* ]]; then
+        api_header="Accept: $GHSCAN_API_ACCEPT"
+      fi
       [[ -n "$api_header" ]] && api_headers+=(-H "$api_header")
     done < <(provider_call api_headers)
 
