@@ -651,6 +651,14 @@ scan_one_repo() {
     local tv; tv=$(tmp_file trivy)
     run_trivy_config "$clone_dir" "$full_name" "$tv"
     MISCONFIG_JSON=$(normalize_trivy_config "$tv" "$full_name" "$default_branch" "$(cfg '.github.web_url' 'https://github.com')")
+    # The container user check reads the supervisor config trivy never opens.
+    # A failure here keeps the rows as trivy graded them.
+    local mc_py; mc_py=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
+    if [[ -n "$mc_py" && "$MISCONFIG_JSON" != "[]" ]]; then
+      local mc_in; mc_in=$(json_file "$MISCONFIG_JSON" misconfig)
+      local mc_out; mc_out=$("$mc_py" "$GHSCAN_HOME/lib/code_triage.py" --misconfig "$mc_in" "$clone_dir" 2>/dev/null) \
+        && [[ -n "$mc_out" ]] && MISCONFIG_JSON="$mc_out"
+    fi
     local ni; ni=$(printf '%s' "$MISCONFIG_JSON" | jq '[.[]|select(.triage=="review")]|length')
     local nit; nit=$(printf '%s' "$MISCONFIG_JSON" | jq 'length')
     if (( ni > 0 )); then

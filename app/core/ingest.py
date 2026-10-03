@@ -1003,6 +1003,26 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             # The engine's grade is kept beside it rather than overwritten, so
             # this reads as a decision somebody can disagree with.  A rule an
             # admin wrote still wins, because it is applied after.
+            # A distribution package in a base image the build upgrades after
+            # pulling it.  The image in the registry carries the old version
+            # and the image that ships most likely does not, so these go to
+            # the bottom together, at low, which is what the recommendation on
+            # each one already said and what people were doing by hand, a
+            # hundred at a time.  Only distribution packages: an upgrade does
+            # not rebuild the Go runtime inside a binary, so a stdlib finding
+            # keeps its grade.  An admin rule or a regrade still has the last
+            # word, because both are applied below.  Known exploited ones keep
+            # their grade: "probably upgraded" is not enough for those.
+            if (finding.kind == FindingKind.DEPENDENCY
+                    and finding.base_upgraded
+                    and not finding.known_exploited
+                    and (finding.ecosystem or "").lower() in ("deb", "rpm", "apk")
+                    and finding.severity in (Severity.CRITICAL, Severity.HIGH,
+                                             Severity.MEDIUM)):
+                finding.engine_severity = (finding.engine_severity
+                                           or finding.severity.value)
+                finding.severity = Severity.LOW
+
             if (finding.triage == "not_applicable"
                     and finding.severity != Severity.INFO):
                 finding.engine_severity = (finding.engine_severity

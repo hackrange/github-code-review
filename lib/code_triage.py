@@ -498,6 +498,40 @@ CODEQL_DOS = frozenset({"js/polynomial-redos", "js/redos", "js/regex-injection",
                         "js/unvalidated-dynamic-method-call"})
 PRIVILEGED_GUARD = re.compile(
     r"\b(requirePerm|requirePermission|requireRole|requireAdmin|adminOnly|isAdmin)\s*\(\s*([^)]{0,60})\)")
+# Which permission checks mean somebody already trusted.  A check is not the
+# same as a privilege: requirePerm('packages:read') is held by every viewer, and
+# reading it as a gate graded an open door low.  The operator verbs are what an
+# approver or administrator holds, and anything scoped to the caller's own
+# objects is not one of them.
+OPERATOR_PERMISSION = re.compile(
+    r"(?:^|[:._-])(write|purge|decide|import|admin|manage|delete|approve|configure)"
+    r"(?:[:._-]all)?$", re.I)
+
+
+def _privileged_guard(text: str) -> str:
+    """-> the guard on this line, if it is one only trusted people pass."""
+    for found in PRIVILEGED_GUARD.finditer(text or ""):
+        kind, arg = found.group(1), found.group(2).strip().strip("'\"` ")
+        if kind in ("requireAdmin", "adminOnly", "isAdmin"):
+            return found.group(0)
+        if kind == "requireRole" and re.search(r"admin|owner|approver", arg, re.I):
+            return found.group(0)
+        if kind in ("requirePerm", "requirePermission") and \
+                not arg.endswith(":own") and OPERATOR_PERMISSION.search(arg):
+            return found.group(0)
+    return ""
+
+
+def _route_guard(source: str, line: int) -> str:
+    """-> the privileged guard on the route that holds this line, or empty."""
+    lines = (source or "").splitlines()
+    for text in reversed(lines[max(0, line - 15):line]):
+        guard = _privileged_guard(text)
+        if guard:
+            return guard
+        if re.search(r"\b(?:router|app)\.(?:get|post|put|patch|delete|all)\s*\(", text):
+            break
+    return ""
 
 # What counts as the handler holding back a caller who asks too often.  CodeQL
 # only knows the limiter packages by name; an app that counts in its own
@@ -632,16 +666,7 @@ def _codeql_privileged_source(repo_root: str, flow_source: dict) -> str:
     path, line = str(flow_source.get("path") or ""), int(flow_source.get("line") or 0)
     if not path or line <= 0:
         return ""
-    lines = _read(os.path.join(repo_root, path)).splitlines()
-    for text in reversed(lines[max(0, line - 15):line]):
-        found = PRIVILEGED_GUARD.search(text)
-        if found:
-            return found.group(0)
-        # The start of this route.  Past it is the previous route, and
-        # whatever guards that one does not guard this one.
-        if re.search(r"\b(?:router|app)\.(?:get|post|put|patch|delete|all)\s*\(", text):
-            break
-    return ""
+    return _route_guard(_read(os.path.join(repo_root, path)), line)
 
 
 def _codeql_guarded_on_flow(repo_root: str, flow_source: dict) -> str:
@@ -753,6 +778,540 @@ FILTERED_LOOKUP = re.compile(r"dns\.lookup\([^)]*\)[\s\S]{0,400}?\.filter\(")
 def _codeql_connect_guard(source: str) -> bool:
     return bool(GUARDED_AGENT.search(source or "")) and \
         bool(FILTERED_LOOKUP.search(source or ""))
+
+
+# --- JavaScript rules, read against what they fired on in a real codebase -----
+#
+# Each of these was a finding in the work list that the code beside it showed
+# could not be what the rule was looking for.  Every check proves something
+# from the file or its neighbors, and says what it proved; anything it cannot
+# prove leaves the finding where it was.
+
+# The arguments a call was given, with nested brackets and strings respected.
+def _js_args(text: str, start: int) -> list:
+    """Split the argument list that opens at text[start] == '('."""
+    args, depth, current, quote = [], 0, [], ""
+    for ch in text[start + 1:]:
+        if quote:
+            current.append(ch)
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "'\"`":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                args.append("".join(current).strip())
+                return args
+            depth -= 1
+        elif ch == "," and depth == 0:
+            args.append("".join(current).strip())
+            current = []
+            continue
+        current.append(ch)
+    return []
+
+
+STRING_LITERAL = re.compile(r"""^(?:'[^'\\\n]*'|"[^"\\\n]*"|`[^`$\\]*`)$""")
+JS_IDENT = r"[A-Za-z_$][\w$]*"
+
+
+def _js_enclosing_function(source: str, line: int):
+    """-> (name, [params], start offset) of the function holding this line."""
+    lines = (source or "").splitlines()
+    head = re.compile(
+        r"(?:\bfunction\s+(?P<a>%s)\s*\((?P<pa>[^)]*)\)"
+        r"|\b(?:const|let|var)\s+(?P<b>%s)\s*=\s*(?:async\s*)?(?:function\b[^(]*)?\((?P<pb>[^)]*)\)\s*(?:=>)?)"
+        % (JS_IDENT, JS_IDENT))
+    for number in range(min(line, len(lines)), max(0, line - 60), -1):
+        found = head.search(lines[number - 1])
+        if found:
+            name = found.group("a") or found.group("b")
+            params = [p.strip().split("=")[0].strip().strip("{}") for p in
+                      (found.group("pa") or found.group("pb") or "").split(",")]
+            return name, [p for p in params if p], number
+    return None, [], 0
+
+
+def _js_exported(source: str, name: str) -> bool:
+    return bool(re.search(r"module\.exports\s*=\s*\{[^}]*\b%s\b" % re.escape(name), source or "")
+                or re.search(r"(?:module\.)?exports\.%s\s*=" % re.escape(name), source or "")
+                or re.search(r"\bexport\s+(?:async\s+)?(?:function|const)\s+%s\b" % re.escape(name), source or ""))
+
+
+def _js_calls_pass_literal(source: str, name: str, index: int, defined_at: int) -> bool:
+    """Every call of this function in the file passes a string literal here."""
+    seen = 0
+    text = source or ""
+    for call in re.finditer(r"(?<![\w$.])%s\s*\(" % re.escape(name), text):
+        if text.count("\n", 0, call.start()) + 1 == defined_at:
+            continue
+        args = _js_args(text, call.end() - 1)
+        if len(args) <= index or not STRING_LITERAL.match(args[index]):
+            return False
+        seen += 1
+    return seen > 0
+
+
+# A spawn or execFile with the arguments as a list and no shell asked for.
+NO_SHELL_SPAWN = re.compile(r"\b(?:spawn|spawnSync|execFile|execFileSync)\s*\(\s*(?P<cmd>%s)\s*," % JS_IDENT)
+
+
+def _js_fixed_program(source: str, line: int) -> str:
+    """-> why the program a child_process call runs is fixed, or empty."""
+    text = _line(source, line)
+    found = NO_SHELL_SPAWN.search(text)
+    if not found or re.search(r"\bshell\s*:\s*(?!false)", text):
+        return ""
+    name, params, defined_at = _js_enclosing_function(source, line)
+    cmd = found.group("cmd")
+    if not name or cmd not in params or _js_exported(source, name):
+        return ""
+    if _js_calls_pass_literal(source, name, params.index(cmd), defined_at):
+        return name
+    return ""
+
+
+# What a response says it is, set in the lines just before it is sent.
+JSON_CONTENT = re.compile(r"""res\.(?:set|setHeader|type)\(\s*['"](?:content-type['"]\s*,\s*['"])?application/json""", re.I)
+SANDBOX_CSP = re.compile(r"""content-security-policy['"]\s*,\s*[`'"][^`'"]*default-src 'none'[^`'"]*sandbox""", re.I)
+ESCAPERS = ("esc", "escape", "escapeHtml", "escapeHTML", "htmlEscape", "encodeHTML")
+
+
+def _js_escaper_names(source: str) -> set:
+    """Functions in this file that turn < and & into entities."""
+    names = set()
+    for name in ESCAPERS:
+        body = _function_text(source, name)
+        if body and "&lt;" in body and "&amp;" in body:
+            names.add(name)
+    return names
+
+
+def _js_balanced(text: str, start: int, open_ch: str = "{", close_ch: str = "}") -> int:
+    """-> index just past the bracket that closes the one at text[start]."""
+    depth, quote = 0, ""
+    for at in range(start, len(text)):
+        ch = text[at]
+        if quote:
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "'\"" and depth > 0:
+            quote = ch
+        elif ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return at + 1
+    return -1
+
+
+def _js_safe_interpolation(expr: str, escapers: set, safe_arrays: set) -> bool:
+    expr = expr.strip()
+    call = re.match(r"^(%s)\(" % JS_IDENT, expr)
+    if call and call.group(1) in escapers:
+        return _js_balanced(expr, call.end() - 1, "(", ")") == len(expr)
+    joined = re.match(r"^(%s)\.join\([^)]*\)$" % JS_IDENT, expr)
+    if joined and joined.group(1) in safe_arrays:
+        return True
+    ternary = re.match(r"^(.+?)\?(.+):(.+)$", expr)
+    if ternary:
+        return all(STRING_LITERAL.match(part.strip()) or
+                   _js_safe_interpolation(part, escapers, safe_arrays)
+                   for part in (ternary.group(2), ternary.group(3)))
+    return bool(STRING_LITERAL.match(expr) or re.match(r"^\d+$", expr))
+
+
+def _js_interpolations(template: str) -> list:
+    out, at = [], 0
+    while True:
+        at = template.find("${", at)
+        if at < 0:
+            return out
+        end = _js_balanced(template, at + 1)
+        if end < 0:
+            return out
+        out.append(template[at + 2:end - 1])
+        at = end
+
+
+def _js_templates(body: str) -> list:
+    """Every template literal in this text, nested ones included."""
+    out, at = [], 0
+    while True:
+        at = body.find("`", at)
+        if at < 0:
+            return out
+        end, depth = at + 1, 0
+        while end < len(body):
+            if body[end] == "\\":
+                end += 2
+                continue
+            if body.startswith("${", end):
+                depth += 1
+                end += 2
+                continue
+            if body[end] == "}" and depth:
+                depth -= 1
+            elif body[end] == "`" and not depth:
+                break
+            end += 1
+        out.append(body[at + 1:end])
+        at = end + 1
+
+
+def _js_renderer_escapes(source: str, name: str) -> bool:
+    """Every value this function puts into markup goes through an escaper."""
+    body = _function_text(source, name)
+    escapers = _js_escaper_names(source)
+    if not body or not escapers:
+        return False
+    # Arrays whose every piece is an escaped template, which may be joined in.
+    safe_arrays = set()
+    for array in re.finditer(r"\b(?:const|let|var)\s+(%s)\s*=\s*\[" % JS_IDENT, body):
+        var = array.group(1)
+        pieces = re.findall(r"\b%s\.push\(\s*(`[^`]*`)\s*\)" % re.escape(var), body)
+        opening = body[array.end() - 1:_js_balanced(body, array.end() - 1, "[", "]")]
+        pieces += re.findall(r"`[^`]*`", opening)
+        if pieces and all(all(_js_safe_interpolation(e, escapers, set())
+                               for e in _js_interpolations(p[1:-1])) for p in pieces):
+            safe_arrays.add(var)
+    for template in _js_templates(body):
+        if "<" not in template:
+            continue
+        for expr in _js_interpolations(template):
+            if not _js_safe_interpolation(expr, escapers, safe_arrays):
+                return False
+    return True
+
+
+def _js_response_is_safe(repo_root: str, path: str, source: str, line: int) -> str:
+    """-> why what this line sends cannot run script in a browser, or empty."""
+    text = _line(source, line)
+    lines = (source or "").splitlines()
+    before = "\n".join(lines[max(0, line - 20):line])
+    if JSON_CONTENT.search(before) or re.search(r"\bres\.send\(\s*`?\$?\{?JSON\.stringify\(", text):
+        return "the response is sent as JSON, which a browser does not render as a page"
+    if SANDBOX_CSP.search(before):
+        return ("the response carries a content security policy of default-src "
+                "'none' with sandbox, so nothing in it can run script")
+    sent = re.search(r"\bres\.send\(\s*(%s)\s*\)" % JS_IDENT, text)
+    if not sent:
+        return ""
+    # The closest assignment above the send, not the first one in the window:
+    # a neighboring handler with its own `body` must not vouch for this one.
+    assignments = list(re.finditer(r"\b(?:const|let|var)\s+%s\s*=\s*([^;\n]*)" % re.escape(sent.group(1)), before))
+    if not assignments:
+        return ""
+    built = re.match(r"\s*(?:(%s)\.)?(%s)\(" % (JS_IDENT, JS_IDENT), assignments[-1].group(1))
+    if not built:
+        return ""
+    module, function = built.group(1), built.group(2)
+    where = source
+    if module:
+        full = os.path.join(repo_root, path)
+        target = ""
+        for req in REQUIRE_LOCAL.finditer(source):
+            if req.group("name") == module:
+                target = _resolve_module(full, req.group("path"))
+        where = _read(target) if target else ""
+    if where and _js_renderer_escapes(where, function):
+        return ("the page is built by %s, which puts every value into the "
+                "markup through an HTML escaper" % function)
+    return ""
+
+
+# A RegExp built from a value that is escaped first, or from a helper that is
+# only ever called with fixed names.
+REGEX_ESCAPE = re.compile(r"""\.replace\(\s*/\[[^\]]*\\\]\\\\\]/g\s*,\s*['"]\\\\\$&['"]\s*\)""")
+
+
+def _js_regexp_fixed(source: str, line: int) -> str:
+    text = _line(source, line)
+    if REGEX_ESCAPE.search(text):
+        return "every piece of the pattern is escaped before it is compiled"
+    found = re.search(r"new RegExp\(\s*`([^`]*)`", text)
+    if not found:
+        return ""
+    used = set(re.findall(r"\$\{\s*(%s)\s*\}" % JS_IDENT, found.group(1)))
+    if not used:
+        return ""
+    name, params, defined_at = _js_enclosing_function(source, line)
+    if not name or _js_exported(source, name):
+        return ""
+    for var in used:
+        if var not in params or not _js_calls_pass_literal(source, name, params.index(var), defined_at):
+            return ""
+    return "%s is only ever called with fixed names" % name
+
+
+# Path parts that cannot carry a separator.
+DIGEST_SOURCE = re.compile(r"\.digest\(\s*['\"]hex['\"]\s*\)|randomBytes\([^)]*\)\.toString\(\s*['\"]hex['\"]\s*\)|randomUUID\(\s*\)")
+HEX_ONLY_REGEX = re.compile(r"^/\^\[(?:0-9a-f|a-f0-9|0-9a-fA-F|0-9A-Fa-f|a-fA-F0-9)\](?:\{\d+(?:,\d*)?\}|\+)\$/[gimsuy]*$")
+
+
+def _js_hex_checked(source: str, var: str, line: int) -> bool:
+    lines = (source or "").splitlines()
+    window = "\n".join(lines[max(0, line - 12):line])
+    for test in re.finditer(r"if\s*\(\s*!\s*(/[^/\n]+/[gimsuy]*|%s)\.test\(\s*(?:String\()?\s*%s\b"
+                            % (JS_IDENT, re.escape(var)), window):
+        pattern = test.group(1)
+        if not pattern.startswith("/"):
+            defined = re.search(r"\b(?:const|let|var)\s+%s\s*=\s*(/[^\n;]+/[gimsuy]*)" % re.escape(pattern), source)
+            pattern = defined.group(1) if defined else ""
+        if pattern and HEX_ONLY_REGEX.match(pattern):
+            return True
+    return False
+
+
+def _js_path_part_safe(source: str, expr: str, line: int, hops: int = 2) -> str:
+    """-> what makes this path part safe, or empty."""
+    expr = expr.strip()
+    # semgrep's span for a template literal stops one short of its closing
+    # backtick, so the matched text arrives open.
+    if expr.startswith("`") and not expr.endswith("`") and expr.count("`") == 1:
+        expr += "`"
+    if STRING_LITERAL.match(expr) or expr in ("process.pid",) or re.match(r"^\d+$", expr):
+        return "fixed text"
+    if DIGEST_SOURCE.search(expr):
+        return "a digest"
+    if expr.startswith("`") and expr.endswith("`"):
+        parts = _js_interpolations(expr[1:-1])
+        reasons = [_js_path_part_safe(source, p, line, hops) for p in parts]
+        return "built from " + " and ".join(sorted(set(reasons))) if all(reasons) else ""
+    name = re.match(r"^(%s)(?:\.(?:slice|substring|substr)\([\d,\s]*\))?$" % JS_IDENT, expr)
+    member = re.match(r"^(%s)\.name$" % JS_IDENT, expr)
+    lines = (source or "").splitlines()
+    window = "\n".join(lines[max(0, line - 40):line])
+    if member:
+        loop = re.search(r"for\s*\(\s*const\s+%s\s+of\s+(%s)\s*\)" % (re.escape(member.group(1)), JS_IDENT), window)
+        if loop and re.search(r"\b%s\s*=\s*await\s+\w+\.readdir\(" % re.escape(loop.group(1)), window):
+            return "a name read from the directory itself"
+        return ""
+    if not name:
+        return ""
+    var = name.group(1)
+    if _js_hex_checked(source, var, line):
+        return "a value checked to be hex"
+    assigned = list(re.finditer(r"\b(?:const|let|var)\s+%s\s*=\s*([^;\n]+)" % re.escape(var), window))
+    if assigned:
+        value = assigned[-1].group(1)
+        if DIGEST_SOURCE.search(value):
+            return "a digest"
+        helper = re.match(r"(%s)\(" % JS_IDENT, value.strip())
+        if helper:
+            body = re.search(r"\b(?:const|function)\s+%s\b[^\n]*" % re.escape(helper.group(1)), source)
+            if body and DIGEST_SOURCE.search(body.group(0)):
+                return "a digest"
+    loop = re.search(r"for\s*\(\s*const\s+%s\s+of\s+\[([^\]]*)\]\s*\)" % re.escape(var), window)
+    if loop and all(STRING_LITERAL.match(p.strip()) for p in loop.group(1).split(",") if p.strip()):
+        return "fixed text"
+    base = _js_base_dir(source, var)
+    if base:
+        return base
+    return ""
+
+
+# A directory the application or its operator chose: the code's own location,
+# or a path out of the server configuration, with fixed names after it.
+BASE_DIR_VALUE = re.compile(
+    r"^(?:path\.(?:join|resolve)\(\s*)?(?P<root>__dirname|(?:config|cfg|settings)(?:\.[\w$]+)+)"
+    r"(?:\s*,\s*'[^'/]*')*\s*\)?\s*;?$")
+
+
+def _js_base_dir(source: str, var: str) -> str:
+    found = re.search(r"^(?:const|let)\s+%s\s*=\s*(.+?)\s*$" % re.escape(var), source or "", re.M)
+    if not found:
+        return ""
+    value = BASE_DIR_VALUE.match(found.group(1))
+    if not value:
+        return ""
+    return ("a directory inside the application" if value.group("root") == "__dirname"
+            else "a directory from the server's own configuration")
+
+
+def _js_member_base_dir(file: str, source: str, expr: str) -> str:
+    """cache.tarDir, where cache is a local module that builds tarDir itself."""
+    member = re.match(r"^(%s)\.(%s)$" % (JS_IDENT, JS_IDENT), expr.strip())
+    if not member or not file:
+        return ""
+    for req in REQUIRE_LOCAL.finditer(source or ""):
+        if req.group("name") == member.group(1):
+            target = _resolve_module(file, req.group("path"))
+            return _js_base_dir(_read(target), member.group(2)) if target else ""
+    return ""
+
+
+CALLER_PREFIX = "handed in by every caller as "
+
+
+def _js_path_safe(repo_root: str, path: str, source: str, line: int, matched: str,
+                  hops: int = 2) -> str:
+    """-> why the flagged part of a path.join cannot climb out, or empty."""
+    why = _js_path_part_safe(source, matched, line)
+    if why:
+        return why
+    if matched.strip().startswith(CALLER_PREFIX):
+        return ""
+    # A directory handed in.  Safe when every caller hands in a safe one.
+    var = matched.strip()
+    if not re.match(r"^%s$" % JS_IDENT, var):
+        return ""
+    name, params, defined_at = _js_enclosing_function(source, line)
+    if not name or var not in params:
+        return ""
+    index = params.index(var)
+    callers = []
+    files = [os.path.join(repo_root, path)]
+    if _js_exported(source, name):
+        files = []
+        for root, _dirs, names in os.walk(os.path.join(repo_root, os.path.dirname(path).split("/")[0] or ".")):
+            if "node_modules" in root:
+                continue
+            files += [os.path.join(root, n) for n in names if n.endswith((".js", ".mjs", ".cjs"))]
+        # Nearest first, and no silent cap: past this many files the answer
+        # would be a guess about the rest, so it says nothing instead.
+        here = os.path.dirname(os.path.join(repo_root, path))
+        files.sort(key=lambda f: (not f.startswith(here), f))
+        if len(files) > 3000:
+            return ""
+    defining = os.path.join(repo_root, path)
+    for file in files:
+        text = _read(file)
+        if os.path.abspath(file) == os.path.abspath(defining):
+            # Inside its own file it is called by its bare name.
+            pattern = r"(?<![\w$.])%s\s*\(" % re.escape(name)
+        else:
+            # Anywhere else only through the name this module was required as,
+            # so a common name like read is not matched against every read.
+            bound = []
+            for req in REQUIRE_LOCAL.finditer(text):
+                if os.path.abspath(_resolve_module(file, req.group("path")) or "") != os.path.abspath(defining):
+                    continue
+                if req.group("name"):
+                    bound.append(r"(?<![\w$])%s\.%s\s*\(" % (re.escape(req.group("name")), re.escape(name)))
+                if name in [n.strip().split(":")[-1].strip() for n in (req.group("names") or "").split(",")]:
+                    bound.append(r"(?<![\w$.])%s\s*\(" % re.escape(name))
+            if not bound:
+                continue
+            pattern = "|".join(bound)
+        for call in re.finditer(pattern, text):
+            number = text.count("\n", 0, call.start()) + 1
+            if file == os.path.join(repo_root, path) and number == defined_at:
+                continue
+            # The definition itself, written as name = (...) =>.
+            if re.match(r"\s*=", text[call.end():call.end() + 3]) or \
+                    re.search(r"(?:function|const|let|var)\s+$", text[max(0, call.start() - 12):call.start()]):
+                continue
+            args = _js_args(text, call.end() - 1)
+            if len(args) <= index:
+                return ""
+            arg = args[index]
+            ok = _js_path_part_safe(text, arg, number) or _js_member_base_dir(file, text, arg)
+            if not ok and re.match(r"^%s$" % JS_IDENT, arg):
+                # A walk that recurses into what it read is still inside.
+                joined = re.search(r"\b(?:const|let)\s+%s\s*=\s*path\.join\(\s*%s\s*,\s*(%s\.name)\s*\)"
+                                   % (re.escape(arg), re.escape(var), JS_IDENT), text)
+                if joined:
+                    ok = "a subdirectory the walk itself found"
+                elif hops > 0:
+                    # Handed straight through from the caller's own caller.
+                    rel = os.path.relpath(file, repo_root)
+                    ok = _js_path_safe(repo_root, rel, text, number, arg, hops - 1)
+            if not ok:
+                return ""
+            callers.append(ok.replace(CALLER_PREFIX, ""))
+    if callers:
+        return CALLER_PREFIX + " or ".join(sorted(set(callers)))
+    return ""
+
+
+# The request value only reaches the address URL encoded, so it cannot change
+# where the browser goes.
+TAINTED = re.compile(r"\breq\.(?:query|body|params|cookies)\b")
+
+
+def _js_redirect_encoded(source: str, line: int) -> str:
+    text = _line(source, line)
+    found = re.search(r"\bres\.redirect\(", text)
+    if not found:
+        return ""
+    args = _js_args(text, found.end() - 1)
+    target = args[-1] if args else ""
+    if not (target.startswith("`") and target.endswith("`")):
+        return ""
+    lines = (source or "").splitlines()
+    window = "\n".join(lines[max(0, line - 15):line])
+    tainted_vars = {m.group(1) for m in re.finditer(
+        r"\b(?:const|let|var)\s+(%s)\s*=\s*[^;\n]*%s" % (JS_IDENT, TAINTED.pattern), window)}
+    for expr in _js_interpolations(target[1:-1]):
+        uses = TAINTED.search(expr) or any(re.search(r"\b%s\b" % re.escape(v), expr) for v in tainted_vars)
+        if uses and not re.match(r"^\s*encodeURIComponent\(", expr):
+            return ""
+    first = target[1:]
+    if not first.startswith("${") and not first.startswith("/"):
+        return ""
+    return ("the request value only reaches the address through "
+            "encodeURIComponent, so it cannot change where the redirect goes")
+
+
+def _repo_has_own_csrf(repo_root: str) -> str:
+    """-> where the app checks its own CSRF token, or empty."""
+    for root, _dirs, names in os.walk(repo_root):
+        if "node_modules" in root or "/." in root:
+            continue
+        for name in names:
+            if not name.endswith(".js"):
+                continue
+            text = _read(os.path.join(root, name))
+            if re.search(r"""req\.get\(\s*['"]x-(?:csrf|xsrf)-token['"]\s*\)""", text, re.I) and \
+                    re.search(r"session[\w.]*\.csrf", text):
+                return os.path.relpath(os.path.join(root, name), repo_root)
+    return ""
+
+
+def _dockerfile_drops_root(repo_root: str, dockerfile: str) -> str:
+    """-> who the container's programs run as, when it is not root, or empty.
+
+    A Dockerfile with no USER starts as root.  That only matters for what runs
+    as root.  A supervisor that starts every program under its own user, or
+    an entrypoint that hands over with gosu or its relatives, keeps the code
+    that handles requests off root, and saying so is the honest grade.
+    """
+    full = os.path.join(repo_root, dockerfile)
+    text = _read(full)
+    if not text:
+        return ""
+    users = [u.strip() for u in re.findall(r"^\s*USER\s+(\S+)", text, re.M)]
+    if users and users[-1] not in ("root", "0"):
+        return ""
+    copies = {}
+    for src, dest in re.findall(r"^\s*COPY\s+(?:--\S+\s+)*(\S+)\s+(\S+)\s*$", text, re.M):
+        copies[dest] = os.path.join(os.path.dirname(full), src)
+    # The program sections can live in the file -c names or in a file dropped
+    # into the directory the packaged supervisord.conf includes.
+    if re.search(r"\bsupervisord\b", text):
+        body = "\n".join(_read(src) for dest, src in copies.items()
+                         if dest.startswith("/etc/supervisor"))
+        programs = re.split(r"^\[program:", body, flags=re.M)[1:]
+        owners = []
+        for program in programs:
+            user = re.search(r"^\s*user\s*=\s*(\S+)", program.split("\n[", 1)[0], re.M)
+            if not user or user.group(1) in ("root", "0"):
+                return ""
+            owners.append(user.group(1))
+        if owners:
+            return "supervisord runs every program as its own user (%s)" % ", ".join(sorted(set(owners)))
+    entry = re.search(r"^\s*ENTRYPOINT\s+\[?[^\n]*?\"?(/[^\s\"\],]+\.sh)", text, re.M)
+    if entry and entry.group(1) in copies:
+        script = _read(copies[entry.group(1)])
+        if re.search(r"^\s*exec\s+(?:gosu|su-exec|setpriv\s+--reuid|runuser\s+-u|s6-setuidgid)\s+(\S+)", script, re.M):
+            return "the entrypoint hands over to an unprivileged user before running the program"
+    return ""
 
 
 # A key as a key file holds it: the armor, then base64.  A detector's own
@@ -1580,6 +2139,60 @@ def judge(rule: str, path: str, matched: str, source: str, line: int = 0,
                     "expression. There is no attacker input to inject.",
                     "actions-fixed-input")
 
+    # --- JavaScript, rule by rule ---------------------------------------
+    if rule == "using-http-server":
+        written = _line(source, line)
+        if re.search(r"\bhttps?\.(?:Agent|request|get)\(", written) and \
+                not re.search(r"createServer|\.listen\(", written):
+            return (NOT_APPLICABLE,
+                    "an outbound client connection, not a server: nothing "
+                    "here accepts plain http from anybody",
+                    "outbound-http-client")
+
+    if rule == "detect-child-process":
+        fixed = _js_fixed_program(source, line)
+        if fixed:
+            return (NOT_APPLICABLE,
+                    "no shell is involved, and %s is only called from this "
+                    "file, always with a fixed program name, so neither the "
+                    "program nor its arguments can be bent into a command"
+                    % fixed,
+                    "fixed-program-no-shell")
+
+    if rule == "express-data-exfiltration":
+        written = _line(source, line)
+        fresh = re.search(r"\b(?:const|let)\s+(%s)\s*=\s*Object\.assign\(\s*\{\s*\}" % JS_IDENT, written)
+        if fresh:
+            var = fresh.group(1)
+            after = "\n".join((source or "").splitlines()[line:line + 3])
+            uses = re.findall(r"(?<![\w$.])%s(?![\w$])" % re.escape(var), after)
+            if uses and len(uses) == len(re.findall(r"JSON\.stringify\(\s*%s\b|res\.json\(\s*%s\b"
+                                                     % (re.escape(var), re.escape(var)), after)):
+                return (NOT_APPLICABLE,
+                        "copied into a fresh object that is only serialized into "
+                        "this response; nothing is written back anywhere, so "
+                        "there is nothing to mass assign",
+                        "fresh-object-serialized")
+
+    if rule == "detect-non-literal-regexp":
+        fixed = _js_regexp_fixed(source, line)
+        if fixed:
+            return (NOT_APPLICABLE, fixed + ", so nobody outside can shape the "
+                    "pattern", "regexp-fixed-input")
+
+    if rule == "gcr-open-redirect":
+        encoded = _js_redirect_encoded(source, line)
+        if encoded:
+            return NOT_APPLICABLE, encoded, "redirect-value-encoded"
+
+    if rule == "request-host-used":
+        written = _line(source, line)
+        if re.search(r"\breturn\s+30[1278]\s+https?://\$host\$request_uri\s*;", written):
+            return (NOT_APPLICABLE,
+                    "the upgrade to https on the host the client already asked "
+                    "for, which can only send that client back to itself",
+                    "https-upgrade-same-host")
+
     if rule in CODEQL_XSS:
         written = _line(source, line)
         if TEXT_SINK.search(written) and not HTML_SINK.search(written):
@@ -2387,6 +3000,34 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
                           "because it only knows limiter packages by name"
                           % limited[:60])
                 decided_by = "codeql-own-limiter"
+        # JavaScript checks that need the repository, not only the file.
+        if verdict == REVIEW and rule == "path-join-resolve-traversal" \
+                and relative.endswith((".js", ".mjs", ".cjs", ".ts")):
+            why = _js_path_safe(repo_root, relative, source,
+                                finding.get("start", {}).get("line", 0), matched)
+            if why:
+                verdict = NOT_APPLICABLE
+                reason = ("this part of the path is %s, so it cannot carry a "
+                          "separator or climb out of the directory" % why)
+                decided_by = "path-part-safe"
+        if verdict == REVIEW and rule == "direct-response-write":
+            why = _js_response_is_safe(repo_root, relative, source,
+                                       finding.get("start", {}).get("line", 0))
+            if why:
+                verdict = NOT_APPLICABLE
+                reason = why
+                decided_by = "response-not-markup"
+        if verdict == REVIEW and rule == "express-check-csurf-middleware-usage":
+            where = _repo_has_own_csrf(repo_root)
+            if where:
+                verdict = NOT_APPLICABLE
+                reason = ("the application checks its own CSRF token in %s, "
+                          "against the one kept in the session; the rule only "
+                          "recognizes the csurf package by name" % where)
+                decided_by = "own-csrf-check"
+        rate_gate = ""
+        if verdict == REVIEW and rule == "js/missing-rate-limiting":
+            rate_gate = _route_guard(source, finding.get("start", {}).get("line", 0))
         flow = finding.get("flow_source")
         if verdict == REVIEW and rule == "js/unvalidated-dynamic-method-call":
             guard = _codeql_guarded_on_flow(repo_root, flow)
@@ -2430,6 +3071,37 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
                 "Whether that filter allows the right ranges is the question "
                 "to review")
             finding["triage"]["rule"] = "codeql-connect-guard"
+            continue
+        if verdict == REVIEW and rule in ("missing-user", "missing-user-entrypoint"):
+            drops = _dockerfile_drops_root(repo_root, relative)
+            if drops:
+                finding["triage"]["demote"] = {"severity": "low",
+                                               "rule": "container-drops-root"}
+                finding["triage"]["reason"] = (
+                    "graded low: the container starts as root, but %s, so the "
+                    "code that handles requests does not run as root" % drops)
+                finding["triage"]["rule"] = "container-drops-root"
+                continue
+        if verdict == REVIEW and rule == "request-host-used" and re.search(
+                r"proxy_set_header\s+(?:Host|X-Forwarded-Host)\s+\$host\s*;",
+                _line(source, finding.get("start", {}).get("line", 0))):
+            finding["triage"]["demote"] = {"severity": "low",
+                                           "rule": "proxy-forwards-host"}
+            finding["triage"]["reason"] = (
+                "graded low: forwarding the Host the client sent is what a "
+                "reverse proxy normally does.  The risk is in an application "
+                "that builds absolute links from it, which is worth checking "
+                "there rather than here")
+            finding["triage"]["rule"] = "proxy-forwards-host"
+            continue
+        if rate_gate:
+            finding["triage"]["demote"] = {"severity": "low",
+                                           "rule": "codeql-privileged-route"}
+            finding["triage"]["reason"] = (
+                "graded low: the route is behind %s, so only somebody already "
+                "trusted with that can call it this often.  The risk is one of "
+                "them slowing the service down, not an outsider" % rate_gate)
+            finding["triage"]["rule"] = "codeql-privileged-route"
             continue
         if verdict == REVIEW and rule in CODEQL_DOS:
             guard = _codeql_privileged_source(repo_root, finding.get("flow_source"))
@@ -2475,8 +3147,35 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
     return findings
 
 
+def triage_misconfigurations(rows: list, repo_root: str) -> list:
+    """The one container check that needs files trivy does not read.
+
+    DS-0002 says the image runs as root.  It is right about the image and
+    can be wrong about the code: a supervisor that starts every program as its
+    own user keeps everything that handles a request off root.  Graded low
+    with the reason, the same as the semgrep rules saying the same thing.
+    """
+    for row in rows or []:
+        if row.get("rule_id") not in ("DS-0002", "DS002") or row.get("triage") != REVIEW:
+            continue
+        drops = _dockerfile_drops_root(repo_root, str(row.get("file") or "Dockerfile"))
+        if drops and row.get("severity") in ("critical", "high", "medium"):
+            row["engine_severity"] = row.get("engine_severity") or row.get("severity")
+            row["severity"] = "low"
+            row["triage_reason"] = (
+                "graded low: the container starts as root, but %s, so the code "
+                "that handles requests does not run as root" % drops)
+            row["triage_rule"] = "container-drops-root"
+    return rows
+
+
 def main() -> int:
     """Read a semgrep report on stdin or argv[1], write the triaged one out."""
+    if len(sys.argv) > 1 and sys.argv[1] == "--misconfig":
+        rows = json.loads(open(sys.argv[2]).read() or "[]")
+        json.dump(triage_misconfigurations(rows, sys.argv[3] if len(sys.argv) > 3 else "."),
+                  sys.stdout)
+        return 0
     repo_root = sys.argv[2] if len(sys.argv) > 2 else "."
     # Comma separated, from the scanner config.
     muted = [m for m in (sys.argv[3] if len(sys.argv) > 3 else "").split(",") if m.strip()]
