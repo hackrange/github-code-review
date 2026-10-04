@@ -42,6 +42,9 @@ FIELDS = (
                       "any part, such as src/legacy/* or */test/*"),
     ("repository", "Repository", "owner/name, as the findings list shows it. * "
                                  "matches any part, such as team/* or */*-demo"),
+    ("reachability", "Reachability", "For a dependency: reachable (the code "
+                                     "imports it), unlikely (it does not ship), "
+                                     "unknown, or unrated"),
     ("cwe", "CWE", "A CWE the finding carries"),
     ("kind", "Kind", "credential, code, dependency or misconfiguration"),
     ("state", "State", "open, waived or fixed"),
@@ -72,7 +75,8 @@ FIELD_LABELS = {name: label for name, label, _help in FIELDS}
 # narrower than a CWE and wider than a line.
 FIELD_RANK = {"fingerprint": 6, "rule": 5, "value": 4, "author": 4,
               "snippet": 4, "path": 4, "repository": 3, "cwe": 3,
-              "exposure": 2, "engine": 2, "kind": 1, "state": 1, "confidence": 1}
+              "exposure": 2, "engine": 2, "reachability": 2, "kind": 1,
+              "state": 1, "confidence": 1}
 
 # What a fingerprint looks like, with the kind in front or without it.  Checked
 # when a rule is saved: a fingerprint is copied off a page, and a value that
@@ -88,6 +92,9 @@ ALLOWED = {
     # stands for the empty field: a CVE match, a Trivy check, or a rule that
     # never said how sure it was.
     "confidence": ("low", "medium", "high", "unrated"),
+    # unrated is the empty field: anything that is not a dependency, or a
+    # dependency scanned before reachability was worked out.
+    "reachability": ("reachable", "unlikely", "unknown", "unrated"),
 }
 
 COMBINE = ("all", "any")
@@ -332,6 +339,8 @@ def _field_of(finding, field: str) -> str:
         return str(getattr(finding, "fingerprint", "") or "").strip().lower()
     if field == "repository":
         return str(getattr(finding, "repository", "") or "").strip().lower()
+    if field == "reachability":
+        return str(getattr(finding, "reachability", "") or "").strip().lower()
     if field == "path":
         # What the Where column shows: the file, or the package where a
         # dependency has no file of its own.
@@ -416,7 +425,7 @@ def _one_matches(field: str, pattern: str, finding) -> bool:
                 return True
         return False
     actual = _field_of(finding, field)
-    if field == "confidence" and pattern == "unrated":
+    if field in ("confidence", "reachability") and pattern == "unrated":
         return not actual
     if not actual:
         return False
@@ -538,12 +547,15 @@ def _sql_for(field: str, pattern: str):
     if field == "confidence" and pattern == "unrated":
         # The same reading as `_one_matches`: nothing recorded at all.
         return func.coalesce(Finding.confidence, "") == ""
+    if field == "reachability" and pattern == "unrated":
+        return func.coalesce(Finding.reachability, "") == ""
     if field == "path":
         # The file, or the package where there is no file, as `_field_of` reads it.
         return text_clause(func.coalesce(func.nullif(Finding.file_path, ""),
                                          Finding.package_name))
     column = {"rule": Finding.rule, "value": Finding.secret_preview,
               "repository": Finding.repository,
+              "reachability": Finding.reachability,
               "exposure": Finding.exposure,
               "confidence": Finding.confidence}.get(field)
     if column is None:
