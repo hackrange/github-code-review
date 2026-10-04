@@ -683,7 +683,7 @@ def _run(finding_id: int, user, force: bool = False) -> dict:
 
     answer = ai.complete(cfg, SYSTEM_PROMPT, _prompt(evidence, advisory, code, notes))
     if not answer["ok"]:
-        return {"ok": False, "detail": answer["error"] or "The model did not answer."}
+        return {"ok": False, "detail": answer["error"] or "Validation testing got no answer."}
 
     rating, confidence = _parse(answer["text"])
     pattern = learned.parse_pattern(answer["text"])
@@ -710,7 +710,7 @@ def _run(finding_id: int, user, force: bool = False) -> dict:
     return {"ok": True, "id": new_id, "rating": rating, "lowered": lowered,
             "tokens": (answer.get("input_tokens") or 0) + (answer.get("output_tokens") or 0),
             "detail": f"Validated in {seconds} second{'' if seconds == 1 else 's'}"
-                      + (f": the model reads it as {rating}." if rating else ".")
+                      + (f": it reads as {rating}." if rating else ".")
                       + (f"  {outcome}" if outcome else "")}
 
 
@@ -727,8 +727,8 @@ def _act_on(db, finding_id, rating, confidence, pattern, record, covering_rule_i
     by = getattr(user, "username", "") or ""
     why = learned.protected(finding)
     if why:
-        return (f"The grade stays {finding.severity.value}: AI may not lower "
-                f"it, because {why}."), False
+        return (f"The grade stays {finding.severity.value}: validation may not "
+                f"lower it, because {why}."), False
 
     # Asked again: start from what stood before any earlier AI grade, so a
     # model that changed its mind moves the finding to its new reading.
@@ -750,19 +750,19 @@ def _act_on(db, finding_id, rating, confidence, pattern, record, covering_rule_i
                                  % (finding.vuln_id or finding.id, rating.lower(),
                                     rule.severity.value))
             note += (f"  Learned rule #{rule.id} covered it and has been retired, "
-                     f"since the model disagrees; the grades it gave were taken back.")
+                     f"since this test disagrees; the grades it gave were taken back.")
         return note, False
 
     moved = learned.give(db, finding, target, source="analysis",
                          reason=f"AI validation #{record.id}: rated {rating.lower()}",
                          by=by, analysis_id=record.id, model=record.model)
     if moved:
-        note = f"Graded {target.value} on the model's reading (was {baseline.value})."
+        note = f"Graded {target.value} on this reading (was {baseline.value})."
     else:
-        note = (f"The model reads it as {target.value}; a person's regrade to "
+        note = (f"It reads as {target.value}; a person's regrade to "
                 f"{finding.custom_severity.value} still stands.")
     if confidence == "low":
-        return note + "  Nothing was learned, because the model was not sure.", moved
+        return note + "  Nothing was learned, because the reading was not sure.", moved
     fields, refused = learned.proposal(finding, target, pattern)
     if not fields:
         return note + f"  Nothing was learned: {refused}.", moved

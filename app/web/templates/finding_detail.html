@@ -322,12 +322,12 @@
 {% set rating_badge = {'CRITICAL': 'critical', 'HIGH': 'high', 'MEDIUM': 'medium',
                        'LOW': 'low', 'INFO': 'info', 'NOT EXPLOITABLE': 'ok'} %}
 <div class="card" id="validation">
-  <div class="card-head">AI validation</div>
+  <div class="card-head">Validation testing</div>
   <div class="card-body">
     {% for gone in lifted_grades %}
     <div class="notice warn">
       <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
-      <div>{{ 'A regrade' if gone.source == 'person' else 'An AI grade' }} to
+      <div>{{ 'A regrade' if gone.source == 'person' else 'A validation grade' }} to
         <strong>{{ gone.lifted_severity }}</strong>{% if gone.lifted_by %} by {{ gone.lifted_by }}{% endif %}
         was lifted on {{ gone.lifted_at | dt('%d %b %Y') }}, because the flagged code
         changed after it was made. It needs a fresh look.
@@ -336,7 +336,7 @@
     {% endfor %}
     {% if ai_grade %}
     <p>Graded <span class="badge {{ ai_grade.severity.value }}">{{ ai_grade.severity.value }}</span>
-      by {{ 'a learned rule' if ai_grade.source == 'rule' else 'AI validation' }}
+      by {{ 'a learned rule' if ai_grade.source == 'rule' else 'validation testing' }}
       on {{ ai_grade.created_at | dt('%d %b %Y') }}{% if ai_grade.was %}, from {{ ai_grade.was }}{% endif %}.
       {% if f.custom_severity %}A person's regrade to {{ f.custom_severity.value }} stands over it.{% endif %}
       {% if ai_rule %}<span class="faint small">Rule #{{ ai_rule.id }}: {{ ai_rule_text }}.</span>{% endif %}
@@ -345,7 +345,7 @@
     <p class="small">Learned rule #{{ ai_rule.id }} covers this finding: {{ ai_rule_text }}.</p>
     {% endif %}
     {% if ai_protected %}
-    <p class="faint small">AI can read this finding but not lower it: {{ ai_protected }}.</p>
+    <p class="faint small">Validation testing can read this finding but not lower it: {{ ai_protected }}.</p>
     {% endif %}
     {% if analyses %}
     {% set latest = analyses[0] %}
@@ -358,11 +358,10 @@
     </p>
     {% endif %}
     <div class="ai-answer">{{ latest.content }}</div>
-    <p class="faint small">Written by {{ latest.model or latest.provider }} for
-      {{ latest.created_by or 'somebody' }} on {{ latest.created_at | dt('%d %b %Y %H:%M') }}.
-      A model's reading of the evidence.  A lower reading lowers the grade,
-      except where AI may not, and a person's regrade always has the last
-      word: a model can be wrong or misled by what is in the code.</p>
+    <p class="faint small">Validated for {{ latest.created_by or 'somebody' }} on
+      {{ latest.created_at | dt('%d %b %Y %H:%M') }}.  A lower reading lowers the
+      grade, except where validation may not, and a person's regrade always has
+      the last word: a reading can be wrong or misled by what is in the code.</p>
     {% if latest.sources %}
     <details>
       <summary class="small">What it was given</summary>
@@ -379,7 +378,7 @@
       <div style="margin-top:.8rem">
         <p class="small">
           {% if earlier.rating %}<span class="badge {{ rating_badge.get(earlier.rating, '') }}">{{ earlier.rating | lower }}</span>{% endif %}
-          {{ earlier.model or earlier.provider }} for {{ earlier.created_by or 'somebody' }},
+          for {{ earlier.created_by or 'somebody' }},
           {{ earlier.created_at | dt('%d %b %Y %H:%M') }}</p>
         <div class="ai-answer">{{ earlier.content }}</div>
       </div>
@@ -390,13 +389,13 @@
 
     {% if can_validate %}
     <form method="post" action="{{ base }}/findings/{{ f.id }}/validate"
-          data-busy="Validating, this can take a minute or two"
+          data-busy="Testing, this can take a minute or two"
           {% if ai_sends_code %}data-confirm="This sends the finding, and the code around it, to {{ ai_model }}. Go ahead?"{% endif %}>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button class="btn primary" type="submit">Validate with AI</button>
+      <button class="btn primary" type="submit">Run validation testing</button>
       {% if ai_rule %}
       <label class="small" style="margin-left:.6rem"><input type="checkbox" name="force" value="1">
-        Ask the model anyway, rather than the learned rule</label>
+        Test again rather than use the learned rule</label>
       {% endif %}
     </form>
     {% endif %}
