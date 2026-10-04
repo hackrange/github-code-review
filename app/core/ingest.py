@@ -1271,6 +1271,13 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                 ai_grades.pop(finding.id, None)
                 grade = None
                 counts["ai_lifted"] = counts.get("ai_lifted", 0) + 1
+            if grade is not None and not learned.still_covers(learned_rules, grade, finding):
+                # A rule narrowed since it gave this grade, or was retired:
+                # the grade goes, and any other rule may still answer below.
+                session.delete(grade)
+                ai_grades.pop(finding.id, None)
+                grade = None
+                counts["rule_grades_dropped"] = counts.get("rule_grades_dropped", 0) + 1
             if grade is not None and (finding.id, "ai") not in bases:
                 bases[(finding.id, "ai")] = learned.record_basis(session, finding, "ai")
             if grade is not None:

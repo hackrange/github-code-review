@@ -177,7 +177,48 @@ def facts(finding) -> dict:
         "version": finding.package_version or "",
         "advisory": finding.vulnerability_id or "",
         "severity": _value(finding.severity),
+        "reachability": finding.reachability or "",
+        "image": getattr(finding, "image_ref", "") or "",
     }
+
+
+# How exposed a package is, for comparing two repositories.  Reachable is the
+# most: the code imports it.  Unknown and unrated sit in the middle, because
+# nothing says either way.  Unlikely is the least: it does not ship.
+EXPOSURE = {"reachable": 3, "unknown": 2, "": 2, "unrated": 2, "unlikely": 1}
+
+
+def _exposure(value) -> int:
+    return EXPOSURE.get((value or "").strip().lower(), 2)
+
+
+def source_facts(session, rule) -> dict:
+    """What was true of the package where a dependency rule was learned.
+
+    Its reachability, its version and the base image it came from.  Read from
+    the rule's own test case, which records all three from now on, and for a
+    rule learned before that, from the finding it came from.
+    """
+    cases = fixture_of(rule).get("positive") or []
+    case = cases[0] if cases else {}
+    out = {"reachability": case.get("reachability"), "version": case.get("version"),
+           "image": case.get("image")}
+    if any(value is None for value in out.values()) and rule.source_finding_id:
+        row = session.get(Finding, rule.source_finding_id)
+        if row is not None:
+            for key, value in (("reachability", row.reachability),
+                               ("version", row.package_version),
+                               ("image", getattr(row, "image_ref", ""))):
+                if out[key] is None:
+                    out[key] = value or ""
+    return {key: (value or "") for key, value in out.items()}
+
+
+def _prepare(session, rule):
+    """Attach what matching needs and the row does not carry."""
+    if rule.kind == "dependency" and not hasattr(rule, "_source"):
+        rule._source = source_facts(session, rule)
+    return rule
 
 
 # ---------------------------------------------------------------- patterns
@@ -258,7 +299,26 @@ def _matches(rule, f: dict) -> bool:
     if rule.kind == "dependency":
         if (rule.package or "") != f.get("package"):
             return False
-        return (rule.advisory or "*") in ("*", f.get("advisory") or "")
+        if (rule.advisory or "*") not in ("*", f.get("advisory") or ""):
+            return False
+        # Outside the repository it was learned in, a rule about a package only
+        # holds where what it was learned on is still true: the same version,
+        # from the same base image when it came from one, and no more exposed.
+        # A reason like "a ^4.21.2 range cannot resolve into the affected
+        # range" or "this copy comes from the node base image" is about one
+        # copy, and says nothing about a service pinned to an older release
+        # that imports the package on every request.
+        if (f.get("repository") or "").lower() != (rule.repository or "").lower():
+            learned_on = getattr(rule, "_source", None)
+            if learned_on is None:
+                return False
+            if (f.get("version") or "") != learned_on["version"]:
+                return False
+            if learned_on["image"] and (f.get("image") or "") != learned_on["image"]:
+                return False
+            if _exposure(f.get("reachability")) > _exposure(learned_on["reachability"]):
+                return False
+        return True
     if (rule.rule or "").lower() != (f.get("rule") or "").lower():
         return False
     if rule.path_glob and not fnmatch.fnmatch(f.get("file") or "", rule.path_glob):
@@ -279,6 +339,7 @@ def load_rules(session) -> dict:
     """Live rules, indexed by what they key on, loaded once per run."""
     index = {}
     for rule in session.query(LearnedRule).filter(LearnedRule.retired_at.is_(None)):
+        _prepare(session, rule)
         key = (rule.kind, (rule.package if rule.kind == "dependency" else rule.rule or "").lower())
         index.setdefault(key, []).append(rule)
     return index
@@ -426,6 +487,7 @@ def apply_rule_now(session, rule, by: str) -> int:
     The point of learning: one answer about renderMarkdown settles all seven
     v-html bindings that call it, in the same run.
     """
+    _prepare(session, rule)
     query = session.query(Finding).filter(Finding.state == FindingState.OPEN)
     if not rule.global_accepted_by:
         query = query.filter(Finding.repository == rule.repository)
@@ -449,6 +511,22 @@ def apply_rule_now(session, rule, by: str) -> int:
             rule.hits = (rule.hits or 0) + 1
             rule.last_hit_at = utcnow()
     return moved
+
+
+def still_covers(index: dict, grade, finding) -> bool:
+    """Does the rule behind a grade it gave still cover this finding.
+
+    A grade a rule gave is re-checked on every scan rather than kept for good,
+    so narrowing a rule, or retiring it, takes back what it no longer covers.
+    """
+    if grade.source != "rule" or not grade.rule_id:
+        return True
+    for rules in index.values():
+        for rule in rules:
+            if rule.id == grade.rule_id:
+                f = facts(finding)
+                return in_scope(rule, f["repository"]) and _matches(rule, f)
+    return False
 
 
 def load_grades(session) -> dict:
