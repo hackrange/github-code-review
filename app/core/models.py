@@ -971,6 +971,112 @@ class FindingAnalysis(Base):
     duration_ms = Column(Integer, default=0)
 
 
+class GradeBasis(Base):
+    """What a grade decision on one finding was made against.
+
+    A person who regraded a finding, or a model that validated it, read some
+    particular code.  The same code on the next scan is the same decision, and
+    redoing it is the work nobody wants.  Different code is not: a regrade made
+    against a line that has since been rewritten is an opinion about something
+    that is no longer there, so it is lifted and the finding says why.
+
+    One row per finding and source ("person" or "ai").  The basis is a digest
+    of what the decision looked at: the flagged lines for code and
+    configuration, the version and advisory for a package.  Credentials have
+    none, because a secret's identity is the secret.
+
+    A lifted decision is kept here, not erased, so the page can say what was
+    decided, by whom, and that the code it was about changed.
+    """
+
+    __tablename__ = "grade_basis"
+    __table_args__ = (UniqueConstraint("finding_id", "source", name="uq_grade_basis"),)
+
+    id = Column(Integer, primary_key=True)
+    finding_id = Column(Integer, ForeignKey("findings.id", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    source = Column(String(16), nullable=False, default="person")
+    basis = Column(String(64), nullable=False, default="")
+    recorded_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    # Filled when a scan saw different code and the decision stopped standing.
+    lifted_at = Column(DateTime(timezone=True))
+    lifted_severity = Column(String(16), default="")
+    lifted_reason = Column(Text, default="")
+    lifted_by = Column(String(120), default="")
+
+
+class AIGrade(Base):
+    """The grade a model's validation, or a rule learned from one, gave a finding.
+
+    Only ever lower than what the scanner said, never on a credential or a
+    known exploited package, and always under a person's own regrade.  Kept
+    apart from custom_severity so it reads as the model's call and a person
+    can overrule it.
+    """
+
+    __tablename__ = "finding_ai_grades"
+
+    id = Column(Integer, primary_key=True)
+    finding_id = Column(Integer, ForeignKey("findings.id", ondelete="CASCADE"),
+                        nullable=False, unique=True, index=True)
+    severity = Column(Enum(Severity), nullable=False)
+    was = Column(String(16), default="")
+    reason = Column(Text, default="")
+    # "analysis" when a model answered for this finding, "rule" when a rule
+    # learned from another answer did, at no cost.
+    source = Column(String(16), nullable=False, default="analysis")
+    analysis_id = Column(Integer)
+    rule_id = Column(Integer, index=True)
+    model = Column(String(120), default="")
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_by = Column(String(120), default="")
+
+
+class LearnedRule(Base):
+    """What one AI validation taught the scanner, so it is never paid for twice.
+
+    A model reads a finding and says why it is lower than graded.  The reason
+    usually covers more than the one line: every v-html in a component that
+    goes through the same sanitizer, every advisory on a package that only a
+    build tool pulls in.  The model is asked for that pattern as narrowly as
+    the evidence supports, and it is kept here as a deterministic matcher plus
+    a synthetic test: the finding it came from must match and grade the same,
+    and findings a model refused to lower must not match.
+
+    Scope is the repository it was learned in.  Applying it everywhere is a
+    person's decision, recorded in global_accepted_by.
+    """
+
+    __tablename__ = "learned_rules"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_by = Column(String(120), default="")
+    repository = Column(String(320), nullable=False, default="", index=True)
+    kind = Column(String(16), nullable=False, default="")
+    rule = Column(String(255), default="", index=True)
+    package = Column(String(255), default="")
+    advisory = Column(String(64), default="")
+    path_glob = Column(String(512), default="")
+    code_contains = Column(Text, default="")
+    severity = Column(Enum(Severity), nullable=False)
+    reason = Column(Text, default="")
+    model = Column(String(120), default="")
+    source_finding_id = Column(Integer)
+    source_analysis_id = Column(Integer)
+    # The synthetic test, as JSON: {"expect": severity, "positive": [facts],
+    # "negative": [facts]}.
+    fixture = Column(LONG_JSON, default="")
+    global_accepted_by = Column(String(120), default="")
+    global_accepted_at = Column(DateTime(timezone=True))
+    retired_at = Column(DateTime(timezone=True))
+    retired_by = Column(String(120), default="")
+    retired_reason = Column(Text, default="")
+    hits = Column(Integer, default=0)
+    last_hit_at = Column(DateTime(timezone=True))
+
+
 class TrendPoint(Base):
     """What one branch of one repository looked like on one day.
 

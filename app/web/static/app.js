@@ -332,3 +332,13 @@
     });
   });
 })();
+
+/* A page showing work in progress reloads itself while the work runs.  The
+ * template puts data-reload-after="<seconds>" on an element only while there
+ * is something still running, so a finished page stays still. */
+(function () {
+  var marker = document.querySelector("[data-reload-after]");
+  if (!marker) { return; }
+  var seconds = parseInt(marker.getAttribute("data-reload-after"), 10) || 5;
+  window.setTimeout(function () { window.location.reload(); }, seconds * 1000);
+})();

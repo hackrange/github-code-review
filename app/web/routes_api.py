@@ -3116,6 +3116,10 @@ async def regrade_finding(finding_id: int, request: Request,
         finding.custom_severity_at = utcnow()
         finding.severity = severity
         db.flush()
+        # The code this decision was made against, so a later scan keeps it
+        # while that code is unchanged and lifts it once it is not.
+        from app.core import learned
+        learned.record_basis(db, finding, "person")
 
         write_reports(db)
         record(db, "finding.regraded", actor=user.username,
@@ -3514,6 +3518,7 @@ async def regrade_many(request: Request, user: User = Depends(current_user)):
                 detail=f"That is more than {MAX_BULK_WAIVE} findings. Narrow "
                        "the filters and do it in batches.")
 
+        from app.core import learned
         for finding in findings:
             if finding.custom_severity == severity:
                 counts["already"] += 1
@@ -3527,6 +3532,7 @@ async def regrade_many(request: Request, user: User = Depends(current_user)):
             finding.custom_severity_by = user.username
             finding.custom_severity_at = utcnow()
             finding.severity = severity
+            learned.record_basis(db, finding, "person")
             counts["changed"] += 1
         db.flush()
 
@@ -3578,6 +3584,16 @@ async def clear_regrade(finding_id: int, request: Request,
         finding.custom_severity_reason = ""
         finding.custom_severity_by = ""
         finding.custom_severity_at = None
+        # An AI grade under the regrade stands again now that nobody is
+        # speaking over it, the same as the next scan would decide.
+        from app.core import learned
+        from app.core.models import AIGrade, GradeBasis
+        grade = db.query(AIGrade).filter(AIGrade.finding_id == finding.id).one_or_none()
+        if (grade is not None and not learned.protected(finding)
+                and learned.lower(finding.severity, grade.severity)):
+            finding.severity = grade.severity
+        db.query(GradeBasis).filter(GradeBasis.finding_id == finding.id,
+                                    GradeBasis.source == "person").delete()
         db.flush()
 
         write_reports(db)
@@ -4045,9 +4061,9 @@ async def validate_finding(finding_id: int, request: Request,
                           user: User = Depends(current_user)):
     """Ask the configured model about one finding, and keep what it says.
 
-    Nothing about the finding changes.  The answer sits on the page with the
-    model's name on it until somebody acts on it, the same as the scanner's
-    own recommendation does.
+    A reading lower than the grade lowers it, except on a credential or a
+    known exploited package, and a person's regrade still has the last word.
+    What the model says covers other findings is kept as a learned rule.
     """
     await check_csrf(request)
     rbac.require(user, "finding.validate")
@@ -4067,9 +4083,14 @@ async def validate_finding(finding_id: int, request: Request,
             raise HTTPException(status_code=404, detail="No such finding.")
         vuln_id = row.vuln_id
 
+    # Ask the model even when a learned rule already covers it.  Without the
+    # box a rule answers, which costs nothing.
+    form = await request.form()
+    force = str(form.get("force", "")).lower() in {"1", "on", "true"}
+
     # Off the event loop: a clone and a model's answer can take minutes, and
     # every other request would wait behind it.
-    result = await run_in_threadpool(analysis.run, finding_id, user)
+    result = await run_in_threadpool(analysis.run, finding_id, user, force)
 
     with session_scope() as db:
         record(db, "finding.validated", actor=user.username,
@@ -4081,6 +4102,142 @@ async def validate_finding(finding_id: int, request: Request,
     anchor = "#validation" if result.get("ok") else ""
     return redirect(f"/findings/{finding_id}?msg={quote(result.get('detail', ''))}"
                     f"&kind={kind}{anchor}")
+
+
+@router.post("/findings/validate-bulk")
+async def validate_many(request: Request, user: User = Depends(current_user)):
+    """Validate the ticked findings, or all matching the filters, with AI.
+
+    Runs in the background and reports on the learned rules page.  Findings
+    about the same thing go one after another, so what the model learns from
+    the first answers the rest without being asked.
+    """
+    await check_csrf(request)
+    rbac.require(user, "finding.validate")
+
+    from app.core import ai, analysis
+
+    form = await request.form()
+    wanted = []
+    for raw in form.getlist("ids"):
+        for piece in str(raw).split(","):
+            piece = piece.strip()
+            if piece.isdigit():
+                wanted.append(int(piece))
+    everything = str(form.get("all_matching", "")).lower() in {"1", "on", "true"}
+    if not wanted and not everything:
+        raise HTTPException(status_code=400, detail="Nothing was selected.")
+
+    with session_scope() as db:
+        problem = ai.missing(ai.config(db))
+        if problem:
+            return redirect(_back_with(_findings_back(form), problem, "error"))
+        query = rbac.visible_findings(db, user)
+        if everything:
+            query = _apply_finding_filters(query, form)
+        else:
+            query = query.filter(Finding.id.in_(wanted))
+        ids = [row[0] for row in query.with_entities(Finding.id)
+               .limit(analysis.MAX_BATCH + 1).all()]
+        if len(ids) > analysis.MAX_BATCH:
+            return redirect(_back_with(
+                _findings_back(form),
+                f"That is more than {analysis.MAX_BATCH} findings. Narrow the "
+                "filters and validate in batches.", "error"))
+        number = analysis.start_batch(ids, user)
+        record(db, "finding.validated", actor=user.username,
+               target=f"{len(ids)} findings", detail=f"bulk AI validation #{number}",
+               source_ip=client_ip(request))
+    return redirect(f"/ai/learned?batch={number}")
+
+
+@router.post("/ai/learned/{rule_id}/accept")
+async def accept_learned(rule_id: int, request: Request,
+                         user: User = Depends(current_user)):
+    """Let a rule learned in one repository answer in every repository."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+    from urllib.parse import quote
+
+    from app.core import learned
+    from app.core.models import LearnedRule
+
+    with session_scope() as db:
+        rule = db.get(LearnedRule, rule_id)
+        if rule is None or rule.retired_at is not None:
+            raise HTTPException(status_code=404, detail="No such live rule.")
+        problems = learned.self_test(rule)
+        if problems:
+            return redirect("/ai/learned?kind=error&msg=" + quote(
+                f"Rule #{rule.id} fails its own test: {problems[0]}."))
+        rule.global_accepted_by = user.username
+        rule.global_accepted_at = utcnow()
+        moved = learned.apply_rule_now(db, rule, user.username)
+        if moved:
+            write_reports(db)
+        record(db, "learned_rule.accepted", actor=user.username,
+               target=f"rule {rule.id}", detail=learned.describe(rule)[:400],
+               source_ip=client_ip(request))
+    return redirect("/ai/learned?msg=" + quote(
+        f"Rule #{rule_id} now applies everywhere; it graded {moved} more finding(s)."))
+
+
+@router.post("/ai/learned/{rule_id}/retire")
+async def retire_learned(rule_id: int, request: Request,
+                         user: User = Depends(current_user)):
+    """Stop a learned rule and take back every grade it gave."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+    from urllib.parse import quote
+
+    from app.core import learned
+    from app.core.models import LearnedRule
+
+    form = await request.form()
+    why = clean_text(form.get("reason"), "Reason", limit=500, required=False) \
+        or "retired by hand"
+    with session_scope() as db:
+        rule = db.get(LearnedRule, rule_id)
+        if rule is None or rule.retired_at is not None:
+            raise HTTPException(status_code=404, detail="No such live rule.")
+        restored = learned.retire(db, rule, user.username, why)
+        write_reports(db)
+        record(db, "learned_rule.retired", actor=user.username,
+               target=f"rule {rule.id}", detail=why[:400],
+               source_ip=client_ip(request))
+    return redirect("/ai/learned?msg=" + quote(
+        f"Rule #{rule_id} retired; {restored} finding(s) went back to their grade."))
+
+
+@router.post("/ai/learned/test")
+async def test_learned(request: Request, user: User = Depends(current_user)):
+    """Run every live rule's synthetic test, and retire the ones that fail."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+    from urllib.parse import quote
+
+    from app.core import learned
+    from app.core.models import LearnedRule
+
+    failed = []
+    with session_scope() as db:
+        live = db.query(LearnedRule).filter(LearnedRule.retired_at.is_(None)).all()
+        for rule in live:
+            problems = learned.self_test(rule)
+            if problems:
+                learned.retire(db, rule, user.username,
+                               "failed its synthetic test: " + problems[0])
+                failed.append(rule.id)
+        if failed:
+            write_reports(db)
+        record(db, "learned_rule.tested", actor=user.username,
+               target=f"{len(live)} rules", detail=f"failed: {failed}"[:400],
+               source_ip=client_ip(request))
+    message = (f"{len(live)} rule(s) tested; all passed." if not failed else
+               f"{len(live)} rule(s) tested; retired {len(failed)} that failed: "
+               + ", ".join(f"#{n}" for n in failed) + ".")
+    return redirect("/ai/learned?msg=" + quote(message)
+                    + ("&kind=error" if failed else ""))
 
 
 @router.post("/triage/add")

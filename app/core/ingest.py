@@ -787,6 +787,13 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     # Loaded once, not queried per finding.
     overrides = severity_rules.as_map(session)
     reach = _reach_map(session)
+    # What AI validation decided and learned, and what code every standing
+    # grade decision was made against.  Small tables, read once.
+    from app.core import learned
+    learned_rules = learned.load_rules(session)
+    ai_grades = learned.load_grades(session)
+    bases = learned.load_bases(session)
+    rule_hits = {}
 
     cache = {}
     counts = {"new": 0, "updated": 0, "resolved": 0, "repositories": 0}
@@ -1195,6 +1202,57 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                 finding.engine_severity = (finding.engine_severity
                                            or finding.severity.value)
                 finding.severity = override
+
+            # What a model said, or a rule learned from what a model said.
+            # Lower only, never a credential or a known exploited package, and
+            # under a person's regrade, which is applied below.  A grade made
+            # against code that has since changed no longer stands: it is
+            # lifted, the finding goes back to what the engine says, and the
+            # page says why.  The same code keeps it, so nothing is asked twice.
+            grade = ai_grades.get(finding.id) if finding.id is not None else None
+            if grade is not None and learned.code_changed(bases, finding, "ai"):
+                learned.lift(bases, finding, "ai", grade.severity.value,
+                             "the flagged code changed after the AI grade "
+                             "was given", grade.created_by)
+                session.delete(grade)
+                ai_grades.pop(finding.id, None)
+                grade = None
+                counts["ai_lifted"] = counts.get("ai_lifted", 0) + 1
+            if grade is not None and (finding.id, "ai") not in bases:
+                bases[(finding.id, "ai")] = learned.record_basis(session, finding, "ai")
+            if grade is not None:
+                if (not learned.protected(finding)
+                        and learned.lower(finding.severity, grade.severity)):
+                    finding.engine_severity = (finding.engine_severity
+                                               or finding.severity.value)
+                    finding.severity = grade.severity
+            else:
+                taught = learned.match(learned_rules, finding)
+                if taught is not None:
+                    rule_hits[taught.id] = rule_hits.get(taught.id, 0) + 1
+                    # Kept as a grade, so retiring the rule can put this
+                    # finding back straight away rather than on the next scan.
+                    learned.give(session, finding, taught.severity, source="rule",
+                                 reason="learned rule #%d: %s" % (taught.id, taught.reason),
+                                 by="scan", rule_id=taught.id, model=taught.model)
+
+            # A person's regrade stands for as long as the code it was about
+            # does.  Rewritten flagged lines are a different question, and an
+            # answer to the old one would hide it.
+            if finding.custom_severity is not None and finding.id is not None:
+                if learned.code_changed(bases, finding, "person"):
+                    learned.lift(bases, finding, "person",
+                                 finding.custom_severity.value,
+                                 finding.custom_severity_reason,
+                                 finding.custom_severity_by)
+                    for name in ("custom_severity", "custom_severity_at"):
+                        setattr(finding, name, None)
+                    finding.custom_severity_reason = ""
+                    finding.custom_severity_by = ""
+                    counts["regrades_lifted"] = counts.get("regrades_lifted", 0) + 1
+                elif (finding.id, "person") not in bases:
+                    bases[(finding.id, "person")] = learned.record_basis(
+                        session, finding, "person")
 
             # An administrator who regraded this one finding gets the last
             # word, after the engine and after any rule an admin wrote.  A
@@ -1749,6 +1807,15 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             trends.record(session)
     except Exception:
         log.exception("could not write the trend point, carrying on")
+
+    # How often each learned rule answered, so the rules page shows which are
+    # earning their keep and which never fire.
+    if rule_hits:
+        from app.core.models import LearnedRule
+        for rule in session.query(LearnedRule).filter(LearnedRule.id.in_(list(rule_hits))):
+            rule.hits = (rule.hits or 0) + rule_hits[rule.id]
+            rule.last_hit_at = seen_at
+        counts["learned_rule_hits"] = sum(rule_hits.values())
 
     return counts
 

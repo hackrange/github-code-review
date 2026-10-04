@@ -45,10 +45,10 @@ from pathlib import Path
 
 import httpx
 
-from app.core import ai
+from app.core import ai, learned
 from app.core.db import session_scope
 from app.core.models import (Finding, FindingAnalysis, FindingKind,
-                             FindingState, Waiver)
+                             FindingState, Severity, Waiver, utcnow)
 
 log = logging.getLogger("gcr.analysis")
 
@@ -112,6 +112,21 @@ Mitigation
 Compensating controls
 <what reduces the risk if the fix cannot happen soon>
 
+Learned pattern: <one line of JSON, described below>
+
+The last line teaches the scanner, so the same question is never paid for \
+twice.  When your rating is lower than the scanner's grade, say which other \
+findings of the same rule (or, for a package, the same package) in this \
+repository would deserve the same rating for the same reason, as narrowly as \
+the evidence supports.  Use exactly these keys:
+{"applies": true or false, "path_glob": "files it covers, such as \
+src/components/chat/*.vue", "code_contains": "text every such flagged line \
+contains, such as renderMarkdown(", "advisory": "this advisory id, or * when \
+the reason holds for every advisory on the package", "why": "one sentence"}
+Set applies to false when the reason rests on something true of this line \
+alone, or when your rating is not lower.  Never widen it past what the \
+evidence shows: a pattern that is too broad hides real findings.
+
 Keep it under about 900 words."""
 
 
@@ -140,6 +155,11 @@ def _finding_facts(f) -> str:
         ("File", f.file_path),
         ("Line", f.line or ""),
         ("Rule", f.rule),
+        # The line the engine flagged, already masked by the scanner.  Without
+        # it a model that was not sent the code is asked about a line it
+        # cannot see, and cannot say what other lines share its reason.
+        ("Flagged code", (f.snippet or "")[:600]
+         if f.kind != FindingKind.CREDENTIAL else ""),
         ("Title", f.title),
         ("Description", f.description if (f.description or "") != (f.title or "")
          else ""),
@@ -568,39 +588,81 @@ def _parse(text: str) -> tuple:
 
 # --------------------------------------------------------------------- run
 
-def run(finding_id: int, user) -> dict:
+def run(finding_id: int, user, force: bool = False, wait: bool = False) -> dict:
     """Ask about one finding and keep the answer.  -> {ok, detail, id}
 
     The caller has already checked the person may see the finding and may ask.
+    A learned rule that covers the finding answers instead of the model,
+    unless force says to ask anyway.  wait queues for a slot rather than
+    refusing, which is what a bulk run wants.
     """
     with _busy_lock:
         if finding_id in _busy:
             return {"ok": False,
                     "detail": "This finding is already being validated."}
-        if not _slots.acquire(blocking=False):
-            return {"ok": False,
-                    "detail": "Two validations are already running. Try again in a moment."}
         _busy.add(finding_id)
+    if not _slots.acquire(blocking=wait):
+        with _busy_lock:
+            _busy.discard(finding_id)
+        return {"ok": False,
+                "detail": "Two validations are already running. Try again in a moment."}
     try:
-        return _run(finding_id, user)
+        return _run(finding_id, user, force)
     finally:
         with _busy_lock:
             _busy.discard(finding_id)
         _slots.release()
 
 
-def _run(finding_id: int, user) -> dict:
+def _answer_from_rule(db, row, user) -> dict:
+    """A learned rule covers this finding: grade it from the rule, for free.
+    -> the result, or None when no rule applies."""
+    if learned.protected(row):
+        return None
+    rule = learned.match(learned.load_rules(db), row)
+    if rule is None:
+        return None
+    was = row.severity.value
+    moved = learned.give(db, row, rule.severity, source="rule",
+                         reason="learned rule #%d: %s" % (rule.id, rule.reason),
+                         by=getattr(user, "username", "") or "",
+                         rule_id=rule.id, model=rule.model)
+    rule.hits = (rule.hits or 0) + 1
+    rule.last_hit_at = utcnow()
+    if moved:
+        detail = ("Answered by learned rule #%d, no tokens spent: %s, graded %s "
+                  "(was %s)." % (rule.id, learned.describe(rule),
+                                 rule.severity.value, was))
+    else:
+        detail = ("Learned rule #%d covers this finding and grades it %s, which "
+                  "is not lower than it already is.  No tokens spent."
+                  % (rule.id, rule.severity.value))
+    return {"ok": True, "id": None, "rating": rule.severity.value.upper(),
+            "rule": rule.id, "from_rule": True, "lowered": bool(moved), "detail": detail}
+
+
+def _run(finding_id: int, user, force: bool = False) -> dict:
     from app.core import rbac
 
     with session_scope() as db:
         cfg = ai.config(db)
-        problem = ai.missing(cfg)
-        if problem:
-            return {"ok": False, "detail": problem}
         base = rbac.visible_findings(db, user)
         row = base.filter(Finding.id == finding_id).one_or_none()
         if row is None:
             return {"ok": False, "detail": "That finding is gone."}
+        # What the scanner has already learned answers first.  Only a person
+        # asking again on purpose goes past it.
+        covering_rule = None
+        if not learned.protected(row):
+            covering_rule = learned.match(learned.load_rules(db), row)
+        if not force:
+            answered = _answer_from_rule(db, row, user)
+            if answered:
+                return answered
+        problem = ai.missing(cfg)
+        if problem:
+            return {"ok": False, "detail": problem}
+        covering_rule_id = covering_rule.id if covering_rule is not None else None
         evidence = gather(db, base, row, cfg, user)
 
     advisory, advisory_source = "", ""
@@ -624,6 +686,7 @@ def _run(finding_id: int, user) -> dict:
         return {"ok": False, "detail": answer["error"] or "The model did not answer."}
 
     rating, confidence = _parse(answer["text"])
+    pattern = learned.parse_pattern(answer["text"])
     with session_scope() as db:
         record = FindingAnalysis(
             finding_id=finding_id,
@@ -640,11 +703,78 @@ def _run(finding_id: int, user) -> dict:
         db.add(record)
         db.flush()
         new_id = record.id
+        outcome, lowered = _act_on(db, finding_id, rating, confidence, pattern,
+                                   record, covering_rule_id, user)
 
     seconds = max(1, round((answer.get("duration_ms") or 0) / 1000))
-    return {"ok": True, "id": new_id, "rating": rating,
+    return {"ok": True, "id": new_id, "rating": rating, "lowered": lowered,
+            "tokens": (answer.get("input_tokens") or 0) + (answer.get("output_tokens") or 0),
             "detail": f"Validated in {seconds} second{'' if seconds == 1 else 's'}"
-                      + (f": the model reads it as {rating}." if rating else ".")}
+                      + (f": the model reads it as {rating}." if rating else ".")
+                      + (f"  {outcome}" if outcome else "")}
+
+
+def _act_on(db, finding_id, rating, confidence, pattern, record, covering_rule_id,
+            user) -> tuple:
+    """What the answer changes: the grade, what is learned, what is unlearned.
+    -> (a sentence for the person, whether the grade went down)."""
+    from app.core.models import AIGrade, LearnedRule
+
+    finding = db.get(Finding, finding_id)
+    target = learned.severity_for(rating)
+    if finding is None or target is None:
+        return "", False
+    by = getattr(user, "username", "") or ""
+    why = learned.protected(finding)
+    if why:
+        return (f"The grade stays {finding.severity.value}: AI may not lower "
+                f"it, because {why}."), False
+
+    # Asked again: start from what stood before any earlier AI grade, so a
+    # model that changed its mind moves the finding to its new reading.
+    earlier = db.query(AIGrade).filter(AIGrade.finding_id == finding.id).one_or_none()
+    baseline = finding.severity
+    if earlier is not None and earlier.was:
+        baseline = Severity(earlier.was)
+        if finding.custom_severity is None:
+            finding.severity = baseline
+        db.delete(earlier)
+        db.flush()
+
+    if not learned.lower(baseline, target):
+        note = f"It stays {finding.severity.value}."
+        rule = db.get(LearnedRule, covering_rule_id) if covering_rule_id else None
+        if rule is not None and rule.retired_at is None:
+            learned.add_negative(db, rule, finding, by,
+                                 "asked again, a model rated %s %s, not %s"
+                                 % (finding.vuln_id or finding.id, rating.lower(),
+                                    rule.severity.value))
+            note += (f"  Learned rule #{rule.id} covered it and has been retired, "
+                     f"since the model disagrees; the grades it gave were taken back.")
+        return note, False
+
+    moved = learned.give(db, finding, target, source="analysis",
+                         reason=f"AI validation #{record.id}: rated {rating.lower()}",
+                         by=by, analysis_id=record.id, model=record.model)
+    if moved:
+        note = f"Graded {target.value} on the model's reading (was {baseline.value})."
+    else:
+        note = (f"The model reads it as {target.value}; a person's regrade to "
+                f"{finding.custom_severity.value} still stands.")
+    if confidence == "low":
+        return note + "  Nothing was learned, because the model was not sure.", moved
+    fields, refused = learned.proposal(finding, target, pattern)
+    if not fields:
+        return note + f"  Nothing was learned: {refused}.", moved
+    rule = learned.create(db, finding, target, fields, record.id, record.model, by)
+    if rule is None:
+        return note + "  The pattern failed its own test, so nothing was learned.", moved
+    others = learned.apply_rule_now(db, rule, by)
+    note += f"  Learned rule #{rule.id}: {learned.describe(rule)}."
+    if others:
+        note += (f"  It graded {others} more finding{'' if others == 1 else 's'} "
+                 f"here at no cost.")
+    return note, moved
 
 
 def for_finding(db, finding_id: int) -> list:
@@ -662,9 +792,124 @@ def for_finding(db, finding_id: int) -> list:
         out.append({"id": row.id, "created_at": row.created_at,
                     "created_by": row.created_by, "provider": row.provider,
                     "model": row.model, "rating": row.rating,
-                    "confidence": row.confidence, "content": row.content,
+                    "confidence": row.confidence, "content": learned.strip_pattern(row.content),
                     "sources": sources, "code_included": row.code_included,
                     "input_tokens": row.input_tokens,
                     "output_tokens": row.output_tokens,
                     "duration_ms": row.duration_ms})
     return out
+
+
+# -------------------------------------------------------------------- bulk
+
+MAX_BATCH = 500
+_batches: dict = {}
+_batch_lock = threading.Lock()
+_batch_seq = [0]
+
+
+def start_batch(finding_ids: list, user) -> int:
+    """Validate many findings in the background.  -> the batch number.
+
+    Ordered so findings about the same thing sit together: the same
+    repository, kind and rule or package.  The first of a group goes to the
+    model, and when what it learns covers the rest they are answered from the
+    rule without a model call, which is where a bulk run saves its tokens.
+    """
+    with _batch_lock:
+        _batch_seq[0] += 1
+        number = _batch_seq[0]
+        _batches[number] = {
+            "id": number, "by": getattr(user, "username", "") or "",
+            "started": utcnow(), "finished": None, "total": len(finding_ids),
+            "done": 0, "asked": 0, "from_rules": 0, "lowered": 0,
+            "skipped_protected": 0, "skipped_done": 0, "errors": 0,
+            "tokens": 0, "rules_learned": 0, "results": []}
+        # Keep the twenty newest; a batch is a progress display, not a record.
+        for old in sorted(_batches)[:-20]:
+            _batches.pop(old, None)
+    worker = threading.Thread(target=_batch, args=(number, list(finding_ids), user),
+                              name=f"ai-batch-{number}", daemon=True)
+    worker.start()
+    return number
+
+
+def batch_status(number: int = None) -> dict:
+    with _batch_lock:
+        if number is None:
+            return dict(_batches[max(_batches)]) if _batches else {}
+        found = _batches.get(number)
+        return dict(found) if found else {}
+
+
+def _note(number: int, **change) -> None:
+    with _batch_lock:
+        batch = _batches.get(number)
+        if batch is None:
+            return
+        result = change.pop("result", None)
+        for key, value in change.items():
+            batch[key] = batch.get(key, 0) + value
+        if result:
+            batch["results"].append(result)
+            batch["results"] = batch["results"][-200:]
+
+
+def _batch(number: int, finding_ids: list, user) -> None:
+    from app.core import rbac
+    from app.core.models import AIGrade, LearnedRule
+
+    try:
+        with session_scope() as db:
+            rows = (rbac.visible_findings(db, user)
+                    .filter(Finding.id.in_(finding_ids)).all())
+            order = sorted(rows, key=lambda f: (
+                f.repository or "", learned._value(f.kind),
+                (f.package_name if f.kind == FindingKind.DEPENDENCY else f.rule) or "",
+                -learned.RANK.get(f.severity.value, 0), f.id))
+            plan = []
+            for f in order:
+                if learned.protected(f):
+                    plan.append((f.id, f.vuln_id, "protected"))
+                    continue
+                done = (db.query(AIGrade).filter(AIGrade.finding_id == f.id,
+                                                 AIGrade.source == "analysis").first())
+                if done is not None:
+                    plan.append((f.id, f.vuln_id, "done"))
+                    continue
+                plan.append((f.id, f.vuln_id, "ask"))
+            rules_before = db.query(LearnedRule).count()
+        for finding_id, vuln_id, step in plan:
+            label = vuln_id or str(finding_id)
+            if step == "protected":
+                _note(number, done=1, skipped_protected=1,
+                      result=f"{label}: not sent; AI may not lower credentials "
+                             "or known exploited packages")
+                continue
+            if step == "done":
+                _note(number, done=1, skipped_done=1,
+                      result=f"{label}: already validated for this code")
+                continue
+            try:
+                result = run(finding_id, user, force=False, wait=True)
+            except Exception:  # one bad finding must not stop the rest
+                log.exception("bulk validation of %s failed", finding_id)
+                result = {"ok": False, "detail": "failed; see the log"}
+            if not result.get("ok"):
+                _note(number, done=1, errors=1, result=f"{label}: {result.get('detail', '')}")
+                continue
+            if result.get("from_rule"):
+                _note(number, done=1, from_rules=1,
+                      lowered=1 if result.get("lowered") else 0,
+                      result=f"{label}: {result['detail']}")
+            else:
+                _note(number, done=1, asked=1, tokens=result.get("tokens") or 0,
+                      lowered=1 if result.get("lowered") else 0,
+                      result=f"{label}: {result['detail']}")
+        with session_scope() as db:
+            learned_now = db.query(LearnedRule).count() - rules_before
+        _note(number, rules_learned=learned_now)
+    finally:
+        with _batch_lock:
+            if number in _batches:
+                _batches[number]["finished"] = utcnow()

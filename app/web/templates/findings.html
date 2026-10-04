@@ -279,7 +279,7 @@
 </div>
 {% endif %}
 
-{% if (can_waive or can_delete) and rows %}
+{% if (can_waive or can_delete or can_regrade or can_validate_ai) and rows %}
 <div class="card" id="bulk-bar" hidden>
   <div class="flex-between">
     <div class="small"><strong><span id="bulk-count">0</span></strong> selected
@@ -294,6 +294,9 @@
       <button type="button" class="btn sm" id="bulk-clear">Clear</button>
       {% if can_delete %}
       <button type="button" class="btn sm danger" data-modal="delete-modal">Delete the selected</button>
+      {% endif %}
+      {% if can_validate_ai %}
+      <button type="button" class="btn sm" data-modal="validate-modal">Validate with AI</button>
       {% endif %}
       {% if can_regrade %}
       <button type="button" class="btn sm" data-modal="regrade-modal">Change the severity</button>
@@ -367,7 +370,7 @@
 {% endmacro %}
 
 <thead><tr>
-        {% if can_waive or can_delete %}
+        {% if can_waive or can_delete or can_regrade or can_validate_ai %}
         <th class="nowrap"><input type="checkbox" id="select-page"
             title="Everything on this page"></th>
         {% endif %}
@@ -389,7 +392,7 @@
       {% for g in groups %}
         {% set f = g.lead %}
         <tr>
-          {% if can_waive or can_delete %}
+          {% if can_waive or can_delete or can_regrade or can_validate_ai %}
           {# Excepted rows cannot be waived again, but they can still be
              deleted, so the box only locks when waiving is all this person
              can do with it. #}
@@ -494,7 +497,7 @@
   {% endif %}
 </div>
 
-{% if can_waive or can_delete or can_regrade %}
+{% if can_waive or can_delete or can_regrade or can_validate_ai %}
 <form method="post" id="bulk-form" action="{{ base }}/findings/waive-bulk">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="all_matching" id="all-matching" value="">
@@ -512,6 +515,35 @@
   <input type="hidden" name="exception" value="{{ filters.exception }}">
   <input type="hidden" name="connection" value="{{ filters.connection }}">
 </form>
+
+{% if can_validate_ai %}
+<div class="modal-backdrop" id="validate-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Validate what is selected with AI
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <div class="notice info">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+        <div><strong><span data-slot="bulk-count">0</span></strong> findings, read
+          by the model in the background. Where it reads one as lower than its
+          grade, the grade goes down. Credentials and known exploited packages
+          are not sent, because AI may not lower them, and a person's own
+          regrade always stands.
+          <div class="small" style="margin-top:.3rem">Findings about the same
+            thing go one after another. What the model learns from the first
+            becomes a rule that answers the rest without asking it again, and
+            findings a learned rule already covers cost nothing. This can send
+            the code around each finding to the configured model.</div></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Cancel</button>
+      <button type="submit" class="btn primary" form="bulk-form"
+              formaction="{{ base }}/findings/validate-bulk">Validate with AI</button>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 {% if can_regrade %}
 {# The same ticked findings, sent somewhere else.

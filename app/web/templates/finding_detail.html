@@ -310,7 +310,7 @@
 </div>
 {% endif %}
 
-{% if analyses or can_validate %}
+{% if analyses or can_validate or ai_grade or lifted_grades or ai_rule %}
 {# A language model's reading, when somebody asked for one.  Shown as text and
    escaped, never as markup: it was written by a model that read code this tool
    does not control.  It sits beside the scanner's own recommendation and has
@@ -324,6 +324,29 @@
 <div class="card" id="validation">
   <div class="card-head">AI validation</div>
   <div class="card-body">
+    {% for gone in lifted_grades %}
+    <div class="notice warn">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+      <div>{{ 'A regrade' if gone.source == 'person' else 'An AI grade' }} to
+        <strong>{{ gone.lifted_severity }}</strong>{% if gone.lifted_by %} by {{ gone.lifted_by }}{% endif %}
+        was lifted on {{ gone.lifted_at | dt('%d %b %Y') }}, because the flagged code
+        changed after it was made. It needs a fresh look.
+        {% if gone.lifted_reason %}<div class="faint small">It said: {{ gone.lifted_reason }}</div>{% endif %}</div>
+    </div>
+    {% endfor %}
+    {% if ai_grade %}
+    <p>Graded <span class="badge {{ ai_grade.severity.value }}">{{ ai_grade.severity.value }}</span>
+      by {{ 'a learned rule' if ai_grade.source == 'rule' else 'AI validation' }}
+      on {{ ai_grade.created_at | dt('%d %b %Y') }}{% if ai_grade.was %}, from {{ ai_grade.was }}{% endif %}.
+      {% if f.custom_severity %}A person's regrade to {{ f.custom_severity.value }} stands over it.{% endif %}
+      {% if ai_rule %}<span class="faint small">Rule #{{ ai_rule.id }}: {{ ai_rule_text }}.</span>{% endif %}
+      <span class="faint small">The grade holds on later scans while the flagged code is unchanged.</span></p>
+    {% elif ai_rule %}
+    <p class="small">Learned rule #{{ ai_rule.id }} covers this finding: {{ ai_rule_text }}.</p>
+    {% endif %}
+    {% if ai_protected %}
+    <p class="faint small">AI can read this finding but not lower it: {{ ai_protected }}.</p>
+    {% endif %}
     {% if analyses %}
     {% set latest = analyses[0] %}
     {% if latest.rating %}
@@ -337,9 +360,9 @@
     <div class="ai-answer">{{ latest.content }}</div>
     <p class="faint small">Written by {{ latest.model or latest.provider }} for
       {{ latest.created_by or 'somebody' }} on {{ latest.created_at | dt('%d %b %Y %H:%M') }}.
-      A model's reading of the evidence, not a decision: the grade only moves
-      when somebody regrades it, and a model can be wrong or misled by what is
-      in the code.</p>
+      A model's reading of the evidence.  A lower reading lowers the grade,
+      except where AI may not, and a person's regrade always has the last
+      word: a model can be wrong or misled by what is in the code.</p>
     {% if latest.sources %}
     <details>
       <summary class="small">What it was given</summary>
@@ -371,6 +394,10 @@
           {% if ai_sends_code %}data-confirm="This sends the finding, and the code around it, to {{ ai_model }}. Go ahead?"{% endif %}>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn primary" type="submit">Validate with AI</button>
+      {% if ai_rule %}
+      <label class="small" style="margin-left:.6rem"><input type="checkbox" name="force" value="1">
+        Ask the model anyway, rather than the learned rule</label>
+      {% endif %}
     </form>
     {% endif %}
   </div>

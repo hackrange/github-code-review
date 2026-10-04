@@ -7,8 +7,14 @@
       presses Validate with AI on a finding, and the model configured here reads the
       finding, the code around it and the decisions already made nearby, and
       says whether it is as bad as its grade and why.  The answer is kept on the
-      finding with the model's name on it.  It never changes a grade, a state or
-      an exception: those still take a person.</div></div>
+      finding with the model's name on it.  A reading lower than the grade
+      lowers it, except on a credential or a known exploited package, and a
+      person's regrade always has the last word.  What the model says covers
+      other findings becomes a learned rule, so the same question is not paid
+      for twice.  It never changes a state or an exception.</div></div>
+  <div class="page-actions">
+    <a class="btn sm" href="{{ base }}/ai/learned">Learned rules</a>
+  </div>
 </div>
 
 {% if message %}

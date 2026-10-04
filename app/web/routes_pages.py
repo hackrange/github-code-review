@@ -1491,6 +1491,7 @@ def findings(request: Request, user: User = Depends(current_user)):
             can_waive=rbac.can(user, "waiver.request"),
             can_delete=rbac.can(user, "findings.delete"),
             can_regrade=rbac.can(user, "finding.regrade"),
+            can_validate_ai=_can_validate_ai(db, user),
             # Not the filtered count.  The delete-everything dialog has to
             # say how many rows actually go, which is rarely the number on
             # screen.
@@ -1690,6 +1691,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        recommendation=recommendation.for_finding(row,
                                                                  risk_context),
                        analyses=analyses,
+                       **_ai_grade_context(db, row),
                        # Offered only when a provider is on and complete.
                        # Half set up shows nothing here; the AI page is where
                        # that gets said.
@@ -3454,6 +3456,59 @@ def ai_page(request: Request, msg: str = "", kind: str = "",
             message=clean_text(msg, "message", limit=300, required=False),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "ai.html", **context)
+
+
+def _can_validate_ai(db, user) -> bool:
+    """Whether the AI buttons belong on a page for this person right now."""
+    from app.core import ai
+    cfg = ai.config(db)
+    return bool(rbac.can(user, "finding.validate") and ai.enabled(cfg)
+                and not ai.missing(cfg))
+
+
+def _ai_grade_context(db, row) -> dict:
+    """What AI validation and learned rules say about one finding, for its page."""
+    from app.core import learned
+    from app.core.models import AIGrade, GradeBasis, LearnedRule
+
+    grade = db.query(AIGrade).filter(AIGrade.finding_id == row.id).one_or_none()
+    rule = None
+    if grade is not None and grade.rule_id:
+        rule = db.get(LearnedRule, grade.rule_id)
+    elif grade is None and not learned.protected(row):
+        rule = learned.match(learned.load_rules(db), row)
+    lifted = (db.query(GradeBasis)
+              .filter(GradeBasis.finding_id == row.id, GradeBasis.lifted_at.isnot(None))
+              .order_by(GradeBasis.lifted_at.desc()).all())
+    return {"ai_grade": grade, "ai_rule": rule,
+            "ai_rule_text": learned.describe(rule) if rule is not None else "",
+            "ai_protected": learned.protected(row), "lifted_grades": lifted}
+
+
+@router.get("/ai/learned")
+def learned_page(request: Request, msg: str = "", kind: str = "", batch: int = 0,
+                 show: str = "", user: User = Depends(current_user)):
+    """What AI validation has taught the scanner, and how a bulk run is going."""
+    rbac.require(user, "finding.validate")
+    from app.core import analysis, learned
+    from app.core.models import LearnedRule
+
+    with session_scope() as db:
+        query = db.query(LearnedRule)
+        if show != "retired":
+            query = query.filter(LearnedRule.retired_at.is_(None))
+        rules = query.order_by(LearnedRule.created_at.desc()).limit(500).all()
+        rows = [{"rule": r, "text": learned.describe(r),
+                 "problems": learned.self_test(r) if r.retired_at is None else [],
+                 "cases": learned.fixture_of(r)} for r in rules]
+        status = analysis.batch_status(batch or None)
+        context = _shared(db, user)
+        context.update(
+            active_page="ai", rows=rows, show=show, batch=status,
+            can_write=rbac.can(user, "settings.write"),
+            message=clean_text(msg, "message", limit=300, required=False),
+            message_kind="error" if kind == "error" else "ok")
+        return page(request, "learned.html", **context)
 
 
 @router.get("/editors")

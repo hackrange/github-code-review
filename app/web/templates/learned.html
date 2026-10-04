@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Learned rules &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Learned rules</h1>
+    <div class="faint small">What AI validation taught the scanner, so the same
+      question is never paid for twice.</div></div>
+  <div class="page-actions">
+    {% if show == 'retired' %}
+    <a class="btn sm" href="{{ base }}/ai/learned">Live rules</a>
+    {% else %}
+    <a class="btn sm" href="{{ base }}/ai/learned?show=retired">Include retired</a>
+    {% endif %}
+    {% if can_write %}
+    <form method="post" action="{{ base }}/ai/learned/test" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn sm" type="submit">Run the synthetic tests</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if message %}
+<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}"><div class="small">{{ message }}</div></div>
+{% endif %}
+
+{% if batch %}
+<div class="card">
+  <div class="card-head">Bulk validation #{{ batch.id }}
+    {% if batch.finished %}<span class="faint small">finished</span>
+    {% else %}<span class="faint small" data-reload-after="5">running, this page refreshes itself</span>{% endif %}</div>
+  <div class="card-body">
+    <p><strong>{{ batch.done }}</strong> of {{ batch.total }} done.
+      {{ batch.asked }} sent to the model, {{ batch.from_rules }} answered by
+      learned rules at no cost, {{ batch.lowered }} graded lower.
+      {% if batch.skipped_protected %}{{ batch.skipped_protected }} not sent, because
+      AI may not lower credentials or known exploited packages.{% endif %}
+      {% if batch.skipped_done %}{{ batch.skipped_done }} already validated for the
+      same code.{% endif %}
+      {% if batch.errors %}<strong>{{ batch.errors }} failed.</strong>{% endif %}
+    </p>
+    <p class="faint small">{{ batch.tokens }} tokens spent.
+      {% if batch.finished %}{{ batch.rules_learned }} new rule{{ '' if batch.rules_learned == 1 else 's' }} learned.{% endif %}
+      Started by {{ batch.by }}.</p>
+    {% if batch.results %}
+    <details>
+      <summary class="small">What happened to each</summary>
+      <ul class="small">{% for line in batch.results %}<li>{{ line }}</li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<div class="notice info">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+  <div>When a model reads a finding as lower than its grade, it also says which
+    other findings deserve the same grade for the same reason. That is kept
+    here as a rule, with a synthetic test: the finding it came from must match
+    it, and anything a model later refused to lower must not. The next finding
+    the rule covers, in a bulk run or on a scan, is graded from the rule
+    without asking the model.
+    <div class="small" style="margin-top:.3rem">A rule only lowers, never on a
+      credential or a known exploited package, and never over a person's own
+      regrade. It applies in the repository it was learned in until somebody
+      accepts it for every repository. A model asked again that disagrees with
+      a rule retires it, and every grade it gave is taken back.</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>#</th><th>What it covers</th><th>Grade</th><th>Scope</th>
+        <th>Used</th><th>Test</th>{% if can_write %}<th></th>{% endif %}</tr></thead>
+      <tbody>
+      {% for row in rows %}{% set r = row.rule %}
+        <tr{% if r.retired_at %} class="faint"{% endif %}>
+          <td>{{ r.id }}</td>
+          <td>{{ row.text }}
+            {% if r.reason %}<div class="faint small">{{ r.reason }}</div>{% endif %}
+            <div class="faint small">Learned from
+              {% if r.source_finding_id %}<a href="{{ base }}/findings/{{ r.source_finding_id }}">finding {{ r.source_finding_id }}</a>{% else %}a finding{% endif %}
+              by {{ r.model or 'a model' }}, for {{ r.created_by or 'somebody' }},
+              {{ r.created_at | dt('%d %b %Y') }}.</div>
+            {% if r.retired_at %}<div class="small">Retired {{ r.retired_at | dt('%d %b %Y') }}
+              by {{ r.retired_by or 'the system' }}: {{ r.retired_reason }}</div>{% endif %}
+          </td>
+          <td><span class="badge {{ r.severity.value }}">{{ r.severity.value }}</span></td>
+          <td class="small">{% if r.global_accepted_by %}Every repository
+            <div class="faint">accepted by {{ r.global_accepted_by }}</div>
+            {% else %}{{ r.repository }}{% endif %}</td>
+          <td class="small">{{ r.hits or 0 }}{% if r.last_hit_at %}
+            <div class="faint">last {{ r.last_hit_at | dt('%d %b') }}</div>{% endif %}</td>
+          <td class="small">{% if r.retired_at %}&nbsp;
+            {% elif row.problems %}<span class="badge high">fails</span> {{ row.problems[0] }}
+            {% else %}passes {{ row.cases.positive | length }} case{{ '' if row.cases.positive | length == 1 else 's' }}{% if row.cases.negative %},
+              refuses {{ row.cases.negative | length }}{% endif %}{% endif %}</td>
+          {% if can_write %}<td class="nowrap">
+            {% if not r.retired_at %}
+            {% if not r.global_accepted_by %}
+            <form method="post" action="{{ base }}/ai/learned/{{ r.id }}/accept" style="display:inline"
+                  data-confirm="Apply rule #{{ r.id }} in every repository? It will lower matching findings everywhere.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm" type="submit">Apply everywhere</button>
+            </form>
+            {% endif %}
+            <form method="post" action="{{ base }}/ai/learned/{{ r.id }}/retire" style="display:inline"
+                  data-confirm="Retire rule #{{ r.id }} and put back every grade it gave?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm danger" type="submit">Retire</button>
+            </form>
+            {% endif %}
+          </td>{% endif %}
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="faint">Nothing learned yet. Validate findings with
+          AI, one at a time or many at once from the findings list, and what the
+          model says covers other findings shows up here.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
