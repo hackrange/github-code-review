@@ -51,6 +51,16 @@ MAX_FILE_BYTES = 2 * 1024 * 1024
 
 # Paths that are the test suite rather than the application.  A package only
 # imported from here does not ship either.
+# Configuration for build, test and lint tools.  They import packages, and none
+# of what they import is in what gets deployed.
+TOOL_PATH = re.compile(
+    r"(^|/)[^/]*\.(?:config|conf)\.[cm]?[jt]s$"
+    r"|(^|/)(?:karma|protractor|gulpfile|gruntfile|webpack|rollup|babel|jest|vite|vitest|"
+    r"postcss|tailwind|craco|nuxt|next|svelte|astro|metro|commitlint|stylelint|lint-staged)"
+    r"[^/]*\.[cm]?[jt]s$"
+    r"|(^|/)\.[a-z]+rc\.[cm]?[jt]s$"
+    r"|(^|/)(e2e|tools|\.storybook|\.husky)/", re.I)
+
 TEST_PATH = re.compile(
     r"(^|/)(tests?|specs?|__tests__|testdata|e2e|cypress|features)(/|$)"
     r"|(^|/)[^/]*[._-](test|spec)\.[^/]+$"
@@ -175,7 +185,7 @@ def scan_imports(root: str) -> dict:
         entry = found[eco].setdefault(name, {"files": 0, "first": rel,
                                              "ships": False})
         entry["files"] += 1
-        if not TEST_PATH.search(rel):
+        if not TEST_PATH.search(rel) and not TOOL_PATH.search(rel):
             entry["ships"] = True
 
     for full, rel in _walk(root):
@@ -303,9 +313,282 @@ def read_manifests(root: str) -> dict:
     return direct
 
 
+# --- who pulls in whom ------------------------------------------------------
+#
+# The absence of an import is not evidence on its own.  An application never
+# imports qs, and express parses every query string with it.  What the lockfile
+# says is evidence: npm marks every package needed only for development
+# `"dev": true`, and records which package requires which, so a transitive
+# package can be followed up to the direct dependency that brought it in.
+
+def _npm_name(key: str) -> str:
+    """node_modules/a/node_modules/@s/b -> @s/b"""
+    tail = key.rsplit("node_modules/", 1)[-1]
+    return tail
+
+
+def read_npm_locks(root: str) -> dict:
+    """-> {name: {"dev": bool, "parents": set, "roots": {name: scope}}}
+
+    Every package-lock.json in the tree, merged.  A package is development only
+    when every copy of it, in every lockfile, is marked dev.
+    """
+    info: dict = {}
+    roots: dict = {}
+
+    def entry(name):
+        return info.setdefault(name, {"dev": True, "parents": set()})
+
+    for full, _rel in _walk(root):
+        if os.path.basename(full) not in ("package-lock.json", "npm-shrinkwrap.json"):
+            continue
+        doc = _json(full)
+        if not isinstance(doc, dict):
+            continue
+        packages = doc.get("packages")
+        if isinstance(packages, dict):
+            top = packages.get("") or {}
+            for key, scope in (("dependencies", "runtime"), ("optionalDependencies", "runtime"),
+                               ("peerDependencies", "runtime"), ("devDependencies", "development")):
+                for dep in (top.get(key) or {}):
+                    if roots.get(dep) != "runtime":
+                        roots[dep] = scope
+            for key, pkg in packages.items():
+                if not key or not isinstance(pkg, dict) or "node_modules/" not in key:
+                    continue
+                name = _npm_name(key)
+                node = entry(name)
+                if not pkg.get("dev"):
+                    node["dev"] = False
+                for field in ("dependencies", "optionalDependencies", "peerDependencies"):
+                    for dep in (pkg.get(field) or {}):
+                        entry(dep)["parents"].add(name)
+            continue
+        # Lockfile version 1: a nested tree, with dev on each node and the
+        # edges under `requires`.  It has no root entry, so the direct
+        # dependencies come from the package.json beside it.
+        beside = _json(os.path.join(os.path.dirname(full), "package.json"))
+        if isinstance(beside, dict):
+            for key, scope in (("dependencies", "runtime"), ("optionalDependencies", "runtime"),
+                               ("peerDependencies", "runtime"), ("devDependencies", "development")):
+                for dep in (beside.get(key) or {}):
+                    if roots.get(dep) != "runtime":
+                        roots[dep] = scope
+        def walk_v1(tree):
+            for name, pkg in (tree or {}).items():
+                if not isinstance(pkg, dict):
+                    continue
+                node = entry(name)
+                if not pkg.get("dev"):
+                    node["dev"] = False
+                for dep in (pkg.get("requires") or {}):
+                    entry(dep)["parents"].add(name)
+                walk_v1(pkg.get("dependencies"))
+        walk_v1(doc.get("dependencies"))
+    for name, node in info.items():
+        node["roots"] = roots
+    return {"packages": info, "roots": roots}
+
+
+def npm_chains(name: str, locks: dict, limit: int = 12) -> list:
+    """Shortest chains from a direct dependency down to this package."""
+    packages, roots = locks.get("packages") or {}, locks.get("roots") or {}
+    if name not in packages:
+        return []
+    chains, frontier, seen = [], [[name]], {name}
+    while frontier and len(chains) < limit:
+        nxt = []
+        for path in frontier:
+            head = path[0]
+            if head in roots and len(path) > 1:
+                chains.append(path)
+                continue
+            for parent in sorted(packages.get(head, {}).get("parents") or ()):
+                if parent not in seen:
+                    seen.add(parent)
+                    nxt.append([parent] + path)
+        frontier = nxt[:500]
+    return chains
+
+
+def _py_norm(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", (name or "").strip().lower())
+
+
+def read_poetry_locks(root: str, direct: dict) -> dict:
+    """The same shape as read_npm_locks, from poetry.lock.
+
+    Poetry 2 records `groups = ["main"]` or `["dev"]` on every package, and
+    older versions `category = "dev"`.  Either is the lockfile saying whether
+    the package ships.  The edges are each package's dependency table, and the
+    direct dependencies are what pyproject.toml asked for.
+    """
+    info: dict = {}
+    for full, _rel in _walk(root):
+        if os.path.basename(full) != "poetry.lock":
+            continue
+        text = _read(full)
+        for block in re.split(r"^\[\[package\]\]\s*$", text, flags=re.M)[1:]:
+            named = re.search(r'^name\s*=\s*"([^"]+)"', block, re.M)
+            if not named:
+                continue
+            name = _py_norm(named.group(1))
+            node = info.setdefault(name, {"dev": True, "parents": set()})
+            groups = re.search(r"^groups\s*=\s*\[([^\]]*)\]", block, re.M)
+            category = re.search(r'^category\s*=\s*"([^"]+)"', block, re.M)
+            if groups:
+                if '"main"' in groups.group(1):
+                    node["dev"] = False
+            elif not category or category.group(1) != "dev":
+                node["dev"] = False
+            deps = re.search(r"^\[package\.dependencies\]\s*$(.*?)(?=^\[|\Z)", block, re.M | re.S)
+            for dep in re.findall(r"^([A-Za-z0-9._-]+)\s*=", deps.group(1) if deps else "", re.M):
+                info.setdefault(_py_norm(dep), {"dev": True, "parents": set()})["parents"].add(name)
+    roots = {_py_norm(n): scope for n, scope in (direct.get("python") or {}).items()}
+    return {"packages": info, "roots": roots}
+
+
+def judge_from_lock(name: str, eco: str, imports: dict, locks: dict) -> tuple:
+    """For a package nothing imports directly: what the lockfile says.
+    None when the lockfile does not know it."""
+    packages = (locks or {}).get("packages") or {}
+    key = _py_norm(name) if eco == "python" else name
+    if key not in packages:
+        return None
+    seen = imports.get(eco) or {}
+
+    def imported(package):
+        if eco == "python":
+            for candidate in python_candidates(package):
+                if candidate in seen:
+                    return seen[candidate]
+            return None
+        return seen.get(package)
+
+    chains = npm_chains(key, locks)
+    # A chain is never proof the code runs.  It is shown, and stays unknown.
+    for chain in chains:
+        hit = imported(chain[0])
+        if hit and hit["ships"]:
+            files = "1 file" if hit["files"] == 1 else f"{hit['files']} files"
+            return UNKNOWN, (f"pulled in through {' -> '.join(chain)}, and {chain[0]} "
+                             f"is imported in {files}, first at {hit['first']}; whether "
+                             f"this code runs depends on what {chain[0]} does with it")
+    if packages[key]["dev"]:
+        return UNLIKELY, ("installed only for development (the lockfile marks it "
+                          "dev) and nothing the application ships imports what "
+                          "pulls it in, so it is not in what gets deployed")
+    if chains:
+        return UNKNOWN, (f"pulled in through {' -> '.join(chains[0])}, but nothing the "
+                         f"application ships imports {chains[0][0]}, which may be a "
+                         f"tool rather than a library")
+    return UNKNOWN, "in the lockfile, but nothing found leads to it from a direct dependency"
+
+
+# Pages that load a library with a script tag rather than an import.
+PAGE_EXT = {".html", ".htm", ".cshtml", ".vbhtml", ".aspx", ".ascx", ".master",
+            ".jsp", ".php", ".erb", ".hbs", ".ejs", ".vue", ".twig", ".jinja", ".j2"}
+SCRIPT_SRC = re.compile(r"""<script[^>]+src\s*=\s*["']([^"']+)["']""", re.I)
+# ASP.NET loads scripts without a script tag: a ScriptManager reference by name
+# or path, and MVC bundles that include a file pattern.
+ASP_SCRIPT = re.compile(r"""<asp:ScriptReference[^>]*?\b(?:Name|Path)\s*=\s*["']([^"']+)["']""", re.I)
+BUNDLE_INCLUDE = re.compile(r"""\.Include\(\s*((?:@?"[^"]+"\s*,?\s*)+)\)""")
+
+
+def scan_script_tags(root: str) -> dict:
+    """-> {basename stem: first page that loads it}."""
+    loaded: dict = {}
+
+    def note(src: str, rel: str):
+        stem = os.path.basename(src.split("?")[0].strip().lower())
+        # A ScriptManager reference by name, jquery, is the library itself.
+        if stem and not stem.endswith(".js"):
+            stem += ".js"
+        # MVC writes {version} where the number goes.
+        stem = stem.replace("-{version}", "")
+        if stem:
+            loaded.setdefault(stem, rel)
+
+    for full, rel in _walk(root):
+        ext = os.path.splitext(full)[1].lower()
+        if TEST_PATH.search(rel):
+            continue
+        if ext in PAGE_EXT:
+            text = _read(full)
+            for match in SCRIPT_SRC.finditer(text):
+                note(match.group(1), rel)
+            for match in ASP_SCRIPT.finditer(text):
+                note(match.group(1), rel)
+        elif ext in (".cs", ".vb"):
+            text = _read(full)
+            if "ScriptBundle" not in text:
+                continue
+            for match in BUNDLE_INCLUDE.finditer(text):
+                for src in re.findall(r'"([^"]+)"', match.group(1)):
+                    note(src, rel)
+    return loaded
+
+
+def _script_loads(name: str, scripts: dict) -> str:
+    """The page that loads this library by file name, if one does."""
+    low = (name or "").lower()
+    if not low or not scripts:
+        return ""
+    pattern = re.compile(r"^%s(?:[-.][\w.]*)?\.js$" % re.escape(low))
+    for stem, page in scripts.items():
+        if pattern.match(stem):
+            return page
+    return ""
+
+
 # --- the verdict ------------------------------------------------------------
-def judge(name: str, eco: str, direct: dict, imports: dict) -> tuple:
+def judge_npm_transitive(name: str, direct: dict, imports: dict, locks: dict,
+                         scripts: dict) -> tuple:
+    """For an npm package nothing imports directly.  None when there is no
+    lockfile evidence either way."""
+    page = _script_loads(name, scripts)
+    if page:
+        return REACHABLE, f"a page loads it with a script tag, first at {page}"
+    packages = (locks or {}).get("packages") or {}
+    if name not in packages:
+        return None
+    seen = imports.get("npm") or {}
+    chains = npm_chains(name, locks)
+    # Being somewhere under a package the application uses does not mean this
+    # code runs: a bundle carries only what is imported, and a dependency of a
+    # dependency is often an install script or a build step.  So a chain is
+    # never proof of reachable.  It is shown, and the verdict stays unknown.
+    shipping = [c for c in chains if (seen.get(c[0]) or {}).get("ships")]
+    if shipping:
+        chain = shipping[0]
+        hit = seen[chain[0]]
+        files = "1 file" if hit["files"] == 1 else f"{hit['files']} files"
+        return UNKNOWN, (f"pulled in through {' -> '.join(chain)}, and {chain[0]} "
+                         f"is imported in {files}, first at {hit['first']}; whether "
+                         f"this code runs depends on what {chain[0]} does with it")
+    # Development only, and nothing the application ships leads to it: the
+    # lockfile and the source agree that it is not deployed.
+    if packages[name]["dev"]:
+        return UNLIKELY, ("installed only for development (the lockfile marks it "
+                          "dev) and nothing the application ships imports what "
+                          "pulls it in, so it is not in what gets deployed")
+    if chains:
+        chain = chains[0]
+        return UNKNOWN, (f"pulled in through {' -> '.join(chain)}, but nothing the "
+                         f"application ships imports {chain[0]}, which may be a "
+                         f"tool rather than a library")
+    return UNKNOWN, "in the lockfile, but nothing found leads to it from a direct dependency"
+
+
+def judge(name: str, eco: str, direct: dict, imports: dict,
+          locks: dict = None, scripts: dict = None) -> tuple:
     """-> (verdict, reason).  Conservative by construction."""
+    # A page loading the library is evidence whatever ecosystem reported it:
+    # jQuery arrives as an npm file, a NuGet package and a dotnet component,
+    # and all three are the same script on the same page.
+    page = _script_loads(name, scripts or {})
+    if page:
+        return REACHABLE, f"a page loads it with a script tag, first at {page}"
     if eco not in SUPPORTED:
         return UNKNOWN, (f"reachability is not worked out for {eco} packages yet, "
                          "so this keeps its place in the list")
@@ -333,18 +616,35 @@ def judge(name: str, eco: str, direct: dict, imports: dict) -> tuple:
         hit = seen.get(name)
         mapped = True
 
-    if declared == "development":
-        return UNLIKELY, ("a development dependency, which is not in what "
-                          "gets deployed")
-
+    # The source importing it outranks what the manifest calls it.  A front
+    # end often lists everything under devDependencies and a bundler ships it
+    # all to the browser regardless.
     if hit is not None:
         where = hit["first"]
         count = hit["files"]
         files = "1 file" if count == 1 else f"{count} files"
         if not hit["ships"]:
+            if declared == "development":
+                return UNLIKELY, (f"a development dependency, only imported from "
+                                  f"the test suite, in {files}, first at {where}")
             return UNLIKELY, (f"only imported from the test suite, in {files}, "
                               f"first at {where}")
         return REACHABLE, f"imported in {files}, first at {where}"
+
+    if declared == "development":
+        return UNLIKELY, ("a development dependency that nothing the "
+                          "application ships imports, so it is not in what "
+                          "gets deployed")
+
+    if eco == "npm" and declared in (None, "transitive"):
+        decided = judge_npm_transitive(name, direct, imports, (locks or {}).get("npm") or {},
+                                       scripts or {})
+        if decided:
+            return decided
+    if eco == "python" and declared in (None, "transitive"):
+        decided = judge_from_lock(name, "python", imports, (locks or {}).get("python") or {})
+        if decided:
+            return decided
 
     if not known and not seen:
         return UNKNOWN, ("no manifest or source for this ecosystem was readable "
@@ -353,8 +653,12 @@ def judge(name: str, eco: str, direct: dict, imports: dict) -> tuple:
     if declared in ("runtime", "transitive") or declared is None:
         transitive = declared in (None, "transitive")
         if transitive:
-            return UNLIKELY, ("not a direct dependency and nothing in the "
-                              "source imports it")
+            # Not an import is not evidence.  A framework calls what it pulls
+            # in on every request, and without a lockfile to say this package
+            # is development only, nobody can say it does not ship.
+            return UNKNOWN, ("not a direct dependency, and nothing here says "
+                             "whether it ships: the application may reach it "
+                             "through the package that pulled it in")
         if not mapped:
             return UNKNOWN, ("a direct dependency, but no import of it was "
                              "found and its module name may differ from the "
@@ -369,6 +673,17 @@ def apply(findings: list, root: str) -> list:
     """Add a reachability verdict to every dependency finding."""
     imports = scan_imports(root)
     direct = read_manifests(root)
+    # Only read when there is an npm finding to answer, because both walk the
+    # whole tree again.
+    wants_npm = any(ecosystem_of((f.get("package") or {}).get("type")
+                                 or (f.get("package") or {}).get("ecosystem") or "") == "npm"
+                    for f in findings)
+    wants_python = any(ecosystem_of((f.get("package") or {}).get("type")
+                                    or (f.get("package") or {}).get("ecosystem") or "") == "python"
+                       for f in findings)
+    locks = {"npm": read_npm_locks(root) if wants_npm else {},
+             "python": read_poetry_locks(root, direct) if wants_python else {}}
+    scripts = scan_script_tags(root) if findings else {}
 
     for finding in findings:
         package = finding.get("package") or {}
@@ -380,7 +695,7 @@ def apply(findings: list, root: str) -> list:
                 "ecosystem": eco, "direct": "unknown", "scope": "unknown"}
             continue
 
-        verdict, reason = judge(name, eco, direct, imports)
+        verdict, reason = judge(name, eco, direct, imports, locks, scripts)
         known = (direct.get(eco) or {})
         declared = known.get(name.lower() if eco == "python" else name)
         finding["reachability"] = {

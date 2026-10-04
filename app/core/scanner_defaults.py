@@ -89,7 +89,13 @@ TEMPLATE = {
                 },
                 "severity": {
                     "credential": "critical",
-                    "test_fixture": "high",
+                    # Critical as well.  A credential under a test or fixture
+                    # path has not been shown to be dead, and only evidence
+                    # that it is not live moves a credential down: a provider
+                    # rejecting it, or a token past its own expiry.  A staging
+                    # password in a fixture is still a working login until
+                    # somebody shows otherwise.
+                    "test_fixture": "critical",
                     "verified_bonus": True
                 },
                 "triage": {

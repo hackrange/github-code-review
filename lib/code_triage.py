@@ -54,7 +54,57 @@ THIRD_PARTY_PATHS = [
     (r"(^|/)lookup_file_backups(/|$)",                                "a Splunk lookup backup"),
     (r"[.-](bundle|pack)\.js$",                                       "a bundled asset"),
     (r"-min\.(js|css)$",                                              "a minified asset"),
+    # The copy of Web.config that a .NET build writes next to the binary.  The
+    # source of it is reported where somebody edits it.
+    (r"(^|/)(bin|obj)/(.+/)?[^/]+\.(dll|exe)\.config$",               "a build output directory"),
 ]
+
+# A library says what it is in the first comment of the file: a name, a
+# version and a license, or a publisher that is not this team.  Ext JS,
+# AngularJS, Bryntum, CKEditor and Cordova copies were all coming up as code
+# to review, because the directory they sat in was called scripts or lib.
+#
+# Only the opening comment is read.  A team's own file that mentions a library
+# further down is still the team's own file.  And a bare copyright line is not
+# enough, since a team writes those on its own code too: it has to come with
+# an open source license or a named publisher.
+LIBRARY_BANNER = [
+    re.compile(r"@license\s+(?P<name>[A-Za-z][\w.\- ]{1,40}?)\s+v?\d+\.\d+", re.I),
+    re.compile(r"This file is part of (?P<name>Ext JS|Sencha [\w ]+)"),
+    re.compile(r"Copyright\s*(?:\(c\)|©)?[\s\d,-]*(?P<name>Sencha|Bryntum|CKSource|"
+               r"jQuery Foundation|Google,? Inc|Telerik|Progress Software|"
+               r"Twitter,? Inc|OpenJS Foundation|Microsoft Corporation)\b"),
+    re.compile(r"Licensed to the (?P<name>Apache Software Foundation)"),
+    # The jsdoc form: @version and @license as tags, with the name in @link.
+    re.compile(r"@version\s+v?\d+\.\d+(?=.*@license\b)(?:.*?@link\s+(?:https?://)?(?P<name>[\w.-]+))?",
+               re.S),
+    # /*! name v1.2.3 ... MIT, the banner minifiers are told to keep.
+    re.compile(r"(?:^|\n)\s*/\*!\s*[\s*]*(?P<name>[A-Za-z][\w.\- ]{1,40}?)\s+v?\d+\.\d+[^\n]*"
+               r"(?:\n[^\n]*){0,12}?\b(?:MIT|BSD|Apache|GPL|MPL)\b", re.I),
+]
+
+
+def _library_banner(source: str) -> str:
+    """The library a file's opening comment names, or ""."""
+    head = (source or "")[:1500].lstrip()
+    # A shebang first, then the comment, the way a node script starts.
+    if head.startswith("#!"):
+        head = head.split("\n", 1)[-1].lstrip()
+    # And an HTML page puts its doctype before its comment.
+    if head[:9].upper() == "<!DOCTYPE":
+        head = head.split(">", 1)[-1].lstrip()
+    # Only a leading comment counts, in any of the usual forms, and only up to
+    # where it closes.
+    match = re.match(r"(?:(?://[^\n]*\n\s*)*)(/\*.*?\*/|<!--.*?-->)", head, re.S)
+    if not match:
+        return ""
+    comment = head[:match.end()]
+    for pattern in LIBRARY_BANNER:
+        found = pattern.search(comment)
+        if found:
+            return (found.group("name") or "a versioned, licensed library").strip()
+    return ""
+
 
 # --- what the matched expression does ----------------------------------------
 
@@ -1316,8 +1366,11 @@ def _dockerfile_drops_root(repo_root: str, dockerfile: str) -> str:
 
 # A key as a key file holds it: the armor, then base64.  A detector's own
 # regex for the armor has a group or a backslash where the base64 would be.
+# Any number of backslashes before the n: a key file written by a script that
+# escaped it twice has two backslashes before each n after the armor, and
+# missing that set a complete 1,840 character key aside as "no key in the file".
 SERVICE_ACCOUNT_KEY = re.compile(
-    r"-----BEGIN (?:RSA )?PRIVATE KEY-----(?:\\n|\s)+[A-Za-z0-9+/]{40}")
+    r"-----BEGIN (?:RSA )?PRIVATE KEY-----(?:\\+n|\s)+[A-Za-z0-9+/]{40}")
 
 
 # --- running a command, and the two ways PHP makes that safe -----------------
@@ -2027,6 +2080,12 @@ def judge(rule: str, path: str, matched: str, source: str, line: int = 0,
     for pattern, why in THIRD_PARTY_PATHS:
         if re.search(pattern, path, re.I):
             return THIRD_PARTY, f"in {why}", "third-party-path"
+
+    library = _library_banner(source)
+    if library:
+        return (THIRD_PARTY,
+                f"in a copy of {library}, which the file's opening comment names",
+                "library-banner")
 
     text = matched.strip()
 

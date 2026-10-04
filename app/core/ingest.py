@@ -1003,6 +1003,32 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             # The engine's grade is kept beside it rather than overwritten, so
             # this reads as a decision somebody can disagree with.  A rule an
             # admin wrote still wins, because it is applied after.
+            # A token that says it has expired.  Every correct validator rejects
+            # it, so it cannot be used to get in, and an expired credential is
+            # not a vulnerability.  Info rather than gone: the value is still
+            # in the code, and whatever claims it carried in the clear are
+            # still a disclosure, which the reason names.  A token the provider
+            # confirmed still works is never lowered, whatever it says about
+            # itself, and an admin rule or a regrade still has the last word.
+            if (finding.kind == FindingKind.CREDENTIAL
+                    and (finding.token_kind or "") == "jwt"
+                    and finding.token_expired is True
+                    and not finding.verified
+                    and finding.severity != Severity.INFO):
+                finding.engine_severity = (finding.engine_severity
+                                           or finding.severity.value)
+                finding.severity = Severity.INFO
+                when = (finding.token_expires_at.strftime("%Y-%m-%d")
+                        if finding.token_expires_at else "a date in the past")
+                note = ("The token expired on %s, so it will not authenticate "
+                        "anybody and is graded info." % when)
+                claims = (finding.token_identity_claims or "").strip()
+                if claims:
+                    note += ("  It still carries %s in the clear, which is a "
+                             "disclosure of its own." % claims)
+                if not (finding.triage_reason or "").startswith("The token expired"):
+                    finding.triage_reason = note
+
             # A distribution package in a base image the build upgrades after
             # pulling it.  The image in the registry carries the old version
             # and the image that ships most likely does not, so these go to

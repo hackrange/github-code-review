@@ -463,7 +463,7 @@ triage_findings() {
             category: "credential",
             finding_type: "exposed_credential",
             severity: (
-              if $verdict == "low" then ($sev.test_fixture // "high")
+              if $verdict == "low" then ($sev.test_fixture // "critical")
               else ($sev.credential // "critical") end),
             severity_reason: (
               if $f.verified then "credential verified live against the issuing provider"
