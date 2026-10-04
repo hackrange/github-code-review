@@ -327,6 +327,64 @@ def _npm_name(key: str) -> str:
     return tail
 
 
+def _record_copies(packages: dict, entry) -> None:
+    """Each installed copy of a package, by version, with who really uses it.
+
+    One name can be installed several times at several versions.  Judging a
+    finding by the name merged them: loader-utils 0.2.17 under a development
+    only plugin was reported as "pulled in through raw-loader", whose own copy
+    is 2.0.4 and not the one with the flaw.  A copy nested under a package
+    belongs to that package; the hoisted one belongs to every dependent that
+    has no nested copy of its own.
+    """
+    keys = {key for key in packages if key and "node_modules/" in key}
+    # Who asks for each name, once, rather than a pass over every key per copy:
+    # a large lockfile has ten thousand entries.
+    wanted_by: dict = {}
+    for other in keys:
+        deps = packages[other] if isinstance(packages[other], dict) else {}
+        for field in ("dependencies", "optionalDependencies", "peerDependencies"):
+            for dep in (deps.get(field) or {}):
+                wanted_by.setdefault(dep, set()).add(other)
+    for key in keys:
+        pkg = packages[key]
+        if not isinstance(pkg, dict):
+            continue
+        name, version = _npm_name(key), str(pkg.get("version") or "")
+        if not version:
+            continue
+        copy = entry(name).setdefault("versions", {}).setdefault(
+            version, {"dev": True, "parents": set()})
+        if not pkg.get("dev"):
+            copy["dev"] = False
+        holder = key.rsplit("/node_modules/", 1)[0] if key.count("node_modules/") > 1 else ""
+        if holder:
+            # The copy serves whoever asks for it from inside the holder's
+            # folder: the holder, or a package installed under it.  vue's
+            # nested postcss is there for vue's own @vue/compiler-sfc, and
+            # vue itself never asks for postcss.
+            users = {other for other in wanted_by.get(name, ())
+                     if (other == holder or other.startswith(holder + "/node_modules/"))
+                     and (other + "/node_modules/" + name) not in keys}
+            copy["parents"].update(_npm_name(u) for u in (users or {holder}))
+            continue
+        for other in wanted_by.get(name, ()):
+            if (other + "/node_modules/" + name) not in keys:
+                copy["parents"].add(_npm_name(other))
+
+
+def _version_view(locks: dict, name: str, version: str) -> dict:
+    """The lock as it applies to one installed version of a package, or as is."""
+    packages = (locks or {}).get("packages") or {}
+    node = packages.get(name) or {}
+    copy = (node.get("versions") or {}).get(str(version or ""))
+    if not copy:
+        return locks
+    narrowed = dict(packages)
+    narrowed[name] = dict(node, dev=copy["dev"], parents=set(copy["parents"]))
+    return dict(locks, packages=narrowed)
+
+
 def read_npm_locks(root: str) -> dict:
     """-> {name: {"dev": bool, "parents": set, "roots": {name: scope}}}
 
@@ -363,6 +421,7 @@ def read_npm_locks(root: str) -> dict:
                 for field in ("dependencies", "optionalDependencies", "peerDependencies"):
                     for dep in (pkg.get(field) or {}):
                         entry(dep)["parents"].add(name)
+            _record_copies(packages, entry)
             continue
         # Lockfile version 1: a nested tree, with dev on each node and the
         # edges under `requires`.  It has no root entry, so the direct
@@ -542,6 +601,77 @@ def _script_loads(name: str, scripts: dict) -> str:
 
 
 # --- the verdict ------------------------------------------------------------
+# Packages that run on the build machine and are not part of what they build.
+# A copy that can only be reached through one of these is a build step's own
+# code: webpack's file watcher, the minifier's serializer, the Vue single file
+# compiler's CSS parser.  npm cannot say so itself.  A loader listed under
+# dependencies drags webpack in as a peer, and vue 2.7 depends on its own
+# compiler, so the whole toolchain is installed without the dev mark.
+BUILD_TOOLS = {
+    "webpack", "webpack-cli", "webpack-dev-server", "webpack-dev-middleware",
+    "@vue/cli-service", "@vue/cli-plugin-babel", "@vue/cli-plugin-eslint",
+    "@vue/cli-plugin-typescript", "@vue/compiler-sfc", "vue-template-compiler",
+    "@babel/core", "@babel/cli", "babel-loader", "sass", "node-sass",
+    "sass-loader", "less", "less-loader", "postcss-loader", "terser",
+    "terser-webpack-plugin", "uglifyjs-webpack-plugin", "copy-webpack-plugin",
+    "html-webpack-plugin", "mini-css-extract-plugin", "cssnano",
+    "optimize-css-assets-webpack-plugin", "eslint", "prettier", "typescript",
+    "ts-loader", "rollup", "vite", "esbuild", "@vitejs/plugin-vue",
+    "@vitejs/plugin-react", "gulp", "grunt", "jest", "karma", "mocha",
+    "husky", "lint-staged", "@angular/cli", "@angular-devkit/build-angular",
+}
+# What a build tool writes into the bundle it produces, together with
+# everything under it: webpack 4's node polyfills and the core-js and
+# regenerator the babel preset injects.
+SHIPS_FROM_BUILD = {
+    "node-libs-browser", "core-js", "core-js-pure", "regenerator-runtime",
+    "@babel/runtime", "@babel/runtime-corejs2", "@babel/runtime-corejs3",
+}
+# Loaders whose own small runtime helper goes into every bundle.  The helper
+# needs nothing else, so the loader ships but what it depends on does not:
+# css-loader's api.js is in the bundle, the postcss it parses with is not.
+LOADER_RUNTIMES = {
+    "style-loader", "vue-style-loader", "css-loader", "vue-loader",
+    "vue-hot-reload-api",
+}
+
+
+def _build_only(name: str, locks: dict, seen: dict) -> set:
+    """The build tools every way up from this package ends in, or none."""
+    packages, roots = locks.get("packages") or {}, locks.get("roots") or {}
+    if name in SHIPS_FROM_BUILD or name in LOADER_RUNTIMES:
+        return set()
+    found: set = set()
+    done: set = set()
+    stack = [name]
+    while stack:
+        current = stack.pop()
+        if current in done:
+            continue
+        done.add(current)
+        if len(done) > 5000:
+            return set()
+        if current != name:
+            if current in SHIPS_FROM_BUILD or (seen.get(current) or {}).get("ships"):
+                return set()
+            if current in BUILD_TOOLS:
+                found.add(current)
+                continue
+        node = packages.get(current)
+        if node is None:
+            return set()
+        if current != name and node.get("dev"):
+            continue
+        scope = roots.get(current)
+        if scope == "runtime":
+            return set()
+        parents = node.get("parents") or set()
+        if not parents and scope != "development":
+            return set()
+        stack.extend(p for p in parents if p not in done)
+    return found
+
+
 def judge_npm_transitive(name: str, direct: dict, imports: dict, locks: dict,
                          scripts: dict) -> tuple:
     """For an npm package nothing imports directly.  None when there is no
@@ -554,6 +684,22 @@ def judge_npm_transitive(name: str, direct: dict, imports: dict, locks: dict,
         return None
     seen = imports.get("npm") or {}
     chains = npm_chains(name, locks)
+    # A copy whose every way up ends inside a build tool is that tool's own
+    # code, even when the chain starts at something the application imports:
+    # vue is in every component, and the compiler vue depends on is not.
+    tools = _build_only(name, locks, seen)
+    if tools and packages[name]["dev"]:
+        return UNLIKELY, ("installed only for development (the lockfile marks it "
+                          "dev) and nothing the application ships imports what "
+                          "pulls it in, so it is not in what gets deployed")
+    if tools:
+        through = [c for c in npm_chains(name, locks, limit=60) if tools & set(c)]
+        tool = (next(t for t in through[0] if t in tools) if through
+                else sorted(tools)[0])
+        route = f", pulled in through {' -> '.join(through[0])}" if through else ""
+        return UNLIKELY, (f"only reached through {tool}, which runs on the build "
+                          f"machine and is not part of what it builds{route}, so "
+                          f"it is not in what gets deployed")
     # Being somewhere under a package the application uses does not mean this
     # code runs: a bundle carries only what is imported, and a dependency of a
     # dependency is often an install script or a build step.  So a chain is
@@ -695,7 +841,10 @@ def apply(findings: list, root: str) -> list:
                 "ecosystem": eco, "direct": "unknown", "scope": "unknown"}
             continue
 
-        verdict, reason = judge(name, eco, direct, imports, locks, scripts)
+        view = locks
+        if eco == "npm" and package.get("version"):
+            view = dict(locks, npm=_version_view(locks.get("npm") or {}, name, package["version"]))
+        verdict, reason = judge(name, eco, direct, imports, view, scripts)
         known = (direct.get(eco) or {})
         declared = known.get(name.lower() if eco == "python" else name)
         finding["reachability"] = {

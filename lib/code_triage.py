@@ -161,6 +161,17 @@ def _header_before(source: str, pattern, line: int) -> bool:
             return True
     return False
 
+# Open redirect, by the names each engine gives it.
+REDIRECT_RULES = {"js/server-side-unvalidated-url-redirection", "gcr-open-redirect",
+                  "express-open-redirect", "open-redirect"}
+
+# Raw HTML bindings in a template, by the names each engine gives them.
+VHTML_RULES = {"avoid-v-html", "vue-v-html"}
+# A DOMPurify option that lets back in what it exists to take out.
+PURIFY_UNSAFE = re.compile(r"""['"](?:script|iframe|object|embed|on[a-z]+)['"]|"""
+                           r"ALLOW_UNKNOWN_PROTOCOLS\s*:\s*true|IN_PLACE|"
+                           r"SAFE_FOR_TEMPLATES\s*:\s*false|RETURN_DOM")
+
 # Rules whose whole premise is "this reaches an HTML page".
 XSS_FAMILY = {"echoed-request", "var-in-href", "template-and-attributes",
               "explicit-unescape-with-markup", "template-explicit-unescape",
@@ -1566,6 +1577,151 @@ def _js_redirect_encoded(source: str, line: int) -> str:
         return ""
     return ("the request value only reaches the address through "
             "encodeURIComponent, so it cannot change where the redirect goes")
+
+
+# What the server's own address looks like when code builds it: a configured
+# public URL, or the host the request was sent to.
+OWN_ORIGIN_CONFIG = re.compile(r"public_?url|publicUrl|PUBLIC_URL|base_?url|baseUrl|BASE_URL", re.I)
+OWN_ORIGIN_HOST = re.compile(r"""req\.get\(\s*['"](?:x-forwarded-host|host)['"]|req\.headers\.host|req\.hostname""", re.I)
+
+
+def _js_named_body(source: str, file_path: str, expr: str, hops: int = 2):
+    """-> [(body, file)] for a call like base(req) or access.baseUrl(req)."""
+    found = re.fullmatch(r"\s*(?:(?P<obj>[A-Za-z_$][\w$]*)\.)?(?P<fn>[A-Za-z_$][\w$]*)\s*\([^()]*\)\s*", expr)
+    if not found or hops < 0:
+        return []
+    obj, fn = found.group("obj"), found.group("fn")
+    target_file, target_source = file_path, source
+    if obj:
+        target_file = ""
+        for req in REQUIRE_LOCAL.finditer(source):
+            if req.group("name") == obj:
+                target_file = _resolve_module(file_path, req.group("path"))
+        if not target_file:
+            return []
+        target_source = _read(target_file)
+    body = _function_text(target_source, fn)
+    if not body:
+        # A one line arrow function, const base = (req) => `...`;
+        arrow = re.search(r"\b(?:const|let|var)\s+%s\s*=\s*\([^)]*\)\s*=>\s*([^\n;]+)" % re.escape(fn),
+                          target_source)
+        body = arrow.group(1) if arrow else ""
+    if not body:
+        return []
+    out = [(body, target_file)]
+    # base(req) is often a wrapper round the module that knows the address.
+    lead = re.match(r"\s*(?:return\s+)?`\$\{([^}]+)\}", body.strip("{} \n"))
+    if lead:
+        out += _js_named_body(target_source, target_file, lead.group(1), hops - 1)
+    return out
+
+
+def _js_redirect_own_origin(source: str, file_path: str, line: int) -> str:
+    """-> how the redirect is pinned to this server, or "".
+
+    A Location that begins with this server's own absolute address cannot send
+    anybody to another host, whatever follows it: the path can only choose
+    where on this server.  What is left is the case where the address is read
+    from the Host header with no configured one, and a forged Host changes
+    only the response to the request that forged it.
+    """
+    text = _line(source, line)
+    found = re.search(r"\bres\.redirect\(", text)
+    if not found:
+        return ""
+    args = _js_args(text, found.end() - 1)
+    target = args[-1] if args else ""
+    lead = re.match(r"`\$\{([^}]+)\}/", target)
+    if not lead:
+        return ""
+    bodies = _js_named_body(source, file_path, lead.group(1))
+    joined = "\n".join(b for b, _ in bodies)
+    if not bodies or not (OWN_ORIGIN_CONFIG.search(joined) or OWN_ORIGIN_HOST.search(joined)):
+        return ""
+    if OWN_ORIGIN_HOST.search(joined):
+        return ("graded low: the redirect begins with this server's own address "
+                "(%s), so the request can only choose a path on this host.  "
+                "With no public URL configured the address comes from the Host "
+                "header, and a forged Host changes only the attacker's own "
+                "response, which matters only behind a cache that does not key "
+                "on Host" % lead.group(1).strip())
+    return ("graded low: the redirect begins with this server's configured "
+            "address (%s), so the request can only choose a path on this host"
+            % lead.group(1).strip())
+
+
+def _brace_body(text: str, start: int) -> str:
+    """The block opening at text[start] == "{", or "" when it never closes."""
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1:i]
+    return ""
+
+
+def _vhtml_sanitized(source: str, line: int) -> str:
+    """-> how a v-html binding is sanitized, or "".
+
+    v-html="renderMarkdown(b.content)" is only as dangerous as what
+    renderMarkdown returns.  When every way out of it is DOMPurify.sanitize,
+    imported from dompurify and called without an option that lets script or
+    event handlers back in, the browser gets markup with the executable parts
+    removed.  What is left is a bypass in DOMPurify itself, which the
+    dependency findings for dompurify already carry.
+    """
+    imported = re.search(r"""import\s+(\w+)\s+from\s+['"]dompurify['"]|"""
+                         r"""(\w+)\s*=\s*require\(\s*['"]dompurify['"]\s*\)""", source or "")
+    if not imported:
+        return ""
+    purify = imported.group(1) or imported.group(2)
+    lines = (source or "").splitlines()
+    # An engine reports the element's first line; the binding can sit a few
+    # attributes further down.
+    window = "\n".join(lines[max(line - 1, 0):line + 11])
+    bound = re.search(r'v-html\s*=\s*"([^"]+)"', window)
+    if not bound:
+        return ""
+    expr = bound.group(1).strip()
+    call = re.escape(purify) + r"\.sanitize\("
+
+    def safe_call(text: str) -> bool:
+        found = re.search(call, text)
+        if not found:
+            return False
+        args = text[found.end():found.end() + 800]
+        args = re.sub(r"(?m)//.*$", "", args.split(");")[0])
+        return not PURIFY_UNSAFE.search(args)
+
+    if re.match(call, expr):
+        return ("graded low: the binding passes through %s.sanitize, which strips "
+                "script and event handlers before the browser sees it" % purify) \
+            if safe_call(expr) else ""
+    named = re.match(r"(?:this\.)?([A-Za-z_$][\w$]*)\s*(\(|$)", expr)
+    if not named:
+        return ""
+    name = named.group(1)
+    head = re.search(r"(?m)^\s*(?:async\s+)?%s\s*\([^)]*\)\s*\{" % re.escape(name), source)
+    if not head:
+        return ""
+    body = _brace_body(source, head.end() - 1)
+    if not body or not safe_call(body):
+        return ""
+    cleaned = {m.group(1) for m in re.finditer(r"(?:const|let|var)\s+(\w+)\s*=\s*" + call, body)}
+    for returned in re.finditer(r"\breturn\b\s*([^;\n]*)", body):
+        value = returned.group(1).strip()
+        if re.match(call, value) or value in cleaned:
+            continue
+        if re.fullmatch(r"""(?:""|''|``|null|undefined)?""", value):
+            continue
+        return ""
+    return ("graded low: %s returns only %s.sanitize output, which strips script "
+            "and event handlers before the browser sees it; what is left is a "
+            "bypass in DOMPurify itself, tracked by its dependency findings"
+            % (name, purify))
 
 
 def _repo_has_own_csrf(repo_root: str) -> str:
@@ -3475,6 +3631,17 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
 
         # A path is weaker evidence than a verdict somebody's rule already
         # reached, so documentation only speaks when nothing else has.
+        if demoted is None and verdict == REVIEW and rule in REDIRECT_RULES:
+            pinned = _js_redirect_own_origin(
+                source, path if os.path.isabs(path) else os.path.join(repo_root, path), line_no)
+            if pinned:
+                demoted = {"severity": "low", "verdict": REVIEW,
+                           "rule": "redirect-own-origin", "reason": pinned}
+        if demoted is None and verdict == REVIEW and rule in VHTML_RULES:
+            cleaned = _vhtml_sanitized(source, line_no)
+            if cleaned:
+                demoted = {"severity": "low", "verdict": REVIEW,
+                           "rule": "vhtml-sanitized", "reason": cleaned}
         if demoted is None and verdict == REVIEW and rule == "run-shell-injection":
             demoted = _actions_writer_only_demotion(source, line_no, matched)
         if demoted is None and verdict == REVIEW:
