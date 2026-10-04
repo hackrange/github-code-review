@@ -65,6 +65,43 @@ _semgrep_html_blocks() {
 }
 
 # run_semgrep <dir> <full_name> <out_json>
+# _semgrep_loaded_rules <bin> <out> <semgrep args...>
+#
+# Which rules semgrep actually had this time, as the names findings carry.
+#
+# The packs are fetched from semgrep's registry on every scan, so a rule can
+# be withdrawn between one scan and the next with nothing changed here.  On
+# 2026-10-04 the JWT rule went from p/secrets between a morning and an evening
+# scan, and every finding it had made started closing as fixed: tokens still
+# sitting in the code, retired because a remote list changed.  Ingest holds a
+# finding open when its rule was not loaded, and this is what it reads.
+#
+# Asked separately, against an empty directory with --time, because --time on
+# the real pass adds timings for every file and rule.  Kept for an hour per set
+# of packs, since every repository in a run asks the same question.  Empty
+# output means unknown, which ingest treats as "do not hold".
+_semgrep_loaded_rules() {
+  local bin="$1" out="$2"; shift 2
+  local -a cfgs=()
+  while (( $# )); do
+    [[ "$1" == "--config" && $# -ge 2 ]] && { cfgs+=(--config "$2"); shift 2; continue; }
+    shift
+  done
+  (( ${#cfgs[@]} > 0 )) || { echo '[]' > "$out"; return 0; }
+  local key; key=$(printf '%s\n' "${cfgs[@]}" "$(date -u +%Y%m%d%H)" | sha256sum | cut -c1-16)
+  local cache="${TMPDIR:-/tmp}/gcr-semgrep-rules-$key.json"
+  if [[ ! -s "$cache" ]]; then
+    local empty; empty=$(mktemp -d)
+    ( cd "$empty" && with_timeout 300 "$bin" scan --metrics=off --json --quiet --time "${cfgs[@]}" . ) 2>/dev/null \
+      | jq -c --argjson alias "$(detector_alias_map)" "$JQ_CANON_DETECTOR"'
+          [ (.time.rules // [])[] | (if type == "object" then (.id // "") else . end)
+            | select(. != "") | split(".") | last | canon_detector($alias) ] | unique' \
+        > "$cache.tmp" 2>/dev/null && [[ -s "$cache.tmp" ]] && mv "$cache.tmp" "$cache"
+    rm -rf "$empty" "$cache.tmp"
+  fi
+  if [[ -s "$cache" ]]; then cp "$cache" "$out"; else echo '[]' > "$out"; fi
+}
+
 run_semgrep() {
   local dir="$1" full_name="$2" out="$3"
   local bin; bin=$(_semgrep_bin)
@@ -174,6 +211,7 @@ run_semgrep() {
     GHSCAN_CODE_INCOMPLETE="${GHSCAN_CODE_INCOMPLETE:+$GHSCAN_CODE_INCOMPLETE, }semgrep gave up on $gave_up file(s)"
   fi
   export GHSCAN_CODE_COMPLETE GHSCAN_CODE_INCOMPLETE
+  _semgrep_loaded_rules "$bin" "$out.rules" "${args[@]}"
   if [[ "$GHSCAN_CODE_COMPLETE" != "true" ]]; then
     log_warn "$full_name: the code pass did not complete ($GHSCAN_CODE_INCOMPLETE), so nothing it did not report will be counted as fixed"
   fi

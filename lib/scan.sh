@@ -35,7 +35,7 @@ scan_one_repo() {
   BRANCHES_JSON='[]'; SECRETS_JSON='{"reported":[],"filtered":[],"suppressed":[]}'
   SBOM_JSON='null'; LICENSE_JSON='null'; POLICY_JSON='null'; VULNS_JSON='[]'
   SBOM_BY_BRANCH_JSON='[]'; ACCESS_JSON='null'
-  PULLS_JSON='[]'; CLONE_TRAFFIC_JSON='null'; CODE_FINDINGS_JSON='[]'; CODEQL_UNREAD=''
+  PULLS_JSON='[]'; CLONE_TRAFFIC_JSON='null'; CODE_FINDINGS_JSON='[]'; CODEQL_UNREAD=''; CODE_RULES_LOADED_JSON='[]'
   MISCONFIG_JSON='[]'; WORKFLOW_JSON='[]'
   # Whether a dynamic pass could ever run here.  null until the question is
   # asked, so a report from before this existed and a repository nobody asked
@@ -114,7 +114,8 @@ scan_one_repo() {
       --argjson hist_done "${HISTORY_COMPLETE:-false}" \
       --argjson dast "${DAST_JSON:-null}" \
       --argjson branch_heads "${BRANCH_HEADS_JSON:-{\}}" \
-      --argjson branches_present "${BRANCHES_PRESENT_JSON:-[]}" '
+      --argjson branches_present "${BRANCHES_PRESENT_JSON:-[]}" \
+      --argjson code_rules "${CODE_RULES_LOADED_JSON:-[]}" '
       {
         repository: $repo[0],
         status: $status,
@@ -128,6 +129,9 @@ scan_one_repo() {
         # branch name to the commit it was on when this ran.
         branch_heads: $branch_heads,
         branch_count: ($branches[0] | length),
+        # The semgrep rules this run had, so a finding whose rule was not among
+        # them is held open rather than read as fixed.
+        code_rules_loaded: $code_rules,
         secrets: $secrets[0],
         sbom: $sbom[0],
         sbom_by_branch: $sbom_branches[0],
@@ -610,6 +614,7 @@ scan_one_repo() {
     # A key semgrep matched is a credential, not a line of code.
     cfg_bool '.scan.secrets.enabled' true && \
       semgrep_secrets_route "$clone_dir" "$full_name" "$sg" "$repo_json"
+    CODE_RULES_LOADED_JSON=$(cat "$sg.rules" 2>/dev/null || echo '[]')
     CODE_PASS_COMPLETE="$GHSCAN_CODE_COMPLETE"
     CODE_PASS_INCOMPLETE="$GHSCAN_CODE_INCOMPLETE"
     CODE_FINDINGS_JSON=$(normalize_semgrep "$sg" "$full_name" "$default_branch" "$(cfg '.github.web_url' 'https://github.com')")

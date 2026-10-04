@@ -492,16 +492,23 @@ def adopt_code_rows(session, finding, marker: str, row: dict, counts: dict):
                     Finding.repository == row["repository"],
                     Finding.file_path == row["file"],
                     Finding.rule == rule,
-                    Finding.line.in_(lines),
-                    Finding.state.in_([FindingState.OPEN, FindingState.WAIVED]))
+                    Finding.line.in_(lines))
             .order_by(Finding.line, Finding.id)
             .all())
+    # A fixed one too.  Before semgrep's keys reached the credential pass
+    # intact, its code rows were closed as fixed with nothing done about the
+    # key; taking them over reopens them as what they always were.  Open ones
+    # are preferred, so a decision on a live row is the one carried.
+    olds.sort(key=lambda row: (row.state == FindingState.FIXED, row.line or 0, row.id))
     if not olds:
         return finding
     if finding is None:
         finding = olds.pop(0)
         finding.kind = FindingKind.CREDENTIAL
         finding.fingerprint = marker
+        if finding.state == FindingState.FIXED:
+            finding.state = FindingState.OPEN
+            finding.resolved_at = None
         # What the code pass said about it is not what the credential pass
         # says, and engine_severity is only ever filled when empty.
         finding.engine_severity = ""
@@ -845,6 +852,8 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     # them.  A finding is only ever closed by the pass that would have found
     # it, so this is what decides that.
     passes_done = {}
+    # The semgrep rules each repository's run had.  Empty means unknown.
+    rules_loaded = {}
 
     # Repositories first, so findings can hang off them.
     for entry in document.get("repositories", []) or []:
@@ -883,6 +892,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             repo.last_scanned_at = seen_at
         else:
             failed_repos.add(full_name)
+        loaded = entry.get("code_rules_loaded")
+        if isinstance(loaded, list) and loaded:
+            rules_loaded[full_name] = {str(name).strip() for name in loaded
+                                       if str(name).strip()}
         declared = entry.get("passes_complete")
         if isinstance(declared, list):
             passes_done[full_name] = {str(name).strip() for name in declared
@@ -1472,6 +1485,7 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         session, document, seen_at, seen_fingerprints)
 
     in_scope = scanned_repos if scanned_repos is not None else touched_repos
+    withdrawn = set()
     if in_scope:
         stale = (session.query(Finding)
                  .filter(Finding.repository.in_(list(in_scope)))
@@ -1583,6 +1597,23 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                     and finding.repository in partial_code):
                 counts["held_open"] = counts.get("held_open", 0) + 1
                 continue
+            # The rule that found it was not in this run's semgrep packs.
+            #
+            # The packs come from semgrep's registry on every scan, and a rule
+            # withdrawn there stops reporting everything it found, with nothing
+            # changed in the code.  The JWT rule left p/secrets on 2026-10-04
+            # and its findings began closing as fixed while the tokens were
+            # still in the files.  Nothing looked, so nothing is closed.
+            seen_by_engines = {e.strip().lower() for e in
+                               str(finding.engines or "").split(",") if e.strip()}
+            loaded = rules_loaded.get(finding.repository)
+            if (loaded and seen_by_engines == {"semgrep"}
+                    and finding.kind in (FindingKind.CODE, FindingKind.CREDENTIAL)
+                    and (finding.rule or "") not in loaded):
+                counts["held_open"] = counts.get("held_open", 0) + 1
+                counts["rule_withdrawn_held"] = counts.get("rule_withdrawn_held", 0) + 1
+                withdrawn.add(finding.rule or "?")
+                continue
             # A credential only semgrep saw comes from the code pass, so it is
             # silent whenever semgrep did not finish, whatever the credential
             # pass did.
@@ -1625,6 +1656,11 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             finding.state = FindingState.FIXED
             finding.resolved_at = seen_at
             counts["resolved"] += 1
+    if withdrawn:
+        log.warning("semgrep did not load %d rule(s) that earlier findings came "
+                    "from, so %d finding(s) are held open rather than counted as "
+                    "fixed: %s", len(withdrawn), counts.get("rule_withdrawn_held", 0),
+                    ", ".join(sorted(withdrawn))[:500])
     if partial_code or partial_history:
         log.warning(
             "incomplete coverage: code pass on %d repository(ies), credential "

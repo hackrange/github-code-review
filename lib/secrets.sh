@@ -1049,8 +1049,14 @@ semgrep_secrets_route() {
   # One spelling across engines, the same canon the code pass uses, so a
   # detector override and the old code row's rule both line up.
   "$py" "$GHSCAN_HOME/lib/semgrep_secrets.py" --extract "$sg" "$dir" 2>/dev/null \
-    | jq -c --argjson alias "$(detector_alias_map)" "$JQ_CANON_DETECTOR"'
-        . + {detector: (.detector | canon_detector($alias)),
+    | jq -c --arg repo "$full_name" --argjson alias "$(detector_alias_map)" "$JQ_CANON_DETECTOR"'
+        # The repository too.  Ingest skips a row that names none, without a
+        # word, and the first version of this left it out: every credential
+        # only semgrep saw vanished, and the code rows it replaced were closed
+        # as fixed.
+        . + {repository: $repo,
+             organization: ($repo | split("/")[0]),
+             detector: (.detector | canon_detector($alias)),
              code_rule: (.code_rule | canon_detector($alias))}' \
     | secrets_drop_excluded /dev/null \
     | derive_secret_facts "$dir" > "$cand"
