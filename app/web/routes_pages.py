@@ -242,8 +242,15 @@ SORTABLE = {
     "rule":       Finding.rule,
     "file":       Finding.file_path,
     "found":      Finding.last_found_at,
+    # Days since this product first saw it.  Fewest days is newest, so the
+    # direction is turned round below: ascending days is the newest first.
+    "discovered": Finding.first_found_at,
     "id":         Finding.vuln_id,
 }
+
+# Columns shown as an age in days rather than a date, where the order a person
+# means by "ascending" is the reverse of the date's.
+AGE_COLUMNS = {"discovered"}
 
 
 def _sort_order(sort: str, direction: str):
@@ -251,6 +258,8 @@ def _sort_order(sort: str, direction: str):
     if sort not in SORTABLE or sort == "priority":
         return [_priority_order(), Finding.last_found_at.desc()]
     column = SORTABLE[sort]
+    if sort in AGE_COLUMNS:
+        direction = "asc" if direction == "desc" else "desc"
     ordered = column.desc() if direction == "desc" else column.asc()
     # A stable second key, or rows with equal values shuffle between pages.
     return [ordered, Finding.id.asc()]
@@ -1275,6 +1284,11 @@ def findings(request: Request, user: User = Depends(current_user)):
     since_choice = (params.get("since", "") or "").strip()
     if since_choice not in ("1", "7", "14", "30"):
         since_choice = ""
+    # The three the dashboard links to.  Read here so sorting, paging and a
+    # bulk action keep them: without that, sorting the live credentials list
+    # by any column came back as every finding there is.
+    flags = {name: "1" for name in ("exploited", "verified", "malicious")
+             if str(params.get(name, "")) == "1"}
     sort = (params.get("sort", "") or "").strip().lower()
     if sort not in SORTABLE:
         sort = "priority"
@@ -1445,7 +1459,11 @@ def findings(request: Request, user: User = Depends(current_user)):
                      "connection": connection, "per_page": limit,
                      "confidence": confidence, "sort": sort, "dir": direction,
                      "triage": triage, "baseline": since, "reach": reach,
-                     "since": since_choice, "group": grouped},
+                     "since": since_choice, "group": grouped,
+                     "exploited": flags.get("exploited", ""),
+                     "verified": flags.get("verified", ""),
+                     "malicious": flags.get("malicious", "")},
+            show_discovered=bool(flags.get("verified")) or kind == "credential",
             hidden_unreachable=hidden_unreachable,
             groups=groups, grouped=grouped, folded=folded,
             page_sizes=PAGE_SIZES,
@@ -1467,6 +1485,9 @@ def findings(request: Request, user: User = Depends(current_user)):
                                    ("triage", triage if triage != "work" else ""),
                                    ("baseline", since if since != "new" else ""),
                                    ("since", since_choice),
+                                   ("exploited", flags.get("exploited", "")),
+                                   ("verified", flags.get("verified", "")),
+                                   ("malicious", flags.get("malicious", "")),
                                    ("sort", sort if sort != "priority" else ""),
                                    ("dir", direction if sort != "priority" else ""))
                                   if value}),

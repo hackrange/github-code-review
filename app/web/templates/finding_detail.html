@@ -789,6 +789,14 @@
           {%- else %}<span class="faint">not recorded for a
             {{ f.kind.value if f.kind else 'finding' }}</span>{% endif %}</td></tr>
         <tr><th>First found</th><td>{{ f.first_found_at | dt('%Y-%m-%d %H:%M') if f.first_found_at }}</td></tr>
+        {% set age = f.first_found_at | age_days %}
+        {% if age is not none %}
+        {% set made = f.committed_at | age_days %}
+        <tr><th>Days since first discovered</th>
+          <td>{% if age == 0 %}<strong>today</strong>{% else %}{{ age }} day{{ '' if age == 1 else 's' }}{% endif %}
+            {% if made is not none and f.kind.value != 'dependency' %}<span class="faint small">&middot; committed
+              {{ 'today' if made == 0 else (made ~ ' day' ~ ('' if made == 1 else 's') ~ ' ago') }}</span>{% endif %}</td></tr>
+        {% endif %}
         <tr><th>Last found</th><td>{{ f.last_found_at | dt('%Y-%m-%d %H:%M') if f.last_found_at }}</td></tr>
         <tr><th>Fingerprint</th><td class="mono small">{{ f.fingerprint }}
           {% if can_exclude %}

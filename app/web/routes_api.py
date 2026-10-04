@@ -312,7 +312,7 @@ async def waive_many(request: Request, user: User = Depends(current_user)):
         # matches nothing rather than waiving somebody else's findings.
         query = rbac.visible_findings(db, user)
         if everything:
-            query = _apply_finding_filters(query, form)
+            query = _apply_finding_filters(query, form, db, user)
         else:
             query = query.filter(Finding.id.in_(wanted))
 
@@ -433,7 +433,7 @@ async def delete_many(request: Request, user: User = Depends(current_user)):
         if everything:
             scope = "every finding"
         elif matching:
-            query = _apply_finding_filters(query, form)
+            query = _apply_finding_filters(query, form, db, user)
             scope = "everything matching the filters on screen"
         else:
             query = query.filter(Finding.id.in_(wanted))
@@ -468,152 +468,23 @@ async def delete_many(request: Request, user: User = Depends(current_user)):
     return redirect(f"/findings?msg={quote(note)}&kind=ok")
 
 
-def _apply_finding_filters(query, form):
+def _apply_finding_filters(query, form, db=None, user=None):
     """The same filters the page was showing, applied to a bulk action.
 
     The ids are not sent for a select-all, so the filters have to be, or the
-    request would mean something different from what was on screen.
+    request would mean something different from what was on screen.  So the
+    list is built by the page's own builder rather than a copy of it: the copy
+    had fallen behind, and ignored the repository, branch, triage, reach,
+    window and the dashboard's exploited, live and malicious filters.  "All
+    matching" from the live credentials list reached every finding the other
+    filters allowed.
     """
-    from app.core.models import FindingKind, Severity
+    from app.web.routes_pages import _filtered_findings
 
-    severity = str(form.get("severity", ""))
-    kind = str(form.get("kind", ""))
-    state = str(form.get("state", ""))
-    organization = str(form.get("org", ""))
-    search = str(form.get("q", "")).strip()[:120]
-    exception = str(form.get("exception", "without"))
-    connection = str(form.get("connection", "")).strip()[:120]
-
-    if connection:
-        query = query.filter(Finding.connection == connection)
-    if severity in {s.value for s in Severity}:
-        query = query.filter(Finding.severity == Severity(severity))
-    if kind in {k.value for k in FindingKind}:
-        query = query.filter(Finding.kind == FindingKind(kind))
-    if state in {s.value for s in FindingState}:
-        query = query.filter(Finding.state == FindingState(state))
-    if organization:
-        query = query.filter(Finding.organization == organization)
-    if exception == "without":
-        query = query.filter(Finding.excepted.is_(False))
-    elif exception == "with":
-        query = query.filter(Finding.excepted.is_(True))
-    if search:
-        like = f"%{search}%"
-        bare = search.upper()
-        id_like = f"%{bare if bare.startswith('GCR-') else 'GCR-' + bare}%"
-        query = query.filter(
-            Finding.vuln_id.ilike(id_like)
-            | Finding.organization.ilike(like)
-            | Finding.repository.ilike(like)
-            | Finding.branch.ilike(like)
-            | Finding.branches.ilike(like)
-            | Finding.file_path.ilike(like)
-            | Finding.rule.ilike(like)
-            | Finding.title.ilike(like)
-            | Finding.package_name.ilike(like)
-            | Finding.package_version.ilike(like)
-            | Finding.vulnerability_id.ilike(like)
-            | Finding.cwe.ilike(like)
-            | Finding.author_name.ilike(like)
-            | Finding.author_login.ilike(like)
-            | Finding.author_email.ilike(like)
-            | Finding.commit_sha.ilike(like))
-    return query
-
-
-@router.post("/waivers/{waiver_id}/approve")
-async def approve_waiver(waiver_id: int, request: Request,
-                         note: str = Form(""),
-                         user: User = Depends(current_user)):
-    await check_csrf(request)
-    rbac.require(user, "waiver.approve")
-    note_text = clean_text(note, "Note", limit=1000, required=False)
-
-    with session_scope() as db:
-        waiver = db.query(Waiver).filter(Waiver.id == waiver_id).one_or_none()
-        if waiver is None or waiver.status != WaiverStatus.REQUESTED:
-            raise HTTPException(status_code=404,
-                                detail="No exception waiting on that one.")
-
-        finding = db.query(Finding).filter(
-            Finding.id == waiver.finding_id).one_or_none()
-        if finding is None:
-            raise HTTPException(status_code=404, detail="No such finding.")
-
-        waiver.status = WaiverStatus.APPROVED
-        waiver.decided_by = user.username
-        waiver.decided_at = utcnow()
-        waiver.decision_note = note_text
-        finding.state = FindingState.WAIVED
-        _set_exception(finding, waiver, user.username)
-        _mirror_waiver(db, finding, waiver, user.username)
-        db.flush()
-
-        record(db, "waiver.approved", actor=user.username,
-               target=finding.fingerprint,
-               detail=f"asked for by {waiver.requested_by}",
-               source_ip=client_ip(request))
-        write_reports(db)
-
-    return redirect("/waivers?msg=Approved.+The+finding+has+left+both+report+files.&kind=ok")
-
-
-@router.post("/waivers/{waiver_id}/reject")
-async def reject_waiver(waiver_id: int, request: Request,
-                        note: str = Form(""),
-                        user: User = Depends(current_user)):
-    await check_csrf(request)
-    rbac.require(user, "waiver.approve")
-    note_text = clean_text(note, "Note", limit=1000, required=False)
-
-    with session_scope() as db:
-        waiver = db.query(Waiver).filter(Waiver.id == waiver_id).one_or_none()
-        if waiver is None or waiver.status != WaiverStatus.REQUESTED:
-            raise HTTPException(status_code=404,
-                                detail="No exception waiting on that one.")
-        waiver.status = WaiverStatus.REJECTED
-        waiver.decided_by = user.username
-        waiver.decided_at = utcnow()
-        waiver.decision_note = note_text
-        record(db, "waiver.rejected", actor=user.username,
-               target=str(waiver.finding_id), detail=note_text,
-               source_ip=client_ip(request))
-
-    return redirect("/waivers?msg=Rejected.&kind=info")
-
-
-@router.post("/waivers/{waiver_id}/revoke")
-async def revoke_waiver(waiver_id: int, request: Request,
-                        user: User = Depends(current_user)):
-    """Take back an approved exception.  The finding comes straight back."""
-    await check_csrf(request)
-    rbac.require(user, "waiver.revoke")
-
-    with session_scope() as db:
-        waiver = db.query(Waiver).filter(Waiver.id == waiver_id).one_or_none()
-        if waiver is None or waiver.status != WaiverStatus.APPROVED:
-            raise HTTPException(status_code=404,
-                                detail="No approved exception with that id.")
-
-        finding = db.query(Finding).filter(
-            Finding.id == waiver.finding_id).one_or_none()
-        waiver.status = WaiverStatus.REVOKED
-        waiver.decided_by = user.username
-        waiver.decided_at = utcnow()
-        if finding is not None:
-            finding.state = FindingState.OPEN
-            _clear_exception(finding)
-            _retire_exclusion(db, finding)
-        db.flush()
-
-        record(db, "waiver.revoked", actor=user.username,
-               target=finding.fingerprint if finding else str(waiver.finding_id),
-               source_ip=client_ip(request))
-        write_reports(db)
-
-    return redirect("/waivers?msg=Revoked.+The+finding+is+back+in+both+report+files.&kind=warn")
-
+    if db is None or user is None:
+        raise ValueError("a bulk filter needs the session and the person")
+    chosen = _filtered_findings(db, user, form).with_entities(Finding.id)
+    return query.filter(Finding.id.in_(chosen.scalar_subquery()))
 
 def form_ids(form, *names) -> list:
     """Whole numbers out of a form, under any of these field names.
@@ -3507,7 +3378,7 @@ async def regrade_many(request: Request, user: User = Depends(current_user)):
         # matches nothing rather than regrading somebody else's findings.
         query = rbac.visible_findings(db, user)
         if everything:
-            query = _apply_finding_filters(query, form)
+            query = _apply_finding_filters(query, form, db, user)
         else:
             query = query.filter(Finding.id.in_(wanted))
 
@@ -4134,7 +4005,7 @@ async def validate_many(request: Request, user: User = Depends(current_user)):
             return redirect(_back_with(_findings_back(form), problem, "error"))
         query = rbac.visible_findings(db, user)
         if everything:
-            query = _apply_finding_filters(query, form)
+            query = _apply_finding_filters(query, form, db, user)
         else:
             query = query.filter(Finding.id.in_(wanted))
         ids = [row[0] for row in query.with_entities(Finding.id)

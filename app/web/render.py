@@ -150,6 +150,22 @@ def sentence_spaced(value) -> str:
 env.filters["sentence_spaced"] = sentence_spaced
 env.filters["local_dt"] = local_dt
 env.filters["dt"] = fmt_dt
+
+
+def age_days(value):
+    """Whole days from a stored timestamp to now, or None when there is none.
+
+    The database hands back naive UTC from MariaDB and aware UTC from SQLite,
+    so both are read as UTC rather than trusting whichever arrived.
+    """
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return max(0, (datetime.now(timezone.utc) - value).days)
+
+
+env.filters["age_days"] = age_days
 env.filters["web_url"] = web_url
 
 

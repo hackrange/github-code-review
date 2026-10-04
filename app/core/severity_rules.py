@@ -38,6 +38,10 @@ log = logging.getLogger("gcr.severity_rules")
 # and typing what they see, so the words have to be the same words.
 FIELDS = (
     ("rule", "What", "The rule that fired, by name"),
+    ("path", "Where", "The file, or the package for a dependency. * matches "
+                      "any part, such as src/legacy/* or */test/*"),
+    ("repository", "Repository", "owner/name, as the findings list shows it. * "
+                                 "matches any part, such as team/* or */*-demo"),
     ("cwe", "CWE", "A CWE the finding carries"),
     ("kind", "Kind", "credential, code, dependency or misconfiguration"),
     ("state", "State", "open, waived or fixed"),
@@ -64,9 +68,11 @@ FIELD_LABELS = {name: label for name, label, _help in FIELDS}
 # most of it, so both sit at the bottom with kind and state.
 # A fingerprint names one finding and no other, so it is the most specific
 # thing anybody can write and it outranks even a rule name.
+# A path names a place somebody wrote; a repository names a whole codebase,
+# narrower than a CWE and wider than a line.
 FIELD_RANK = {"fingerprint": 6, "rule": 5, "value": 4, "author": 4,
-              "snippet": 4, "cwe": 3, "exposure": 2, "engine": 2, "kind": 1,
-              "state": 1, "confidence": 1}
+              "snippet": 4, "path": 4, "repository": 3, "cwe": 3,
+              "exposure": 2, "engine": 2, "kind": 1, "state": 1, "confidence": 1}
 
 # What a fingerprint looks like, with the kind in front or without it.  Checked
 # when a rule is saved: a fingerprint is copied off a page, and a value that
@@ -324,6 +330,13 @@ def _field_of(finding, field: str) -> str:
         return str(getattr(finding, "snippet", "") or "").strip().lower()
     if field == "fingerprint":
         return str(getattr(finding, "fingerprint", "") or "").strip().lower()
+    if field == "repository":
+        return str(getattr(finding, "repository", "") or "").strip().lower()
+    if field == "path":
+        # What the Where column shows: the file, or the package where a
+        # dependency has no file of its own.
+        return str(getattr(finding, "file_path", "") or getattr(finding, "package_name", "")
+                   or "").strip().lower()
     if field in ("kind", "state"):
         raw = getattr(finding, field, "")
         return str(getattr(raw, "value", raw) or "").strip().lower()
@@ -525,7 +538,12 @@ def _sql_for(field: str, pattern: str):
     if field == "confidence" and pattern == "unrated":
         # The same reading as `_one_matches`: nothing recorded at all.
         return func.coalesce(Finding.confidence, "") == ""
+    if field == "path":
+        # The file, or the package where there is no file, as `_field_of` reads it.
+        return text_clause(func.coalesce(func.nullif(Finding.file_path, ""),
+                                         Finding.package_name))
     column = {"rule": Finding.rule, "value": Finding.secret_preview,
+              "repository": Finding.repository,
               "exposure": Finding.exposure,
               "confidence": Finding.confidence}.get(field)
     if column is None:

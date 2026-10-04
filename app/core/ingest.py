@@ -507,7 +507,7 @@ def adopt_code_rows(session, finding, marker: str, row: dict, counts: dict):
         finding.kind = FindingKind.CREDENTIAL
         finding.fingerprint = marker
         if finding.state == FindingState.FIXED:
-            finding.state = FindingState.OPEN
+            finding.state = reopened_state(session, finding)
             finding.resolved_at = None
         # What the code pass said about it is not what the credential pass
         # says, and engine_severity is only ever filled when empty.
@@ -537,6 +537,53 @@ def adopt_code_rows(session, finding, marker: str, row: dict, counts: dict):
         session.delete(old)
         counts["folded_into_credential"] = counts.get("folded_into_credential", 0) + 1
     return finding
+
+
+def waived_now(session, finding) -> bool:
+    """Does an approved waiver that has not expired cover this finding."""
+    from app.core.models import Waiver, WaiverStatus
+    if finding.id is None:
+        return False
+    waiver = (session.query(Waiver)
+              .filter(Waiver.finding_id == finding.id,
+                      Waiver.status == WaiverStatus.APPROVED)
+              .one_or_none())
+    if waiver is None or waiver.expires_at is None:
+        return False
+    expires = waiver.expires_at
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return expires > utcnow()
+
+
+def reopened_state(session, finding):
+    """What a finding that came back after being marked fixed is now.
+
+    Open, unless somebody waived it and the waiver still stands.  A scan that
+    did not see a waived finding marks it fixed, and windowed or partial
+    scans miss findings all the time; reopening it as open when it came back
+    threw the approved waiver away.  386 waived findings were back on the
+    dashboard that way, among them a rotated key with an attestation on file.
+    """
+    return FindingState.WAIVED if waived_now(session, finding) else FindingState.OPEN
+
+
+def restore_waived(session) -> int:
+    """Put back to waived every open finding an approved waiver still covers.
+
+    Repairs what the reopening above got wrong before it was fixed, and
+    anything else that leaves a waived finding open.  Cheap: one join.
+    """
+    from app.core.models import Waiver, WaiverStatus
+    rows = (session.query(Finding)
+            .join(Waiver, Waiver.finding_id == Finding.id)
+            .filter(Finding.state == FindingState.OPEN,
+                    Waiver.status == WaiverStatus.APPROVED,
+                    Waiver.expires_at > utcnow())
+            .all())
+    for finding in rows:
+        finding.state = FindingState.WAIVED
+    return len(rows)
 
 
 def _repo_for(session, organization: str, full_name: str, cache: dict,
@@ -787,6 +834,9 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     # Loaded once, not queried per finding.
     overrides = severity_rules.as_map(session)
     reach = _reach_map(session)
+    # Waived findings an earlier scan reopened by mistake go back to waived.
+    restored = restore_waived(session)
+
     # What AI validation decided and learned, and what code every standing
     # grade decision was made against.  Small tables, read once.
     from app.core import learned
@@ -797,6 +847,8 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
 
     cache = {}
     counts = {"new": 0, "updated": 0, "resolved": 0, "repositories": 0}
+    if restored:
+        counts["waivers_restored"] = restored
     new_findings = []
     touched_repos = set()
     seen_fingerprints = set()
@@ -1069,9 +1121,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             else:
                 counts["updated"] += 1
                 # It came back, so it is not fixed any more.  A waived one
-                # stays waived.
+                # stays waived, including one a scan that missed it had
+                # marked fixed in the meantime.
                 if finding.state == FindingState.FIXED:
-                    finding.state = FindingState.OPEN
+                    finding.state = reopened_state(session, finding)
                     finding.resolved_at = None
 
             # Older rows predate the readable id.  Fill it in as they come

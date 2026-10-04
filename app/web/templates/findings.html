@@ -363,10 +363,12 @@
                   ~ '&triage=' ~ filters.triage ~ '&reach=' ~ filters.reach
                   ~ '&baseline=' ~ filters.baseline ~ '&since=' ~ filters.since
                   ~ '&group=' ~ filters.group
+                  ~ '&exploited=' ~ filters.exploited ~ '&verified=' ~ filters.verified
+                  ~ '&malicious=' ~ filters.malicious
                   ~ '&per_page=' ~ filters.per_page %}
   <a href="{{ base }}/findings?{{ base_q }}&sort={{ key }}&dir={{ flip }}"
      class="sort-link{{ ' on' if filters.sort == key }}">{{ label }}<span
-     class="sort-mark">{% if filters.sort == key %}{{ '&#9660;' if filters.dir == 'desc' else '&#9650;' }}{% endif %}</span></a>
+     class="sort-mark">{% if filters.sort == key %}{{ '▼' if filters.dir == 'desc' else '▲' }}{% endif %}</span></a>
 {% endmacro %}
 
 <thead><tr>
@@ -383,6 +385,9 @@
         <th>Branch</th>
         <th>{{ sortable('rule', 'What') }}</th>
         <th>{{ sortable('file', 'Where') }}</th>
+        {% if show_discovered %}
+        <th class="nowrap" title="Days since this was first discovered. Ascending puts what was just committed at the top.">{{ sortable('discovered', 'First found (days)') }}</th>
+        {% endif %}
         <th class="nowrap">{{ sortable('found', 'Last found') }}</th>
         <th></th>
       </tr></thead>
@@ -474,6 +479,17 @@
               set aside: {{ f.triage.replace('_', ' ') }}</div>
             {% endif %}
           </td>
+          {% if show_discovered %}
+          {% set age = f.first_found_at | age_days %}
+          {% set made = f.committed_at | age_days %}
+          <td class="small nowrap" title="First discovered {{ f.first_found_at | dt('%Y-%m-%d %H:%M') }}{% if f.committed_at %}, committed {{ f.committed_at | dt('%Y-%m-%d') }}{% endif %}">
+            {% if age is none %}<span class="faint">unknown</span>
+            {% elif age == 0 %}<strong>today</strong>
+            {% else %}{{ age }} day{{ '' if age == 1 else 's' }}{% endif %}
+            {% if made is not none and f.kind.value != 'dependency' %}<div class="faint" style="font-size:.78rem">committed
+              {{ 'today' if made == 0 else (made ~ ' day' ~ ('' if made == 1 else 's') ~ ' ago') }}</div>{% endif %}
+          </td>
+          {% endif %}
           <td class="small faint nowrap">{{ f.last_found_at | dt('%Y-%m-%d') if f.last_found_at }}</td>
           <td class="nowrap">
             {% if can_waive and f.state.value == 'open' %}
@@ -514,6 +530,15 @@
   <input type="hidden" name="reach" value="{{ filters.reach }}">
   <input type="hidden" name="exception" value="{{ filters.exception }}">
   <input type="hidden" name="connection" value="{{ filters.connection }}">
+  {# Every filter the list was built with, so "all matching these filters"
+     means the list on screen. #}
+  <input type="hidden" name="repo" value="{{ filters.repo }}">
+  <input type="hidden" name="branch" value="{{ filters.branch }}">
+  <input type="hidden" name="baseline" value="{{ filters.baseline }}">
+  <input type="hidden" name="since" value="{{ filters.since }}">
+  <input type="hidden" name="exploited" value="{{ filters.exploited }}">
+  <input type="hidden" name="verified" value="{{ filters.verified }}">
+  <input type="hidden" name="malicious" value="{{ filters.malicious }}">
 </form>
 
 {% if can_validate_ai %}
@@ -652,6 +677,15 @@
   <input type="hidden" name="reach" value="{{ filters.reach }}">
   <input type="hidden" name="exception" value="{{ filters.exception }}">
   <input type="hidden" name="connection" value="{{ filters.connection }}">
+  {# Every filter the list was built with, so "all matching these filters"
+     means the list on screen. #}
+  <input type="hidden" name="repo" value="{{ filters.repo }}">
+  <input type="hidden" name="branch" value="{{ filters.branch }}">
+  <input type="hidden" name="baseline" value="{{ filters.baseline }}">
+  <input type="hidden" name="since" value="{{ filters.since }}">
+  <input type="hidden" name="exploited" value="{{ filters.exploited }}">
+  <input type="hidden" name="verified" value="{{ filters.verified }}">
+  <input type="hidden" name="malicious" value="{{ filters.malicious }}">
 </form>
 
 <div class="modal-backdrop" id="delete-modal" hidden>

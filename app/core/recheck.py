@@ -110,8 +110,10 @@ def _record(finding_id: int, present: bool, actor: str, branches) -> bool:
         if present:
             row.last_found_at = now
             if row.state == FindingState.FIXED:
-                # It came back.  The same rule the ingest uses.
-                row.state = FindingState.OPEN
+                # It came back.  The same rule the ingest uses, which keeps a
+                # waived finding waived.
+                from app.core.ingest import reopened_state
+                row.state = reopened_state(db, row)
                 row.resolved_at = None
             db.flush()
             return True
