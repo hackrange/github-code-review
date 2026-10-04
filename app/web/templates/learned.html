@@ -81,7 +81,7 @@
             {% if r.reason %}<div class="faint small">{{ r.reason }}</div>{% endif %}
             <div class="faint small">Learned from
               {% if r.source_finding_id %}<a href="{{ base }}/findings/{{ r.source_finding_id }}">finding {{ r.source_finding_id }}</a>{% else %}a finding{% endif %}
-              by {{ r.model or 'a model' }}, for {{ r.created_by or 'somebody' }},
+              for {{ r.created_by or 'somebody' }},
               {{ r.created_at | dt('%d %b %Y') }}.</div>
             {% if r.retired_at %}<div class="small">Retired {{ r.retired_at | dt('%d %b %Y') }}
               by {{ r.retired_by or 'the system' }}: {{ r.retired_reason }}</div>{% endif %}
