@@ -131,8 +131,15 @@ ticking the box.
 
 ## Who can do what
 
-Administrators and developers can validate a finding, one at a time or in
-bulk, and see the Learned rules page.  Readers see the answers but have no
-button.  Only administrators can change the configuration, apply a rule
-everywhere, retire one or run the synthetic tests.  Every validation, bulk run,
+Only administrators can validate a finding, one at a time or in bulk, and see
+the Learned rules page, because every question is paid for, sends the finding
+outside this installation, and can lower grades for everyone.  Developers and
+readers see the answers and the grades they gave, but have no button.  Only
+administrators can change the configuration, apply a rule everywhere, retire
+one or run the synthetic tests.
+
+What has been learned keeps applying with AI switched off: every scan still
+grades from the learned rules and the AI grades already given, and with no
+provider set up the bulk button on the findings list becomes **Apply learned
+rules**, which answers from the rules alone and sends nothing anywhere.  Every validation, bulk run,
 save, test and rule decision is in the audit log.

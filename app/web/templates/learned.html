@@ -37,6 +37,8 @@
       AI may not lower credentials or known exploited packages.{% endif %}
       {% if batch.skipped_done %}{{ batch.skipped_done }} already validated for the
       same code.{% endif %}
+      {% if batch.skipped_no_rule %}{{ batch.skipped_no_rule }} left as they are,
+      because AI is off and no learned rule covers them.{% endif %}
       {% if batch.errors %}<strong>{{ batch.errors }} failed.</strong>{% endif %}
     </p>
     <p class="faint small">{{ batch.tokens }} tokens spent.

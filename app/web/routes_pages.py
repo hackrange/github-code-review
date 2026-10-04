@@ -3479,12 +3479,22 @@ def ai_page(request: Request, msg: str = "", kind: str = "",
         return page(request, "ai.html", **context)
 
 
-def _can_validate_ai(db, user) -> bool:
-    """Whether the AI buttons belong on a page for this person right now."""
+def _can_validate_ai(db, user) -> str:
+    """Which bulk button belongs on the findings list for this person.
+
+    "ai" when a model is set up, "rules" when it is not but rules have been
+    learned, which still apply with AI off, and "" when neither.
+    """
     from app.core import ai
+    from app.core.models import LearnedRule
+    if not rbac.can(user, "finding.validate"):
+        return ""
     cfg = ai.config(db)
-    return bool(rbac.can(user, "finding.validate") and ai.enabled(cfg)
-                and not ai.missing(cfg))
+    if ai.enabled(cfg) and not ai.missing(cfg):
+        return "ai"
+    if db.query(LearnedRule).filter(LearnedRule.retired_at.is_(None)).first() is not None:
+        return "rules"
+    return ""
 
 
 def _ai_grade_context(db, row) -> dict:

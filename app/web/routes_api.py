@@ -4000,9 +4000,10 @@ async def validate_many(request: Request, user: User = Depends(current_user)):
         raise HTTPException(status_code=400, detail="Nothing was selected.")
 
     with session_scope() as db:
-        problem = ai.missing(ai.config(db))
-        if problem:
-            return redirect(_back_with(_findings_back(form), problem, "error"))
+        # With AI off, what has been learned still applies: the run answers
+        # from the learned rules alone and sends nothing anywhere.
+        cfg = ai.config(db)
+        rules_only = (not ai.enabled(cfg)) or bool(ai.missing(cfg))
         query = rbac.visible_findings(db, user)
         if everything:
             query = _apply_finding_filters(query, form, db, user)
@@ -4015,9 +4016,11 @@ async def validate_many(request: Request, user: User = Depends(current_user)):
                 _findings_back(form),
                 f"That is more than {analysis.MAX_BATCH} findings. Narrow the "
                 "filters and validate in batches.", "error"))
-        number = analysis.start_batch(ids, user)
+        number = analysis.start_batch(ids, user, rules_only=rules_only)
         record(db, "finding.validated", actor=user.username,
-               target=f"{len(ids)} findings", detail=f"bulk AI validation #{number}",
+               target=f"{len(ids)} findings",
+               detail=(f"bulk learned rules #{number}" if rules_only
+                       else f"bulk AI validation #{number}"),
                source_ip=client_ip(request))
     return redirect(f"/ai/learned?batch={number}")
 

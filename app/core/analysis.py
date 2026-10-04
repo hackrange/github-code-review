@@ -808,7 +808,26 @@ _batch_lock = threading.Lock()
 _batch_seq = [0]
 
 
-def start_batch(finding_ids: list, user) -> int:
+def rule_only(finding_id: int, user) -> dict:
+    """Answer one finding from the learned rules alone, with no model.
+
+    What a bulk run does when AI is switched off: everything the scanner has
+    already learned still applies, and nothing is sent anywhere.
+    """
+    from app.core import rbac
+    with session_scope() as db:
+        row = (rbac.visible_findings(db, user)
+               .filter(Finding.id == finding_id).one_or_none())
+        if row is None:
+            return {"ok": False, "detail": "That finding is gone."}
+        answered = _answer_from_rule(db, row, user)
+        if answered:
+            return answered
+        return {"ok": True, "skipped": True,
+                "detail": "no learned rule covers it, and AI is off"}
+
+
+def start_batch(finding_ids: list, user, rules_only: bool = False) -> int:
     """Validate many findings in the background.  -> the batch number.
 
     Ordered so findings about the same thing sit together: the same
@@ -824,11 +843,12 @@ def start_batch(finding_ids: list, user) -> int:
             "started": utcnow(), "finished": None, "total": len(finding_ids),
             "done": 0, "asked": 0, "from_rules": 0, "lowered": 0,
             "skipped_protected": 0, "skipped_done": 0, "errors": 0,
-            "tokens": 0, "rules_learned": 0, "results": []}
+            "tokens": 0, "rules_learned": 0, "skipped_no_rule": 0,
+            "rules_only": rules_only, "results": []}
         # Keep the twenty newest; a batch is a progress display, not a record.
         for old in sorted(_batches)[:-20]:
             _batches.pop(old, None)
-    worker = threading.Thread(target=_batch, args=(number, list(finding_ids), user),
+    worker = threading.Thread(target=_batch, args=(number, list(finding_ids), user, rules_only),
                               name=f"ai-batch-{number}", daemon=True)
     worker.start()
     return number
@@ -855,7 +875,7 @@ def _note(number: int, **change) -> None:
             batch["results"] = batch["results"][-200:]
 
 
-def _batch(number: int, finding_ids: list, user) -> None:
+def _batch(number: int, finding_ids: list, user, rules_only: bool = False) -> None:
     from app.core import rbac
     from app.core.models import AIGrade, LearnedRule
 
@@ -891,12 +911,16 @@ def _batch(number: int, finding_ids: list, user) -> None:
                       result=f"{label}: already validated for this code")
                 continue
             try:
-                result = run(finding_id, user, force=False, wait=True)
+                result = (rule_only(finding_id, user) if rules_only
+                          else run(finding_id, user, force=False, wait=True))
             except Exception:  # one bad finding must not stop the rest
                 log.exception("bulk validation of %s failed", finding_id)
                 result = {"ok": False, "detail": "failed; see the log"}
             if not result.get("ok"):
                 _note(number, done=1, errors=1, result=f"{label}: {result.get('detail', '')}")
+                continue
+            if result.get("skipped"):
+                _note(number, done=1, skipped_no_rule=1, result=f"{label}: {result['detail']}")
                 continue
             if result.get("from_rule"):
                 _note(number, done=1, from_rules=1,

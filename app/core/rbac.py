@@ -92,10 +92,12 @@ PERMISSIONS = {
         # A developer can ask for a noisy rule to be set aside.  Somebody else
         # has to agree, the same as an exception.
         "rule.mute.request",
-        # A developer is the person working out whether a finding in their own
-        # repository is real, which is exactly what this is for.
-        "finding.validate",
-        # Deliberately not here: the schedules, the exclusions and the report
+        # Deliberately not here: "finding.validate".  Asking a model costs money
+        # per question, sends the finding and its code outside this
+        # installation, and now lowers grades and teaches rules that apply to
+        # everyone, so it is an administrator's decision.  What has been
+        # learned still applies to a developer's findings on every scan.
+        # Also deliberately not here: the schedules, the exclusions and the report
         # files.  Each of those is a statement about the whole estate rather
         # than about this person's repositories, and a page that shows one
         # team when every account is on it is a leak whichever way it is read.

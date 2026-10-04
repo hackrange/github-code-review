@@ -296,7 +296,7 @@
       <button type="button" class="btn sm danger" data-modal="delete-modal">Delete the selected</button>
       {% endif %}
       {% if can_validate_ai %}
-      <button type="button" class="btn sm" data-modal="validate-modal">Validate with AI</button>
+      <button type="button" class="btn sm" data-modal="validate-modal">{{ 'Validate with AI' if can_validate_ai == 'ai' else 'Apply learned rules' }}</button>
       {% endif %}
       {% if can_regrade %}
       <button type="button" class="btn sm" data-modal="regrade-modal">Change the severity</button>
@@ -544,11 +544,17 @@
 {% if can_validate_ai %}
 <div class="modal-backdrop" id="validate-modal" hidden>
   <div class="modal">
-    <div class="modal-head">Validate what is selected with AI
+    <div class="modal-head">{{ 'Validate what is selected with AI' if can_validate_ai == 'ai' else 'Apply learned rules to what is selected' }}
       <button type="button" class="modal-close" data-close-modal>&times;</button></div>
     <div class="modal-body">
       <div class="notice info">
         <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+        {% if can_validate_ai == 'rules' %}
+        <div><strong><span data-slot="bulk-count">0</span></strong> findings. AI is
+          off, so nothing is sent anywhere: each finding a learned rule covers is
+          graded from the rule, and the rest are left as they are. Credentials and
+          known exploited packages are never lowered.</div>
+        {% else %}
         <div><strong><span data-slot="bulk-count">0</span></strong> findings, read
           by the model in the background. Where it reads one as lower than its
           grade, the grade goes down. Credentials and known exploited packages
@@ -559,12 +565,13 @@
             becomes a rule that answers the rest without asking it again, and
             findings a learned rule already covers cost nothing. This can send
             the code around each finding to the configured model.</div></div>
+        {% endif %}
       </div>
     </div>
     <div class="modal-foot">
       <button type="button" class="btn" data-close-modal>Cancel</button>
       <button type="submit" class="btn primary" form="bulk-form"
-              formaction="{{ base }}/findings/validate-bulk">Validate with AI</button>
+              formaction="{{ base }}/findings/validate-bulk">{{ 'Validate with AI' if can_validate_ai == 'ai' else 'Apply learned rules' }}</button>
     </div>
   </div>
 </div>
