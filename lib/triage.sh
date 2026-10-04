@@ -233,6 +233,9 @@ triage_findings() {
             entropy:    (map(.entropy) | map(select(. != null)) | max),
             alert_url:  (map(.alert_url // empty) | first),
             branch_hint: (map(.branch_hint // empty) | first),
+            # Where semgrep reported this value as code, every line of it, so
+            # ingest can retire each of those rows into this one.
+            code_lines: (map(.code_line // empty) | unique),
             tags:       (map(.tags[]?) | unique)
           }
         | del(._key)

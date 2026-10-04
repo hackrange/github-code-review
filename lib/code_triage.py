@@ -250,6 +250,125 @@ def _expression_is_fixed(expression: str, source: str) -> bool:
     return False
 
 
+# Parts of the github context nobody outside the repository chooses.  A
+# username is limited to letters, digits and hyphens, and the refs and names
+# here come from pushes, which need write access already.
+WRITER_GITHUB = re.compile(
+    r"github\.(?:ref_name|ref|base_ref|sha|event_name|run_id|run_number|run_attempt|"
+    r"repository|repository_owner|repository_id|workspace|actor|triggering_actor|"
+    r"job|action|server_url|api_url|graphql_url|retention_days|ref_type|workflow|"
+    r"event\.repository\.(?:name|full_name|default_branch)|"
+    # Fixed vocabularies, numbers, booleans, hashes and the workflow's own
+    # cron.  A pull request's base is a branch that already exists here; its
+    # head, title and body are the submitter's and are deliberately absent.
+    r"event\.(?:action|schedule|number|before|after|forced|created|deleted)|"
+    r"event\.pull_request\.(?:number|merged|draft|base\.ref|base\.sha|head\.sha))$")
+WRITER_ROOTS = re.compile(r"(?:secrets|vars|runner|job|strategy|matrix)\.[\w.-]+$|"
+                          r"steps\.[\w-]+\.(?:outcome|conclusion)$")
+
+
+def _run_block(source: str, line: int) -> str:
+    """The run: step that starts on this line, down to where it ends."""
+    lines = (source or "").splitlines()
+    if not 0 < line <= len(lines):
+        return ""
+    first = lines[line - 1]
+    indent = len(first) - len(first.lstrip())
+    block = [first]
+    for follow in lines[line:]:
+        if follow.strip() and len(follow) - len(follow.lstrip()) <= indent:
+            break
+        block.append(follow)
+    return "\n".join(block)
+
+
+def _actions_writer_only_demotion(source: str, line: int, matched: str):
+    """Graded low when everything put into the shell is a writer's to choose."""
+    block = _run_block(source, line) or matched
+    expressions = ACTIONS_EXPR.findall(block)
+    if not expressions or not all(_writer_only(e, source) for e in expressions):
+        return None
+    return {"severity": "low", "verdict": REVIEW, "rule": "actions-writer-only",
+            "reason": ("graded low: every value put into this shell is set by "
+                       "somebody who can already change the workflow (inputs to "
+                       "a manually run workflow, the workflow's own env, branch "
+                       "names, secrets or vars).  Nothing here comes from a pull "
+                       "request, an issue or a comment, so it gives nobody more "
+                       "than they had.  Passing the values through env: is still "
+                       "the safer way to write it")}
+
+
+def _workflow_triggers(source: str) -> set:
+    """-> the events a workflow file runs on, read from its on: key."""
+    lines = (source or "").splitlines()
+    for index, text in enumerate(lines):
+        found = re.match(r"^(?:on|['\"]on['\"]|true)\s*:\s*(.*)$", text)
+        if not found:
+            continue
+        rest = found.group(1).split("#")[0].strip()
+        if rest:
+            return set(re.findall(r"[a-z_]+", rest))
+        events = set()
+        level = None
+        for follow in lines[index + 1:]:
+            if not follow.strip() or follow.lstrip().startswith("#"):
+                continue
+            if not follow.startswith((" ", "\t")):
+                break
+            # Only the first level under on: names events.  inputs: and
+            # types: sit deeper, under the event they belong to.
+            depth = len(follow) - len(follow.lstrip())
+            level = depth if level is None else level
+            if depth != level:
+                continue
+            item = re.match(r"^\s*(?:-\s*)?([a-z_]+)\s*:?\s*(?:#.*)?$", follow)
+            if item:
+                events.add(item.group(1))
+        return events
+    return set()
+
+
+def _operands(expression: str) -> list:
+    """The values an expression can come out as: a || b && c is a, b or c."""
+    parts = re.split(r"\|\||&&|==|!=", expression)
+    return [p.strip().strip("()").strip() for p in parts if p.strip()]
+
+
+def _writer_only(expression: str, source: str, depth: int = 0) -> bool:
+    """Is every value this ${{ }} can take set by somebody with write access?
+
+    Not fixed, which is the stronger claim the set aside check makes.  A
+    workflow_dispatch input is typed by whoever runs the workflow, and running
+    it already takes write access, so injecting into it gains them nothing
+    they did not have.  A reusable workflow's inputs are the caller's, and
+    the caller may hand on a pull request title, so workflow_call is never
+    writer only.
+    """
+    triggers = _workflow_triggers(source)
+    for operand in _operands(expression):
+        if re.fullmatch(r"'[^']*'|\d+|true|false|null", operand):
+            continue
+        if WRITER_GITHUB.fullmatch(operand) or WRITER_ROOTS.fullmatch(operand):
+            continue
+        if re.fullmatch(r"(?:github\.event\.)?inputs\.[\w-]+", operand):
+            # Only a manual run fills inputs; every other event leaves them
+            # empty.  A reusable workflow's are the caller's, so that one
+            # trigger is the exception, and an unreadable on: is not proof.
+            if triggers and "workflow_call" not in triggers:
+                continue
+            return False
+        env = re.fullmatch(r"env\.([\w-]+)", operand)
+        if env and depth == 0:
+            values = [m.group(1) for m in re.finditer(
+                r"^\s*" + re.escape(env.group(1)) + r"\s*:\s*(\S.*)$", source, re.M)]
+            if values and all(all(_writer_only(e, source, 1) for e in ACTIONS_EXPR.findall(v))
+                              for v in values):
+                continue
+            return False
+        return False
+    return True
+
+
 # Structure, not vocabulary.  A lone keyword catches ordinary prose: the string
 # "(Select all that apply, comma-separated: ...)" is a question on a form, and
 # it contains SELECT.  A statement has two halves that go together.
@@ -639,7 +758,8 @@ def _resolve_module(base_file: str, spec: str) -> str:
 def _function_text(source: str, name: str) -> str:
     """The body of a named function in this file, or empty."""
     pattern = re.compile(
-        r"(?:\bfunction\s+%s\s*\(|\b%s\s*[:=]\s*(?:async\s*)?(?:function\b[^(]*)?\([^)]*\)\s*(?:=>)?\s*\{)"
+        r"(?:\bfunction\s+%s\s*\(|\b%s\s*[:=]\s*(?:(?:wrap|asyncHandler|catchAsync|asyncWrap)\(\s*)?"
+        r"(?:async\s*)?(?:function\b[^(]*)?\([^)]*\)\s*(?:=>)?\s*\{)"
         % (re.escape(name), re.escape(name)))
     found = pattern.search(source or "")
     if not found:
@@ -658,9 +778,14 @@ def _function_text(source: str, name: str) -> str:
     return ""
 
 
-def _limit_in(text: str, file_path: str, hops: int, seen: set) -> str:
-    """-> what holds callers back, found in this text or what it calls."""
-    found = LIMIT_EVIDENCE.search(text or "")
+def _limit_in(text: str, file_path: str, hops: int, seen: set,
+              evidence=LIMIT_EVIDENCE) -> str:
+    """-> what holds callers back, found in this text or what it calls.
+
+    Or, given another pattern, where that is found instead: the same walk
+    answers whether a handler checks a password somewhere down the line.
+    """
+    found = evidence.search(text or "")
     if found:
         return found.group(0).strip(" (,")
     if hops <= 0 or not file_path:
@@ -694,7 +819,7 @@ def _limit_in(text: str, file_path: str, hops: int, seen: set) -> str:
         if not body:
             # Re-exported from somewhere else: the module only names it.
             body = "%s(" % fn if re.search(r"\b%s\b" % re.escape(fn), _read(target)) else ""
-        why = _limit_in(body, target, hops - 1, seen)
+        why = _limit_in(body, target, hops - 1, seen, evidence)
         if why:
             return why
     return ""
@@ -707,6 +832,140 @@ def _codeql_rate_limited(repo_root: str, path: str, source: str,
     text = "\n".join(lines[max(0, start - 1):max(start, end)])
     full = path if os.path.isabs(path) else os.path.join(repo_root, path)
     return _limit_in(text, full, 2, set())
+
+
+# What checking a password looks like.  checkPasswordPolicy is not one: the
+# call has to open straight after the name.  Reading a password out of the
+# request counts on its own, since a login that looks the pair up in a
+# database, findOne({ username, password }), calls nothing with a telling name.
+PASSWORD_VERIFY = re.compile(
+    r"\b(?:bcrypt\.compare(?:Sync)?|argon2\.verify|crypto\.(?:scrypt|pbkdf2)(?:Sync)?|"
+    r"verifyPassword|comparePassword|checkPassword|passport\.authenticate|"
+    r"login|logIn|signIn|signin|authenticate)\s*\(|"
+    r"\b(?:req|request)\.(?:body|query|params)\s*(?:\.\s*|\[\s*['\"])"
+    r"(?:password|passwd|pass|pwd|passcode|pin|otp|totp)\b|"
+    r"\{[^}]*\b(?:password|passwd|pwd|passcode|otp)\b[^}]*\}\s*=\s*(?:req|request)\.(?:body|query)",
+    re.I)
+# Reading a Basic authorization header.
+BASIC_AUTH = re.compile(r"""(?i)['"`^]\s*basic\b|\bbasic\\s""")
+
+
+def _repo_basic_password(repo_root: str) -> str:
+    """-> a file that reads Basic credentials and checks a password, or empty.
+
+    That is middleware turning every route into a place to guess a password,
+    and then a route with no limiter is a guessing oracle whatever it does.
+    """
+    for root, _dirs, names in os.walk(repo_root):
+        if "node_modules" in root or "/." in root:
+            continue
+        # A test that builds a Basic header and calls login is not middleware.
+        if re.search(r"(^|/)(tests?|spec|__tests__|fixtures?)(/|$)",
+                     os.path.relpath(root, repo_root)):
+            continue
+        for name in names:
+            if not name.endswith((".js", ".mjs", ".cjs", ".ts")) or \
+                    re.search(r"\.(test|spec)\.[cm]?[jt]s$", name):
+                continue
+            text = _read(os.path.join(root, name))
+            if BASIC_AUTH.search(text) and PASSWORD_VERIFY.search(text):
+                return os.path.relpath(os.path.join(root, name), repo_root)
+    return ""
+
+
+def _named_handlers(line: str, source: str, file_path: str):
+    """-> (body, file) for each handler a route line names, or None.
+
+    router.get('/x', auth, controller.show) names its handlers rather than
+    writing them.  None when any of them cannot be found in this file or in
+    a module it requires, because then what they do is unknown.
+    """
+    call = re.search(r"\b(?:app|router|\w+Router)\.(?:get|post|put|patch|delete|all|use|head)"
+                     r"\s*\((?P<args>.*)\)\s*;?\s*$", line)
+    if not call:
+        return None
+    names = []
+    for arg in (a.strip() for a in call.group("args").split(",")):
+        # The path, a string or a regex, is not a handler.  router.use(fn)
+        # has none, so it cannot simply be the first argument dropped.
+        if re.fullmatch(r"(['\"`]).*\1|/.+/[gimsuy]*", arg):
+            continue
+        # wrap(handler), the async error wrapper, hands the handler on as is.
+        unwrapped = re.fullmatch(r"(?:wrap|asyncHandler|catchAsync|asyncWrap)\((.+)\)", arg)
+        names.append(unwrapped.group(1).strip() if unwrapped else arg)
+    if not names or not all(re.fullmatch(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?", n)
+                            for n in names):
+        return None
+    modules = {}
+    for req in REQUIRE_LOCAL.finditer(source):
+        resolved = _resolve_module(file_path, req.group("path"))
+        if resolved and req.group("name"):
+            modules[req.group("name")] = resolved
+        for part in (req.group("names") or "").split(","):
+            part = part.strip().split(":")[-1].strip()
+            if part and resolved:
+                modules.setdefault("{%s}" % part, resolved)
+    bodies = []
+    for name in names:
+        if "." in name:
+            obj, fn = name.split(".", 1)
+            target = modules.get(obj)
+            body = _function_text(_read(target), fn) if target else ""
+        else:
+            target = file_path
+            body = _function_text(source, name)
+            if not body and "{%s}" % name in modules:
+                target = modules["{%s}" % name]
+                body = _function_text(_read(target), name)
+        if not body:
+            return None
+        bodies.append((body, target))
+    return bodies
+
+
+def _codeql_no_password_here(repo_root: str, path: str, source: str,
+                             start: int, end: int) -> bool:
+    """For js/missing-rate-limiting: can this route not be used to guess one?
+
+    True only when the handler checks no password, itself or in anything it
+    calls two steps down, and nothing in the repository checks a password
+    read from a Basic header on every request.
+    """
+    lines = (source or "").splitlines()
+    text = "\n".join(lines[max(0, start - 1):max(start, end)])
+    if not text.strip():
+        return False
+    full = path if os.path.isabs(path) else os.path.join(repo_root, path)
+    # Reported on one line, the router.get( line, the handler is the block
+    # that opens there.  Reading only the line would miss everything it does.
+    if end <= start:
+        first = lines[start - 1] if 0 < start <= len(lines) else ""
+        opens = re.search(r"(?:=>|\bfunction\b[^(]*\([^)]*\))\s*\{", first)
+        if opens:
+            offset = sum(len(x) + 1 for x in lines[:start - 1])
+            opened = offset + opens.end() - 1
+            depth = 0
+            for at in range(opened, min(len(source), opened + 20000)):
+                if source[at] == "{":
+                    depth += 1
+                elif source[at] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        text = source[offset:at + 1]
+                        break
+        else:
+            # Handlers passed by name.  Each one has to be found and read, or
+            # nothing has been shown about what it does.
+            named = _named_handlers(first, source, full)
+            if named is None:
+                return False
+            for body, where in named:
+                if _limit_in(body, where, 2, set(), PASSWORD_VERIFY):
+                    return False
+            return not _repo_basic_password(repo_root)
+    if _limit_in(text, full, 2, set(), PASSWORD_VERIFY):
+        return False
+    return not _repo_basic_password(repo_root)
 
 
 def _codeql_privileged_source(repo_root: str, flow_source: dict) -> str:
@@ -3085,8 +3344,14 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
                           "recognizes the csurf package by name" % where)
                 decided_by = "own-csrf-check"
         rate_gate = ""
+        no_password = False
         if verdict == REVIEW and rule == "js/missing-rate-limiting":
             rate_gate = _route_guard(source, finding.get("start", {}).get("line", 0))
+            if not rate_gate:
+                no_password = _codeql_no_password_here(
+                    repo_root, relative, source,
+                    finding.get("start", {}).get("line", 0),
+                    finding.get("end", {}).get("line", 0))
         flow = finding.get("flow_source")
         if verdict == REVIEW and rule == "js/unvalidated-dynamic-method-call":
             guard = _codeql_guarded_on_flow(repo_root, flow)
@@ -3162,6 +3427,22 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
                 "them slowing the service down, not an outsider" % rate_gate)
             finding["triage"]["rule"] = "codeql-privileged-route"
             continue
+        if no_password:
+            # The rule names two harms.  Guessing a credential needs a route
+            # that checks a password, and this one does not, so what is left
+            # is how much work a request costs: availability, which does not
+            # take the repository's data with it.
+            finding["triage"]["demote"] = {"severity": "low",
+                                           "rule": "codeql-no-password"}
+            finding["triage"]["reason"] = (
+                "graded low: nothing on this route checks a password, here or "
+                "in what it calls, and no request elsewhere has its Basic "
+                "credentials checked as a password, so it cannot be used to "
+                "guess one.  What is left is how much work each request costs, "
+                "which is a question of availability.  An ingress or load "
+                "balancer may already limit it, and CodeQL cannot see that")
+            finding["triage"]["rule"] = "codeql-no-password"
+            continue
         if verdict == REVIEW and rule in CODEQL_DOS:
             guard = _codeql_privileged_source(repo_root, finding.get("flow_source"))
             if guard:
@@ -3194,6 +3475,8 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
 
         # A path is weaker evidence than a verdict somebody's rule already
         # reached, so documentation only speaks when nothing else has.
+        if demoted is None and verdict == REVIEW and rule == "run-shell-injection":
+            demoted = _actions_writer_only_demotion(source, line_no, matched)
         if demoted is None and verdict == REVIEW:
             demoted = _documentation_demotion(relative)
 
@@ -3228,8 +3511,77 @@ def triage_misconfigurations(rows: list, repo_root: str) -> list:
     return rows
 
 
+# --- one job, one finding ------------------------------------------------------
+
+def _job_of(source: str, line: int) -> str:
+    """-> the workflow job this line sits in, "" before jobs:, or None."""
+    lines = (source or "").splitlines()
+    start = next((i for i, t in enumerate(lines) if re.match(r"^jobs\s*:\s*(#.*)?$", t)), None)
+    if start is None:
+        return None
+    if line <= start + 1:
+        return ""
+    level, job = None, None
+    for number, text in enumerate(lines[start + 1:], start=start + 2):
+        if text.strip() and not text.lstrip().startswith("#"):
+            depth = len(text) - len(text.lstrip())
+            if depth == 0:
+                break
+            level = depth if level is None else level
+            key = re.match(r"^\s*([\w-]+)\s*:", text)
+            if depth == level and key:
+                job = key.group(1)
+        if number >= line:
+            return job
+    return job
+
+
+def fold_workflow_duplicates(code_rows: list, workflow_rows: list, repo_root: str) -> list:
+    """Set aside a CodeQL missing-permissions alert zizmor already reports.
+
+    Both say the same job runs with the default token: CodeQL points at the
+    first line inside the job and zizmor at the job's own key, one line up.
+    Counted twice, it was the same 470 problems in the list as 940 rows.
+    zizmor's row stays, because it grades the permissions the job actually
+    gets.  A job zizmor says nothing about keeps the CodeQL row.
+    """
+    flagged = {}
+    for row in workflow_rows or []:
+        if row.get("rule_id") != "excessive-permissions" or not row.get("file"):
+            continue
+        source = _read(os.path.join(repo_root, row["file"]))
+        job = _job_of(source, int(row.get("start_line") or 0))
+        if job is not None:
+            flagged.setdefault(row["file"], {})[job] = int(row.get("start_line") or 0)
+    for row in code_rows or []:
+        if row.get("rule_id") != "actions/missing-workflow-permissions" or \
+                (row.get("triage") or "review") != "review":
+            continue
+        jobs = flagged.get(row.get("file") or "")
+        if not jobs:
+            continue
+        job = _job_of(_read(os.path.join(repo_root, row["file"])), int(row.get("start_line") or 0))
+        at = jobs.get(job) if job else None
+        if at is None and "" in jobs:
+            at = jobs[""]
+        if at is None:
+            continue
+        row["triage"] = NOT_APPLICABLE
+        row["triage_rule"] = "reported-by-zizmor"
+        row["triage_reason"] = ("reported once already: zizmor's excessive-permissions "
+                                "flags the same job at line %d, graded by the "
+                                "permissions it actually gets" % at)
+    return code_rows
+
+
 def main() -> int:
     """Read a semgrep report on stdin or argv[1], write the triaged one out."""
+    if len(sys.argv) > 1 and sys.argv[1] == "--workflow-dupes":
+        code = json.loads(open(sys.argv[2]).read() or "[]")
+        workflows = json.loads(open(sys.argv[3]).read() or "[]")
+        json.dump(fold_workflow_duplicates(code, workflows, sys.argv[4] if len(sys.argv) > 4 else "."),
+                  sys.stdout)
+        return 0
     if len(sys.argv) > 1 and sys.argv[1] == "--misconfig":
         rows = json.loads(open(sys.argv[2]).read() or "[]")
         json.dump(triage_misconfigurations(rows, sys.argv[3] if len(sys.argv) > 3 else "."),

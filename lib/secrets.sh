@@ -1027,3 +1027,78 @@ corroborate() {
         corroborating_detectors: [ $m[].type ]
       }'
 }
+
+# semgrep_secrets_route <dir> <full_name> <semgrep_json> <repo_json>
+#
+# semgrep's secret detectors, moved to the credential pass.  See
+# semgrep_secrets.py for why.  The value goes from the file into
+# derive_secret_facts through a pipe and nowhere else.
+#
+# Everything here fails toward leaving the report as it was: if any step does
+# not finish, semgrep's matches stay code findings, which is how they were
+# always filed.  Only matches that became credentials are taken out of the
+# code report, so nothing is moved into silence.
+semgrep_secrets_route() {
+  local dir="$1" full_name="$2" sg="$3" repo_json="$4"
+  local py; py=$(ghscan_python)
+  [[ -n "$py" && -s "$sg" ]] || return 0
+  jq -e '[.results[]? | select(.check_id | startswith("generic.secrets."))] | length > 0' "$sg" >/dev/null 2>&1 \
+    || return 0
+
+  local cand; cand=$(tmp_file semgrep_creds)
+  # One spelling across engines, the same canon the code pass uses, so a
+  # detector override and the old code row's rule both line up.
+  "$py" "$GHSCAN_HOME/lib/semgrep_secrets.py" --extract "$sg" "$dir" 2>/dev/null \
+    | jq -c --argjson alias "$(detector_alias_map)" "$JQ_CANON_DETECTOR"'
+        . + {detector: (.detector | canon_detector($alias)),
+             code_rule: (.code_rule | canon_detector($alias))}' \
+    | secrets_drop_excluded /dev/null \
+    | derive_secret_facts "$dir" > "$cand"
+  if [[ ! -s "$cand" ]]; then rm -f "$cand"; return 0; fi
+
+  local triaged; triaged=$(tmp_file semgrep_creds_triaged)
+  if ! triage_findings "$dir" "$cand" "$repo_json" > "$triaged" || [[ ! -s "$triaged" ]]; then
+    log_warn "[$full_name] semgrep's secret matches could not be triaged as credentials, so they stay code findings"
+    rm -f "$cand" "$triaged"; return 0
+  fi
+  local keep_low; keep_low=$(cfg_bool '.scan.secrets.triage.path_rule_downgrades_only' true && echo true || echo false)
+  local part; part=$(tmp_file semgrep_creds_part)
+  triage_partition "$triaged" "$keep_low" > "$part"
+
+  local base; base=$(json_file "${SECRETS_JSON:-}" secrets_before_semgrep)
+  local merged
+  # The same value in the same file is one credential, whichever engine said
+  # so first: it gains semgrep as an engine and the lines semgrep saw.
+  merged=$(jq -c --slurpfile add "$part" '
+    def fp: ((.secret_fingerprint // "") + "|" + (.file // ""));
+    def rows($o): (($o.reported // []) + ($o.filtered // []) + ($o.suppressed // []));
+    def joined($same):
+      if $same == null then .
+      else .engines = (((.engines // [.engine // empty]) + ["semgrep"]) | unique)
+         | .code_lines = (((.code_lines // []) + ($same.code_lines // [])) | unique)
+         | .code_rule = (.code_rule // $same.code_rule)
+      end;
+    ($add[0]) as $new
+    | (if type == "object" then . else {} end) as $base
+    | (rows($base) | map(fp)) as $have
+    | (rows($new) | map({key: fp, value: .}) | from_entries) as $by
+    | reduce ("reported", "filtered", "suppressed") as $k ($base;
+        .[$k] = (
+          ((.[$k] // []) | map(joined($by[fp])))
+          + (($new[$k] // []) | map(select(fp as $f | ($have | any(.[]; . == $f)) | not)))
+        ))
+  ' "$base" 2>/dev/null)
+  if [[ -z "$merged" ]]; then
+    log_warn "[$full_name] semgrep's secret matches could not be merged into the credentials, so they stay code findings"
+    rm -f "$cand" "$triaged" "$part"; return 0
+  fi
+
+  local code_only; code_only=$(tmp_file semgrep_code_only)
+  if "$py" "$GHSCAN_HOME/lib/semgrep_secrets.py" --drop "$sg" "$cand" > "$code_only" 2>/dev/null \
+      && [[ -s "$code_only" ]]; then
+    SECRETS_JSON="$merged"
+    mv "$code_only" "$sg"
+    log_info "[$full_name] $(jq -s 'length' "$cand") semgrep secret match(es) moved to the credential pass"
+  fi
+  rm -f "$cand" "$triaged" "$part" "$code_only"
+}

@@ -204,6 +204,11 @@ vulns_osv() {
         if   $ds != "" then $ds
         elif ($cv // "" | test("/C:H/I:H/A:H")) then "critical"
         else "unknown" end),
+      # Graded from the vector rather than by the advisory itself.  cvss.py
+      # works the real score out below; this says which rows it may touch.
+      _severity_from: (if ((.database_specific.severity // "") != "") then "advisory"
+                       elif ([ (.severity // [])[] | select(.type == "CVSS_V3") ] | length) > 0
+                       then "vector" else null end),
       cvss_vector: ([ (.severity // [])[] | select(.type == "CVSS_V3") | .score ] | first),
       cvss_score: null,
       title: (.summary // null),
@@ -240,7 +245,17 @@ vulns_osv() {
                             reason: "a malicious package runs when it is installed, so whether the code imports it is not the question",
                             ecosystem: ((.package.type // "unknown") | tostring),
                             direct: "unknown", scope: "runtime"}}
-      else . end ]' "$out" 2>/dev/null || echo '[]'
+      else . end ]' "$out" 2>/dev/null > "$out.rows" || echo '[]' > "$out.rows"
+  # The score from the vector, where the advisory gave no rating of its own.
+  # Without python the rows go out as graded above, marker removed.
+  local py; py=$(ghscan_python)
+  if [[ -n "$py" ]] && "$py" "$GHSCAN_HOME/lib/cvss.py" --osv-grade < "$out.rows" > "$out.graded" 2>/dev/null \
+      && [[ -s "$out.graded" ]]; then
+    cat "$out.graded"
+  else
+    jq -c 'map(del(._severity_from))' "$out.rows" 2>/dev/null || echo '[]'
+  fi
+  rm -f "$out.rows" "$out.graded"
 }
 
 # vulns_malicious <dir> <full_name> -> JSON array in the vulnerability shape

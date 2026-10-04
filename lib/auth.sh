@@ -237,16 +237,37 @@ auth_explain_sso() {
   return 0
 }
 
+# A refusal that is about the clock, not the credential.
+#
+# GitHub answers an exhausted budget with a 403 too, and this check used to
+# read every 403 as a bad token.  One connection was skipped whole on
+# 2026-10-04 with "token rejected (HTTP 403)" while the body said "API rate
+# limit exceeded": the token was fine, the budget was spent, and every
+# repository behind it went unscanned for a reason nobody would look for.
+# -> 0 when it waited and the call is worth trying again.
+_auth_rate_limited() {
+  local code="${1//$'\r'/}" hdr="$2" body="$3" attempt="$4"
+  [[ "$code" == "403" || "$code" == "429" ]] || return 1
+  declare -F _api_handle_primary >/dev/null || return 1
+  _api_handle_primary "$hdr" && return 0
+  _api_handle_secondary "$hdr" "$body" "$attempt" && return 0
+  return 1
+}
+
 # Verify the credential works and report what it can see.
 auth_whoami() {
   local api; api=$(cfg '.github.api_url' 'https://api.github.com')
   local body hdr code
   hdr=$(tmp_file hdr); body=$(tmp_file body)
 
+  local attempt
   if [[ "$GHSCAN_AUTH_METHOD" == "app" ]]; then
-    auth_curl -sS -D "$hdr" -o "$body" \
-      -H "Accept: application/vnd.github+json" "$api/installation/repositories?per_page=1"
-    code=$(awk 'toupper($1) ~ /^HTTP/ {c=$2} END{print c}' "$hdr")
+    for attempt in 1 2 3; do
+      auth_curl -sS -D "$hdr" -o "$body" \
+        -H "Accept: application/vnd.github+json" "$api/installation/repositories?per_page=1"
+      code=$(awk 'toupper($1) ~ /^HTTP/ {c=$2} END{print c}' "$hdr")
+      _auth_rate_limited "$code" "$hdr" "$body" "$attempt" || break
+    done
     [[ "$code" == "200" ]] || { jq -r '.message // empty' "$body" >&2; die "installation token rejected (HTTP $code)"; }
     local n; n=$(jq -r '.total_count // 0' "$body")
     log_ok "authenticated as GitHub App installation; $n repositories visible"
@@ -254,12 +275,19 @@ auth_whoami() {
     return 0
   fi
 
-  auth_curl -sS -D "$hdr" -o "$body" "$api/$(provider_call whoami_path)"
-  code=$(awk 'toupper($1) ~ /^HTTP/ {c=$2} END{print c}' "$hdr")
+  for attempt in 1 2 3; do
+    auth_curl -sS -D "$hdr" -o "$body" "$api/$(provider_call whoami_path)"
+    code=$(awk 'toupper($1) ~ /^HTTP/ {c=$2} END{print c}' "$hdr")
+    _auth_rate_limited "$code" "$hdr" "$body" "$attempt" || break
+  done
   local sso; sso=$(grep -i '^x-github-sso:' "$hdr" | head -1 | cut -d: -f2- | tr -d '\r' | sed 's/^ *//' || true)
   [[ -n "$sso" ]] && auth_explain_sso "$sso"
   if [[ "$code" != "200" ]]; then
     jq -r '.message // empty' "$body" >&2
+    # Say which it is.  A spent budget after three waits is not a bad token.
+    if grep -qiE 'rate limit' "$body" 2>/dev/null; then
+      die "GitHub's rate limit is still spent after waiting (HTTP $code); the token itself was not refused"
+    fi
     die "token rejected (HTTP $code)"
   fi
   local login; login=$(jq -r "$(provider_call whoami_field)" "$body")

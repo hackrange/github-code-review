@@ -461,6 +461,77 @@ def adopt_renamed(session, rows) -> dict:
     return out
 
 
+# Severity words, weakest first, for "at least" comparisons.
+_RANK = {"unknown": 0, "info": 1, "low": 2, "medium": 3, "high": 4, "critical": 5}
+
+
+def adopt_code_rows(session, finding, marker: str, row: dict, counts: dict):
+    """A credential semgrep used to file as code takes those rows over.
+
+    semgrep's secret detectors were code findings, one per line, until they
+    were moved to the credential pass.  Left alone, every one of them would
+    stop being reported and be closed as fixed: hundreds of keys marked
+    remediated on the night nothing was done about them.
+
+    So the first of them becomes this credential, keeping its id and every
+    decision on it, the way a renamed finding is carried.  The rest were never
+    separate problems, only the same value on another line, so their
+    decisions move onto this credential where it has none of its own, and the
+    rows go.  -> the finding to fill in.
+    """
+    from app.core.models import FindingAnalysis, Waiver
+
+    rule = row.get("code_rule") or ""
+    lines = [int(n) for n in (row.get("code_lines") or []) if str(n).isdigit()]
+    if not lines and row.get("start_line"):
+        lines = [int(row["start_line"])]
+    if not rule or not lines or not row.get("repository") or not row.get("file"):
+        return finding
+    olds = (session.query(Finding)
+            .filter(Finding.kind == FindingKind.CODE,
+                    Finding.repository == row["repository"],
+                    Finding.file_path == row["file"],
+                    Finding.rule == rule,
+                    Finding.line.in_(lines),
+                    Finding.state.in_([FindingState.OPEN, FindingState.WAIVED]))
+            .order_by(Finding.line, Finding.id)
+            .all())
+    if not olds:
+        return finding
+    if finding is None:
+        finding = olds.pop(0)
+        finding.kind = FindingKind.CREDENTIAL
+        finding.fingerprint = marker
+        # What the code pass said about it is not what the credential pass
+        # says, and engine_severity is only ever filled when empty.
+        finding.engine_severity = ""
+        finding.triage = ""
+        finding.triage_reason = ""
+        counts["renamed"] = counts.get("renamed", 0) + 1
+    session.flush()
+    for old in olds:
+        kept = session.query(Waiver).filter(Waiver.finding_id == finding.id).one_or_none()
+        moving = session.query(Waiver).filter(Waiver.finding_id == old.id).one_or_none()
+        if moving is not None and kept is None:
+            moving.finding_id = finding.id
+            for name in ("excepted", "exception_reason", "exception_by",
+                         "exception_at", "exception_expires_at"):
+                setattr(finding, name, getattr(old, name))
+            if old.state == FindingState.WAIVED:
+                finding.state = FindingState.WAIVED
+        if finding.custom_severity is None and old.custom_severity is not None:
+            for name in ("custom_severity", "custom_severity_reason",
+                         "custom_severity_by", "custom_severity_at"):
+                setattr(finding, name, getattr(old, name))
+        (session.query(FindingAnalysis)
+         .filter(FindingAnalysis.finding_id == old.id)
+         .update({FindingAnalysis.finding_id: finding.id}, synchronize_session=False))
+        session.flush()
+        session.delete(old)
+        counts["folded_into_credential"] = counts.get("folded_into_credential", 0) + 1
+    return finding
+
+
 def _repo_for(session, organization: str, full_name: str, cache: dict,
               connection=None) -> Repository:
     """Find or make the repository row.  Cached so a big scan is not chatty."""
@@ -959,6 +1030,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                     finding = carried
                     counts["renamed"] = counts.get("renamed", 0) + 1
 
+            # A credential semgrep used to report as code.
+            if kind_name == "credential" and row.get("code_rule"):
+                finding = adopt_code_rows(session, finding, marker, row, counts)
+
             if finding is None:
                 finding = Finding(fingerprint=marker,
                                   vuln_id=vuln_id_for(marker),
@@ -1028,6 +1103,46 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                              "disclosure of its own." % claims)
                 if not (finding.triage_reason or "").startswith("The token expired"):
                     finding.triage_reason = note
+
+            # Somebody is exploiting this in the wild, and nothing here says
+            # the code does not ship.  The advisory's own grade is a judgement
+            # about the flaw in the abstract; CISA listing it is an
+            # observation about attackers, and it outranks the abstract.
+            #
+            # 116 of 171 known exploited advisories were medium, among them a
+            # jQuery XSS on 22 pages that load it, which is a work list that
+            # puts "medium" beside "being exploited right now".  Raised to
+            # high, never lowered, and the advisory's grade kept beside it.
+            # Reachability "unlikely" is evidence it does not ship, so those
+            # keep their grade and say why in their likelihood.
+            if (finding.kind == FindingKind.DEPENDENCY
+                    and finding.known_exploited
+                    and (finding.reachability or "") != "unlikely"
+                    and _RANK.get(finding.severity.value, 0) < _RANK["high"]):
+                finding.engine_severity = (finding.engine_severity
+                                           or finding.severity.value)
+                finding.severity = Severity.HIGH
+
+            # The tree says it does not ship.  Since 461e180 reachability only
+            # says unlikely on evidence: the lockfile marks it development
+            # only, only the test suite imports it, or it is a development
+            # dependency nothing the application ships imports.  So the flaw
+            # runs on developer and build machines, not in front of anybody,
+            # and grading it the same as one in production is the noise that
+            # buries the ones that are.  2,640 came in on one scan.
+            #
+            # Low rather than gone: build machines are still machines, and a
+            # malicious input in CI is still an input.  Never a known
+            # exploited one, and never a malicious package, which does its
+            # damage at install time whatever imports it.
+            if (finding.kind == FindingKind.DEPENDENCY
+                    and (finding.reachability or "") == "unlikely"
+                    and not finding.known_exploited
+                    and not getattr(finding, "malicious", False)
+                    and _RANK.get(finding.severity.value, 0) > _RANK["low"]):
+                finding.engine_severity = (finding.engine_severity
+                                           or finding.severity.value)
+                finding.severity = Severity.LOW
 
             # A distribution package in a base image the build upgrades after
             # pulling it.  The image in the registry carries the old version
@@ -1108,6 +1223,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         # with no ceiling is a column somebody eventually fills.
         finding.snippet = (row.get("snippet") or "")[:2000]
         finding.verified = bool(row.get("verified"))
+        # Which engines saw it.  A credential only semgrep saw lives or dies
+        # with the code pass, and the resolve loop reads this to know that.
+        engines = row.get("engines") or ([row["engine"]] if row.get("engine") else [])
+        finding.engines = ", ".join(str(name) for name in engines)[:120]
         # Triage works this out from the value and the path, and it was being
         # dropped here, so every credential read as unrated.  Confirmed means
         # the provider said yes, which is as high as confidence goes.
@@ -1464,6 +1583,16 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                     and finding.repository in partial_code):
                 counts["held_open"] = counts.get("held_open", 0) + 1
                 continue
+            # A credential only semgrep saw comes from the code pass, so it is
+            # silent whenever semgrep did not finish, whatever the credential
+            # pass did.
+            seen_by = {e.strip().lower() for e in str(finding.engines or "").split(",") if e.strip()}
+            if (finding.kind == FindingKind.CREDENTIAL and seen_by == {"semgrep"}):
+                done = passes_done.get(finding.repository)
+                if (finding.repository in partial_code
+                        or (done is not None and "code" not in done)):
+                    counts["held_open"] = counts.get("held_open", 0) + 1
+                    continue
             # CodeQL alerts nobody could fetch this time.  Either the code
             # finding they became, or one still filed the old way as a
             # dependency with no package, which only CodeQL ever produced.

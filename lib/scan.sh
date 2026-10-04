@@ -607,6 +607,9 @@ scan_one_repo() {
     local sg; sg=$(tmp_file semgrep)
     GHSCAN_CODE_COMPLETE=true; GHSCAN_CODE_INCOMPLETE=""
     run_semgrep "$clone_dir" "$full_name" "$sg"
+    # A key semgrep matched is a credential, not a line of code.
+    cfg_bool '.scan.secrets.enabled' true && \
+      semgrep_secrets_route "$clone_dir" "$full_name" "$sg" "$repo_json"
     CODE_PASS_COMPLETE="$GHSCAN_CODE_COMPLETE"
     CODE_PASS_INCOMPLETE="$GHSCAN_CODE_INCOMPLETE"
     CODE_FINDINGS_JSON=$(normalize_semgrep "$sg" "$full_name" "$default_branch" "$(cfg '.github.web_url' 'https://github.com')")
@@ -674,6 +677,20 @@ scan_one_repo() {
     local zz; zz=$(tmp_file zizmor)
     run_zizmor "$clone_dir" "$full_name" "$zz"
     WORKFLOW_JSON=$(normalize_zizmor "$zz" "$full_name" "$default_branch" "$(cfg '.github.web_url' 'https://github.com')")
+    # The same job without a permissions block, once from CodeQL and once from
+    # zizmor.  zizmor's row is kept; see fold_workflow_duplicates.  A failure
+    # here leaves both, which is the old behavior.
+    if [[ "${CODE_FINDINGS_JSON:-[]}" != "[]" && "$WORKFLOW_JSON" != "[]" ]]; then
+      local fold_py; fold_py=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
+      if [[ -n "$fold_py" ]]; then
+        local fold_code fold_wf fold_out
+        fold_code=$(json_file "$CODE_FINDINGS_JSON" fold_code)
+        fold_wf=$(json_file "$WORKFLOW_JSON" fold_wf)
+        fold_out=$("$fold_py" "$GHSCAN_HOME/lib/code_triage.py" --workflow-dupes \
+                     "$fold_code" "$fold_wf" "$clone_dir" 2>/dev/null) \
+          && [[ -n "$fold_out" ]] && CODE_FINDINGS_JSON="$fold_out"
+      fi
+    fi
     local nw; nw=$(printf '%s' "$WORKFLOW_JSON" | jq 'length')
     if (( nw > 0 )); then
       log_warn "[$full_name] $nw workflow finding(s), $(printf '%s' "$WORKFLOW_JSON" | jq '[.[]|select(.severity=="high")]|length') high"
