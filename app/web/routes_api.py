@@ -22,7 +22,7 @@ from app.core.models import (
     SeverityRule as m_SeverityRule, User, UserRole, Waiver, WaiverStatus,
     utcnow,
 )
-from app.core.reports import write_reports
+from app.core.reports import request_rewrite, write_reports
 from app.auth import service as auth_service
 from app.web.security import (
     SESSION_COOKIE, check_csrf, clean_email, clean_int, clean_remote_url,
@@ -257,7 +257,7 @@ async def request_waiver(finding_id: int, request: Request,
 
         if auto_approve:
             # An approval changes what is on disk, so rewrite both files now.
-            write_reports(db)
+            request_rewrite()
 
     message = ("Exception approved and the finding has left both report files."
                if auto_approve else
@@ -360,7 +360,7 @@ async def waive_many(request: Request, user: User = Depends(current_user)):
                source_ip=client_ip(request))
 
         if auto_approve and counts["waived"]:
-            write_reports(db)
+            request_rewrite()
 
     parts = []
     if auto_approve:
@@ -461,7 +461,7 @@ async def delete_many(request: Request, user: User = Depends(current_user)):
         # The report files are the thing other people read.  Leaving them
         # showing rows that no longer exist would be worse than the delete.
         if removed:
-            write_reports(db)
+            request_rewrite()
 
     note = (f"{removed} finding(s) deleted. The next scan files them again if "
             "the code still matches.")
@@ -553,7 +553,7 @@ async def revoke_waivers(request: Request, user: User = Depends(current_user)):
                target=f"{revoked} exceptions", detail="bulk",
                source_ip=client_ip(request))
         if revoked:
-            write_reports(db)
+            request_rewrite()
 
     note = f"{revoked} exception(s) revoked. Their findings are back."
     if skipped:
@@ -627,7 +627,7 @@ async def approve_waivers(request: Request, user: User = Depends(current_user)):
                source_ip=client_ip(request))
         if approved:
             # An approval changes what is on disk, so rewrite both files now.
-            write_reports(db)
+            request_rewrite()
 
     note = (f"{approved} exception(s) approved. Their findings have left both "
             "report files.")
@@ -729,8 +729,17 @@ async def rebuild_reports(request: Request, user: User = Depends(current_user)):
     await check_csrf(request)
     rbac.require(user, "findings.export")
 
+    # Asked for, so it is done now and the count is the answer, but in a
+    # worker thread: rebuilding every open finding on the event loop held up
+    # every other request on the site until it finished.
+    from starlette.concurrency import run_in_threadpool
+
+    def _rebuild():
+        with session_scope() as db:
+            return write_reports(db)
+
+    result = await run_in_threadpool(_rebuild)
     with session_scope() as db:
-        result = write_reports(db)
         record(db, "reports.rebuilt", actor=user.username,
                detail=f"{result['findings']} findings",
                source_ip=client_ip(request))
@@ -2073,7 +2082,7 @@ async def add_exclusion(request: Request, user: User = Depends(current_user)):
         # files so anything it covers is gone from both of them straight away.
         changed = ingest.apply_exceptions(db)
         if changed:
-            write_reports(db)
+            request_rewrite()
 
         # A rule about a value says nothing useful as a path, so name the
         # value.  It is a hash, so the log is still free of the secret itself.
@@ -2329,7 +2338,7 @@ def _reapply_exceptions(db) -> None:
         _clear_exception(finding)
     db.flush()
     ingest.apply_exceptions(db)
-    write_reports(db)
+    request_rewrite()
 
 
 # ---------------------------------------------------------------------------
@@ -2992,7 +3001,7 @@ async def regrade_finding(finding_id: int, request: Request,
         from app.core import learned
         learned.record_basis(db, finding, "person")
 
-        write_reports(db)
+        request_rewrite()
         record(db, "finding.regraded", actor=user.username,
                target=finding.vuln_id or str(finding.id),
                detail=f"{was.value} to {severity.value}: {reason[:200]}",
@@ -3408,7 +3417,7 @@ async def regrade_many(request: Request, user: User = Depends(current_user)):
         db.flush()
 
         if counts["changed"]:
-            write_reports(db)
+            request_rewrite()
         # One audit line for one decision.  The findings carry who and why,
         # so a line each would say the same sentence a hundred times and bury
         # everything around it.
@@ -3467,7 +3476,7 @@ async def clear_regrade(finding_id: int, request: Request,
                                     GradeBasis.source == "person").delete()
         db.flush()
 
-        write_reports(db)
+        request_rewrite()
         record(db, "finding.regrade_cleared", actor=user.username,
                target=finding.vuln_id or str(finding.id),
                detail=f"was {was.value}", source_ip=client_ip(request))
