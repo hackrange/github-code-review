@@ -17,6 +17,8 @@ import json
 import logging
 import os
 import tempfile
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -617,6 +619,45 @@ def output_dir(session=None) -> Path:
         # is not somewhere anybody mounted a volume.
         return fallback
     return path
+
+
+# A rewrite somebody asked for and nobody has done yet.  The files are an
+# export of every open finding, tens of thousands of rows, and rebuilding them
+# inside a request kept the person waiting the better part of a minute and,
+# because those handlers run on the event loop, kept everybody else waiting
+# too.  A request now asks, and a thread does it a few seconds later, once for
+# however many asked in between.
+_rewrite_lock = threading.Lock()
+_rewrite_state = {"due": False, "thread": None}
+
+
+def request_rewrite(delay: float = 5.0) -> None:
+    """Ask for the report files to be rebuilt soon, off the request."""
+    with _rewrite_lock:
+        _rewrite_state["due"] = True
+        worker = _rewrite_state["thread"]
+        if worker is not None and worker.is_alive():
+            return
+        worker = threading.Thread(target=_rewriter, args=(delay,),
+                                  name="report-rewrite", daemon=True)
+        _rewrite_state["thread"] = worker
+        worker.start()
+
+
+def _rewriter(delay: float) -> None:
+    from app.core.db import session_scope
+    while True:
+        time.sleep(delay)
+        with _rewrite_lock:
+            if not _rewrite_state["due"]:
+                _rewrite_state["thread"] = None
+                return
+            _rewrite_state["due"] = False
+        try:
+            with session_scope() as db:
+                write_reports(db)
+        except Exception:
+            log.exception("could not rebuild the report files, the next change will try again")
 
 
 def write_reports(session, reports_dir: Path = None) -> dict:

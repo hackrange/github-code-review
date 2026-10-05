@@ -4034,6 +4034,7 @@ async def accept_learned(rule_id: int, request: Request,
     from urllib.parse import quote
 
     from app.core import learned
+    from app.core.reports import request_rewrite
     from app.core.models import LearnedRule
 
     with session_scope() as db:
@@ -4048,7 +4049,7 @@ async def accept_learned(rule_id: int, request: Request,
         rule.global_accepted_at = utcnow()
         moved = learned.apply_rule_now(db, rule, user.username)
         if moved:
-            write_reports(db)
+            request_rewrite()
         record(db, "learned_rule.accepted", actor=user.username,
                target=f"rule {rule.id}", detail=learned.describe(rule)[:400],
                source_ip=client_ip(request))
@@ -4065,6 +4066,7 @@ async def retire_learned(rule_id: int, request: Request,
     from urllib.parse import quote
 
     from app.core import learned
+    from app.core.reports import request_rewrite
     from app.core.models import LearnedRule
 
     form = await request.form()
@@ -4075,7 +4077,7 @@ async def retire_learned(rule_id: int, request: Request,
         if rule is None or rule.retired_at is not None:
             raise HTTPException(status_code=404, detail="No such live rule.")
         restored = learned.retire(db, rule, user.username, why)
-        write_reports(db)
+        request_rewrite()
         record(db, "learned_rule.retired", actor=user.username,
                target=f"rule {rule.id}", detail=why[:400],
                source_ip=client_ip(request))
@@ -4091,6 +4093,7 @@ async def test_learned(request: Request, user: User = Depends(current_user)):
     from urllib.parse import quote
 
     from app.core import learned
+    from app.core.reports import request_rewrite
     from app.core.models import LearnedRule
 
     failed = []
@@ -4103,7 +4106,7 @@ async def test_learned(request: Request, user: User = Depends(current_user)):
                                "failed its synthetic test: " + problems[0])
                 failed.append(rule.id)
         if failed:
-            write_reports(db)
+            request_rewrite()
         record(db, "learned_rule.tested", actor=user.username,
                target=f"{len(live)} rules", detail=f"failed: {failed}"[:400],
                source_ip=client_ip(request))
