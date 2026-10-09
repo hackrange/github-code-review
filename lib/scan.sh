@@ -641,7 +641,9 @@ scan_one_repo() {
     HISTORY_COMPLETE="false"
     HISTORY_FROM=""
     _emit "partial" "still running; finished so far: ${PASSES_DONE:-none}"
-  else
+  elif cfg_bool '.scan.secrets.enabled' true; then
+    # Only a pass that ran says it finished.  Switched off in the settings,
+    # it read nothing, and naming it here closed every credential as fixed.
     _checkpoint secrets
   fi
 
@@ -762,7 +764,12 @@ scan_one_repo() {
     esac
   fi
 
-  if (( full_passes )); then _checkpoint code; fi
+  # The same rule for every pass below: named finished only when it ran.
+  # Switched off in the settings or skipped by scan scope, it read nothing,
+  # and naming it closed every finding of its kind on the next ingest.
+  if (( full_passes )) && cfg_bool '.scan.code_analysis.enabled' true; then
+    _checkpoint code
+  fi
 
   # --- SBOM + licensing -----------------------------------------------------
   if (( full_passes )) && cfg_bool '.scan.sbom.enabled' true; then
@@ -882,7 +889,12 @@ scan_one_repo() {
   # only when the pass that produces its kind is named here, and a kind that
   # never names itself would have every finding of that kind closed by the
   # first run that reported none.
-  if (( full_passes )); then _checkpoint misconfigurations; fi
+  # Both halves, because each makes its own rows and either one switched off
+  # would have its rows read as fixed.
+  if (( full_passes )) && cfg_bool '.scan.iac.enabled' true \
+     && cfg_bool '.scan.workflows.enabled' true; then
+    _checkpoint misconfigurations
+  fi
 
   # Everything the default-branch passes produced now says which branches it
   # speaks for.  Done here, in one place, because the workflow findings are
@@ -904,7 +916,9 @@ scan_one_repo() {
     log_info "[$full_name] $(printf '%s' "$prs" | jq 'length') pull request(s) from $(printf '%s' "$PULLS_JSON" | jq '[.[].username] | unique | length') user(s)"
   fi
 
-  if (( full_passes )); then _checkpoint sbom; fi
+  if (( full_passes )) && cfg_bool '.scan.sbom.enabled' true; then
+    _checkpoint sbom
+  fi
 
   # --- vulnerabilities ------------------------------------------------------
   if (( full_passes )) && cfg_bool '.scan.vulnerabilities.enabled' true; then
@@ -957,7 +971,7 @@ scan_one_repo() {
   fi
 
   cfg_bool '.clone.keep_clones' false || rm -rf -- "$clone_dir"
-  if (( full_passes )); then
+  if (( full_passes )) && cfg_bool '.scan.vulnerabilities.enabled' true; then
     PASSES_DONE="${PASSES_DONE:+$PASSES_DONE }vulnerabilities"
   fi
   _emit "ok" ""
