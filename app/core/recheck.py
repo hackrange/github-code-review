@@ -71,8 +71,26 @@ def _shallow_clone(url: str, branch: str, dest: Path, cred: list) -> tuple:
         detail = (done.stderr or "").strip().splitlines()
         # Never echo a credential back to a page.
         last = detail[-1] if detail else "git would not clone it"
-        return False, last[:200]
+        return False, _explain_clone(last)[:300]
     return True, ""
+
+
+def _explain_clone(line: str) -> str:
+    """git's words for a repository the token cannot see, made accurate.
+
+    GitHub answers a private repository the token has no access to as if it
+    did not exist, and git reports that as the token failing.  The token is
+    usually fine: it still reads everything else in the account.
+    """
+    lowered = line.lower()
+    if ("authentication failed" in lowered or "repository not found" in lowered
+            or "could not read username" in lowered):
+        return ("this connection's token cannot see the repository.  Either "
+                "it lost access (removed from the token, or the account was "
+                "taken off the repository), the repository was renamed or "
+                "deleted, or the token itself stopped working.  Test the "
+                "connection on the Connections page to see which")
+    return line
 
 
 def _english(names) -> str:

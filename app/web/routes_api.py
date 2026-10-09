@@ -1418,19 +1418,32 @@ async def test_connection(connection_id: int, request: Request,
         name = row.name
 
     result = check_credential(connection_id=connection_id)
+    status = "ok" if result["ok"] else "error"
+    if result["ok"]:
+        # Signed in says nothing about what it can read.  A repository the
+        # token lost is never listed, so it quietly stops being scanned.
+        from app.core import repo_reach
+        reach = repo_reach.check(connection_id)
+        if reach["missing"]:
+            # First, so the short line on the connections table shows it.
+            result["detail"] = reach["detail"] + "  " + result["detail"]
+        elif reach["detail"]:
+            result["detail"] = result["detail"] + "  " + reach["detail"]
+        if reach["missing"]:
+            status = "partial"
 
     with session_scope() as db:
         row = connection_store.by_id(db, connection_id)
         if row is not None:
             row.last_checked_at = utcnow()
-            row.last_status = "ok" if result["ok"] else "error"
+            row.last_status = status
             row.last_detail = result["detail"][:1000]
         record(db, "connection.tested", actor=user.username, target=name,
-               outcome="ok" if result["ok"] else "error",
-               detail=result["detail"][:400], source_ip=client_ip(request))
+               outcome=status, detail=result["detail"][:400],
+               source_ip=client_ip(request))
 
-    kind = "ok" if result["ok"] else "error"
-    return redirect(f"/connections?msg={quote(name + ': ' + result['detail'][:250])}"
+    kind = {"ok": "ok", "partial": "warn"}.get(status, "error")
+    return redirect(f"/connections?msg={quote(name + ': ' + result['detail'][:800])}"
                     f"&kind={kind}")
 
 

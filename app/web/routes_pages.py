@@ -1742,6 +1742,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        scope_text=scan_scope.describe(
                            _scope_rule, (about or {}).get("default_branch", "")),
                        can_scope=rbac.can(user, "repo.scope"),
+                       has_diagram=row.repository in _diagram_flags(db, user)[0],
                        certification=certification,
                        exemption=exemption,
                        covering=covering,
@@ -2966,8 +2967,8 @@ def connections_page(request: Request, msg: str = "", kind: str = "",
                        if rbac.can(user, "settings.write") else []),
             can_write=rbac.can(user, "settings.write"),
             can_scope=rbac.can(user, "repo.scope"),
-            message=clean_text(msg, "message", limit=400, required=False),
-            message_kind="error" if kind == "error" else "ok",
+            message=clean_text(msg, "message", limit=1000, required=False),
+            message_kind=kind if kind in ("error", "warn") else "ok",
         )
         return page(request, "connections.html", **context)
 

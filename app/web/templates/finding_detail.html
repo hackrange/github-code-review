@@ -568,6 +568,8 @@
              because it decides whether this finding is on the work list. #}
           <div class="faint small">Scan scope: {{ scope_text }}
             {%- if can_scope %} &middot; <a href="{{ base }}/repositories/{{ f.repo_id }}/scope">change</a>{% endif %}</div>
+          {% if has_diagram and f.repo_id %}<div class="small"><a href="{{ base }}/repositories/{{ f.repo_id }}/diagram">Show diagram</a>
+            <span class="faint">how this repository fits together</span></div>{% endif %}
         </td></tr>
         {# Which branch, and whether that is the one that ships.
            The same finding on the default branch and on a feature branch

@@ -20,7 +20,7 @@
 </div>
 
 {% if message %}
-<div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
+<div class="card {{ {'error': 'bad', 'warn': 'warn'}.get(message_kind, 'ok') }}">
   <div class="small">{{ message }}</div>
 </div>
 {% endif %}
@@ -87,6 +87,7 @@
           <td class="small">
             {% if c.last_status == 'ok' %}<span class="badge ok">ok</span>
             {% elif c.last_status == 'error' %}<span class="badge critical" title="{{ c.last_detail }}">error</span>
+            {% elif c.last_status == 'partial' %}<span class="badge pending" title="{{ c.last_detail }}">some repositories unreachable</span>
             {% endif %}
             <div class="faint" style="font-size:.75rem">{{ (c.last_detail or '')[:70] }}</div>
           </td>
