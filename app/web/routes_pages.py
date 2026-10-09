@@ -1913,7 +1913,12 @@ def certification_detail(request: Request, repo: str = "", branch: str = "",
                  .filter(Finding.repository == repository))
         if branch_name:
             found = found.filter(Finding.branch == branch_name)
+        drawn, can_draw = _diagram_flags(db, user)
         context = _shared(db, user)
+        # A certified repository is still a repository somebody wants to
+        # understand, so its diagram is offered here too.
+        context.update(repo_id=owner.id, drawn=repository in drawn,
+                       can_draw=can_draw)
         context.update(active_page="repositories", repository=repository,
                        branch=branch_name, row=row, state=state, head=head,
                        pushed_at=owner.pushed_at,
@@ -2049,18 +2054,13 @@ def repositories(request: Request, user: User = Depends(current_user),
                 "default_out": scan_scope.default_left_out(
                     rule, row.default_branch)}
 
-        # Which repositories have a drawing, and whether this person may make one.
-        from app.core import ai as _ai
-        from app.core.models import RepoDiagram
-        drawn = {name for (name,) in db.query(RepoDiagram.repository)
-                 .filter(RepoDiagram.graph.isnot(None))
-                 .filter(RepoDiagram.graph != "").all()}
-        _ai_cfg = _ai.config(db)
-        can_draw = (rbac.can(user, "repo.diagram") and _ai.enabled(_ai_cfg)
-                    and not _ai.missing(_ai_cfg))
+        drawn, can_draw = _diagram_flags(db, user)
 
         context = _shared(db, user)
-        context.update(drawn=drawn, can_draw=can_draw)
+        # The certified card names repositories, and its diagram link needs
+        # the id the main table already has.
+        context.update(drawn=drawn, can_draw=can_draw,
+                       repo_ids={row.full_name: row.id for row in rows})
         context.update(scopes=scopes, can_scope=rbac.can(user, "repo.scope"),
                        flash=clean_text(msg, "message", limit=300,
                                         required=False),
@@ -2127,6 +2127,20 @@ def repository_scope(repo_id: int, request: Request, msg: str = "",
                                         required=False),
                        flash_kind=notice_class(kind))
         return page(request, "scope.html", **context)
+
+
+def _diagram_flags(db, user) -> tuple:
+    """Which repositories have a drawing, and whether this person may make one."""
+    from app.core import ai
+    from app.core.models import RepoDiagram
+
+    drawn = {name for (name,) in db.query(RepoDiagram.repository)
+             .filter(RepoDiagram.graph.isnot(None))
+             .filter(RepoDiagram.graph != "").all()}
+    cfg = ai.config(db)
+    can_draw = (rbac.can(user, "repo.diagram") and ai.enabled(cfg)
+                and not ai.missing(cfg))
+    return drawn, can_draw
 
 
 def _diagram_context(db, user, repo) -> dict:

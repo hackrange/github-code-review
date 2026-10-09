@@ -4,12 +4,14 @@
    a layout runs that whole page, which fails on everything the layout expects
    in its context and has nothing to do with a badge. #}
 {% import "_cert_badge.html" as cb %}
+{% import "_diagram_actions.html" as da with context %}
 {% block title %}{{ repository }} &middot; Git Code Review{% endblock %}
 {% block content %}
 <div class="page-head">
   <div><h1 class="mono">{{ repository }}</h1>
     <div class="faint small">on {{ branch or 'the default branch' }}</div></div>
   <div class="page-actions">
+    {{ da.diagram_actions(repo_id, drawn, can_draw, buttons=True) }}
     <a class="btn" href="{{ base }}/repositories">Back to repositories</a>
   </div>
 </div>

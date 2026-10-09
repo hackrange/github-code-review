@@ -1,0 +1,13 @@
+{# Show, create or re-create a repository's diagram, wherever a repository is.
+   Imported with context, so base and csrf_token come from the page. #}
+{% macro diagram_actions(repo_id, drawn, can_draw, buttons=False) -%}
+  {%- if drawn %}
+  <a class="{{ 'btn' if buttons else 'small' }}" href="{{ base }}/repositories/{{ repo_id }}/diagram">Show diagram</a>
+  {%- endif %}
+  {%- if can_draw %}
+  <form method="post" action="{{ base }}/repositories/{{ repo_id }}/diagram" style="display:inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="{{ 'btn' if buttons else 'linkish small' }}" type="submit">{{ 'Re-create diagram' if drawn else 'Create diagram' }}</button>
+  </form>
+  {%- endif %}
+{%- endmacro %}

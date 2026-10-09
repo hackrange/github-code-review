@@ -5,6 +5,7 @@
   <div class="faint small">{{ rows|length }} you can see</div></div></div>
 
 {% import "_cert_badge.html" as cb %}
+{% import "_diagram_actions.html" as da with context %}
 
 
 {# The security sign offs.
@@ -70,7 +71,10 @@
              The certify and withdraw forms live on a finding, which works
              until the branch has no findings on it, and a branch a scan signed
              off is exactly that.  Then there was no route to it at all. #}
-          <td class="mono"><a href="{{ base }}/certifications?repo={{ row.repository | urlencode }}{% if row.branch %}&branch={{ row.branch | urlencode }}{% endif %}">{{ row.repository }}</a></td>
+          <td class="mono"><a href="{{ base }}/certifications?repo={{ row.repository | urlencode }}{% if row.branch %}&branch={{ row.branch | urlencode }}{% endif %}">{{ row.repository }}</a>
+            {%- if row.repository in repo_ids and (row.repository in drawn or can_draw) %}
+            <div class="diagram-actions">{{ da.diagram_actions(repo_ids[row.repository], row.repository in drawn, can_draw) }}</div>
+            {%- endif %}</td>
           {# The branch name, in full and allowed to wrap.  A name like
              Feature/DIGI-1734-add-notification-to-approver in an unpadded
              cell reads as an empty one, which looks like a branch that has
@@ -216,15 +220,8 @@
             {%- if cert.automatic %}<span class="faint small"> by a scan</span>
             {%- endif %}{% endif %}
             {# A drawing of how the default branch fits together. #}
-            {%- if r.full_name in drawn %}
-            <div><a class="small" href="{{ base }}/repositories/{{ r.id }}/diagram">Show diagram</a>
-              {%- if can_draw %} &middot; <form method="post" action="{{ base }}/repositories/{{ r.id }}/diagram" style="display:inline">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="linkish small" type="submit">Re-create diagram</button></form>{% endif %}</div>
-            {%- elif can_draw %}
-            <div><form method="post" action="{{ base }}/repositories/{{ r.id }}/diagram" style="display:inline">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="linkish small" type="submit">Create diagram</button></form></div>
+            {%- if r.full_name in drawn or can_draw %}
+            <div>{{ da.diagram_actions(r.id, r.full_name in drawn, can_draw) }}</div>
             {%- endif %}</td>
           {% set sc = scopes.get(r.full_name, {}) %}
           <td class="small">
