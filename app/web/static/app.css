@@ -228,12 +228,10 @@ a.stat:hover .l { color: var(--text); }
 .diagram-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px;
                   background: #ffffff; margin: .5rem 0; }
 .diagram-svg { display: block; max-width: none; }
-/* Diagram links under a repository name set in the code font. */
+/* Diagram buttons under a repository name set in the code font. */
 .diagram-actions { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
-                   Roboto, "Helvetica Neue", Arial, sans-serif; font-size: .85rem; }
-/* A form button that reads as a link, for an action in a table cell. */
-button.linkish { background: none; border: 0; padding: 0; color: inherit;
-                 cursor: pointer; font: inherit; text-decoration: underline; }
+                   Roboto, "Helvetica Neue", Arial, sans-serif;
+                   display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .3rem; }
 
 /* Saying a branch is not one anybody will sign off.  Set apart from the sign
    off above it by a line and some space, because the two are opposite claims

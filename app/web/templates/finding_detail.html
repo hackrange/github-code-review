@@ -192,6 +192,12 @@
     {% endif %}
   </div>
   <div class="page-actions">
+    {# The repository's diagram, up here where it is seen.  Anybody who can
+       read the finding can open a drawing that exists.  Administrators can
+       draw one, or draw it again, when AI analysis is set up. #}
+    {% if f.repo_id and (has_diagram or can_draw) %}
+    {{ da.diagram_actions(f.repo_id, has_diagram, can_draw, buttons=True) }}
+    {% endif %}
     {# A dependency finding has no file to open: its url is the advisory, and
        a button offering to open the file that then leaves for a security
        tracker is the kind of small lie that makes people stop trusting the
@@ -569,13 +575,6 @@
              because it decides whether this finding is on the work list. #}
           <div class="faint small">Scan scope: {{ scope_text }}
             {%- if can_scope %} &middot; <a href="{{ base }}/repositories/{{ f.repo_id }}/scope">change</a>{% endif %}</div>
-          {# Developers see a drawing that exists.  Administrators can draw
-             one, or draw it again, when AI analysis is set up. #}
-          {% if f.repo_id and (has_diagram or can_draw) %}
-          <div class="diagram-actions small">
-            {{ da.diagram_actions(f.repo_id, has_diagram, can_draw) }}
-            <span class="faint">how this repository fits together</span></div>
-          {% endif %}
         </td></tr>
         {# Which branch, and whether that is the one that ships.
            The same finding on the default branch and on a feature branch

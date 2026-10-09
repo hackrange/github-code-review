@@ -221,7 +221,7 @@
             {%- endif %}{% endif %}
             {# A drawing of how the default branch fits together. #}
             {%- if r.full_name in drawn or can_draw %}
-            <div>{{ da.diagram_actions(r.id, r.full_name in drawn, can_draw) }}</div>
+            <div class="diagram-actions">{{ da.diagram_actions(r.id, r.full_name in drawn, can_draw) }}</div>
             {%- endif %}</td>
           {% set sc = scopes.get(r.full_name, {}) %}
           <td class="small">
