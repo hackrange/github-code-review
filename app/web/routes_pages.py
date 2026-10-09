@@ -1709,6 +1709,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
         from app.core import scan_scope
 
         _scope_rule = scan_scope.rule_for(db, row.repository)
+        _drawn, _can_draw = _diagram_flags(db, user)
         branch_scan = {name: dict(zip(("full", "source"),
                                       _scope_rule.full_scan(name)))
                        for name in (on_branches or [row.branch or ""])}
@@ -1742,7 +1743,8 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        scope_text=scan_scope.describe(
                            _scope_rule, (about or {}).get("default_branch", "")),
                        can_scope=rbac.can(user, "repo.scope"),
-                       has_diagram=row.repository in _diagram_flags(db, user)[0],
+                       has_diagram=row.repository in _drawn,
+                       can_draw=_can_draw,
                        certification=certification,
                        exemption=exemption,
                        covering=covering,

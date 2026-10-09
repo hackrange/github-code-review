@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Finding &middot; Git Code Review{% endblock %}
 {% block content %}
+{% import "_diagram_actions.html" as da with context %}
 {# What is known about this advisory, and where the rest of it is.
    Not an attempt to reproduce the advisory: the national databases and the
    distribution trackers do that, and doing it worse from a stale copy would
@@ -568,8 +569,13 @@
              because it decides whether this finding is on the work list. #}
           <div class="faint small">Scan scope: {{ scope_text }}
             {%- if can_scope %} &middot; <a href="{{ base }}/repositories/{{ f.repo_id }}/scope">change</a>{% endif %}</div>
-          {% if has_diagram and f.repo_id %}<div class="small"><a href="{{ base }}/repositories/{{ f.repo_id }}/diagram">Show diagram</a>
-            <span class="faint">how this repository fits together</span></div>{% endif %}
+          {# Developers see a drawing that exists.  Administrators can draw
+             one, or draw it again, when AI analysis is set up. #}
+          {% if f.repo_id and (has_diagram or can_draw) %}
+          <div class="diagram-actions small">
+            {{ da.diagram_actions(f.repo_id, has_diagram, can_draw) }}
+            <span class="faint">how this repository fits together</span></div>
+          {% endif %}
         </td></tr>
         {# Which branch, and whether that is the one that ships.
            The same finding on the default branch and on a feature branch
