@@ -331,7 +331,10 @@ _FILL = {"user": ("#e8f1fb", "#2f6db3"), "client": ("#e8f1fb", "#2f6db3"),
          "registry": ("#fff8d6", "#8a6d00"), "repository": ("#fff8d6", "#8a6d00"),
          "config": ("#f1f3f5", "#55606b")}
 
-NODE_W, NODE_H, COL_GAP, ROW_GAP, MARGIN = 200, 62, 110, 30, 30
+NODE_W, NODE_H, ROW_GAP, MARGIN = 200, 62, 30, 30
+# Between columns: a slot wide enough for a wrapped label, a lane where a line
+# only passes through, and the gap either side of each that the curves use.
+LABEL_W, LANE_W, SLOT_GAP, LABEL_CHARS = 130, 24, 34, 20
 
 
 def _wrap(text: str, width: int, lines: int) -> list:
@@ -390,79 +393,176 @@ def _layers(nodes, edges) -> dict:
 
 
 def draw(graph: dict) -> str:
-    """The component diagram as SVG, left to right, wider than tall."""
+    """The component diagram as SVG, left to right, wider than tall.
+
+    Every edge label gets a slot of its own in a narrow column between two
+    columns of components, and sits above its line inside that slot.  An edge
+    that skips a column runs through an empty lane in it rather than under
+    whatever is drawn there.  So nothing is ever painted over a line or a box,
+    which is what made the first drawings hard to read.
+    """
     nodes, edges = graph.get("nodes") or [], graph.get("edges") or []
     if not nodes:
         return ""
     layer = _layers(nodes, edges)
-    columns = {}
+    by_id = {n["id"]: n for n in nodes}
+
+    # Real components on even columns, label slots and lanes on odd ones.
+    kind, height, column, chains, back = {}, {}, {}, [], []
     for n in nodes:
-        columns.setdefault(layer[n["id"]], []).append(n["id"])
-    # Order each column by where its inputs sit, twice over, so lines cross
-    # less.  Not optimal; good enough to read.
+        kind[n["id"]] = "node"
+        height[n["id"]] = NODE_H
+        column[n["id"]] = layer[n["id"]] * 2
+    for i, edge in enumerate(edges):
+        a, b = edge["from"], edge["to"]
+        if layer[b] <= layer[a]:
+            back.append(edge)
+            continue
+        chain = [a]
+        lines = _wrap(edge["label"], LABEL_CHARS, 3) if edge["label"] else []
+        for col in range(column[a] + 1, column[b]):
+            vid = "~%d.%d" % (i, col)
+            if col == column[a] + 1 and lines:
+                kind[vid], height[vid] = "label", 14 * len(lines) + 8
+            else:
+                kind[vid], height[vid] = "lane", 10
+            column[vid] = col
+            chain.append(vid)
+        chain.append(b)
+        chains.append((chain, lines))
+
+    columns = {}
+    for vid in column:
+        columns.setdefault(column[vid], []).append(vid)
+    preds, succs = {v: [] for v in column}, {v: [] for v in column}
+    for chain, _ in chains:
+        for a, b in zip(chain, chain[1:]):
+            preds[b].append(a)
+            succs[a].append(b)
+
+    # Order each column by where its neighbors sit, sweeping both ways, so
+    # lines cross less.  Not optimal; good enough to read.
     position = {}
     for col in sorted(columns):
-        for i, nid in enumerate(columns[col]):
-            position[nid] = i
-    preds = {n["id"]: [] for n in nodes}
-    for e in edges:
-        preds[e["to"]].append(e["from"])
-    for _ in range(2):
-        for col in sorted(columns):
-            if col == 0:
-                continue
-            columns[col].sort(key=lambda nid: (
-                sum(position[p] for p in preds[nid]) / len(preds[nid])
-                if preds[nid] else position[nid]))
-            for i, nid in enumerate(columns[col]):
-                position[nid] = i
+        for i, vid in enumerate(columns[col]):
+            position[vid] = i
 
-    tallest = max(len(v) for v in columns.values())
-    width = MARGIN * 2 + len(columns) * NODE_W + (len(columns) - 1) * COL_GAP
-    height = MARGIN * 2 + tallest * NODE_H + (tallest - 1) * ROW_GAP + 40
-    xy = {}
+    def sweep(order, links):
+        for col in order:
+            members = columns[col]
+            members.sort(key=lambda v: (
+                sum(position[p] for p in links[v]) / len(links[v])
+                if links[v] else position[v]))
+            for i, vid in enumerate(members):
+                position[vid] = i
+
+    cols = sorted(columns)
+    for _ in range(3):
+        sweep(cols[1:], preds)
+        sweep(cols[-2::-1], succs)
+
+    def gap(above, below):
+        boxes = (kind[above] == "node") + (kind[below] == "node")
+        return (6, 14, ROW_GAP)[boxes]
+
+    def stack(members):
+        return (sum(height[v] for v in members)
+                + sum(gap(a, b) for a, b in zip(members, members[1:])))
+
+    tallest = max(stack(m) for m in columns.values())
+    widths = {col: (NODE_W if col % 2 == 0 else
+                    (LABEL_W if any(kind[v] == "label" for v in columns[col])
+                     else LANE_W))
+              for col in range(max(cols) + 1)}
+    left, x = {}, MARGIN
+    for col in range(max(cols) + 1):
+        left[col] = x
+        x += widths[col] + SLOT_GAP
+    width = x - SLOT_GAP + MARGIN
+    lift = 40 if back else 0
+    height_total = MARGIN * 2 + tallest + lift
+
+    box = {}
     for col, members in columns.items():
-        offset = (tallest - len(members)) * (NODE_H + ROW_GAP) / 2
-        for i, nid in enumerate(members):
-            xy[nid] = (MARGIN + col * (NODE_W + COL_GAP),
-                       MARGIN + offset + i * (NODE_H + ROW_GAP))
+        y = MARGIN + lift + (tallest - stack(members)) / 2
+        for i, vid in enumerate(members):
+            box[vid] = (left[col], y, widths[col], height[vid])
+            if i + 1 < len(members):
+                y += height[vid] + gap(vid, members[i + 1])
+
+    # Where each line meets a box: spread over the middle of the side, in the
+    # order of what is at the other end, so arrows into one box do not land
+    # on the same point.
+    def ports(side_links):
+        spot = {}
+        for vid, links in side_links.items():
+            if kind[vid] != "node" or not links:
+                continue
+            others = sorted(links, key=lambda o: box[o][1] + box[o][3] / 2)
+            x0, y0, w0, h0 = box[vid]
+            for k, other in enumerate(others):
+                spot[(vid, other)] = y0 + h0 * (k + 1) / (len(others) + 1)
+        return spot
+
+    out_port, in_port = ports(succs), ports(preds)
+
+    def line_y(vid, other, outgoing):
+        x0, y0, w0, h0 = box[vid]
+        if kind[vid] == "node":
+            return (out_port if outgoing else in_port)[(vid, other)]
+        return y0 + h0 - 5        # a slot's line runs under its words
 
     e = html.escape
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" class="diagram-svg" '
-             f'viewBox="0 0 {int(width)} {int(height)}" width="{int(width)}" '
-             f'height="{int(height)}" font-family="Helvetica, Arial, sans-serif">',
+             f'viewBox="0 0 {int(width)} {int(height_total)}" width="{int(width)}" '
+             f'height="{int(height_total)}" font-family="Helvetica, Arial, sans-serif">',
              '<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" '
              'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
              '<path d="M0,0 L10,5 L0,10 z" fill="#6b7280"/></marker></defs>',
-             f'<rect width="{int(width)}" height="{int(height)}" fill="#ffffff"/>']
+             f'<rect width="{int(width)}" height="{int(height_total)}" fill="#ffffff"/>']
 
-    labels = []
-    for edge in edges:
-        x1, y1 = xy[edge["from"]]
-        x2, y2 = xy[edge["to"]]
-        if x2 > x1:
-            sx, sy = x1 + NODE_W, y1 + NODE_H / 2
-            tx, ty = x2, y2 + NODE_H / 2
-            bend = (tx - sx) / 2
-            d = f"M{sx:.0f},{sy:.0f} C{sx + bend:.0f},{sy:.0f} {tx - bend:.0f},{ty:.0f} {tx:.0f},{ty:.0f}"
-            mx, my = (sx + tx) / 2, (sy + ty) / 2
-        else:
-            # Backwards or within one column: loop over the top of both.
-            sx, sy = x1 + NODE_W / 2, y1
-            tx, ty = x2 + NODE_W / 2, y2
-            lift = min(sy, ty) - 28 - 6 * (len(labels) % 4)
-            d = f"M{sx:.0f},{sy:.0f} C{sx:.0f},{lift:.0f} {tx:.0f},{lift:.0f} {tx:.0f},{ty:.0f}"
-            mx, my = (sx + tx) / 2, lift + 8
-        parts.append(f'<path d="{d}" fill="none" stroke="#9aa3ad" stroke-width="1.4" '
-                     f'marker-end="url(#arrow)"/>')
+    stroke = 'fill="none" stroke="#9aa3ad" stroke-width="1.4"'
+    for chain, lines in chains:
+        d = []
+        for a, b in zip(chain, chain[1:]):
+            ax, _, aw, _ = box[a]
+            bx = box[b][0]
+            sy, ty = line_y(a, b, True), line_y(b, a, False)
+            sx = ax + aw
+            if not d:
+                d.append(f"M{sx:.0f},{sy:.0f}")
+            bend = (bx - sx) / 2
+            d.append(f"C{sx + bend:.0f},{sy:.0f} {bx - bend:.0f},{ty:.0f} {bx:.0f},{ty:.0f}")
+            if kind[b] != "node":
+                # Straight through the slot or lane.
+                d.append(f"L{bx + box[b][2]:.0f},{ty:.0f}")
+        parts.append(f'<path d="{" ".join(d)}" {stroke} marker-end="url(#arrow)"/>')
+        if lines:
+            x0, y0, w0, h0 = box[chain[1]]
+            for k, text in enumerate(lines):
+                parts.append(f'<text x="{x0 + w0 / 2:.0f}" y="{y0 + 12 + k * 14:.0f}" '
+                             f'text-anchor="middle" font-size="10.5" fill="#4b5563">'
+                             f'{e(text)}</text>')
+
+    # Loops back to an earlier column go over the top, label above the arc.
+    for k, edge in enumerate(back):
+        x1, y1, w1, _ = box[edge["from"]]
+        x2, y2, w2, _ = box[edge["to"]]
+        sx, tx = x1 + w1 / 2, x2 + w2 / 2
+        top = MARGIN + 14 + 6 * (k % 3)
+        parts.append(f'<path d="M{sx:.0f},{y1:.0f} C{sx:.0f},{top:.0f} {tx:.0f},{top:.0f} '
+                     f'{tx:.0f},{y2:.0f}" {stroke} marker-end="url(#arrow)"/>')
         if edge["label"]:
-            labels.append((mx, my, edge["label"]))
+            parts.append(f'<text x="{(sx + tx) / 2:.0f}" y="{top - 2:.0f}" '
+                         f'text-anchor="middle" font-size="10.5" fill="#4b5563">'
+                         f'{e(_wrap(edge["label"], 40, 1)[0])}</text>')
+
     for n in nodes:
-        x, y = xy[n["id"]]
-        fill, stroke = _FILL.get(n["kind"], _FILL["module"])
+        x, y, _, _ = box[n["id"]]
+        fill, edge_color = _FILL.get(n["kind"], _FILL["module"])
         shape = (f'<rect x="{x:.0f}" y="{y:.0f}" width="{NODE_W}" height="{NODE_H}" '
                  f'rx="{18 if n["kind"] in ("datastore", "queue") else 6}" '
-                 f'fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>')
+                 f'fill="{fill}" stroke="{edge_color}" stroke-width="1.5"/>')
         parts.append(f'<g><title>{e(n["detail"])}</title>{shape}')
         lines = _wrap(n["label"], 26, 2)
         top = y + (24 if len(lines) == 1 else 18)
@@ -471,15 +571,8 @@ def draw(graph: dict) -> str:
                          f'text-anchor="middle" font-size="13" font-weight="600" '
                          f'fill="#1f2933">{e(line)}</text>')
         parts.append(f'<text x="{x + NODE_W / 2:.0f}" y="{y + NODE_H - 9:.0f}" '
-                     f'text-anchor="middle" font-size="10" fill="{stroke}">'
+                     f'text-anchor="middle" font-size="10" fill="{edge_color}">'
                      f'{e(n["kind"])}</text></g>')
-    # Labels last, on a white backing, so a line never runs through one.
-    for mx, my, text in labels:
-        w = 6.2 * len(text) + 8
-        parts.append(f'<rect x="{mx - w / 2:.0f}" y="{my - 9:.0f}" width="{w:.0f}" '
-                     f'height="14" rx="3" fill="#ffffff" opacity="0.92"/>'
-                     f'<text x="{mx:.0f}" y="{my + 2:.0f}" text-anchor="middle" '
-                     f'font-size="10" fill="#4b5563">{e(text)}</text>')
     parts.append("</svg>")
     return "".join(parts)
 
