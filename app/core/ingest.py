@@ -1796,6 +1796,17 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         log.exception("could not record access, carrying on with the findings")
         counts["access"] = 0
 
+    # Anything on branches that do not ship gets flagged the same way.  New
+    # findings arrive unflagged, and a finding that moved onto a branch that
+    # ships has to come back.
+    try:
+        from app.core import scan_scope
+        with session.begin_nested():
+            counts["scope_changed"] = scan_scope.refresh(session, touched_repos)
+    except Exception:
+        log.exception("could not apply the scan scope, carrying on")
+        counts["scope_changed"] = 0
+
     # Anything an exclusion covers gets flagged now, so it never reaches the
     # report files in the first place.
     counts["excepted"] = apply_exceptions(session)

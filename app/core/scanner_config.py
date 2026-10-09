@@ -333,6 +333,12 @@ def build(session, out_dir: Path, orgs=None, repos=None, connection=None,
 
     scan["images"]["enabled"] = bool(store.get(session, "images.enabled"))
 
+    # Which branches ship.  Only repositories somebody set are listed, and
+    # the scanner reads a missing one as every branch, every pass.  The
+    # credential pass never looks at this.
+    from app.core import scan_scope
+    scan["branch_scope"] = scan_scope.for_scanner(session)
+
     vulns = scan["vulnerabilities"]
     vulns["enabled"] = bool(store.get(session, "vulns.enabled"))
     vulns["min_severity"] = _text(session, "vulns.min_severity", "all")

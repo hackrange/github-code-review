@@ -193,12 +193,12 @@ def rebuild() -> bool:
 
 
 _COUNT_DIMS = ("organization", "repository", "connection", "branch", "kind",
-               "severity", "state", "excepted", "triage", "reachability",
-               "confidence", "known_exploited", "malicious", "verified",
-               "impact", "likelihood")
+               "severity", "state", "excepted", "out_of_scope", "triage",
+               "reachability", "confidence", "known_exploited", "malicious",
+               "verified", "impact", "likelihood")
 
 _GROUP_DIMS = ("organization", "connection", "kind", "severity", "state",
-               "excepted",
+               "excepted", "out_of_scope",
                "triage", "reachability", "confidence", "known_exploited",
                "malicious", "verified", "impact", "likelihood")
 

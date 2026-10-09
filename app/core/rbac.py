@@ -62,6 +62,15 @@ PERMISSIONS = {
         # recording that the work was done.  Certifying may reasonably move to
         # a reviewer role one day; this should not go with it.
         "repo.certify.exempt",
+        # Saying which branches ship.  Administrators only: it takes findings
+        # off everybody's work list and out of the report files, the same
+        # weight as an exclusion.  A developer asks through a waiver instead.
+        "repo.scope",
+        # Asking a model to draw how a repository fits together.  It sends the
+        # code outside this installation and costs money per drawing, so the
+        # same people who may ask about a finding.  Anybody who can see the
+        # repository can look at the result.
+        "repo.diagram",
         # Looking at the product as somebody else, to see what they see.
         # Read only: see the note on Session.impersonating_id.
         "user.impersonate",

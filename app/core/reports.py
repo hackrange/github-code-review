@@ -95,7 +95,8 @@ def reportable(session) -> list:
     """Every finding that belongs in the files.
 
     Anything with the exception flag set is left out, and so is anything with
-    a live approved waiver or anything already marked fixed.  The flag is the
+    a live approved waiver, anything already marked fixed, and anything only on
+    branches that do not ship.  The flag is the
     quick way to take one finding out by id; the waiver is the paperwork that
     usually sets it.
 
@@ -115,6 +116,8 @@ def reportable(session) -> list:
     rows = (session.query(Finding)
             .filter(Finding.state != FindingState.FIXED)
             .filter(Finding.excepted.is_(False))
+            # Only on branches that do not ship.  See app.core.scan_scope.
+            .filter(Finding.out_of_scope.is_(False))
             .all())
     out = [f for f in rows if f.id not in waived_ids]
 

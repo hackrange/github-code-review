@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Scan scope &middot; {{ connection.name }} &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Scan scope</h1>
+  <div class="faint small">{{ connection.name }}: {{ listing | length }}
+    repositor{{ 'y' if listing | length == 1 else 'ies' }}</div></div>
+  <a class="btn" href="{{ base }}/connections">Back to connections</a></div>
+
+{# For the accounts with thousands of branches.  Tick what does not ship and
+   it gets the credential pass only.  Credentials are scanned everywhere,
+   always: a key works whether or not the code is deployed. #}
+<div class="card">
+  <div class="card-body">
+    <p class="small">Ticked repositories and branches stop getting dependency,
+      code and configuration scans.  <strong>Credentials are still scanned on
+      every branch of every repository.</strong>  Findings only on those
+      branches are marked not deployed: off the work list and out of the report
+      files, never deleted.  You see what moves before anything does.</p>
+    <div class="flex" style="gap:1rem;flex-wrap:wrap;align-items:flex-end">
+      <div class="field" style="max-width:420px;margin:0;flex:1 1 18rem">
+        <label for="scope-search">Search</label>
+        <input type="text" id="scope-search" data-filter="scope-table" autocomplete="off"
+               placeholder="repository or branch">
+        <div class="small faint" data-filter-count="scope-table"></div>
+      </div>
+      <label class="check"><input type="checkbox" id="tick-all-repos"> Select all repositories shown</label>
+      <label class="check"><input type="checkbox" id="tick-all-branches"> Select all branches shown</label>
+    </div>
+  </div>
+</div>
+
+<form method="post" action="{{ base }}/connections/{{ connection.id }}/scope/confirm" id="conn-scope">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="card">
+    <div class="empty" data-filter-empty="scope-table" hidden>Nothing matches that.</div>
+    <div class="table-scroll">
+      <table id="scope-table" class="small">
+        <thead><tr><th></th><th>Repository</th><th>Scope now</th><th>Branches</th></tr></thead>
+        <tbody>
+        {% for item in listing %}
+          {% set r = item.repo %}
+          <tr>
+            <td class="nowrap"><input type="checkbox" name="repo" value="{{ r.full_name }}"
+                title="The whole repository"></td>
+            <td class="mono"><a href="{{ base }}/repositories/{{ r.id }}/scope">{{ r.full_name }}</a>
+              {% if r.archived %}<span class="badge waived">archived</span>{% endif %}</td>
+            <td>{{ item.text }}
+              {% if item.default_out %}<span class="badge pending">default left out</span>{% endif %}</td>
+            <td>
+              <details>
+                <summary class="small">{{ item.branches | length }} branch{{ '' if item.branches | length == 1 else 'es' }}{%
+                  if item.credentials_only %}, {{ item.credentials_only }} credentials only{% endif %}</summary>
+                <label class="check small"><input type="checkbox" data-tick-repo-branches>
+                  Select all branches of this repository</label>
+                <div class="scope-branches">
+                {% for b in item.branches %}
+                  <label class="check small mono">
+                    <input type="checkbox" name="pair" value="{{ r.full_name }} {{ b.name }}">
+                    {{ b.name }}
+                    {% if b.default %}<span class="badge ok">default</span>{% endif %}
+                    {% if not b.full %}<span class="badge waived">credentials only{{ '' if b.source == 'branch' else ', inherited' }}</span>{% endif %}
+                  </label>
+                {% endfor %}
+                </div>
+              </details>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body flex" style="gap:.75rem;align-items:flex-end;flex-wrap:wrap">
+      <div class="field" style="margin:0">
+        <label for="scope-action">For everything ticked</label>
+        <select id="scope-action" name="action">
+          <option value="credentials">Credentials only: omit non-credential scans</option>
+          <option value="full">Full scan again</option>
+          <option value="inherit">Branches: follow the repository setting</option>
+        </select>
+      </div>
+      <button class="btn primary" type="submit" data-scope-submit>Check what this changes</button>
+      <span class="small faint" data-scope-count></span>
+    </div>
+  </div>
+</form>
+<script src="{{ base }}/static/tablefilter.js?v={{ asset_v('tablefilter.js') }}"></script>
+<script src="{{ base }}/static/connscope.js?v={{ asset_v('connscope.js') }}"></script>
+{% endblock %}

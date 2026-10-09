@@ -113,6 +113,10 @@
                     data-sensitivity="{{ c.sensitivity or '' }}"
                     data-repositories="{{ c.repositories }}"
                     data-branches="{{ c.branches or '' }}">Edit</button>
+            {% if can_scope %}
+            <a class="btn sm" href="{{ base }}/connections/{{ c.id }}/scope" target="_blank" rel="noopener"
+               title="Omit non-credential scans for some repositories or branches. Opens in a new tab.">Scan scope</a>
+            {% endif %}
             <form method="post" action="{{ base }}/connections/{{ c.id }}/test" style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn sm" type="submit">Test</button>
@@ -461,6 +465,17 @@
           <span class="faint small">Optional.  Narrows this connection to a few
             repositories rather than everything the organization holds.</span>
         </label>
+        {# Scoping is per repository and branch, so it has a page of its own
+           rather than more boxes here.  Hidden for a new connection. #}
+        {% if can_scope %}
+        <div class="field" data-scope-link hidden>
+          <strong class="small">Omit non-credential scans</strong>
+          <span class="faint small">For accounts with repositories or branches
+            that never ship: tick them and they get the credential pass only.
+            Credentials are still scanned everywhere.
+            <a href="#" target="_blank" rel="noopener">Open the scan scope page in a new tab</a></span>
+        </div>
+        {% endif %}
         <label>Only these branches
           <textarea name="branches" rows="3" placeholder="master&#10;main"></textarea>
           <span class="faint small">Optional, one per line.  Names or patterns,

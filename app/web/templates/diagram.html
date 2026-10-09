@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Diagram &middot; Git Code Review{% endblock %}
+{% block content %}
+{% set d = diagram %}
+<div class="page-head"><div><h1>Diagram</h1>
+  <div class="faint small"><span class="mono">{{ repo.full_name }}</span>,
+    default branch <span class="mono">{{ repo.default_branch }}</span></div></div>
+  <div class="flex" style="gap:.5rem;align-items:center">
+    {% if d and d.ready %}
+    <a class="btn" href="{{ base }}/repositories/{{ repo.id }}/diagram.pdf">Save as PDF</a>
+    {% endif %}
+    {% if can_draw and not (d and d.running) %}
+    <form method="post" action="{{ base }}/repositories/{{ repo.id }}/diagram" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn primary" type="submit"
+              title="Sends {{ 'the key files and ' if ai_sends_code }}the file tree to {{ ai_model }}">
+        {{ 'Re-create diagram' if d and d.ready else 'Create diagram' }}</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if d and d.running %}
+<div class="notice info" data-reload-after="10"><div>Being drawn now, started by
+  {{ d.row.started_by }} at {{ d.row.started_at | dt('%H:%M') }}.  This page
+  refreshes itself until it is done.{% if d.ready %}  The last drawing is shown
+  below until then.{% endif %}</div></div>
+{% endif %}
+{% if d and d.failed %}
+<div class="notice warn"><div>The last attempt did not finish: {{ d.row.error }}
+  {% if d.ready %}  The drawing below is the one before it.{% endif %}</div></div>
+{% endif %}
+
+{% if not d or not d.ready %}
+<div class="card"><div class="empty">
+  <p>No diagram of this repository yet.</p>
+  {% if can_draw %}
+  <p class="faint small">Create diagram reads the default branch and asks
+    {{ ai_model }} to draw its components, how they connect and the main flows
+    through them.  {% if ai_sends_code %}The key files are sent with anything
+    that looks like a credential masked.{% else %}Sending code is off, so only
+    the file tree and the dependency sources go.{% endif %}</p>
+  {% elif not ai_model %}
+  <p class="faint small">Drawing one needs AI analysis switched on, on the AI page.</p>
+  {% else %}
+  <p class="faint small">An administrator can create one.</p>
+  {% endif %}
+</div></div>
+{% else %}
+{% set g = d.graph %}
+<div class="card">
+  <div class="card-head">{{ g.title or repo.name }}
+    <span class="faint small">drawn by {{ d.row.model }} on
+      {{ d.row.created_at | dt('%d %b %Y') }}{% if d.row.commit %} from commit
+      <span class="mono">{{ d.row.commit[:12] }}</span>{% endif %}, asked for by {{ d.row.created_by }}</span></div>
+  <div class="card-body">
+    <p>{{ g.summary }}</p>
+    <p class="faint small">Written by a model from a read of the code, so check
+      it against the code before relying on it.  The registries and
+      repositories further down are read straight from the files.</p>
+    {# Built from the model's JSON on the server, every string escaped.
+       Nothing the model wrote is rendered as markup. #}
+    <div class="diagram-scroll">{{ d.svg | safe }}</div>
+  </div>
+</div>
+
+{% if g.flows %}
+<div class="card">
+  <div class="card-head">Flows</div>
+  <div class="card-body">
+    {% for flow in d.flows %}
+    <h3 style="margin:.75rem 0 .25rem">{{ loop.index }}. {{ flow.name }}</h3>
+    {% if flow.description %}<p class="faint small">{{ flow.description }}</p>{% endif %}
+    <div class="diagram-scroll">{{ flow.svg | safe }}</div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head">Components</div>
+  <div class="table-scroll">
+    <table class="small">
+      <thead><tr><th>Component</th><th>Kind</th><th>Where it comes from</th></tr></thead>
+      <tbody>
+      {% for n in g.nodes %}
+        <tr><td>{{ n.label }}</td><td class="faint">{{ n.kind }}</td><td>{{ n.detail }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if d and d.sources %}
+{% set s = d.sources %}
+<div class="card">
+  <div class="card-head">Where the code comes from
+    <span class="faint small">{{ s.private_hosts }} private host{{ '' if s.private_hosts == 1 else 's' }},
+      {{ s.shared }} shared repositor{{ 'y' if s.shared == 1 else 'ies' }} scanned here too</span></div>
+  <div class="card-body">
+    <p class="faint small">Read from the manifests, lock files, registry
+      settings, submodules, Dockerfiles and pipeline files on the default
+      branch.  A private host is one the build trusts with everything it
+      installs.  A shared repository is code this one pulls in: a finding there
+      is a finding here.</p>
+  </div>
+  {% if s.repositories %}
+  <div class="table-scroll">
+    <table class="small">
+      <thead><tr><th>Repository pulled in</th><th>How</th><th>Scanned here</th><th>Named in</th></tr></thead>
+      <tbody>
+      {% for r in s.repositories %}
+        <tr>
+          <td class="mono">{{ r.repository }}</td>
+          <td class="faint">{{ r.kind }}</td>
+          <td>{% if r.in_estate %}<a href="{{ base }}/findings?repo={{ r.in_estate | urlencode }}&state=open">{{ r.in_estate }}</a>
+              {% else %}<span class="faint">no</span>{% endif %}</td>
+          <td class="mono small">{{ r.files | join(', ') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  {% if s.hosts %}
+  <div class="table-scroll">
+    <table class="small">
+      <thead><tr><th>Host</th><th></th><th>Used for</th><th>Named in</th></tr></thead>
+      <tbody>
+      {% for h in s.hosts %}
+        <tr>
+          <td class="mono">{{ h.host }}</td>
+          <td>{% if h.public %}<span class="badge waived">public</span>
+              {% else %}<span class="badge pending">private</span>{% endif %}</td>
+          <td>{{ h.kinds | join(', ') }}</td>
+          <td class="mono small">{{ h.files[:6] | join(', ') }}{% if h.files | length > 6 %}
+            <span class="faint">and {{ h.files | length - 6 }} more</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<div class="empty small">No registries or repositories named in the files.</div>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

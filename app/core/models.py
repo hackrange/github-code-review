@@ -478,6 +478,11 @@ class Finding(Base):
     exception_by = Column(String(120), default="")
     exception_at = Column(DateTime(timezone=True))
     exception_expires_at = Column(DateTime(timezone=True))
+    # Only on branches that do not ship.  Set by app.core.scan_scope, never by
+    # hand, and worked out again whenever a scope or a scan changes.  Not the
+    # same as excepted: nobody reviewed this one, it just is not deployed.  It
+    # leaves the work list and the report files and the row stays.
+    out_of_scope = Column(Boolean, default=False, nullable=False, index=True)
 
     kind = Column(Enum(FindingKind), nullable=False, index=True)
     severity = Column(Enum(Severity), nullable=False, default=Severity.UNKNOWN)
@@ -897,6 +902,11 @@ class Waiver(Base):
 
     reason = Column(Text, nullable=False)
     ticket = Column(String(120), default="")
+    # What kind of exception.  Empty is an accepted risk.  "not_deployed" says
+    # the code is on a branch or in a repository that never ships, which an
+    # admin may answer by approving this or by narrowing the scan scope.
+    # Never on a credential: a key works wherever it was pushed.
+    category = Column(String(32), default="")
 
     requested_by = Column(String(120), nullable=False)
     requested_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -1740,6 +1750,90 @@ class Exclusion(Base):
         return expires >= moment
 
 
+class BranchScope(Base):
+    """Which branches of a repository get more than the credential pass.
+
+    Not an exclusion.  An exclusion says somebody read a finding and accepted
+    it.  This says the branch does not ship, so dependency, code and
+    configuration findings on it are not worth anybody's week.  Credentials
+    are read everywhere whatever this says, because a key works the same from
+    a dead branch as from a live one.
+
+    One row with an empty branch is the repository's setting.  Rows that name
+    a branch override it for that branch alone.
+    """
+
+    __tablename__ = "branch_scopes"
+    __table_args__ = (
+        UniqueConstraint("repository", "branch", name="uq_branch_scope"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    repository = Column(String(320), nullable=False, index=True)
+    branch = Column(String(255), nullable=False, default="")
+    # Repository row: all, chosen or credentials.  Branch row: full or
+    # credentials.
+    mode = Column(String(16), nullable=False, default="all")
+    # The full scan list for "chosen", one name or glob per line.
+    patterns = Column(Text, default="")
+    reason = Column(Text, default="")
+    review_at = Column(DateTime(timezone=True), nullable=True)
+    set_by = Column(String(120), default="")
+    set_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class BranchScopeChange(Base):
+    """One change to a scope, with what it was before, so it can be undone."""
+
+    __tablename__ = "branch_scope_changes"
+
+    id = Column(Integer, primary_key=True)
+    repository = Column(String(320), nullable=False, index=True)
+    branch = Column(String(255), nullable=False, default="")
+    # JSON of the row before and after, or "null" when there was none.
+    before = Column(Text, default="null")
+    after = Column(Text, default="null")
+    reason = Column(Text, default="")
+    changed_by = Column(String(120), default="")
+    changed_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    # Set on the change that a revert made, pointing at the one it undid.
+    reverts = Column(Integer, nullable=True)
+
+
+class RepoDiagram(Base):
+    """A drawing of how one repository's default branch fits together.
+
+    Written by a language model from a read of the code, so it is a sketch to
+    check against the code rather than a fact about it, and the page says so.
+    The sources beside it (registries and repositories the build pulls from)
+    are read straight out of the files and are facts.
+
+    One per repository.  Drawing it again keeps the old one on screen until
+    the new one is finished, and keeps it if the new one fails.
+    """
+
+    __tablename__ = "repo_diagrams"
+
+    id = Column(Integer, primary_key=True)
+    repository = Column(String(320), nullable=False, unique=True, index=True)
+    branch = Column(String(255), default="")
+    commit = Column(String(64), default="")
+    # idle, running or failed.  A failed run keeps the last good drawing.
+    status = Column(String(16), default="idle", nullable=False)
+    error = Column(Text, default="")
+    graph = Column(LONG_JSON, default="")
+    sources = Column(LONG_JSON, default="")
+    code_included = Column(Boolean, default=False, nullable=False)
+    provider = Column(String(32), default="")
+    model = Column(String(120), default="")
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    created_by = Column(String(120), default="")
+    created_at = Column(DateTime(timezone=True))
+    started_by = Column(String(120), default="")
+    started_at = Column(DateTime(timezone=True))
+
+
 class AuditEvent(Base):
     """Who did what.  Append only, nothing in the app deletes from here."""
 
@@ -1813,6 +1907,7 @@ class FindingCount(Base):
     severity = Column(Enum(Severity))
     state = Column(Enum(FindingState))
     excepted = Column(Boolean)
+    out_of_scope = Column(Boolean)
     triage = Column(String(16))
     reachability = Column(String(16))
     confidence = Column(String(16))
@@ -1852,6 +1947,7 @@ class FindingGroup(Base):
     severity = Column(Enum(Severity))
     state = Column(Enum(FindingState))
     excepted = Column(Boolean)
+    out_of_scope = Column(Boolean)
     triage = Column(String(16))
     reachability = Column(String(16))
     confidence = Column(String(16))

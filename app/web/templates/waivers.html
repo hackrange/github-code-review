@@ -129,6 +129,15 @@
           <td class="stack reason">
             <span>{{ w.reason[:140] }}{% if w.reason|length > 140 %}&hellip;{% endif %}</span>
             {% if w.ticket %}<span class="sub"><span class="badge">{{ w.ticket }}</span></span>{% endif %}
+            {% if w.category == 'not_deployed' %}
+            {# Asked as "this code does not ship".  Approving covers this one
+               finding; an admin who agrees about the whole branch can change
+               the scan scope instead, which covers what comes next too. #}
+            <span class="sub"><span class="badge pending">not deployed</span>
+              {% if can_approve and f and f.branch %}
+              <a class="small" href="{{ base }}/scope/confirm?repo={{ f.repository | urlencode }}&branch={{ f.branch | urlencode }}&mode=credentials&back=%2Fwaivers">Set {{ f.branch }} to credentials only</a>
+              {% endif %}</span>
+            {% endif %}
           </td>
           <td class="stack nowrap">
             <span>{{ w.requested_by }}</span>

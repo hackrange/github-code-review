@@ -17,7 +17,8 @@ from app.core import live, rbac
 from app.core.audit import record
 from app.core.db import session_scope
 from app.core.models import (
-    Finding, FindingAnalysis, FindingState, RuleMute as m_RuleMute,
+    Finding, FindingAnalysis, FindingKind, FindingState,
+    RuleMute as m_RuleMute,
     ApiToken as m_ApiToken, Severity,
     SeverityRule as m_SeverityRule, User, UserRole, Waiver, WaiverStatus,
     utcnow,
@@ -82,6 +83,18 @@ def _back_with(where: str, message: str, kind: str = "ok") -> str:
 
     return "%s%smsg=%s&kind=%s" % (where, "&" if "?" in where else "?",
                                    quote(message), kind)
+
+
+# The kinds of exception somebody can ask for, by what is stored.
+WAIVER_CATEGORIES = {"": "Accepted risk",
+                     "not_deployed": "Not in scope: this code does not get deployed"}
+
+
+def _waiver_category(raw) -> str:
+    value = str(raw or "").strip().lower()
+    if value not in WAIVER_CATEGORIES:
+        raise HTTPException(status_code=400, detail="Pick a kind of exception.")
+    return value
 
 
 def _parse_expiry(value: str) -> datetime:
@@ -199,6 +212,7 @@ async def request_waiver(finding_id: int, request: Request,
                          reason: str = Form(""),
                          expires: str = Form(""),
                          ticket: str = Form(""),
+                         category: str = Form(""),
                          user: User = Depends(current_user)):
     """Ask for an exception.
 
@@ -216,11 +230,16 @@ async def request_waiver(finding_id: int, request: Request,
             detail="Say a bit more about why this is acceptable, at least 20 characters.")
     ticket_text = clean_text(ticket, "Ticket", limit=120, required=False)
     expires_at = _parse_expiry(expires)
+    category_value = _waiver_category(category)
 
     with session_scope() as db:
         finding = rbac.visible_finding(db, user, finding_id)
         if finding is None:
             raise HTTPException(status_code=404, detail="No such finding.")
+        if category_value == "not_deployed" and finding.kind == FindingKind.CREDENTIAL:
+            raise HTTPException(status_code=400, detail=(
+                "A credential works wherever it was pushed, deployed or not.  "
+                "Rotate it, or ask for an accepted risk exception instead."))
 
         existing = db.query(Waiver).filter(
             Waiver.finding_id == finding.id).one_or_none()
@@ -233,6 +252,7 @@ async def request_waiver(finding_id: int, request: Request,
         waiver = existing or Waiver(finding_id=finding.id)
         waiver.reason = reason_text
         waiver.ticket = ticket_text
+        waiver.category = category_value
         waiver.requested_by = user.username
         waiver.requested_at = utcnow()
         waiver.expires_at = expires_at
@@ -252,7 +272,8 @@ async def request_waiver(finding_id: int, request: Request,
 
         record(db, "waiver.approved" if auto_approve else "waiver.requested",
                actor=user.username, target=finding.fingerprint,
-               detail=f"{finding.repository} {finding.file_path} until {expires}",
+               detail=(f"{finding.repository} {finding.file_path} until {expires}"
+                       + (" (not deployed)" if category_value else "")),
                source_ip=client_ip(request))
 
         if auto_approve:
@@ -292,6 +313,7 @@ async def waive_many(request: Request, user: User = Depends(current_user)):
     ticket_text = clean_text(form.get("ticket"), "Ticket", limit=120,
                              required=False)
     expires_at = _parse_expiry(str(form.get("expires", "")))
+    category_value = _waiver_category(form.get("category", ""))
 
     wanted = []
     for raw in form.getlist("ids"):
@@ -330,10 +352,17 @@ async def waive_many(request: Request, user: User = Depends(current_user)):
                     WaiverStatus.REQUESTED, WaiverStatus.APPROVED}:
                 counts["already"] += 1
                 continue
+            # Credentials in the set are left alone rather than failing the
+            # lot.  The count says so.
+            if (category_value == "not_deployed"
+                    and finding.kind == FindingKind.CREDENTIAL):
+                counts["skipped"] += 1
+                continue
 
             waiver = existing or Waiver(finding_id=finding.id)
             waiver.reason = reason_text
             waiver.ticket = ticket_text
+            waiver.category = category_value
             waiver.requested_by = user.username
             waiver.requested_at = utcnow()
             waiver.expires_at = expires_at
@@ -371,6 +400,9 @@ async def waive_many(request: Request, user: User = Depends(current_user)):
                      "an admin")
     if counts["already"]:
         parts.append(f"{counts['already']} already had one")
+    if counts["skipped"]:
+        parts.append(f"{counts['skipped']} credential(s) left alone, because a "
+                     "key works whether or not the code is deployed")
 
     return redirect(_back_with(_findings_back(form), '. '.join(parts)))
 
@@ -4657,3 +4689,219 @@ async def delete_user(user_id: int, request: Request,
                source_ip=client_ip(request))
 
     return redirect(f"/users?msg={username}+is+gone.&kind=ok")
+
+
+# ---- scan scope ---------------------------------------------------------------
+
+# One bulk change across the Repositories page, at most.
+MAX_SCOPE_REPOS = 500
+
+
+@router.post("/scope/apply")
+async def apply_scope(request: Request, user: User = Depends(current_user)):
+    """Change which branches of one or more repositories get a full scan.
+
+    Reached from the confirmation page, which has already shown what moves.
+    The default branch going to credentials only needs its own tick box, here
+    as well as on the page, so a hand built request cannot skip it.
+    """
+    await check_csrf(request)
+    rbac.require(user, "repo.scope")
+
+    from app.core import scan_scope
+
+    form = await request.form()
+    repositories = [str(v).strip() for v in form.getlist("repo") if str(v).strip()]
+    branch = clean_text(form.get("branch"), "Branch", limit=255, required=False)
+    mode = (str(form.get("mode", "")) or "").strip()
+    patterns = clean_text(form.get("patterns"), "Branches", limit=4000,
+                          required=False)
+    reason = clean_text(form.get("reason"), "Reason", limit=2000)
+    review = clean_text(form.get("review"), "Review date", limit=10,
+                        required=False)
+    confirmed_default = str(form.get("confirm_default", "")) == "1"
+    back = _safe_back(str(form.get("back", "") or "/repositories"))
+    if not repositories:
+        raise HTTPException(status_code=400, detail="Pick a repository first.")
+    if len(repositories) > MAX_SCOPE_REPOS:
+        raise HTTPException(status_code=400, detail=(
+            f"At most {MAX_SCOPE_REPOS} repositories at a time."))
+    if branch and len(repositories) != 1:
+        raise HTTPException(status_code=400, detail=(
+            "A branch setting is for one repository at a time."))
+
+    changes, skipped = [], 0
+    with session_scope() as db:
+        for repository in repositories:
+            if _branch_in_reach(db, user, repository, branch) is None:
+                skipped += 1
+                continue
+            impact = scan_scope.preview(db, repository, branch, mode, patterns)
+            if impact["default_leaves"] and not confirmed_default:
+                raise HTTPException(status_code=400, detail=(
+                    f"This takes {impact['default_branch']}, the default branch "
+                    f"of {repository}, down to credentials only.  Tick the box "
+                    "that says you mean it."))
+            change, problem = scan_scope.apply(
+                db, repository, branch, mode, patterns, reason, review,
+                user.username)
+            if problem:
+                raise HTTPException(status_code=400, detail=problem)
+            record(db, "repo.scope_changed", actor=user.username,
+                   target=f"{repository}@{branch}" if branch else repository,
+                   detail=(f"change {change.id}: {impact['describe_before']} -> "
+                           f"{impact['describe_after']}; {impact['hide_total']} "
+                           f"finding(s) now not deployed, {impact['show_total']} "
+                           f"back.  Reason: {reason}")[:4000],
+                   source_ip=client_ip(request))
+            changes.append(change.id)
+
+    # What is reported changed, so the files follow.
+    if changes:
+        request_rewrite()
+    note = "Scan scope changed on %d repositor%s." % (
+        len(changes), "y" if len(changes) == 1 else "ies")
+    if len(changes) == 1:
+        note += "  Revert it from the repository's scope page if that was wrong."
+    if skipped:
+        note += "  %d left alone: not yours to change." % skipped
+    return redirect(_back_with(back, note, "ok"))
+
+
+@router.post("/scope/changes/{change_id}/revert")
+async def revert_scope(change_id: int, request: Request,
+                       user: User = Depends(current_user)):
+    """Undo one change, as long as nothing has changed the same scope since."""
+    await check_csrf(request)
+    rbac.require(user, "repo.scope")
+
+    from app.core import scan_scope
+    from app.core.models import BranchScopeChange
+
+    form = await request.form()
+    back = _safe_back(str(form.get("back", "") or "/repositories"))
+    with session_scope() as db:
+        old = db.get(BranchScopeChange, change_id)
+        if old is None or _branch_in_reach(db, user, old.repository,
+                                           old.branch) is None:
+            raise HTTPException(status_code=404, detail="No such change.")
+        change, problem = scan_scope.revert(db, change_id, user.username)
+        if problem:
+            return redirect(_back_with(back, problem, "warn"))
+        record(db, "repo.scope_reverted", actor=user.username,
+               target=(f"{old.repository}@{old.branch}" if old.branch
+                       else old.repository),
+               detail=f"change {change.id} undid change {change_id}",
+               source_ip=client_ip(request))
+    request_rewrite()
+    return redirect(_back_with(back, "Reverted.", "ok"))
+
+
+# ---- diagrams -----------------------------------------------------------------
+
+@router.post("/repositories/{repo_id}/diagram")
+async def draw_diagram(repo_id: int, request: Request,
+                       user: User = Depends(current_user)):
+    """Create or re-create the drawing of a repository's default branch."""
+    await check_csrf(request)
+    rbac.require(user, "repo.diagram")
+
+    from app.core import diagram
+    from app.core.models import Repository
+
+    with session_scope() as db:
+        repo = (rbac.visible_repositories(db, user)
+                .filter(Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        full_name = repo.full_name
+        record(db, "repo.diagram_requested", actor=user.username,
+               target=full_name, detail=f"default branch {repo.default_branch}",
+               source_ip=client_ip(request))
+    started, problem = diagram.start(full_name, user.username)
+    back = f"/repositories/{repo_id}/diagram"
+    if not started:
+        return redirect(_back_with(back, problem, "warn"))
+    return redirect(_back_with(
+        back, "Drawing started.  It usually takes a minute or two, and this "
+              "page refreshes itself until it is done.", "ok"))
+
+
+
+# Ticked branches on one connection's scope page.  The largest account seen
+# held a few thousand, so this is room for that with plenty over.
+MAX_SCOPE_FIELDS = 25000
+
+
+@router.post("/connections/{connection_id}/scope/apply")
+async def apply_connection_scope(connection_id: int, request: Request,
+                                 user: User = Depends(current_user)):
+    """Scope every ticked repository and branch under one account at once."""
+    # Read first, with room for every branch of a large account.  The form is
+    # kept, so the CSRF check below reads this copy rather than parsing again
+    # with the default limit of a thousand fields and finding no token.
+    await request.form(max_fields=MAX_SCOPE_FIELDS)
+    await check_csrf(request)
+    rbac.require(user, "repo.scope")
+
+    from app.core import connections as connection_store, scan_scope
+    from app.core.models import Repository
+    from sqlalchemy import or_ as sa_or
+
+    form = await request.form(max_fields=MAX_SCOPE_FIELDS)
+    action = str(form.get("action", "") or "")
+    reason = clean_text(form.get("reason"), "Reason", limit=2000)
+    review = clean_text(form.get("review"), "Review date", limit=10,
+                        required=False)
+    confirmed_default = str(form.get("confirm_default", "")) == "1"
+    ticked_repos = [str(v) for v in form.getlist("repo") if str(v).strip()]
+    ticked_pairs = []
+    for raw in form.getlist("pair"):
+        repository, _, branch = str(raw).partition(" ")
+        if repository and branch:
+            ticked_pairs.append((repository, branch))
+    back = f"/connections/{connection_id}/scope"
+
+    done = branches = 0
+    with session_scope() as db:
+        connection = connection_store.by_id(db, connection_id)
+        if connection is None:
+            raise HTTPException(status_code=404, detail="No such connection.")
+        allowed = {name for (name,) in rbac.visible_repositories(db, user)
+                   .filter(sa_or(Repository.connection_id == connection.id,
+                                 Repository.connection == connection.name))
+                   .with_entities(Repository.full_name).all()}
+        plan = scan_scope.batch([r for r in ticked_repos if r in allowed],
+                                [p for p in ticked_pairs if p[0] in allowed],
+                                action)
+        if not plan:
+            raise HTTPException(status_code=400, detail="Nothing to change.")
+        for repository, changes in sorted(plan.items()):
+            impact = scan_scope.preview(db, repository, "", "", "",
+                                        changes=changes)
+            if impact["default_leaves"] and not confirmed_default:
+                raise HTTPException(status_code=400, detail=(
+                    f"This takes {impact['default_branch']}, the default branch "
+                    f"of {repository}, down to credentials only.  Tick the box "
+                    "that says you mean it."))
+            ids, problem = scan_scope.apply_batch(db, repository, changes,
+                                                  reason, review, user.username)
+            if problem:
+                raise HTTPException(status_code=400, detail=problem)
+            record(db, "repo.scope_changed", actor=user.username,
+                   target=repository,
+                   detail=(f"changes {ids[0]}-{ids[-1]} from connection "
+                           f"{connection.name}: {impact['describe_before']} -> "
+                           f"{impact['describe_after']}; {len(changes)} setting(s), "
+                           f"{impact['hide_total']} finding(s) now not deployed, "
+                           f"{impact['show_total']} back.  Reason: {reason}")[:4000],
+                   source_ip=client_ip(request))
+            done += 1
+            branches += sum(1 for b, _, _ in changes if b)
+
+    request_rewrite()
+    note = (f"Scan scope changed on {done} repositor{'y' if done == 1 else 'ies'}"
+            + (f" and {branches} branch(es)" if branches else "") + ".  "
+            "Credentials are still scanned everywhere.  Each change can be "
+            "reverted from its repository's scope page.")
+    return redirect(_back_with(back, note, "ok"))

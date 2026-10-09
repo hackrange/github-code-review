@@ -173,8 +173,11 @@
   <div class="empty" data-filter-empty="repo-table" hidden>Nothing matches that.</div>
   <div class="table-scroll">
     <table id="repo-table">
-      <thead><tr><th>Organization</th><th>Repository</th><th>Visibility</th>
+      <thead><tr>{% if can_scope %}<th class="nowrap"><input type="checkbox"
+          id="select-repos" title="Everything shown"></th>{% endif %}
+        <th>Organization</th><th>Repository</th><th>Visibility</th>
         <th>Default branch<span class="faint small"> and its sign off</span></th>
+        <th>Scope</th>
         <th>Open findings</th><th class="nowrap">Last scanned</th>
         {# Named in the header as well as in the tooltip.  A tooltip is a
            hover, which is nothing at all on a touch screen, and the difference
@@ -185,6 +188,8 @@
       {% for r in rows %}
         {% set c = counts.get(r.full_name, {}) %}
         <tr>
+          {% if can_scope %}<td class="nowrap"><input type="checkbox" name="repo"
+              form="scope-bulk" value="{{ r.full_name }}"></td>{% endif %}
           <td class="small">{{ r.organization }}</td>
           <td class="small"><a href="{{ base }}/findings?q={{ r.name }}">{{ r.name }}</a>
             {% if r.archived %}<span class="badge waived">archived</span>{% endif %}</td>
@@ -209,7 +214,25 @@
                  ('a scan' if cert.automatic else (cert.by or 'somebody')),
                  beside_branch=True) }}
             {%- if cert.automatic %}<span class="faint small"> by a scan</span>
-            {%- endif %}{% endif %}</td>
+            {%- endif %}{% endif %}
+            {# A drawing of how the default branch fits together. #}
+            {%- if r.full_name in drawn %}
+            <div><a class="small" href="{{ base }}/repositories/{{ r.id }}/diagram">Show diagram</a>
+              {%- if can_draw %} &middot; <form method="post" action="{{ base }}/repositories/{{ r.id }}/diagram" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="linkish small" type="submit">Re-create diagram</button></form>{% endif %}</div>
+            {%- elif can_draw %}
+            <div><form method="post" action="{{ base }}/repositories/{{ r.id }}/diagram" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="linkish small" type="submit">Create diagram</button></form></div>
+            {%- endif %}</td>
+          {% set sc = scopes.get(r.full_name, {}) %}
+          <td class="small">
+            {%- if can_scope %}<a href="{{ base }}/repositories/{{ r.id }}/scope"
+                class="{{ '' if sc.set else 'faint' }}">{{ sc.text }}</a>
+            {%- else %}<span class="{{ '' if sc.set else 'faint' }}">{{ sc.text }}</span>{% endif %}
+            {%- if sc.default_out %} <span class="badge pending"
+                title="The default branch only gets the credential pass">default left out</span>{% endif %}</td>
           <td class="nowrap">
             {% for level in ['critical','high','medium','low'] %}
               {% if c.get(level) %}<span class="badge {{ level }}">{{ c[level] }}</span>{% endif %}
@@ -255,8 +278,31 @@
       </tbody>
     </table>
   </div>
+  {% if can_scope %}
+  {# The same setting on every ticked repository.  It goes through the
+     confirmation page like any other change, so the counts are seen first. #}
+  <form method="get" id="scope-bulk" action="{{ base }}/scope/confirm"
+        style="padding:.6rem 0 0;display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
+    <input type="hidden" name="back" value="/repositories">
+    <div class="field" style="margin:0">
+      <label for="scope-bulk-mode">Scan scope for the ticked ones</label>
+      <select id="scope-bulk-mode" name="mode">
+        <option value="all">Full scan, all branches</option>
+        <option value="chosen">Full scan, chosen branches only</option>
+        <option value="credentials">Credentials only</option>
+      </select>
+    </div>
+    <div class="field" style="flex:1 1 16rem;margin:0">
+      <label for="scope-bulk-patterns">Full scan branches</label>
+      <input type="text" id="scope-bulk-patterns" name="patterns" class="mono"
+             placeholder="master, main, release/*">
+    </div>
+    <button class="btn" type="submit">Check what this changes</button>
+  </form>
+  {% endif %}
   {% else %}<div class="empty">No repositories yet. Run a scan.</div>{% endif %}
 </div>
 <script src="{{ base }}/static/tablefilter.js?v={{ asset_v('tablefilter.js') }}"></script>
 <script src="{{ base }}/static/certbulk.js?v={{ asset_v('certbulk.js') }}"></script>
+<script src="{{ base }}/static/scopebulk.js?v={{ asset_v('scopebulk.js') }}"></script>
 {% endblock %}

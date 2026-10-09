@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+{# The diagram as a landscape document: the drawing on the first page, each
+   flow on a page of its own, then the components and the sources.  The SVG
+   is the same one the page shows, scaled to fit, so the two never disagree. #}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ diagram.graph.title or repo.full_name }}</title>
+<style>
+  @page {
+    size: letter landscape;
+    margin: 12mm 12mm 14mm 12mm;
+    @bottom-left {
+      content: "{{ repo.full_name }}, {{ repo.default_branch }}{{ (' at ' ~ diagram.row.commit[:12]) if diagram.row.commit }}";
+      font-family: "DejaVu Sans", sans-serif; font-size: 7pt; color: #8a8a8a;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: "DejaVu Sans", sans-serif; font-size: 7pt; color: #8a8a8a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "DejaVu Sans", sans-serif; font-size: 9pt; color: #1a1a1a; margin: 0; }
+  h1 { font-size: 15pt; margin: 0 0 2mm; }
+  h2 { font-size: 12pt; margin: 0 0 2mm; }
+  .meta, .note { color: #5a5a5a; font-size: 8pt; margin: 0 0 2mm; }
+  .page { page-break-after: always; }
+  .page:last-child { page-break-after: auto; }
+  /* Fit the drawing on the page whatever its size.  The SVG keeps its
+     proportions from the viewBox. */
+  .fit svg { width: 100%; height: auto; max-height: 150mm; }
+  .fit-flow svg { width: 100%; height: auto; max-height: 120mm; }
+  table { width: 100%; border-collapse: collapse; font-size: 8pt; }
+  th, td { text-align: left; padding: 1.2mm 2mm; border-bottom: .3mm solid #dcdcdc; vertical-align: top; }
+  th { color: #5a5a5a; font-weight: 600; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 7.5pt; }
+</style>
+</head>
+<body>
+{% set g = diagram.graph %}
+<div class="page">
+  <h1>{{ g.title or repo.full_name }}</h1>
+  <p class="meta">{{ repo.full_name }}, default branch {{ repo.default_branch }}{{
+    (', commit ' ~ diagram.row.commit[:12]) if diagram.row.commit }}.  Drawn by {{ diagram.row.model }} on
+    {{ diagram.row.created_at | dt('%d %b %Y') }}.  Printed {{ now | dt('%d %b %Y') }}
+    from {{ app_name }}.</p>
+  <p>{{ g.summary }}</p>
+  <div class="fit">{{ diagram.svg | safe }}</div>
+  <p class="note">Written by a model from a read of the code.  Check it against
+    the code before relying on it.</p>
+</div>
+
+{% for flow in diagram.flows %}
+<div class="page">
+  <h2>Flow {{ loop.index }}: {{ flow.name }}</h2>
+  {% if flow.description %}<p class="meta">{{ flow.description }}</p>{% endif %}
+  <div class="fit-flow">{{ flow.svg | safe }}</div>
+</div>
+{% endfor %}
+
+<div class="page">
+  <h2>Components</h2>
+  <table>
+    <thead><tr><th>Component</th><th>Kind</th><th>Where it comes from</th></tr></thead>
+    <tbody>
+    {% for n in g.nodes %}
+      <tr><td>{{ n.label }}</td><td>{{ n.kind }}</td><td>{{ n.detail }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if diagram.sources and (diagram.sources.hosts or diagram.sources.repositories) %}
+{% set s = diagram.sources %}
+<div class="page">
+  <h2>Where the code comes from</h2>
+  <p class="meta">Read from the files on the default branch, not by the model.
+    {{ s.private_hosts }} private host(s), {{ s.shared }} shared repositor{{ 'y' if s.shared == 1 else 'ies' }}.</p>
+  {% if s.repositories %}
+  <table>
+    <thead><tr><th>Repository pulled in</th><th>How</th><th>Scanned here</th><th>Named in</th></tr></thead>
+    <tbody>
+    {% for r in s.repositories %}
+      <tr><td class="mono">{{ r.repository }}</td><td>{{ r.kind }}</td>
+        <td>{{ r.in_estate or 'no' }}</td><td class="mono">{{ r.files[:4] | join(', ') }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <br>
+  {% endif %}
+  <table>
+    <thead><tr><th>Host</th><th>Public or private</th><th>Used for</th><th>Named in</th></tr></thead>
+    <tbody>
+    {% for h in s.hosts %}
+      <tr><td class="mono">{{ h.host }}</td><td>{{ 'public' if h.public else 'private' }}</td>
+        <td>{{ h.kinds | join(', ') }}</td><td class="mono">{{ h.files[:4] | join(', ') }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+</body>
+</html>

@@ -124,6 +124,13 @@
    and the export.  They are kept out of the counts because nobody can act on
    them: the code is archived.  A number quietly missing from a total is worse
    than a larger total, so it is named here with a link to it. #}
+{% if not_deployed %}
+<div class="small faint" style="margin:-.75rem 0 1.25rem">
+  +{{ not_deployed }} open finding{{ '' if not_deployed == 1 else 's' }} out of
+  scope, on branches that get credentials only and are not deployed.
+  <a href="{{ base }}/findings?scope=out">Show them</a>.
+</div>
+{% endif %}
 {% if archived_set_aside %}
 <div class="small faint" style="margin:-.75rem 0 1.25rem">
   {{ archived_set_aside }} open finding{{ '' if archived_set_aside == 1 else 's' }}

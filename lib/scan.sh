@@ -22,6 +22,35 @@ _walk_instant() {
   else printf '%sT00:00:00Z' "$marker"; fi
 }
 
+# Whether a branch gets every pass, or only the credential one.
+#
+# The app sends a rule only for repositories somebody scoped, so no rule means
+# every branch, every pass, which is how it always was.  A branch override
+# wins, then the repository's mode.  The globs match the way the app's
+# fnmatch does: a star crosses slashes, so release/* takes release/1.2.
+scope_full_scan() {
+  local repo="$1" branch="$2" rule mode over p
+  rule=$(printf '%s' "$GHSCAN_CFG_JSON" \
+           | jq -c --arg r "$repo" '.scan.branch_scope[$r] // null' 2>/dev/null)
+  [[ -z "$rule" || "$rule" == "null" ]] && return 0
+  over=$(jq -r --arg b "$branch" '.branches[$b] // ""' <<<"$rule" 2>/dev/null)
+  case "$over" in
+    full) return 0 ;;
+    credentials) return 1 ;;
+  esac
+  mode=$(jq -r '.mode // "all"' <<<"$rule" 2>/dev/null)
+  case "$mode" in
+    credentials) return 1 ;;
+    chosen)
+      while IFS= read -r p; do
+        # shellcheck disable=SC2053
+        [[ -n "$p" && "$branch" == $p ]] && return 0
+      done < <(jq -r '.full[]?' <<<"$rule" 2>/dev/null)
+      return 1 ;;
+  esac
+  return 0
+}
+
 # Per-repository worker
 scan_one_repo() {
   local repo_json="$1" results_dir="$2" work_root="$3"
@@ -536,6 +565,17 @@ scan_one_repo() {
     log_info "[$full_name] the default branch tree is also on: ${same_branches[*]:1}"
   fi
 
+  # Whether the branch these passes read ships.  When it does not, the code,
+  # configuration and dependency passes are skipped and, just as important,
+  # never named as finished.  The app closes a finding only when the pass
+  # that makes its kind says it finished, so what they found before is held
+  # open rather than read as fixed.  Credentials are read regardless.
+  local full_passes=1
+  if ! scope_full_scan "$full_name" "$default_branch"; then
+    full_passes=0
+    log_info "[$full_name] $default_branch is credentials only by scan scope, so the code, configuration and dependency passes are skipped"
+  fi
+
   # Where the walk reached, for the next run to carry on from.
   HISTORY_FROM=""; HISTORY_COMPLETE="false"
   # A full walk, and only when one actually happened.
@@ -606,7 +646,7 @@ scan_one_repo() {
   fi
 
   # --- static analysis of the code ------------------------------------------
-  if cfg_bool '.scan.code_analysis.enabled' true; then
+  if (( full_passes )) && cfg_bool '.scan.code_analysis.enabled' true; then
     log_info "[$full_name] static code analysis"
     local sg; sg=$(tmp_file semgrep)
     GHSCAN_CODE_COMPLETE=true; GHSCAN_CODE_INCOMPLETE=""
@@ -654,7 +694,7 @@ scan_one_repo() {
   fi
 
   # --- infrastructure as code -----------------------------------------------
-  if cfg_bool '.scan.iac.enabled' true; then
+  if (( full_passes )) && cfg_bool '.scan.iac.enabled' true; then
     log_info "[$full_name] reading the infrastructure files"
     local tv; tv=$(tmp_file trivy)
     run_trivy_config "$clone_dir" "$full_name" "$tv"
@@ -677,7 +717,7 @@ scan_one_repo() {
   fi
 
   # --- the build pipeline ---------------------------------------------------
-  if cfg_bool '.scan.workflows.enabled' true; then
+  if (( full_passes )) && cfg_bool '.scan.workflows.enabled' true; then
     log_info "[$full_name] reading the workflows"
     local zz; zz=$(tmp_file zizmor)
     run_zizmor "$clone_dir" "$full_name" "$zz"
@@ -722,10 +762,10 @@ scan_one_repo() {
     esac
   fi
 
-  _checkpoint code
+  if (( full_passes )); then _checkpoint code; fi
 
   # --- SBOM + licensing -----------------------------------------------------
-  if cfg_bool '.scan.sbom.enabled' true; then
+  if (( full_passes )) && cfg_bool '.scan.sbom.enabled' true; then
     log_info "[$full_name] building SBOM"
     local cdx spdx; cdx=$(tmp_file cdx); spdx=$(tmp_file spdx)
     local sources; sources=$(cfg_json '.scan.sbom.sources // []')
@@ -779,6 +819,7 @@ scan_one_repo() {
       local b bcdx bsum bpol
       for b in "${branches[@]}"; do
         [[ "$b" == "$default_branch" ]] && continue
+        scope_full_scan "$full_name" "$b" || continue
         git -C "$clone_dir" checkout --quiet --force "$b" 2>/dev/null || continue
         bcdx=$(tmp_file cdx_branch)
         sbom_syft "$clone_dir" "$full_name" "$bcdx" "" || continue
@@ -841,7 +882,7 @@ scan_one_repo() {
   # only when the pass that produces its kind is named here, and a kind that
   # never names itself would have every finding of that kind closed by the
   # first run that reported none.
-  _checkpoint misconfigurations
+  if (( full_passes )); then _checkpoint misconfigurations; fi
 
   # Everything the default-branch passes produced now says which branches it
   # speaks for.  Done here, in one place, because the workflow findings are
@@ -863,10 +904,10 @@ scan_one_repo() {
     log_info "[$full_name] $(printf '%s' "$prs" | jq 'length') pull request(s) from $(printf '%s' "$PULLS_JSON" | jq '[.[].username] | unique | length') user(s)"
   fi
 
-  _checkpoint sbom
+  if (( full_passes )); then _checkpoint sbom; fi
 
   # --- vulnerabilities ------------------------------------------------------
-  if cfg_bool '.scan.vulnerabilities.enabled' true; then
+  if (( full_passes )) && cfg_bool '.scan.vulnerabilities.enabled' true; then
     log_info "[$full_name] vulnerability scan"
     local vsources; vsources=$(cfg_json '.scan.vulnerabilities.sources // []')
     local -a parts=()
@@ -916,7 +957,9 @@ scan_one_repo() {
   fi
 
   cfg_bool '.clone.keep_clones' false || rm -rf -- "$clone_dir"
-  PASSES_DONE="${PASSES_DONE:+$PASSES_DONE }vulnerabilities"
+  if (( full_passes )); then
+    PASSES_DONE="${PASSES_DONE:+$PASSES_DONE }vulnerabilities"
+  fi
   _emit "ok" ""
   log_ok "[$full_name] done in $(( $(date +%s) - started ))s"
 }

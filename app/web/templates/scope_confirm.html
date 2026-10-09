@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Confirm scan scope &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Change the scan scope</h1>
+  <div class="faint small">{% if branch %}<span class="mono">{{ branch }}</span> on {% endif %}
+    {% if rows | length == 1 %}<span class="mono">{{ rows[0].repository }}</span>
+    {% else %}{{ rows | length }} repositories{% endif %}</div></div></div>
+
+{% if problem %}
+<div class="notice warn"><div>{{ problem }}</div></div>
+<p><a class="btn" href="{{ base }}{{ back }}">Back</a></p>
+{% else %}
+
+{# What moves, worked out from the findings as they are now.  Counted per
+   severity because "40 findings" and "40 lows" are different decisions. #}
+<div class="card">
+  <div class="card-head">What this changes</div>
+  <div class="card-body">
+    <p>
+      {% if branch %}
+        <span class="mono">{{ branch }}</span> becomes
+        <strong>{{ {'full': 'full scan', 'credentials': 'credentials only',
+                    'inherit': 'whatever the repository says'}[mode] }}</strong>.
+      {% else %}
+        Repository setting becomes <strong>{{ labels[mode] }}</strong>{% if mode == 'chosen' %}:
+        <span class="mono">{{ patterns | replace('\n', ', ') }}</span>{% endif %}.
+      {% endif %}
+    </p>
+    <p>
+      {% if totals.hide_total %}
+        <strong>{{ totals.hide_total }}</strong> open finding{{ '' if totals.hide_total == 1 else 's' }}
+        will be marked not deployed:
+        {% for level in severities %}{% if totals.hide.get(level) %}
+          <span class="badge {{ level }}">{{ totals.hide[level] }} {{ level }}</span>
+        {% endif %}{% endfor %}
+      {% else %}No open finding leaves the work list.{% endif %}
+    </p>
+    {% if totals.show_total %}
+    <p><strong>{{ totals.show_total }}</strong> come back:
+      {% for level in severities %}{% if totals.show.get(level) %}
+        <span class="badge {{ level }}">{{ totals.show[level] }} {{ level }}</span>
+      {% endif %}{% endfor %}</p>
+    {% endif %}
+    <p class="faint small">Credential findings are not affected.  A finding that
+      is also on a branch that still gets a full scan stays where it is.</p>
+
+    <div class="table-scroll">
+      <table class="small">
+        <thead><tr><th>Repository</th><th>Now</th><th>After</th>
+          <th>Branches to credentials only</th><th>Branches to full scan</th></tr></thead>
+        <tbody>
+        {% for row in rows %}
+          {% set i = row.impact %}
+          <tr>
+            <td class="mono">{{ row.repository }}
+              {% if i.default_leaves %}<span class="badge pending">default branch leaves the full scan</span>{% endif %}</td>
+            <td>{{ i.describe_before }}</td>
+            <td>{{ i.describe_after }}</td>
+            <td class="mono">{{ i.to_credentials[:12] | join(', ') }}{% if i.to_credentials | length > 12 %}
+              <span class="faint">and {{ i.to_credentials | length - 12 }} more</span>{% endif %}</td>
+            <td class="mono">{{ i.to_full[:12] | join(', ') }}{% if i.to_full | length > 12 %}
+              <span class="faint">and {{ i.to_full | length - 12 }} more</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="post" action="{{ base }}/scope/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% for row in rows %}<input type="hidden" name="repo" value="{{ row.repository }}">{% endfor %}
+      <input type="hidden" name="branch" value="{{ branch }}">
+      <input type="hidden" name="mode" value="{{ mode }}">
+      <input type="hidden" name="patterns" value="{{ patterns }}">
+      <input type="hidden" name="back" value="{{ back }}">
+      <div class="field">
+        <label for="scope-reason">Why</label>
+        <input type="text" id="scope-reason" name="reason" required minlength="10"
+               maxlength="2000" placeholder="For example: release/* is what the pipeline deploys">
+      </div>
+      <div class="field" style="max-width:220px">
+        <label for="scope-review">Review by <span class="faint small">optional</span></label>
+        <input type="date" id="scope-review" name="review" min="{{ today }}">
+      </div>
+      {% if default_leaves %}
+      {# The default branch is the one that ships unless somebody knows
+         otherwise, so taking it out needs saying twice. #}
+      <label class="check">
+        <input type="checkbox" name="confirm_default" value="1" required>
+        I know the default branch of {{ default_leaves | join(', ') }} will
+        only get the credential pass.
+      </label>
+      {% endif %}
+      <div style="margin-top:.75rem">
+        <a class="btn" href="{{ base }}{{ back }}">Cancel</a>
+        <button class="btn primary" type="submit">Change the scope</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

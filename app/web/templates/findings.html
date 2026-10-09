@@ -130,6 +130,16 @@
         <option value="unrated" {{ 'selected' if filters.reach == 'unrated' }}>Not worked out yet</option>
       </select>
     </div>
+    {# Branches that do not ship get credentials only, and what is left on
+       them from earlier scans is marked not deployed rather than deleted. #}
+    <div class="field">
+      <label for="scope">Deployed</label>
+      <select id="scope" name="scope" data-autosubmit>
+        <option value="" {{ 'selected' if not filters.scope }}>On a branch that ships</option>
+        <option value="any" {{ 'selected' if filters.scope == 'any' }}>Show out-of-scope too</option>
+        <option value="out" {{ 'selected' if filters.scope == 'out' }}>Only not deployed</option>
+      </select>
+    </div>
   </fieldset>
 
   <fieldset class="filter-group">
@@ -236,6 +246,15 @@
       {% else %}Nothing on this page needed folding.{% endif %}
     {% else %}Every advisory on its own row.{% endif %}
   </span>
+</div>
+{% endif %}
+
+{% if hidden_out_of_scope %}
+<div class="arrange-bar">
+  <span class="arrange-label">Hidden</span>
+  <span class="arrange-note">+{{ hidden_out_of_scope }} out of scope, on branches
+    that get credentials only and are not deployed.
+    <a href="{{ base }}/findings?{{ page_query }}{% if page_query %}&{% endif %}scope=any">Show out-of-scope</a></span>
 </div>
 {% endif %}
 
@@ -528,6 +547,7 @@
   <input type="hidden" name="confidence" value="{{ filters.confidence }}">
   <input type="hidden" name="triage" value="{{ filters.triage }}">
   <input type="hidden" name="reach" value="{{ filters.reach }}">
+  <input type="hidden" name="scope" value="{{ filters.scope }}">
   <input type="hidden" name="exception" value="{{ filters.exception }}">
   <input type="hidden" name="connection" value="{{ filters.connection }}">
   {# Every filter the list was built with, so "all matching these filters"
@@ -637,6 +657,14 @@
           as you save.{% else %}An admin has to approve this before anything
           changes on disk.{% endif %}</div>
       </div>
+      <label>Kind of exception
+        <select name="category" form="bulk-form">
+          <option value="">Accepted risk</option>
+          <option value="not_deployed">Not in scope: this code does not get deployed</option>
+        </select>
+        <span class="faint small">Credentials are skipped for "not deployed":
+          a key works whether or not the code ships.</span>
+      </label>
       <label>Why are these acceptable
         <textarea name="reason" rows="4" required minlength="20" maxlength="2000"
                   form="bulk-form"
@@ -682,6 +710,7 @@
   <input type="hidden" name="confidence" value="{{ filters.confidence }}">
   <input type="hidden" name="triage" value="{{ filters.triage }}">
   <input type="hidden" name="reach" value="{{ filters.reach }}">
+  <input type="hidden" name="scope" value="{{ filters.scope }}">
   <input type="hidden" name="exception" value="{{ filters.exception }}">
   <input type="hidden" name="connection" value="{{ filters.connection }}">
   {# Every filter the list was built with, so "all matching these filters"
@@ -763,6 +792,14 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="finding" id="waive-finding">
         <div class="small faint mb" data-slot="what"></div>
+        <label>Kind of exception
+          <select name="category">
+            <option value="">Accepted risk</option>
+            <option value="not_deployed">Not in scope: this code does not get deployed</option>
+          </select>
+          <span class="faint small">Not for credentials: a key works whether
+            or not the code ships.</span>
+        </label>
 
         {% if user.role.value != 'admin' %}
           <div class="notice info">

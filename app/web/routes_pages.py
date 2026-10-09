@@ -518,6 +518,15 @@ def _filtered_findings(db, user, params, model=None):
         query = query.filter(sa_or(model.reachability.is_(None),
                                    model.reachability != "unlikely"))
 
+    # Findings only on branches that do not ship.  Hidden the same way as the
+    # unreachable ones above: left out of the default list, counted on the
+    # page, one click to see.  See app.core.scan_scope.
+    scope = (params.get("scope", "") or "").strip().lower()
+    if scope == "out":
+        query = query.filter(model.out_of_scope.is_(True))
+    elif scope != "any":
+        query = query.filter(model.out_of_scope.is_(False))
+
     # Which side of the baseline.  The work by default.  This does nothing at
     # all until somebody draws a line, because an organization without one has
     # every finding counted as new, so an install that never touches this sees
@@ -644,7 +653,7 @@ def dashboard(request: Request, user: User = Depends(current_user)):
                           rbac.visible_repositories(db, user)
                           .filter(Repository.archived.is_(True))
                           .with_entities(Repository.full_name).all()]
-        query = everything_open
+        query = everything_open.filter(Finding.out_of_scope.is_(False))
         if archived_names:
             query = query.filter(Finding.repository.notin_(archived_names))
 
@@ -659,6 +668,12 @@ def dashboard(request: Request, user: User = Depends(current_user)):
         tally = (rbac.visible(db, user, FindingCount)
                  .filter(FindingCount.state == FindingState.OPEN)
                  if use_summary else everything_open)
+        # Not deployed is set aside the same way: still open, still in the
+        # findings list behind a filter, and counted below the tiles.
+        not_deployed_q = tally.filter(tally_model.out_of_scope.is_(True))
+        not_deployed = (summary.total(not_deployed_q) if use_summary
+                        else not_deployed_q.count())
+        tally = tally.filter(tally_model.out_of_scope.is_(False))
         live = tally
         if archived_names:
             live = tally.filter(tally_model.repository.notin_(archived_names))
@@ -681,7 +696,8 @@ def dashboard(request: Request, user: User = Depends(current_user)):
         # take a group as an answer.
         if use_summary:
             groups_live = (rbac.visible(db, user, FindingGroup)
-                           .filter(FindingGroup.state == FindingState.OPEN))
+                           .filter(FindingGroup.state == FindingState.OPEN)
+                           .filter(FindingGroup.out_of_scope.is_(False)))
             if archived_names:
                 groups_live = groups_live.filter(
                     FindingGroup.repository.notin_(archived_names))
@@ -777,6 +793,7 @@ def dashboard(request: Request, user: User = Depends(current_user)):
                        advisory_total=sum(advisory_counts.values()),
                        archived_set_aside=set_aside,
                        archived_repositories=len(archived_names),
+                       not_deployed=not_deployed,
                        total=sum(counts.values()))
         return page(request, "dashboard.html", **context)
 
@@ -1276,6 +1293,9 @@ def findings(request: Request, user: User = Depends(current_user)):
     reach = (params.get("reach", "") or "").strip().lower()
     if reach not in {"", "reachable", "unlikely", "unknown", "unrated"}:
         reach = ""
+    scope = (params.get("scope", "") or "").strip().lower()
+    if scope not in {"", "any", "out"}:
+        scope = ""
     since = (params.get("baseline", "new") or "new").strip().lower()
     if since not in baseline_filter.MODES:
         since = "new"
@@ -1390,6 +1410,13 @@ def findings(request: Request, user: User = Depends(current_user)):
             hidden_unreachable = _how_many(
                 wider, lambda m, q: q.filter(m.reachability == "unlikely"))
 
+        # And the ones on branches that do not ship, counted the same way.
+        hidden_out_of_scope = 0
+        if not scope:
+            hidden_out_of_scope = _how_many(
+                dict(params, scope="any"),
+                lambda m, q: q.filter(m.out_of_scope.is_(True)))
+
         # The lists behind the four "where" dropdowns.
         #
         # Each one is narrowed by the choices above it and not by itself.  Not
@@ -1459,12 +1486,14 @@ def findings(request: Request, user: User = Depends(current_user)):
                      "connection": connection, "per_page": limit,
                      "confidence": confidence, "sort": sort, "dir": direction,
                      "triage": triage, "baseline": since, "reach": reach,
+                     "scope": scope,
                      "since": since_choice, "group": grouped,
                      "exploited": flags.get("exploited", ""),
                      "verified": flags.get("verified", ""),
                      "malicious": flags.get("malicious", "")},
             show_discovered=bool(flags.get("verified")) or kind == "credential",
             hidden_unreachable=hidden_unreachable,
+            hidden_out_of_scope=hidden_out_of_scope,
             groups=groups, grouped=grouped, folded=folded,
             page_sizes=PAGE_SIZES,
             connections=sorted({c[0] for c in
@@ -1481,6 +1510,7 @@ def findings(request: Request, user: User = Depends(current_user)):
                                    ("q", search), ("exception", exception),
                                    ("confidence", confidence),
                                    ("reach", reach),
+                                   ("scope", scope),
                                    ("connection", connection),
                                    ("triage", triage if triage != "work" else ""),
                                    ("baseline", since if since != "new" else ""),
@@ -1674,6 +1704,15 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
             covering[_sev.value] = _branch_now.filter(
                 Finding.severity == _sev).count()
 
+        # Which of those branches get a full scan, and whether this finding is
+        # marked not deployed because none of them do.
+        from app.core import scan_scope
+
+        _scope_rule = scan_scope.rule_for(db, row.repository)
+        branch_scan = {name: dict(zip(("full", "source"),
+                                      _scope_rule.full_scan(name)))
+                       for name in (on_branches or [row.branch or ""])}
+
         about = repo_context.for_repository(db, row.repository)
         risk_context = {"sensitivity": about.get("sensitivity"),
                         "visibility": about.get("visibility"),
@@ -1699,6 +1738,10 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        scanning_now=_scanning_now(),
                        scanning_now_ids=_scanning_now_ids(),
                        on_branches=on_branches,
+                       branch_scan=branch_scan,
+                       scope_text=scan_scope.describe(
+                           _scope_rule, (about or {}).get("default_branch", "")),
+                       can_scope=rbac.can(user, "repo.scope"),
                        certification=certification,
                        exemption=exemption,
                        covering=covering,
@@ -1885,8 +1928,10 @@ def certification_detail(request: Request, repo: str = "", branch: str = "",
 
 
 @router.get("/repositories")
-def repositories(request: Request, user: User = Depends(current_user)):
+def repositories(request: Request, user: User = Depends(current_user),
+                 msg: str = "", kind: str = ""):
     from app.core import certification as _cert
+    from app.core import scan_scope
 
     # The dashboard tile for certified branches linked here with a filter that
     # did not exist, so the number opened a list of everything.  A count that
@@ -1986,13 +2031,40 @@ def repositories(request: Request, user: User = Depends(current_user)):
         for repo_name, severity, total in (
                 rbac.visible_findings(db, user)
                 .filter(Finding.state == FindingState.OPEN)
+                .filter(Finding.out_of_scope.is_(False))
                 .with_entities(Finding.repository, Finding.severity,
                                func.count(Finding.id))
                 .group_by(Finding.repository, Finding.severity).all()):
             key = repo_name or ""
             counts.setdefault(key, {})[getattr(severity, "value", "")] = total
 
+        # The Scope column.  Only repositories somebody set have a rule.
+        scope_rules = scan_scope.rules(db, [row.full_name for row in rows])
+        scopes = {}
+        for row in rows:
+            rule = scope_rules.get(row.full_name)
+            scopes[row.full_name] = {
+                "text": scan_scope.describe(rule, row.default_branch),
+                "set": rule is not None,
+                "default_out": scan_scope.default_left_out(
+                    rule, row.default_branch)}
+
+        # Which repositories have a drawing, and whether this person may make one.
+        from app.core import ai as _ai
+        from app.core.models import RepoDiagram
+        drawn = {name for (name,) in db.query(RepoDiagram.repository)
+                 .filter(RepoDiagram.graph.isnot(None))
+                 .filter(RepoDiagram.graph != "").all()}
+        _ai_cfg = _ai.config(db)
+        can_draw = (rbac.can(user, "repo.diagram") and _ai.enabled(_ai_cfg)
+                    and not _ai.missing(_ai_cfg))
+
         context = _shared(db, user)
+        context.update(drawn=drawn, can_draw=can_draw)
+        context.update(scopes=scopes, can_scope=rbac.can(user, "repo.scope"),
+                       flash=clean_text(msg, "message", limit=300,
+                                        required=False),
+                       flash_kind=notice_class(kind))
         context.update(active_page="repositories", rows=rows, counts=counts,
                        can_scan=rbac.can(user, "scan.run"),
                        scanning_now=_scanning_now(),
@@ -2001,6 +2073,300 @@ def repositories(request: Request, user: User = Depends(current_user)):
                        can_certify=rbac.can(user, "repo.certify"),
                        certified_default=certified_default)
         return page(request, "repositories.html", **context)
+
+
+def _scope_repo(db, user, repository: str):
+    """The repository, if this person may see it.  Absent and hidden match."""
+    if not repository:
+        return None
+    return (rbac.visible_repositories(db, user)
+            .filter(Repository.full_name == repository).one_or_none())
+
+
+@router.get("/repositories/{repo_id}/scope")
+def repository_scope(repo_id: int, request: Request, msg: str = "",
+                     kind: str = "", user: User = Depends(current_user)):
+    """Which branches of one repository ship, and what changed it last."""
+    rbac.require(user, "repo.scope")
+    from app.core import scan_scope
+
+    with session_scope() as db:
+        repo = (rbac.visible_repositories(db, user)
+                .filter(Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        rule = scan_scope.rule_for(db, repo.full_name)
+        names = set(scan_scope.known_branches(db, repo.full_name))
+        names.update(rule.overrides)
+        # Branches with open findings on them, so a branch the last scan did
+        # not list but that still carries findings is offered too.
+        names.update(branch_scope.names(
+            rbac.visible_findings(db, user)
+            .filter(Finding.repository == repo.full_name)
+            .filter(Finding.state == FindingState.OPEN)))
+        branches = []
+        for name in sorted(names):
+            full, source = rule.full_scan(name)
+            branches.append({"name": name, "full": full, "source": source,
+                             "default": name == repo.default_branch})
+        stored = scan_scope.settings_of(db, repo.full_name)
+        hidden = (rbac.visible_findings(db, user)
+                  .filter(Finding.repository == repo.full_name)
+                  .filter(Finding.state == FindingState.OPEN)
+                  .filter(Finding.out_of_scope.is_(True)).count())
+        context = _shared(db, user)
+        context.update(active_page="repositories", repo=repo, rule=rule,
+                       branches=branches, stored=stored,
+                       labels=scan_scope.REPO_LABELS,
+                       describe=scan_scope.describe(rule, repo.default_branch),
+                       default_left_out=scan_scope.default_left_out(
+                           rule, repo.default_branch),
+                       history=scan_scope.history(db, repo.full_name),
+                       hidden=hidden,
+                       flash=clean_text(msg, "message", limit=300,
+                                        required=False),
+                       flash_kind=notice_class(kind))
+        return page(request, "scope.html", **context)
+
+
+def _diagram_context(db, user, repo) -> dict:
+    """The stored drawing for a repository, and what this person may do."""
+    from app.core import ai, diagram
+
+    cfg = ai.config(db)
+    ai_ready = ai.enabled(cfg) and not ai.missing(cfg)
+    return {"diagram": diagram.view(diagram.current(db, repo.full_name)),
+            "can_draw": rbac.can(user, "repo.diagram") and ai_ready,
+            "ai_model": ai.describe_model(cfg) if ai_ready else "",
+            "ai_sends_code": bool(cfg.get("ai.send_code"))}
+
+
+@router.get("/repositories/{repo_id}/diagram")
+def repository_diagram(repo_id: int, request: Request, msg: str = "",
+                       kind: str = "", user: User = Depends(current_user)):
+    """How a repository's default branch fits together, as a model read it."""
+    with session_scope() as db:
+        repo = (rbac.visible_repositories(db, user)
+                .filter(Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        context = _shared(db, user)
+        context.update(active_page="repositories", repo=repo,
+                       **_diagram_context(db, user, repo),
+                       flash=clean_text(msg, "message", limit=300,
+                                        required=False),
+                       flash_kind=notice_class(kind))
+        return page(request, "diagram.html", **context)
+
+
+@router.get("/repositories/{repo_id}/diagram.pdf")
+def repository_diagram_pdf(repo_id: int, request: Request,
+                           user: User = Depends(current_user)):
+    """The same drawing as a landscape PDF, one flow per page after it."""
+    with session_scope() as db:
+        repo = (rbac.visible_repositories(db, user)
+                .filter(Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        context = _diagram_context(db, user, repo)
+        if not (context["diagram"] and context["diagram"]["ready"]):
+            raise HTTPException(status_code=404, detail="No diagram yet.")
+        context.update(repo=repo, app_name=APP_NAME,
+                       now=datetime.now(timezone.utc))
+        html = render_partial("diagram_pdf.html", **context)
+        name = "diagram-%s-%s.pdf" % (repo.full_name.replace("/", "-"),
+                                      datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    try:
+        from weasyprint import HTML
+    except Exception:
+        log.exception("weasyprint is not available")
+        raise HTTPException(
+            status_code=503,
+            detail="PDFs need the typesetting libraries, which are not "
+                   "installed on this server.")
+    pdf = HTML(string=html, base_url=str(request.base_url),
+               url_fetcher=report_url_fetcher("")).write_pdf()
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": 'attachment; filename="%s"' % name})
+
+
+def _connection_repos(db, user, connection):
+    """The repositories under one connection that this person may see."""
+    return (rbac.visible_repositories(db, user)
+            .filter(sa_or(Repository.connection_id == connection.id,
+                          Repository.connection == connection.name))
+            .order_by(Repository.organization, Repository.name).all())
+
+
+@router.get("/connections/{connection_id}/scope")
+def connection_scope(connection_id: int, request: Request, msg: str = "",
+                     kind: str = "", user: User = Depends(current_user)):
+    """Every repository and branch under one account, to scope in bulk.
+
+    For the accounts with thousands of branches, where one at a time from a
+    finding is no way to work.  Ticking a repository or a branch and choosing
+    credentials only leaves the credential pass on it and nothing else.
+    """
+    rbac.require(user, "repo.scope")
+    from app.core import connections as connection_store, scan_scope
+
+    with session_scope() as db:
+        connection = connection_store.by_id(db, connection_id)
+        if connection is None:
+            raise HTTPException(status_code=404, detail="No such connection.")
+        repos = _connection_repos(db, user, connection)
+        all_rules = scan_scope.rules(db, [r.full_name for r in repos])
+        listing = []
+        for repo in repos:
+            rule = all_rules.get(repo.full_name) or scan_scope.Rule()
+            names = set(scan_scope.known_branches(db, repo.full_name))
+            names.update(rule.overrides)
+            branches = []
+            for name in sorted(names):
+                full, source = rule.full_scan(name)
+                branches.append({"name": name, "full": full, "source": source,
+                                 "default": name == repo.default_branch})
+            listing.append({"repo": repo, "rule": rule,
+                            "text": scan_scope.describe(rule, repo.default_branch),
+                            "default_out": scan_scope.default_left_out(
+                                rule, repo.default_branch),
+                            "branches": branches,
+                            "credentials_only": sum(1 for b in branches if not b["full"])})
+        context = _shared(db, user)
+        context.update(active_page="connections", connection=connection,
+                       listing=listing,
+                       flash=clean_text(msg, "message", limit=300,
+                                        required=False),
+                       flash_kind=notice_class(kind))
+        return page(request, "connection_scope.html", **context)
+
+
+# Ticked branches on one connection's scope page.  The largest account seen
+# held a few thousand, so this is room for that with plenty over.
+MAX_SCOPE_FIELDS = 25000
+
+
+@router.post("/connections/{connection_id}/scope/confirm")
+async def connection_scope_confirm(connection_id: int, request: Request,
+                                   user: User = Depends(current_user)):
+    """What the ticked boxes would change, before anything does.
+
+    A POST rather than the GET the single change uses, because a few thousand
+    ticked branches do not fit in an address.
+    """
+    from app.web.security import check_csrf
+
+    # Read first, with room for every branch of a large account.  The form is
+    # kept, so the CSRF check below reads this copy rather than parsing again
+    # with the default limit of a thousand fields and finding no token.
+    await request.form(max_fields=MAX_SCOPE_FIELDS)
+    await check_csrf(request)
+    rbac.require(user, "repo.scope")
+    from app.core import connections as connection_store, scan_scope
+
+    form = await request.form(max_fields=MAX_SCOPE_FIELDS)
+    action = str(form.get("action", "") or "")
+    ticked_repos = [str(v) for v in form.getlist("repo") if str(v).strip()]
+    ticked_pairs = []
+    for raw in form.getlist("pair"):
+        repository, _, branch = str(raw).partition(" ")
+        if repository and branch:
+            ticked_pairs.append((repository, branch))
+    if action not in scan_scope.ACTIONS:
+        raise HTTPException(status_code=400, detail="Pick what to do with them.")
+    if not ticked_repos and not ticked_pairs:
+        raise HTTPException(status_code=400, detail="Tick something first.")
+
+    with session_scope() as db:
+        connection = connection_store.by_id(db, connection_id)
+        if connection is None:
+            raise HTTPException(status_code=404, detail="No such connection.")
+        allowed = {r.full_name for r in _connection_repos(db, user, connection)}
+        plan = scan_scope.batch([r for r in ticked_repos if r in allowed],
+                                [p for p in ticked_pairs if p[0] in allowed],
+                                action)
+        rows = []
+        totals = {"hide": {}, "show": {}, "hide_total": 0, "show_total": 0}
+        visible = rbac.visible_findings(db, user)
+        for repository, changes in sorted(plan.items()):
+            impact = scan_scope.preview(db, repository, "", "", "",
+                                        findings=visible, changes=changes)
+            rows.append({"repository": repository, "impact": impact,
+                         "branches": [b for b, _, _ in changes if b],
+                         "whole": any(not b for b, _, _ in changes)})
+            for side in ("hide", "show"):
+                for level, n in impact[side].items():
+                    totals[side][level] = totals[side].get(level, 0) + n
+                totals[side + "_total"] += impact[side + "_total"]
+        context = _shared(db, user)
+        context.update(active_page="connections", connection=connection,
+                       rows=rows, totals=totals, action=action,
+                       severities=SEVERITIES,
+                       ticked_repos=[r for r in ticked_repos if r in allowed],
+                       ticked_pairs=[f"{r} {b}" for r, b in ticked_pairs if r in allowed],
+                       default_leaves=[r["repository"] for r in rows
+                                       if r["impact"]["default_leaves"]],
+                       today=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        return page(request, "connection_scope_confirm.html", **context)
+
+
+@router.get("/scope/confirm")
+def confirm_scope(request: Request, user: User = Depends(current_user)):
+    """What a scope change would do, with the form that makes it.
+
+    A page of its own rather than a dialog, so the counts are worked out by
+    the server from the findings as they are now, and so the same page serves
+    one branch, one repository and a ticked set of them.
+    """
+    rbac.require(user, "repo.scope")
+    from app.core import scan_scope
+
+    params = request.query_params
+    wanted = [r.strip() for r in params.getlist("repo") if r.strip()]
+    branch = clean_text(params.get("branch", ""), "Branch", limit=255,
+                        required=False)
+    mode = (params.get("mode", "") or "").strip()
+    patterns = clean_text(params.get("patterns", ""), "Branches", limit=4000,
+                          required=False)
+    back = (params.get("back", "") or "/repositories").strip()
+    if not back.startswith("/") or back.startswith("//"):
+        back = "/repositories"
+    if not wanted:
+        raise HTTPException(status_code=400,
+                            detail="Tick at least one repository first.")
+    if len(wanted) > 500:
+        raise HTTPException(status_code=400,
+                            detail="At most 500 repositories at a time.")
+    if branch and len(wanted) != 1:
+        raise HTTPException(status_code=400, detail=(
+            "A branch setting is for one repository at a time."))
+
+    with session_scope() as db:
+        rows, problem = [], ""
+        totals = {"hide": {}, "show": {}, "hide_total": 0, "show_total": 0}
+        for name in wanted:
+            repo = _scope_repo(db, user, name)
+            if repo is None:
+                continue
+            problem = problem or scan_scope.validate(name, branch, mode, patterns)
+            impact = scan_scope.preview(db, name, branch, mode, patterns,
+                                        findings=rbac.visible_findings(db, user))
+            rows.append({"repository": name, "impact": impact})
+            for side in ("hide", "show"):
+                for level, n in impact[side].items():
+                    totals[side][level] = totals[side].get(level, 0) + n
+                totals[side + "_total"] += impact[side + "_total"]
+        if not rows:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        context = _shared(db, user)
+        context.update(active_page="repositories", rows=rows, branch=branch,
+                       mode=mode, patterns=patterns, back=back, totals=totals,
+                       problem=problem, labels=scan_scope.REPO_LABELS,
+                       severities=SEVERITIES,
+                       default_leaves=[r["repository"] for r in rows
+                                       if r["impact"]["default_leaves"]],
+                       today=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        return page(request, "scope_confirm.html", **context)
 
 
 @router.get("/scans")
@@ -2585,6 +2951,7 @@ def connections_page(request: Request, msg: str = "", kind: str = "",
             leftovers=(_connections.leftovers(db)
                        if rbac.can(user, "settings.write") else []),
             can_write=rbac.can(user, "settings.write"),
+            can_scope=rbac.can(user, "repo.scope"),
             message=clean_text(msg, "message", limit=400, required=False),
             message_kind="error" if kind == "error" else "ok",
         )

@@ -27,6 +27,18 @@
           if (box) { box.checked = trigger.getAttribute(pair[1]) === "1"; }
         });
 
+      /* The scan scope page for this account, opened in a new tab.  Only for
+       * one that exists: a new connection has nothing scanned under it yet. */
+      var scopeLink = form.querySelector("[data-scope-link]");
+      if (scopeLink) {
+        scopeLink.hidden = !id;
+        if (id) {
+          scopeLink.querySelector("a").setAttribute("href",
+            form.getAttribute("action").replace(/\/connections\/save$/,
+                                                "/connections/" + id + "/scope"));
+        }
+      }
+
       /* Several labels can apply at once, so they are tick boxes rather than a
        * field the generic filler understands. */
       var carried = (trigger.getAttribute("data-sensitivity") || "")

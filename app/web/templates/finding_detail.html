@@ -564,6 +564,10 @@
           {%- set repo_home = repo_info.html_url | web_url if repo_info else '' -%}
           {% if repo_home %}<a href="{{ repo_home }}" rel="noopener noreferrer"
              target="_blank">{{ f.repository }}</a>{% else %}{{ f.repository }}{% endif %}
+          {# Which branches get more than the credential pass.  Said here
+             because it decides whether this finding is on the work list. #}
+          <div class="faint small">Scan scope: {{ scope_text }}
+            {%- if can_scope %} &middot; <a href="{{ base }}/repositories/{{ f.repo_id }}/scope">change</a>{% endif %}</div>
         </td></tr>
         {# Which branch, and whether that is the one that ships.
            The same finding on the default branch and on a feature branch
@@ -573,11 +577,40 @@
         {% if f.branch or on_branches %}
         <tr><th>Branch</th><td>
           {% for b in (on_branches or [f.branch]) %}
+            {% set scan = branch_scan.get(b, {}) %}
             <span class="mono small">{{ b }}</span>{%
               if repo_info and repo_info.default_branch == b
               %} <span class="badge ok">default</span>{% endif %}{%
+              if scan and not scan.full %} <span class="badge waived"
+                title="{{ 'Set on this branch' if scan.source == 'branch' else 'Inherited from repository' }}">credentials only{{
+                '' if scan.source == 'branch' else ', inherited from repository' }}</span>{% endif %}
+            {%- if can_scope and b %}
+            {# A menu with no script: details opens and closes itself.  Each
+               choice goes to the confirmation page, which shows what moves
+               before anything does. #}
+            {% set q = 'repo=' ~ (f.repository | urlencode) ~ '&back=' ~ (('/findings/' ~ f.id) | urlencode) %}
+            <details class="scope-menu">
+              <summary>scope</summary>
+              <div class="small">
+                {% if scan.full %}
+                <div><a href="{{ base }}/scope/confirm?{{ q }}&branch={{ b | urlencode }}&mode=credentials">Credentials only on this branch</a></div>
+                {% else %}
+                <div><a href="{{ base }}/scope/confirm?{{ q }}&branch={{ b | urlencode }}&mode=full">Full scan on this branch</a></div>
+                {% endif %}
+                <div><a href="{{ base }}/scope/confirm?{{ q }}&mode=chosen&patterns={{ b | urlencode }}">Full scan only on this branch</a></div>
+                {% if scan.source == 'branch' %}
+                <div><a href="{{ base }}/scope/confirm?{{ q }}&branch={{ b | urlencode }}&mode=inherit">Inherit from repository</a></div>
+                {% endif %}
+              </div>
+            </details>
+            {%- endif %}{%
               if not loop.last %}<span class="faint">,</span> {% endif %}
           {% endfor %}
+          {% if f.out_of_scope %}
+          <div class="small"><span class="badge waived">not deployed</span>
+            <span class="faint">Every branch this is on gets credentials only,
+              so it is off the work list and out of the report files.</span></div>
+          {% endif %}
           {% if on_branches | length > 1 %}
           <div class="faint small">On {{ on_branches | length }} branches. It is
             the same finding in each: fixing it on one leaves it on the
@@ -1020,6 +1053,19 @@
         <button type="button" class="modal-close" data-close-modal>&times;</button></div>
       <div class="modal-body">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% if f.kind.value != 'credential' %}
+        {# Not offered on a credential.  A key works whether or not the code
+           it sits in is ever deployed. #}
+        <div class="field">
+          <label for="category">Kind of exception</label>
+          <select id="category" name="category">
+            <option value="">Accepted risk</option>
+            <option value="not_deployed">Not in scope: this code does not get deployed</option>
+          </select>
+          <span class="faint small">Either way an admin reviews it before
+            anything changes.</span>
+        </div>
+        {% endif %}
         <div class="field">
           <label for="reason">Why is this acceptable</label>
           <textarea id="reason" name="reason" required minlength="20" maxlength="2000"></textarea>

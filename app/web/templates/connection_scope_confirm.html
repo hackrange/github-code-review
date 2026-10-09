@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Confirm scan scope &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Change the scan scope</h1>
+  <div class="faint small">{{ connection.name }}: {{ rows | length }}
+    repositor{{ 'y' if rows | length == 1 else 'ies' }}</div></div></div>
+
+<div class="card">
+  <div class="card-head">What this changes</div>
+  <div class="card-body">
+    <p>Everything ticked becomes <strong>{{ {'credentials': 'credentials only',
+      'full': 'full scan', 'inherit': 'whatever its repository says'}[action] }}</strong>.
+      Credentials are still scanned on every branch.</p>
+    <p>
+      {% if totals.hide_total %}
+        <strong>{{ totals.hide_total }}</strong> open finding{{ '' if totals.hide_total == 1 else 's' }}
+        will be marked not deployed:
+        {% for level in severities %}{% if totals.hide.get(level) %}
+          <span class="badge {{ level }}">{{ totals.hide[level] }} {{ level }}</span>
+        {% endif %}{% endfor %}
+      {% else %}No open finding leaves the work list.{% endif %}
+    </p>
+    {% if totals.show_total %}
+    <p><strong>{{ totals.show_total }}</strong> come back:
+      {% for level in severities %}{% if totals.show.get(level) %}
+        <span class="badge {{ level }}">{{ totals.show[level] }} {{ level }}</span>
+      {% endif %}{% endfor %}</p>
+    {% endif %}
+  </div>
+  <div class="table-scroll">
+    <table class="small">
+      <thead><tr><th>Repository</th><th>Now</th><th>After</th><th>Branches to credentials only</th><th>Back to full scan</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        {% set i = row.impact %}
+        <tr>
+          <td class="mono">{{ row.repository }}
+            {% if i.default_leaves %}<span class="badge pending">default branch leaves the full scan</span>{% endif %}</td>
+          <td>{{ i.describe_before }}</td>
+          <td>{{ i.describe_after }}</td>
+          <td>{{ i.to_credentials | length }}{% if i.to_credentials %}
+            <span class="mono faint">{{ i.to_credentials[:5] | join(', ') }}{% if i.to_credentials | length > 5 %} and more{% endif %}</span>{% endif %}</td>
+          <td>{{ i.to_full | length }}{% if i.to_full %}
+            <span class="mono faint">{{ i.to_full[:5] | join(', ') }}{% if i.to_full | length > 5 %} and more{% endif %}</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="post" action="{{ base }}/connections/{{ connection.id }}/scope/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="action" value="{{ action }}">
+      {% for r in ticked_repos %}<input type="hidden" name="repo" value="{{ r }}">{% endfor %}
+      {% for p in ticked_pairs %}<input type="hidden" name="pair" value="{{ p }}">{% endfor %}
+      <div class="field">
+        <label for="cs-reason">Why</label>
+        <input type="text" id="cs-reason" name="reason" required minlength="10" maxlength="2000"
+               placeholder="For example: feature branches never deploy; release/* is what ships">
+      </div>
+      <div class="field" style="max-width:220px">
+        <label for="cs-review">Review by <span class="faint small">optional</span></label>
+        <input type="date" id="cs-review" name="review" min="{{ today }}">
+      </div>
+      {% if default_leaves %}
+      <label class="check">
+        <input type="checkbox" name="confirm_default" value="1" required>
+        I know the default branch of {{ default_leaves | length }}
+        repositor{{ 'y' if default_leaves | length == 1 else 'ies' }}
+        ({{ default_leaves[:5] | join(', ') }}{% if default_leaves | length > 5 %} and more{% endif %})
+        will only get the credential pass.
+      </label>
+      {% endif %}
+      <div style="margin-top:.75rem">
+        <a class="btn" href="{{ base }}/connections/{{ connection.id }}/scope">Cancel</a>
+        <button class="btn primary" type="submit">Change the scope</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

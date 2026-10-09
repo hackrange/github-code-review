@@ -94,6 +94,13 @@ def create_app() -> FastAPI:
                 log.warning("%d scan(s) were running when this last stopped, "
                             "marked interrupted", len(stale))
 
+        # The same for a diagram being drawn: the thread went with the process.
+        try:
+            from app.core import diagram as _diagram
+            _diagram.recover()
+        except Exception:            # noqa: BLE001
+            log.warning("could not tidy up unfinished diagrams", exc_info=True)
+
         # Whatever those runs had already finished.  The findings are on disk,
         # one file per repository, written as each one completed; a container
         # recreated mid scan runs none of the in process handlers, so this is

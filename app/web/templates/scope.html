@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Scan scope &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Scan scope</h1>
+  <div class="faint small mono">{{ repo.full_name }}</div></div></div>
+
+{# Which branches ship.  Credentials are read on every branch whatever this
+   says, so the choice here is only about the dependency, code and
+   configuration passes. #}
+<div class="card">
+  <div class="card-head">Now: {{ describe }}
+    {% if default_left_out %}<span class="badge pending"
+      title="The default branch only gets the credential pass">default branch not fully scanned</span>{% endif %}</div>
+  <div class="card-body">
+    <p class="small faint">Credentials are scanned on every branch, always.
+      Branches outside the full scan get the credential pass and nothing else,
+      and findings that are only on those branches are marked not deployed:
+      off the work list and out of the report files, never deleted.
+      {% if hidden %}<a href="{{ base }}/findings?repo={{ repo.full_name | urlencode }}&scope=out&state=open">{{ hidden }}
+      open finding{{ '' if hidden == 1 else 's' }} here {{ 'is' if hidden == 1 else 'are' }} marked not deployed now.</a>{% endif %}</p>
+    {% if stored.repository %}
+    <p class="small">Set by {{ stored.repository.set_by }} on
+      {{ stored.repository.set_at | dt('%d %b %Y') }}: {{ stored.repository.reason }}
+      {% if stored.repository.review_at %}<span class="faint">Review by
+        {{ stored.repository.review_at | dt('%d %b %Y') }}.</span>{% endif %}</p>
+    {% endif %}
+
+    <form method="get" action="{{ base }}/scope/confirm">
+      <input type="hidden" name="repo" value="{{ repo.full_name }}">
+      <input type="hidden" name="back" value="/repositories/{{ repo.id }}/scope">
+      {% for key in ['all', 'chosen', 'credentials'] %}
+      <label class="check">
+        <input type="radio" name="mode" value="{{ key }}" {{ 'checked' if rule.mode == key }}>
+        {{ labels[key] }}
+      </label>
+      {% endfor %}
+      <div class="field" style="max-width:480px">
+        <label for="patterns">Full scan branches, for "chosen branches only"</label>
+        {# The default branch is filled in to start with.  It is the one
+           that ships unless somebody says otherwise. #}
+        <textarea id="patterns" name="patterns" rows="3" class="mono"
+                  placeholder="master&#10;release/*">{{ (rule.full | join('\n')) if rule.full else repo.default_branch }}</textarea>
+        <span class="faint small">One per line.  Exact names or patterns:
+          release/* matches release/1.2.  Every other branch, new ones
+          included, gets credentials only.</span>
+      </div>
+      <button class="btn primary" type="submit">Check what this changes</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">Branches
+    <span class="faint small">as the last scan saw them, plus any with findings</span></div>
+  {% if branches %}
+  <div class="table-scroll">
+    <table class="small">
+      <thead><tr><th>Branch</th><th>Scan</th><th>Set by</th><th></th></tr></thead>
+      <tbody>
+      {% for b in branches %}
+        <tr>
+          <td class="mono branch-name">{{ b.name }}
+            {% if b.default %}<span class="badge ok">default</span>{% endif %}</td>
+          <td>{% if b.full %}<span class="badge ok">full scan</span>
+              {% else %}<span class="badge waived">credentials only</span>{% endif %}</td>
+          <td class="faint">{{ 'this branch' if b.source == 'branch' else 'inherited from repository' }}</td>
+          <td class="nowrap">
+            {% set back = '/repositories/' ~ repo.id ~ '/scope' %}
+            {% set q = 'repo=' ~ (repo.full_name | urlencode) ~ '&branch=' ~ (b.name | urlencode) ~ '&back=' ~ (back | urlencode) %}
+            {% if b.full %}
+            <a class="btn sm" href="{{ base }}/scope/confirm?{{ q }}&mode=credentials">Credentials only</a>
+            {% else %}
+            <a class="btn sm" href="{{ base }}/scope/confirm?{{ q }}&mode=full">Full scan</a>
+            {% endif %}
+            {% if b.source == 'branch' %}
+            <a class="btn sm" href="{{ base }}/scope/confirm?{{ q }}&mode=inherit">Inherit</a>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<div class="empty">No branches known yet.  Run a scan.</div>{% endif %}
+</div>
+
+{% if history %}
+<div class="card">
+  <div class="card-head">Changes</div>
+  <div class="table-scroll">
+    <table class="small">
+      <thead><tr><th>When</th><th>By</th><th>What</th><th>Why</th><th></th></tr></thead>
+      <tbody>
+      {% for h in history %}
+        <tr>
+          <td class="nowrap">{{ h.at | dt('%d %b %Y %H:%M') }}</td>
+          <td>{{ h.by }}</td>
+          <td>{% if h.branch %}<span class="mono">{{ h.branch }}</span>: {% endif %}
+            {{ (h.before.mode if h.before else ('inherit' if h.branch else 'all')) }}
+            &rarr; {{ (h.after.mode if h.after else ('inherit' if h.branch else 'all')) }}
+            {% if h.after and h.after.patterns %}<span class="mono faint">({{ h.after.patterns | replace('\n', ', ') }})</span>{% endif %}
+            {% if h.reverts %}<span class="faint">undoes change {{ h.reverts }}</span>{% endif %}</td>
+          <td>{{ h.reason }}</td>
+          <td>
+            {% if h.newest %}
+            <form method="post" action="{{ base }}/scope/changes/{{ h.id }}/revert" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="back" value="/repositories/{{ repo.id }}/scope">
+              <button class="btn sm" type="submit">Revert</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
