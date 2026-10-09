@@ -41,12 +41,12 @@
 <div class="page">
   <h1>{{ g.title or repo.full_name }}</h1>
   <p class="meta">{{ repo.full_name }}, default branch {{ repo.default_branch }}{{
-    (', commit ' ~ diagram.row.commit[:12]) if diagram.row.commit }}.  Drawn by {{ diagram.row.model }} on
+    (', commit ' ~ diagram.row.commit[:12]) if diagram.row.commit }}.  Diagram created for {{ diagram.row.created_by }} on
     {{ diagram.row.created_at | dt('%d %b %Y') }}.  Printed {{ now | dt('%d %b %Y') }}
     from {{ app_name }}.</p>
   <p>{{ g.summary }}</p>
   <div class="fit">{{ diagram.svg | safe }}</div>
-  <p class="note">Written by a model from a read of the code.  Check it against
+  <p class="note">Generated automatically from a read of the code.  Check it against
     the code before relying on it.</p>
 </div>
 
@@ -74,7 +74,7 @@
 {% set s = diagram.sources %}
 <div class="page">
   <h2>Where the code comes from</h2>
-  <p class="meta">Read from the files on the default branch, not by the model.
+  <p class="meta">Read straight from the files on the default branch.
     {{ s.private_hosts }} private host(s), {{ s.shared }} shared repositor{{ 'y' if s.shared == 1 else 'ies' }}.</p>
   {% if s.repositories %}
   <table>

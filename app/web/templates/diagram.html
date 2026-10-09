@@ -13,7 +13,7 @@
     <form method="post" action="{{ base }}/repositories/{{ repo.id }}/diagram" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn primary" type="submit"
-              title="Sends {{ 'the key files and ' if ai_sends_code }}the file tree to {{ ai_model }}">
+              title="Reads the default branch again and redraws the diagram">
         {{ 'Re-create diagram' if d and d.ready else 'Create diagram' }}</button>
     </form>
     {% endif %}
@@ -35,11 +35,11 @@
 <div class="card"><div class="empty">
   <p>No diagram of this repository yet.</p>
   {% if can_draw %}
-  <p class="faint small">Create diagram reads the default branch and asks
-    {{ ai_model }} to draw its components, how they connect and the main flows
-    through them.  {% if ai_sends_code %}The key files are sent with anything
-    that looks like a credential masked.{% else %}Sending code is off, so only
-    the file tree and the dependency sources go.{% endif %}</p>
+  <p class="faint small">Create diagram reads the default branch and draws
+    its components, how they connect and the main flows through them.
+    {% if ai_sends_code %}The key files are read with anything that looks
+    like a credential masked.{% else %}Only the file tree and the dependency
+    sources are read.{% endif %}</p>
   {% elif not ai_model %}
   <p class="faint small">Drawing one needs AI analysis switched on, on the AI page.</p>
   {% else %}
@@ -50,16 +50,16 @@
 {% set g = d.graph %}
 <div class="card">
   <div class="card-head">{{ g.title or repo.name }}
-    <span class="faint small">drawn by {{ d.row.model }} on
+    <span class="faint small">Diagram created for {{ d.row.created_by }} on
       {{ d.row.created_at | dt('%d %b %Y') }}{% if d.row.commit %} from commit
-      <span class="mono">{{ d.row.commit[:12] }}</span>{% endif %}, asked for by {{ d.row.created_by }}</span></div>
+      <span class="mono">{{ d.row.commit[:12] }}</span>{% endif %}</span></div>
   <div class="card-body">
     <p>{{ g.summary }}</p>
-    <p class="faint small">Written by a model from a read of the code, so check
-      it against the code before relying on it.  The registries and
+    <p class="faint small">Generated automatically from a read of the code, so
+      check it against the code before relying on it.  The registries and
       repositories further down are read straight from the files.</p>
-    {# Built from the model's JSON on the server, every string escaped.
-       Nothing the model wrote is rendered as markup. #}
+    {# Built from the generated JSON on the server, every string escaped.
+       Nothing generated is rendered as markup. #}
     <div class="diagram-scroll">{{ d.svg | safe }}</div>
   </div>
 </div>
