@@ -586,7 +586,9 @@ def matching_count(session, row, base=None) -> int:
               else or_(*clauses))
     query = base if base is not None else session.query(Finding)
     try:
-        return query.filter(joined).count()
+        # Counted the way its link opens the list: without what is only on
+        # branches that do not ship.
+        return query.filter(joined).filter(Finding.out_of_scope.is_(False)).count()
     except Exception:      # a count is not worth failing the page for
         log.exception("could not count what severity rule %s covers",
                       getattr(row, "id", "?"))

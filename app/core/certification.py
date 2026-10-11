@@ -295,6 +295,7 @@ class _Lookups:
                          .filter(Finding.repository.in_(chunk))
                          .filter(Finding.state == FindingState.OPEN)
                          .filter(Finding.excepted.is_(False))
+                         .filter(Finding.out_of_scope.is_(False))
                          .filter(Finding.first_found_at > oldest))
                 for repository, branch, first in query.all():
                     found[(_fold(repository), _fold(branch or ""))].append(
@@ -436,6 +437,7 @@ def status(session, row, head_sha: str = "", lookups=None) -> dict:
                    .filter(Finding.repository == row.repository)
                    .filter(Finding.state == FindingState.OPEN)
                    .filter(Finding.excepted.is_(False))
+                   .filter(Finding.out_of_scope.is_(False))
                    .filter(Finding.first_found_at > _aware(row.certified_at)))
         if named:
             since_q = since_q.filter(or_(Finding.branch == named,
@@ -531,6 +533,9 @@ def blocking_branches(session, repository: str, default_branch: str = "") -> set
             .filter(Finding.repository == repository)
             .filter(Finding.state == FindingState.OPEN)
             .filter(Finding.excepted.is_(False))
+            # Only on branches that do not ship blocks nothing.  See
+            # app.core.scan_scope.
+            .filter(Finding.out_of_scope.is_(False))
             .filter(Finding.severity.notin_(AUTOMATIC_CLEAR))
             .all())
     for branch, listed in rows:

@@ -73,6 +73,11 @@ def _scoped(query, organization="", repository="", branch="", connection="",
     """
     model = model or Finding
     query = query.filter(model.state == FindingState.OPEN)
+    # Only on branches that do not ship is off every number, not set aside
+    # and counted the way archived is.  See app.core.scan_scope.  The branch
+    # name summary has no such column; it only lists names for a picker.
+    if hasattr(model, "out_of_scope"):
+        query = query.filter(model.out_of_scope.is_(False))
     if not include_archived:
         query = query.filter(model.repository.notin_(_archived_names()))
     if connection:

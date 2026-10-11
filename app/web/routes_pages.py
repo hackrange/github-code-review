@@ -82,6 +82,7 @@ def _branch_finding_counts(db, user):
     for repository, branch, total in (
             rbac.visible_findings(db, user)
             .filter(Finding.state == FindingState.OPEN)
+            .filter(Finding.out_of_scope.is_(False))
             .with_entities(Finding.repository, Finding.branch,
                            func.count(Finding.id))
             .group_by(Finding.repository, Finding.branch).all()):
@@ -212,6 +213,9 @@ def _shared(db, user: User) -> dict:
         # The shell decides whether to offer the link, so a role without the
         # permission is not shown a page it would be refused at.
         "can_see_trends": rbac.can(user, "trend.read"),
+        # Whether findings on branches that do not ship can be asked for at
+        # all.  Everybody else never sees them.  See app.core.scan_scope.
+        "can_see_out_of_scope": rbac.can(user, "repo.scope"),
         # The navigation asks the same questions the routes do, so it stops
         # offering pages that will refuse.  Hiding a link is not the guard:
         # the address still works, and the guard is on the route.
@@ -518,10 +522,12 @@ def _filtered_findings(db, user, params, model=None):
         query = query.filter(sa_or(model.reachability.is_(None),
                                    model.reachability != "unlikely"))
 
-    # Findings only on branches that do not ship.  Hidden the same way as the
-    # unreachable ones above: left out of the default list, counted on the
-    # page, one click to see.  See app.core.scan_scope.
+    # Findings only on branches that do not ship.  Off the list for everybody,
+    # and only somebody who can change the scope can ask to see them, so they
+    # can be checked before a branch goes back.  See app.core.scan_scope.
     scope = (params.get("scope", "") or "").strip().lower()
+    if not rbac.can(user, "repo.scope"):
+        scope = ""
     if scope == "out":
         query = query.filter(model.out_of_scope.is_(True))
     elif scope != "any":
@@ -671,8 +677,11 @@ def dashboard(request: Request, user: User = Depends(current_user)):
         # Not deployed is set aside the same way: still open, still in the
         # findings list behind a filter, and counted below the tiles.
         not_deployed_q = tally.filter(tally_model.out_of_scope.is_(True))
-        not_deployed = (summary.total(not_deployed_q) if use_summary
-                        else not_deployed_q.count())
+        # Said only to somebody who can change the scope.  For everybody else
+        # these are not there at all.
+        not_deployed = ((summary.total(not_deployed_q) if use_summary
+                         else not_deployed_q.count())
+                        if rbac.can(user, "repo.scope") else 0)
         tally = tally.filter(tally_model.out_of_scope.is_(False))
         live = tally
         if archived_names:
@@ -1294,7 +1303,7 @@ def findings(request: Request, user: User = Depends(current_user)):
     if reach not in {"", "reachable", "unlikely", "unknown", "unrated"}:
         reach = ""
     scope = (params.get("scope", "") or "").strip().lower()
-    if scope not in {"", "any", "out"}:
+    if scope not in {"", "any", "out"} or not rbac.can(user, "repo.scope"):
         scope = ""
     since = (params.get("baseline", "new") or "new").strip().lower()
     if since not in baseline_filter.MODES:
@@ -1412,7 +1421,7 @@ def findings(request: Request, user: User = Depends(current_user)):
 
         # And the ones on branches that do not ship, counted the same way.
         hidden_out_of_scope = 0
-        if not scope:
+        if not scope and rbac.can(user, "repo.scope"):
             hidden_out_of_scope = _how_many(
                 dict(params, scope="any"),
                 lambda m, q: q.filter(m.out_of_scope.is_(True)))
@@ -1623,6 +1632,10 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                    kind: str = "", user: User = Depends(current_user)):
     with session_scope() as db:
         row = rbac.visible_finding(db, user, finding_id)
+        # Only on branches that do not ship is not there for anybody who
+        # cannot change the scope, link or no link.
+        if row is not None and row.out_of_scope and not rbac.can(user, "repo.scope"):
+            row = None
         if row is None:
             # Out of scope and does not exist look the same on purpose.
             raise HTTPException(status_code=404, detail="No such finding.")
@@ -1696,6 +1709,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
         # was not informed, which is a worse failure than a wrong badge.
         _branch_now = (rbac.visible_findings(db, user)
                        .filter(Finding.state == FindingState.OPEN)
+                       .filter(Finding.out_of_scope.is_(False))
                        .filter(Finding.repository == row.repository))
         if row.branch:
             _branch_now = _branch_now.filter(Finding.branch == row.branch)
@@ -1794,8 +1808,12 @@ def waivers(request: Request, q: str = "", status: str = "", page_no: int = 1,
     with session_scope() as db:
         # A subquery, not a list.  Reading every finding the user can see into
         # Python to collect its id took three and a half seconds on its own.
-        visible_ids = (rbac.visible_findings(db, user)
-                       .with_entities(Finding.id).scalar_subquery())
+        shown = rbac.visible_findings(db, user)
+        # An exception on a finding that is only on branches that do not ship
+        # goes with it, except for somebody who can change the scope.
+        if not rbac.can(user, "repo.scope"):
+            shown = shown.filter(Finding.out_of_scope.is_(False))
+        visible_ids = shown.with_entities(Finding.id).scalar_subquery()
         base = db.query(Waiver).filter(Waiver.finding_id.in_(visible_ids))
         # And, for anybody who cannot approve one, only their own.
         #
@@ -1913,6 +1931,7 @@ def certification_detail(request: Request, repo: str = "", branch: str = "",
                    if row is not None and state.get("moved") else "")
         found = (rbac.visible_findings(db, user)
                  .filter(Finding.state == FindingState.OPEN)
+                 .filter(Finding.out_of_scope.is_(False))
                  .filter(Finding.repository == repository))
         if branch_name:
             found = found.filter(Finding.branch == branch_name)

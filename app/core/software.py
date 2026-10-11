@@ -68,6 +68,8 @@ def vulnerability_index(session) -> dict:
             .filter(Finding.kind == FindingKind.DEPENDENCY)
             .filter(Finding.state != FindingState.FIXED)
             .filter(Finding.excepted.is_(False))
+            # Nor what is only on branches that do not ship.
+            .filter(Finding.out_of_scope.is_(False))
             .all())
     for repository, name, version, severity, advisory, exploited, malicious in rows:
         if not name:
@@ -439,6 +441,7 @@ def advisory_severities(session) -> dict:
             .filter(Finding.kind == FindingKind.DEPENDENCY)
             .filter(Finding.state != FindingState.FIXED)
             .filter(Finding.excepted.is_(False))
+            .filter(Finding.out_of_scope.is_(False))
             .filter(Finding.vulnerability_id != "")
             .all())
     for advisory, severity in rows:

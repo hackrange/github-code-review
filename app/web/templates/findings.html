@@ -131,7 +131,9 @@
       </select>
     </div>
     {# Branches that do not ship get credentials only, and what is left on
-       them from earlier scans is marked not deployed rather than deleted. #}
+       them from earlier scans is marked not deployed rather than deleted.
+       Only somebody who can change the scope can ask to see them. #}
+    {% if can_see_out_of_scope %}
     <div class="field">
       <label for="scope">Deployed</label>
       <select id="scope" name="scope" data-autosubmit>
@@ -140,6 +142,7 @@
         <option value="out" {{ 'selected' if filters.scope == 'out' }}>Only not deployed</option>
       </select>
     </div>
+    {% endif %}
   </fieldset>
 
   <fieldset class="filter-group">

@@ -53,6 +53,8 @@ def ranked(session, user, kind: str = "", limit: int = 50) -> list:
         func.sum(case((Finding.confidence == "low", 1), else_=0)).label("unsure"),
     ).filter(
         Finding.state == FindingState.OPEN,
+        # Only on branches that do not ship is not on anybody's work list.
+        Finding.out_of_scope.is_(False),
         Finding.rule.isnot(None),
         Finding.rule != "",
     )

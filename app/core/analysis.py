@@ -249,6 +249,8 @@ def _related(db, base_query, f, user=None) -> list:
 
     rows = (base_query.filter(Finding.repository == f.repository)
             .filter(Finding.id != f.id)
+            # Decisions on findings nobody is shown are not evidence.
+            .filter(Finding.out_of_scope.is_(False))
             .filter(or_(*near))
             .order_by(Finding.last_found_at.desc())
             .limit(60).all())

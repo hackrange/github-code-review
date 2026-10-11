@@ -661,6 +661,16 @@ def _rewriter(delay: float) -> None:
                 write_reports(db)
         except Exception:
             log.exception("could not rebuild the report files, the next change will try again")
+        # Today's trend point too, so a scope change, an exception or a
+        # triage decision moves the trend line now rather than at the next
+        # scan.  It replaces today's row, so doing it often costs nothing but
+        # the count.
+        try:
+            from app.core import trends
+            with session_scope() as db:
+                trends.record(db)
+        except Exception:
+            log.exception("could not update today's trend point, the next change will try again")
 
 
 def write_reports(session, reports_dir: Path = None) -> dict:

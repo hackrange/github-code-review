@@ -1814,8 +1814,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     session.flush()
     # Anything an exception already covers is not news.  Filtered after
     # apply_exceptions so a finding that arrives already waived never becomes
-    # a message somebody has to read and dismiss.
-    counts["new_findings"] = [f for f in new_findings if not f.excepted]
+    # a message somebody has to read and dismiss.  Nor is one only on branches
+    # that do not ship: the scope refresh above has flagged it already.
+    counts["new_findings"] = [f for f in new_findings
+                              if not f.excepted and not f.out_of_scope]
 
     # Branches a completed scan found nothing to read on, signed off without
     # anybody having to click.  Last, because every rule it applies is about

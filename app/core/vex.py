@@ -137,7 +137,10 @@ def statements(session) -> list:
     findings = (session.query(Finding)
                 .filter(Finding.kind == FindingKind.DEPENDENCY)
                 .filter(Finding.state != FindingState.FIXED)
-                .filter(Finding.excepted.is_(False)).all())
+                .filter(Finding.excepted.is_(False))
+                # Only on branches that do not ship, so out of the report
+                # files too.  See app.core.scan_scope.
+                .filter(Finding.out_of_scope.is_(False)).all())
     for finding in findings:
         waiver = waived.get(finding.id)
         if waiver is not None:

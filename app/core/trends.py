@@ -71,8 +71,12 @@ def record(session, day: datetime = None) -> int:
     from app.core import grouping
 
     day = _midnight(day or datetime.now(timezone.utc))
+    # Not counting what is only on branches that do not ship.  Those are off
+    # every other number too, and a trend line that disagrees with the
+    # dashboard is one nobody trusts.
     open_only = session.query(Finding).filter(
-        Finding.state == FindingState.OPEN)
+        Finding.state == FindingState.OPEN).filter(
+        Finding.out_of_scope.is_(False))
 
     # Advisories per branch and severity, in one statement.
     rows = (open_only.with_entities(
@@ -221,7 +225,8 @@ def backfill(session, days: int = 90) -> int:
         edge = day + timedelta(days=1)
         was_open = session.query(Finding).filter(
             Finding.first_found_at < edge).filter(
-            (Finding.resolved_at.is_(None)) | (Finding.resolved_at >= edge))
+            (Finding.resolved_at.is_(None)) | (Finding.resolved_at >= edge)).filter(
+            Finding.out_of_scope.is_(False))
 
         rows = (was_open.with_entities(
                     Finding.organization, Finding.repository, Finding.branch,
