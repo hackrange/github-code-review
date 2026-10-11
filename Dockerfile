@@ -90,19 +90,21 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
 # The scanning engines.  Pinned, because a scanner that changes its mind
 # between runs makes every report argue with the last one.
 ARG GITLEAKS_VERSION=8.30.1
-ARG SYFT_VERSION=1.51.0
-ARG GRYPE_VERSION=0.117.0
-ARG OSV_VERSION=v2.5.1
-ARG TRIVY_VERSION=0.74.0
+ARG SYFT_VERSION=1.54.1
+ARG GRYPE_VERSION=0.120.1
+ARG OSV_VERSION=v2.6.0
+ARG TRIVY_VERSION=0.75.0
 ARG ZIZMOR_VERSION=1.29.0
+# trufflehog was the one engine not pinned, so a rebuild could change it.
+ARG TRUFFLEHOG_VERSION=3.99.2
 # The one second engine that adds real depth rather than corroboration:
 # gosec analyses a Go package rather than a file at a time, which is exactly
 # the boundary semgrep's free rules stop at.
-ARG GOSEC_VERSION=2.22.9
+ARG GOSEC_VERSION=2.29.0
 # gosec reads types through go/packages, which shells out to `go list`.  With
 # no toolchain it exits zero having analysed nothing, so the compiler comes
 # with it or the engine is worse than absent.
-ARG GO_VERSION=1.25.1
+ARG GO_VERSION=1.27.2
 
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
@@ -118,7 +120,7 @@ RUN set -eux; \
     curl -fsSL "https://raw.githubusercontent.com/anchore/grype/main/install.sh" \
       | sh -s -- -b /usr/local/bin "v${GRYPE_VERSION}"; \
     curl -fsSL "https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh" \
-      | sh -s -- -b /usr/local/bin; \
+      | sh -s -- -b /usr/local/bin "v${TRUFFLEHOG_VERSION}"; \
     curl -fsSL "https://github.com/google/osv-scanner/releases/download/${OSV_VERSION}/osv-scanner_linux_${go_arch}" \
       -o /usr/local/bin/osv-scanner; \
     chmod 0755 /usr/local/bin/osv-scanner; \
