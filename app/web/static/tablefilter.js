@@ -19,7 +19,8 @@
  *   <tr data-org="acme">
  *
  * Rows that carry data-branches also take branch=name and branch!=name in
- * the search box.  A row is shown when one of its branches is named by an =
+ * the search box, and any [data-branch-name] inside the row that the search
+ * did not name is hidden.  A row is shown when one of its branches is named by an =
  * term, if there are any, and is not named by any != term.  So
  * "branch!=master branch!=main" means some branch other than those two, which
  * is what somebody writing it means, rather than the always true thing the
@@ -117,6 +118,17 @@
         }
         row.hidden = !keep;
         if (keep) { shown++; }
+
+        /* A row that lists its branches one by one shows only the ones the
+         * search named, opened up so they can be seen and ticked. */
+        var labels = row.querySelectorAll("[data-branch-name]");
+        for (var l = 0; l < labels.length; l++) {
+          labels[l].hidden = !!(hits && keep) &&
+            hits.indexOf(labels[l].getAttribute("data-branch-name")) === -1;
+        }
+        if (labels.length && hits && keep) {
+          row.querySelectorAll("details").forEach(function (d) { d.open = true; });
+        }
 
         /* Which branches matched, on the row, so the reason it is shown can
          * be read without opening anything. */

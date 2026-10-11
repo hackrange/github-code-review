@@ -20,12 +20,18 @@
       <div class="field" style="max-width:420px;margin:0;flex:1 1 18rem">
         <label for="scope-search">Search</label>
         <input type="text" id="scope-search" data-filter="scope-table" autocomplete="off"
-               placeholder="repository or branch">
+               placeholder="repository, or branch!=main branch!=master">
         <div class="small faint" data-filter-count="scope-table"></div>
       </div>
       <label class="check"><input type="checkbox" id="tick-all-repos"> Select all repositories shown</label>
       <label class="check"><input type="checkbox" id="tick-all-branches"> Select all branches shown</label>
     </div>
+    <div class="help small faint" style="margin-top:.5rem">Words match a repository
+      or branch name.  <span class="mono">branch=main OR branch=master</span> shows
+      just those branches, and <span class="mono">branch!=main branch!=master</span>
+      every other branch, so a select all then ticks only those.
+      <span class="mono">*</span> matches anything, as in
+      <span class="mono">branch=release/*</span>.</div>
   </div>
 </div>
 
@@ -39,7 +45,7 @@
         <tbody>
         {% for item in listing %}
           {% set r = item.repo %}
-          <tr>
+          <tr data-branches="{{ item.branches | map(attribute='name') | join(' ') }}">
             <td class="nowrap"><input type="checkbox" name="repo" value="{{ r.full_name }}"
                 title="The whole repository"></td>
             <td class="mono"><a href="{{ base }}/repositories/{{ r.id }}/scope">{{ r.full_name }}</a>
@@ -54,7 +60,7 @@
                   Select all branches of this repository</label>
                 <div class="scope-branches">
                 {% for b in item.branches %}
-                  <label class="check small mono">
+                  <label class="check small mono" data-branch-name="{{ b.name }}">
                     <input type="checkbox" name="pair" value="{{ r.full_name }} {{ b.name }}">
                     {{ b.name }}
                     {% if b.default %}<span class="badge ok">default</span>{% endif %}

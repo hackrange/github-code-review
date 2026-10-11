@@ -2368,9 +2368,31 @@ def confirm_scope(request: Request, user: User = Depends(current_user)):
     one branch, one repository and a ticked set of them.
     """
     rbac.require(user, "repo.scope")
+    return _confirm_scope(request, user, request.query_params)
+
+
+@router.post("/scope/confirm")
+async def confirm_scope_post(request: Request, user: User = Depends(current_user)):
+    """The same page for a ticked set too long for an address.
+
+    Four hundred repositories in a query string is about 25 KB, and the load
+    balancer drops a request line that size without a word: the browser shows
+    the connection closed, not an error anybody can read.  The repositories
+    page posts its ticks here instead.
+    """
+    from app.web.security import check_csrf
+
+    # Read with room first, so the CSRF check reads this copy rather than
+    # parsing again with the default limit of a thousand fields.
+    form = await request.form(max_fields=MAX_SCOPE_FIELDS)
+    await check_csrf(request)
+    rbac.require(user, "repo.scope")
+    return _confirm_scope(request, user, form)
+
+
+def _confirm_scope(request: Request, user: User, params):
     from app.core import scan_scope
 
-    params = request.query_params
     wanted = [r.strip() for r in params.getlist("repo") if r.strip()]
     branch = clean_text(params.get("branch", ""), "Branch", limit=255,
                         required=False)

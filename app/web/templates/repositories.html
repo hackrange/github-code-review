@@ -232,7 +232,9 @@
   {% if can_scope %}
   {# Above the table and kept on screen by scopebulk.js, so the setting is
      beside the rows being ticked rather than a thousand rows further down. #}
-  <form method="get" id="scope-bulk" class="scope-bar" action="{{ base }}/scope/confirm">
+  {# Posted, not a GET: a few hundred ticked names do not fit in an address. #}
+  <form method="post" id="scope-bulk" class="scope-bar" action="{{ base }}/scope/confirm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="back" value="/repositories">
     <div class="scope-bar-count"><strong data-ticked>Nothing ticked</strong>
       <span class="faint small" data-ticked-hidden></span></div>

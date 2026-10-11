@@ -1,7 +1,7 @@
 /* Select all, on the scan scope page of a connection.
  *
- * Shown means what the search left visible, so a search for "feature/" and a
- * select all ticks those and nothing else.  A box hidden by the search is
+ * Shown means what the search left visible, so a search for "feature/", or
+ * branch!=main branch!=master, and a select all ticks those and nothing else.  A box hidden by the search is
  * unticked rather than left as it was, because a change to a branch nobody
  * could see on the screen is a change nobody checked.
  */
@@ -11,9 +11,12 @@
   var form = document.getElementById("conn-scope");
   if (!form) { return; }
 
+  /* A branch the branch search left out of its list counts as hidden too,
+   * even though its row is showing. */
   function shown(box) {
     var row = box.closest("tr");
-    return row && row.offsetParent !== null;
+    var label = box.closest("[data-branch-name]");
+    return row && !row.hidden && !(label && label.hidden);
   }
 
   function all(selector) {
@@ -55,7 +58,7 @@
     box.addEventListener("change", function () {
       var list = box.closest("details");
       Array.prototype.slice.call(list.querySelectorAll('input[name="pair"]'))
-        .forEach(function (b) { b.checked = box.checked; });
+        .forEach(function (b) { b.checked = shown(b) ? box.checked : false; });
       count();
     });
   });
