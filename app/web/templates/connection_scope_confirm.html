@@ -2,14 +2,17 @@
 {% block title %}Confirm scan scope &middot; Git Code Review{% endblock %}
 {% block content %}
 <div class="page-head"><div><h1>Change the scan scope</h1>
-  <div class="faint small">{{ connection.name }}: {{ rows | length }}
-    repositor{{ 'y' if rows | length == 1 else 'ies' }}</div></div></div>
+  {# Shared by a connection's scope page and a repository's branch page.
+     Each passes where to post and where Cancel goes. #}
+  <div class="faint small">{% if connection %}{{ connection.name }}: {{ rows | length }}
+    repositor{{ 'y' if rows | length == 1 else 'ies' }}{% else %}<span class="mono">{{ rows[0].repository }}</span>:
+    {{ ticked_pairs | length }} branch{{ '' if ticked_pairs | length == 1 else 'es' }}{% endif %}</div></div></div>
 
 <div class="card">
   <div class="card-head">What this changes</div>
   <div class="card-body">
     <p>Everything ticked becomes <strong>{{ {'credentials': 'credentials only',
-      'full': 'full scan', 'inherit': 'whatever its repository says'}[action] }}</strong>.
+      'full': 'credentials + full scan', 'inherit': 'whatever its repository says'}[action] }}</strong>.
       Credentials are still scanned on every branch.</p>
     <p>
       {% if totals.hide_total %}
@@ -51,7 +54,7 @@
 
 <div class="card">
   <div class="card-body">
-    <form method="post" action="{{ base }}/connections/{{ connection.id }}/scope/apply">
+    <form method="post" action="{{ base }}{{ apply_url }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="action" value="{{ action }}">
       {% for r in ticked_repos %}<input type="hidden" name="repo" value="{{ r }}">{% endfor %}
@@ -75,7 +78,7 @@
       </label>
       {% endif %}
       <div style="margin-top:.75rem">
-        <a class="btn" href="{{ base }}/connections/{{ connection.id }}/scope">Cancel</a>
+        <a class="btn" href="{{ base }}{{ cancel_url }}">Cancel</a>
         <button class="btn primary" type="submit">Change the scope</button>
       </div>
     </form>

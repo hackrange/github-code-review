@@ -4,11 +4,94 @@
 <div class="page-head"><div><h1>Scan scope</h1>
   <div class="faint small mono">{{ repo.full_name }}</div></div></div>
 
+{# Every branch, ticked and set together.  The single branch buttons are
+   still there for one at a time, and both go through the same page that
+   counts what moves before anything does. #}
+<div class="card repo-card">
+  <div class="card-head" style="padding:0 0 .6rem;border:0">Branches
+    <span class="faint small" style="font-weight:400;margin-left:.5rem">as the last
+      scan saw them, plus any with findings</span></div>
+  {% if branches %}
+  <div class="repo-filters">
+    <div class="field">
+      <label for="branch-search">Search</label>
+      <input type="text" id="branch-search" data-filter="branch-table" autocomplete="off"
+             placeholder="name, or branch!=main branch!=master">
+    </div>
+    <div class="field">
+      <label for="branch-mode">Scan now</label>
+      <select id="branch-mode" data-filter-by="branch-table" data-filter-key="mode">
+        <option value="">Any</option>
+        <option value="full">Credentials + Full scan</option>
+        <option value="credentials">Credentials</option>
+        <option value="own">Set on the branch itself</option>
+      </select>
+    </div>
+    <div class="small faint repo-filter-count" data-filter-count="branch-table"></div>
+  </div>
+  <div class="help small faint" style="margin-top:.35rem">Words match a branch name.
+    <span class="mono">branch=main OR branch=master</span> shows just those, and
+    <span class="mono">branch!=main branch!=master</span> every other branch.
+    <span class="mono">*</span> matches anything, as in
+    <span class="mono">branch=release/*</span>.</div>
+
+  <form method="post" id="branch-bulk" class="scope-bar"
+        action="{{ base }}/repositories/{{ repo.id }}/scope/confirm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="scope-bar-count"><strong data-ticked>Nothing ticked</strong>
+      <span class="faint small" data-ticked-hidden></span></div>
+    <div class="scope-bar-actions" style="margin-left:0">
+      <span class="small faint">Set the ticked ones to</span>
+      <button class="btn" type="submit" name="action" value="credentials" disabled>Credentials only</button>
+      <button class="btn" type="submit" name="action" value="full" disabled>Credentials + Full scan</button>
+      <button class="btn" type="submit" name="action" value="inherit" disabled
+              title="Drop the branch's own setting and follow the repository's">Follow the repository</button>
+      <button class="btn" type="button" data-clear hidden>Clear</button>
+    </div>
+  </form>
+
+  <div class="empty" data-filter-empty="branch-table" hidden>Nothing matches that.</div>
+  <div class="table-scroll">
+    <table id="branch-table" class="small">
+      <thead><tr><th class="nowrap"><input type="checkbox" id="select-branches"
+          title="Everything shown"></th>
+        <th>Branch</th><th>Scan</th><th>Set by</th><th></th></tr></thead>
+      <tbody>
+      {% for b in branches %}
+        <tr data-branches="{{ b.name }}"
+            data-mode="{{ 'full' if b.full else 'credentials' }}{{ ' own' if b.source == 'branch' }}">
+          <td class="nowrap"><input type="checkbox" name="branch" form="branch-bulk"
+              value="{{ b.name }}"></td>
+          <td class="mono branch-name">{{ b.name }}
+            {% if b.default %}<span class="badge ok">default</span>{% endif %}</td>
+          <td>{% if b.full %}<span class="badge scope-full">Credentials + Full scan</span>
+              {% else %}<span class="badge scope-creds">Credentials</span>{% endif %}</td>
+          <td class="faint">{{ 'this branch' if b.source == 'branch' else 'inherited from repository' }}</td>
+          <td class="nowrap">
+            {% set back = '/repositories/' ~ repo.id ~ '/scope' %}
+            {% set q = 'repo=' ~ (repo.full_name | urlencode) ~ '&branch=' ~ (b.name | urlencode) ~ '&back=' ~ (back | urlencode) %}
+            {% if b.full %}
+            <a class="btn sm" href="{{ base }}/scope/confirm?{{ q }}&mode=credentials">Credentials only</a>
+            {% else %}
+            <a class="btn sm" href="{{ base }}/scope/confirm?{{ q }}&mode=full">Full scan</a>
+            {% endif %}
+            {% if b.source == 'branch' %}
+            <a class="btn sm" href="{{ base }}/scope/confirm?{{ q }}&mode=inherit">Inherit</a>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<div class="empty">No branches known yet.  Run a scan.</div>{% endif %}
+</div>
+
 {# Which branches ship.  Credentials are read on every branch whatever this
    says, so the choice here is only about the dependency, code and
    configuration passes. #}
 <div class="card">
-  <div class="card-head">Now: {{ describe }}
+  <div class="card-head">The repository setting, now: {{ describe }}
     {% if default_left_out %}<span class="badge pending"
       title="The default branch only gets the credential pass">default branch not fully scanned</span>{% endif %}</div>
   <div class="card-body">
@@ -49,41 +132,6 @@
   </div>
 </div>
 
-<div class="card">
-  <div class="card-head">Branches
-    <span class="faint small">as the last scan saw them, plus any with findings</span></div>
-  {% if branches %}
-  <div class="table-scroll">
-    <table class="small">
-      <thead><tr><th>Branch</th><th>Scan</th><th>Set by</th><th></th></tr></thead>
-      <tbody>
-      {% for b in branches %}
-        <tr>
-          <td class="mono branch-name">{{ b.name }}
-            {% if b.default %}<span class="badge ok">default</span>{% endif %}</td>
-          <td>{% if b.full %}<span class="badge ok">full scan</span>
-              {% else %}<span class="badge waived">credentials only</span>{% endif %}</td>
-          <td class="faint">{{ 'this branch' if b.source == 'branch' else 'inherited from repository' }}</td>
-          <td class="nowrap">
-            {% set back = '/repositories/' ~ repo.id ~ '/scope' %}
-            {% set q = 'repo=' ~ (repo.full_name | urlencode) ~ '&branch=' ~ (b.name | urlencode) ~ '&back=' ~ (back | urlencode) %}
-            {% if b.full %}
-            <a class="btn sm" href="{{ base }}/scope/confirm?{{ q }}&mode=credentials">Credentials only</a>
-            {% else %}
-            <a class="btn sm" href="{{ base }}/scope/confirm?{{ q }}&mode=full">Full scan</a>
-            {% endif %}
-            {% if b.source == 'branch' %}
-            <a class="btn sm" href="{{ base }}/scope/confirm?{{ q }}&mode=inherit">Inherit</a>
-            {% endif %}
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}<div class="empty">No branches known yet.  Run a scan.</div>{% endif %}
-</div>
-
 {% if history %}
 <div class="card">
   <div class="card-head">Changes</div>
@@ -117,4 +165,6 @@
   </div>
 </div>
 {% endif %}
+<script src="{{ base }}/static/tablefilter.js?v={{ asset_v('tablefilter.js') }}"></script>
+<script src="{{ base }}/static/branchbulk.js?v={{ asset_v('branchbulk.js') }}"></script>
 {% endblock %}

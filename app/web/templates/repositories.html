@@ -287,7 +287,11 @@
           {% if can_scope %}<td class="nowrap"><input type="checkbox" name="repo"
               form="scope-bulk" value="{{ r.full_name }}"></td>{% endif %}
           <td class="small">{{ r.organization }}</td>
-          <td class="small"><a href="{{ base }}/findings?q={{ r.name }}">{{ r.name }}</a>
+          {# To its branches for somebody who can scope them, so the name is
+             the way to pick branches one repository at a time.  The open
+             findings column still goes to the findings. #}
+          <td class="small"><a href="{{ base }}{{ ('/repositories/' ~ r.id ~ '/scope') if can_scope else ('/findings?q=' ~ (r.name | urlencode)) }}"
+              {%- if can_scope %} title="Every branch of {{ r.name }}, to set what each one gets"{% endif %}>{{ r.name }}</a>
             {% if r.archived %}<span class="badge waived">archived</span>{% endif %}</td>
           <td class="small faint">{{ r.visibility }}</td>
           {# The sign off on this repository's own default branch, beside the
@@ -345,9 +349,11 @@
             {%- if rc | length > 4 %}<a class="faint" href="#certifications">and {{ rc | length - 4 }} more</a>{% endif %}
             {%- if not rc %}<span class="faint">none</span>{% endif %}</td>
           <td class="nowrap">
+            {% if c %}<a href="{{ base }}/findings?repo={{ r.full_name | urlencode }}&state=open"
+               style="text-decoration:none" title="The open findings in {{ r.name }}">
             {% for level in ['critical','high','medium','low'] %}
               {% if c.get(level) %}<span class="badge {{ level }}">{{ c[level] }}</span>{% endif %}
-            {% endfor %}
+            {% endfor %}</a>{% endif %}
             {% if not c %}<span class="faint small">none</span>{% endif %}
           </td>
           <td class="small faint nowrap">{{ r.last_scanned_at | dt('%Y-%m-%d') if r.last_scanned_at else 'never' }}</td>

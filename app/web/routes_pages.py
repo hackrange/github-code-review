@@ -2164,6 +2164,56 @@ def repository_scope(repo_id: int, request: Request, msg: str = "",
         return page(request, "scope.html", **context)
 
 
+@router.post("/repositories/{repo_id}/scope/confirm")
+async def repository_scope_confirm(repo_id: int, request: Request,
+                                   user: User = Depends(current_user)):
+    """What the ticked branches of one repository would change.
+
+    The same page and the same counts as a connection's bulk page, for one
+    repository.  Posted, because a repository can have thousands of branches.
+    """
+    from app.web.security import check_csrf
+
+    form = await request.form(max_fields=MAX_SCOPE_FIELDS)
+    await check_csrf(request)
+    rbac.require(user, "repo.scope")
+    from app.core import scan_scope
+
+    action = str(form.get("action", "") or "")
+    if action not in scan_scope.ACTIONS:
+        raise HTTPException(status_code=400, detail="Pick what to do with them.")
+    with session_scope() as db:
+        repo = (rbac.visible_repositories(db, user)
+                .filter(Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        branches = sorted({str(v).strip() for v in form.getlist("branch")
+                           if str(v).strip()})
+        if not branches:
+            raise HTTPException(status_code=400, detail="Tick a branch first.")
+        plan = scan_scope.batch([], [(repo.full_name, b) for b in branches], action)
+        changes = plan.get(repo.full_name, [])
+        impact = scan_scope.preview(db, repo.full_name, "", "", "",
+                                    findings=rbac.visible_findings(db, user),
+                                    changes=changes)
+        totals = {"hide": dict(impact["hide"]), "show": dict(impact["show"]),
+                  "hide_total": impact["hide_total"],
+                  "show_total": impact["show_total"]}
+        context = _shared(db, user)
+        context.update(active_page="repositories", connection=None,
+                       apply_url=f"/repositories/{repo.id}/scope/apply",
+                       cancel_url=f"/repositories/{repo.id}/scope",
+                       rows=[{"repository": repo.full_name, "impact": impact,
+                              "branches": branches, "whole": False}],
+                       totals=totals, action=action, severities=SEVERITIES,
+                       ticked_repos=[],
+                       ticked_pairs=[f"{repo.full_name} {b}" for b in branches],
+                       default_leaves=([repo.full_name]
+                                       if impact["default_leaves"] else []),
+                       today=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        return page(request, "connection_scope_confirm.html", **context)
+
+
 def _diagram_flags(db, user) -> tuple:
     """Which repositories have a drawing, and whether this person may make one."""
     from app.core import ai
@@ -2349,6 +2399,8 @@ async def connection_scope_confirm(connection_id: int, request: Request,
                 totals[side + "_total"] += impact[side + "_total"]
         context = _shared(db, user)
         context.update(active_page="connections", connection=connection,
+                       apply_url=f"/connections/{connection.id}/scope/apply",
+                       cancel_url=f"/connections/{connection.id}/scope",
                        rows=rows, totals=totals, action=action,
                        severities=SEVERITIES,
                        ticked_repos=[r for r in ticked_repos if r in allowed],

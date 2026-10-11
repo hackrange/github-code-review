@@ -4846,6 +4846,65 @@ async def draw_diagram(repo_id: int, request: Request,
 MAX_SCOPE_FIELDS = 25000
 
 
+@router.post("/repositories/{repo_id}/scope/apply")
+async def apply_repository_branches(repo_id: int, request: Request,
+                                    user: User = Depends(current_user)):
+    """The ticked branches of one repository, all set the same way at once."""
+    await request.form(max_fields=MAX_SCOPE_FIELDS)
+    await check_csrf(request)
+    rbac.require(user, "repo.scope")
+
+    from app.core import scan_scope
+    from app.core.models import Repository
+
+    form = await request.form(max_fields=MAX_SCOPE_FIELDS)
+    action = str(form.get("action", "") or "")
+    reason = clean_text(form.get("reason"), "Reason", limit=2000)
+    review = clean_text(form.get("review"), "Review date", limit=10,
+                        required=False)
+    confirmed_default = str(form.get("confirm_default", "")) == "1"
+    back = f"/repositories/{repo_id}/scope"
+
+    with session_scope() as db:
+        repo = (rbac.visible_repositories(db, user)
+                .filter(Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        # The confirm page sends "repository branch" pairs.  Only this
+        # repository's count, whatever else a hand built request carries.
+        pairs = []
+        for raw in form.getlist("pair"):
+            repository, _, branch = str(raw).partition(" ")
+            if repository == repo.full_name and branch:
+                pairs.append((repository, branch))
+        changes = scan_scope.batch([], pairs, action).get(repo.full_name, [])
+        if not changes:
+            raise HTTPException(status_code=400, detail="Nothing to change.")
+        impact = scan_scope.preview(db, repo.full_name, "", "", "",
+                                    changes=changes)
+        if impact["default_leaves"] and not confirmed_default:
+            raise HTTPException(status_code=400, detail=(
+                f"This takes {impact['default_branch']}, the default branch, "
+                "down to credentials only.  Tick the box that says you mean it."))
+        ids, problem = scan_scope.apply_batch(db, repo.full_name, changes,
+                                              reason, review, user.username)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+        record(db, "repo.scope_changed", actor=user.username,
+               target=repo.full_name,
+               detail=(f"changes {ids[0]}-{ids[-1]} from its branch page: "
+                       f"{len(changes)} branch(es) to {action}; "
+                       f"{impact['hide_total']} finding(s) now not deployed, "
+                       f"{impact['show_total']} back.  Reason: {reason}")[:4000],
+               source_ip=client_ip(request))
+
+    request_rewrite()
+    n = len(changes)
+    note = (f"{n} branch{'' if n == 1 else 'es'} changed.  Credentials are "
+            "still scanned everywhere.  Each change can be reverted below.")
+    return redirect(_back_with(back, note, "ok"))
+
+
 @router.post("/connections/{connection_id}/scope/apply")
 async def apply_connection_scope(connection_id: int, request: Request,
                                  user: User = Depends(current_user)):
