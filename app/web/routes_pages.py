@@ -2032,6 +2032,17 @@ def repositories(request: Request, user: User = Depends(current_user),
                 continue
             certified_default[badge["repository"]] = badge
 
+        # Every sign off on each repository, any branch, for the
+        # Certification filter and column in the table.  Also taken before
+        # the state filter, for the same reason as the column above.
+        certs_by_repo = {}
+        for badge in badges:
+            if badge["state"] == "revoked":
+                continue
+            certs_by_repo.setdefault(badge["repository"], []).append(
+                dict(badge, branch=badge["branch"]
+                     or default_of.get(badge["repository"], "")))
+
         if wanted:
             badges = [b for b in badges if b["state"] == wanted]
 
@@ -2054,12 +2065,33 @@ def repositories(request: Request, user: User = Depends(current_user),
             scopes[row.full_name] = {
                 "text": scan_scope.describe(rule, row.default_branch),
                 "set": rule is not None,
+                # For the Scope filter above the table.
+                "mode": rule.mode if rule is not None else "all",
                 "default_out": scan_scope.default_left_out(
                     rule, row.default_branch)}
+
+        # Every branch the last scan saw, for the branch= and branch!= terms
+        # in the search box.  Read off the rows already loaded, so it costs
+        # no query, and falls back the same way known_branches() does.
+        branches = {}
+        for row in rows:
+            names = []
+            for column in (row.branch_names_present, row.branch_names):
+                try:
+                    names = [str(n) for n in (json.loads(column or "[]") or [])
+                             if n and " " not in str(n)]
+                except (TypeError, ValueError):
+                    names = []
+                if names:
+                    break
+            if not names and row.default_branch:
+                names = [row.default_branch]
+            branches[row.full_name] = sorted(set(names))
 
         drawn, can_draw = _diagram_flags(db, user)
 
         context = _shared(db, user)
+        context.update(branches=branches, certs_by_repo=certs_by_repo)
         # The certified card names repositories, and its diagram link needs
         # the id the main table already has.
         context.update(drawn=drawn, can_draw=can_draw,

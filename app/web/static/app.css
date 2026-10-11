@@ -999,3 +999,37 @@ table.heat .heat-actions .btn { margin-left: .3rem; }
     line-height: 1.5; padding: .6rem .8rem; border-radius: 4px;
     background: var(--bg-soft); font-size: .92rem;
 }
+
+/* The repository page.  Filters in one row, then the scope bar, which
+   scopebulk.js pins to the top of the window so it stays beside the rows
+   being ticked. */
+.repo-card { padding: .9rem 1rem 1rem; }
+.repo-filters { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: flex-end; }
+.repo-filters .field { margin: 0; flex: 0 1 13rem; }
+.repo-filters .field:first-child { flex: 1 1 22rem; max-width: 32rem; }
+.repo-filter-count { padding-bottom: .45rem; }
+.scope-bar {
+    display: flex; flex-wrap: wrap; gap: .5rem .9rem; align-items: center;
+    margin: .8rem 0 .6rem; padding: .6rem .8rem;
+    background: var(--bg-soft); border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+.scope-bar.floating { position: fixed; top: 0; z-index: 6; margin-top: 0;
+    border-top-left-radius: 0; border-top-right-radius: 0;
+    box-shadow: 0 4px 12px rgba(0,0,0,.12); }
+.scope-bar-count { min-width: 9rem; }
+.scope-bar-modes { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center;
+                   border: 0; margin: 0; padding: 0; }
+.scope-bar-modes legend { float: left; margin-right: .4rem; padding: 0; }
+.scope-bar .seg {
+    display: inline-flex; align-items: center; gap: .35rem; cursor: pointer;
+    font-size: .85rem; padding: .25rem .65rem; border-radius: 999px;
+    border: 1px solid var(--border-strong); background: var(--bg);
+}
+.scope-bar .seg:has(input:checked) { border-color: var(--text); font-weight: 600; }
+.scope-bar-patterns { flex: 1 1 16rem; max-width: 26rem; }
+.scope-bar-actions { display: flex; gap: .4rem; margin-left: auto; }
+.badge.scope-full  { background: transparent; color: var(--info); border: 1px solid var(--info); }
+.badge.scope-creds { background: transparent; color: var(--warn); border: 1px solid var(--warn); }
+.branch-hits { white-space: normal; max-width: 22rem; margin-top: .15rem; }
+details.cert-card > summary { cursor: pointer; justify-content: flex-start; gap: .5rem; }

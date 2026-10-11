@@ -2,26 +2,28 @@
 {% block title %}Repositories &middot; Git Code Review{% endblock %}
 {% block content %}
 <div class="page-head"><div><h1>Repositories</h1>
-  <div class="faint small">{{ rows|length }} you can see</div></div></div>
+  <div class="faint small">{{ rows|length }} you can see</div></div>
+  {% if certified and not certified_filter %}
+  <a class="btn" href="#certifications">Certified branches ({{ certified | length }})</a>
+  {% endif %}</div>
 
 {% import "_cert_badge.html" as cb %}
 {% import "_diagram_actions.html" as da with context %}
 
-
-{# The security sign offs.
-   The dashboard counts these and its tile linked here with a filter nothing
-   implemented, so the number opened a list of every repository.  A count that
-   cannot be opened is one somebody has to take on trust, which is the thing
-   this product is meant not to ask of anybody. #}
+{% set cert_block %}
+{# Folded away under the repository table unless the link that opened the
+   page asked for a state.  Its tick boxes withdraw sign offs, and with the
+   card on top of the page they read as the way to pick repositories for a
+   scope change, which they never were. #}
 {% if certified %}
-<div class="card">
-  <div class="card-head">
+<details class="card cert-card" id="certifications" {{ 'open' if certified_filter }}>
+  <summary class="card-head">
     {% if certified_filter %}{{ certified_filter | capitalize }} certifications
     {% else %}Certified branches{% endif %}
-    <span class="faint small">signed off by a person, or by a scan that found
-      nothing to read on the branch, and the branches nobody is expected to
-      review</span>
-  </div>
+    <span class="faint small" style="font-weight:400;margin-left:.5rem">{{ certified | length }}
+      signed off by a person, or by a scan that found nothing to read on the
+      branch, and the branches nobody is expected to review</span>
+  </summary>
   {# Every state reachable by clicking, rather than by knowing the query
      string.  The dashboard could only ever send somebody to the current ones,
      so the amber list, which is the one that needs a person, could not be
@@ -158,30 +160,105 @@
     <a href="{{ base }}/repositories">Show every certification</a>
   </div>
   {% endif %}
-</div>
+</details>
 {% elif certified_filter %}
 <div class="card">
   <div class="empty"><p class="faint">No {{ certified_filter }} certifications.
     <a href="{{ base }}/repositories">Show every certification</a></p></div>
 </div>
 {% endif %}
+{% endset %}
+{# Opened from a link that asked for a state, so it goes first. #}
+{% if certified_filter %}{{ cert_block }}{% endif %}
 
-<div class="card">
+
+{# One table for every repository, certified or not, so a scope change is
+   picked in one place.  The filters narrow it by what people actually sort
+   on: the organization, whether the default branch is signed off, and what
+   the scope is now.  Ticks survive a change of filter, so one change can
+   gather repositories from several views, and the bar says how many of them
+   are out of sight. #}
+<div class="card repo-card">
   {% if rows %}
-  <div class="field" style="max-width:420px;margin-bottom:.75rem">
-    <label for="repo-search">Search</label>
-    <input type="text" id="repo-search" data-filter="repo-table" autocomplete="off"
-           placeholder="organization or repository">
-    <div class="small faint" data-filter-count="repo-table"></div>
+  <div class="repo-filters">
+    <div class="field">
+      <label for="repo-search">Search</label>
+      <input type="text" id="repo-search" data-filter="repo-table" autocomplete="off"
+             placeholder="name, or branch=main OR branch=master">
+    </div>
+    <div class="field">
+      <label for="repo-org">Organization</label>
+      <select id="repo-org" data-filter-by="repo-table" data-filter-key="org">
+        <option value="">Any</option>
+        {% for org in rows | map(attribute='organization') | unique | sort %}
+        <option value="{{ org }}">{{ org }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="repo-cert">Certification</label>
+      <select id="repo-cert" data-filter-by="repo-table" data-filter-key="cert">
+        <option value="">Any</option>
+        <option value="certified">Has a certified branch</option>
+        <option value="default-certified">Default branch certified</option>
+        <option value="stale">Needs re-checking</option>
+        <option value="rescanning">Waiting for the next scan</option>
+        <option value="lapsed">Expired</option>
+        <option value="unknown">Branch not found</option>
+        <option value="na">Marked not applicable</option>
+        <option value="none">No current certification</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="repo-scope">Scope now</label>
+      <select id="repo-scope" data-filter-by="repo-table" data-filter-key="scope">
+        <option value="">Any</option>
+        <option value="full">Credentials + Full scan</option>
+        <option value="all">&nbsp;&nbsp;on every branch</option>
+        <option value="chosen">&nbsp;&nbsp;on chosen branches</option>
+        <option value="credentials">Credentials</option>
+        <option value="default-out">Default branch left out</option>
+        <option value="set">Changed from the default</option>
+      </select>
+    </div>
+    <div class="small faint repo-filter-count" data-filter-count="repo-table"></div>
   </div>
+  <div class="help small faint" style="margin-top:.35rem">Words match any column.
+    <span class="mono">branch=main OR branch=master</span> shows repositories with
+    either branch, and <span class="mono">branch!=master branch!=main</span> the ones
+    with some other branch.  <span class="mono">*</span> matches anything, as in
+    <span class="mono">branch=release/*</span>.</div>
+
+  {% if can_scope %}
+  {# Above the table and kept on screen by scopebulk.js, so the setting is
+     beside the rows being ticked rather than a thousand rows further down. #}
+  <form method="get" id="scope-bulk" class="scope-bar" action="{{ base }}/scope/confirm">
+    <input type="hidden" name="back" value="/repositories">
+    <div class="scope-bar-count"><strong data-ticked>Nothing ticked</strong>
+      <span class="faint small" data-ticked-hidden></span></div>
+    <fieldset class="scope-bar-modes">
+      <legend class="small faint">Set the ticked ones to</legend>
+      <label class="seg"><input type="radio" name="mode" value="all"> Credentials + Full scan, every branch</label>
+      <label class="seg"><input type="radio" name="mode" value="chosen"> Credentials + Full scan, chosen branches</label>
+      <label class="seg"><input type="radio" name="mode" value="credentials"> Credentials only</label>
+    </fieldset>
+    <input type="text" id="scope-bulk-patterns" name="patterns" class="mono scope-bar-patterns"
+           aria-label="Branches that get the full scan" hidden
+           placeholder="Full scan branches: master, main, release/*">
+    <div class="scope-bar-actions">
+      <button class="btn primary" type="submit" disabled>Review the change</button>
+      <button class="btn" type="button" data-clear hidden>Clear</button>
+    </div>
+  </form>
+  {% endif %}
   <div class="empty" data-filter-empty="repo-table" hidden>Nothing matches that.</div>
   <div class="table-scroll">
     <table id="repo-table">
       <thead><tr>{% if can_scope %}<th class="nowrap"><input type="checkbox"
           id="select-repos" title="Everything shown"></th>{% endif %}
         <th>Organization</th><th>Repository</th><th>Visibility</th>
-        <th>Default branch<span class="faint small"> and its sign off</span></th>
-        <th>Scope</th>
+        <th>Default branch</th>
+        <th>Scope</th><th>Branches</th><th>Certified branches</th>
         <th>Open findings</th><th class="nowrap">Last scanned</th>
         {# Named in the header as well as in the tooltip.  A tooltip is a
            hover, which is nothing at all on a touch screen, and the difference
@@ -191,7 +268,20 @@
       <tbody>
       {% for r in rows %}
         {% set c = counts.get(r.full_name, {}) %}
-        <tr>
+        {% set cert = certified_default.get(r.full_name) %}
+        {% set sc = scopes.get(r.full_name, {}) %}
+        <tr data-org="{{ r.organization }}"
+            {%- set rc = certs_by_repo.get(r.full_name, []) %}
+            {%- set ct = namespace(words=[]) %}
+            {%- for one in rc %}
+              {%- set ct.words = ct.words + ['certified' if one.state == 'active'
+                  else 'na' if one.state == 'not_applicable' else one.state] %}
+            {%- endfor %}
+            {%- if cert and cert.state == 'active' %}{% set ct.words = ct.words + ['default-certified'] %}{% endif %}
+            data-cert="{{ (ct.words | unique | join(' ')) if 'certified' in ct.words else ((ct.words | unique | join(' ')) ~ ' none') | trim }}"
+            data-scope="{{ sc.mode or 'all' }}{{ ' full' if sc.mode != 'credentials' }}{{ ' default-out' if sc.default_out }}{{ ' set' if sc.set }}"
+            {%- set bl = branches.get(r.full_name, []) %}
+            data-branches="{{ bl | join(' ') }}">
           {% if can_scope %}<td class="nowrap"><input type="checkbox" name="repo"
               form="scope-bulk" value="{{ r.full_name }}"></td>{% endif %}
           <td class="small">{{ r.organization }}</td>
@@ -210,7 +300,6 @@
              hover is nothing at all on a touch screen, and a scan finding
              nothing to read claims a great deal less than somebody having
              read it, which is the whole reason the two are told apart. #}
-          {% set cert = certified_default.get(r.full_name) %}
           <td class="small faint">{{ r.default_branch }}
             {%- if cert %} {{ cb.cert_badge(cert.state, cert.why ~
                  ('. Marked by ' if cert.state == 'not_applicable'
@@ -223,13 +312,36 @@
             {%- if r.full_name in drawn or can_draw %}
             <div class="diagram-actions">{{ da.diagram_actions(r.id, r.full_name in drawn, can_draw) }}</div>
             {%- endif %}</td>
-          {% set sc = scopes.get(r.full_name, {}) %}
           <td class="small">
-            {%- if can_scope %}<a href="{{ base }}/repositories/{{ r.id }}/scope"
-                class="{{ '' if sc.set else 'faint' }}">{{ sc.text }}</a>
-            {%- else %}<span class="{{ '' if sc.set else 'faint' }}">{{ sc.text }}</span>{% endif %}
+            {# A tag first, so the two kinds tell apart at a glance down a
+               long list.  Credentials are scanned everywhere whatever the
+               setting, which is why the full scan one says both.  Chosen
+               branches get the full tag with the branches under it. #}
+            {%- if sc.mode == 'credentials' %}<span class="badge scope-creds"
+                title="Only the credential pass, on every branch">Credentials</span>
+            {%- else %}<span class="badge scope-full"
+                title="Credentials plus dependency, code and configuration scans">Credentials + Full scan</span>{% endif %}
+            {%- if sc.mode == 'chosen' or 'override' in sc.text %}
+            <div style="margin-top:.2rem">
+            {%- if can_scope %}<a href="{{ base }}/repositories/{{ r.id }}/scope">{{ sc.text }}</a>
+            {%- else %}<span>{{ sc.text }}</span>{% endif %}</div>
+            {%- elif can_scope %} <a class="faint" href="{{ base }}/repositories/{{ r.id }}/scope"
+                title="Change this one repository branch by branch">change</a>{% endif %}
             {%- if sc.default_out %} <span class="badge pending"
                 title="The default branch only gets the credential pass">default left out</span>{% endif %}</td>
+          {# How many branches, and under a branch search which of them
+             matched, so the reason a row is shown is on the row. #}
+          <td class="small nowrap"><span data-branch-total>{{ bl | length }}</span>
+            <div class="mono faint branch-hits" data-branch-hits hidden></div></td>
+          {# Every branch with a sign off, not only the default, so the
+             Certification filter has something to show for what it found. #}
+          <td class="small">
+            {%- for one in rc[:4] %}
+            <div class="nowrap"><span class="mono">{{ one.branch }}</span>
+              {{ cb.cert_badge(one.state, one.why) }}</div>
+            {%- endfor %}
+            {%- if rc | length > 4 %}<a class="faint" href="#certifications">and {{ rc | length - 4 }} more</a>{% endif %}
+            {%- if not rc %}<span class="faint">none</span>{% endif %}</td>
           <td class="nowrap">
             {% for level in ['critical','high','medium','low'] %}
               {% if c.get(level) %}<span class="badge {{ level }}">{{ c[level] }}</span>{% endif %}
@@ -275,30 +387,15 @@
       </tbody>
     </table>
   </div>
-  {% if can_scope %}
-  {# The same setting on every ticked repository.  It goes through the
-     confirmation page like any other change, so the counts are seen first. #}
-  <form method="get" id="scope-bulk" action="{{ base }}/scope/confirm"
-        style="padding:.6rem 0 0;display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
-    <input type="hidden" name="back" value="/repositories">
-    <div class="field" style="margin:0">
-      <label for="scope-bulk-mode">Scan scope for the ticked ones</label>
-      <select id="scope-bulk-mode" name="mode">
-        <option value="all">Full scan, all branches</option>
-        <option value="chosen">Full scan, chosen branches only</option>
-        <option value="credentials">Credentials only</option>
-      </select>
-    </div>
-    <div class="field" style="flex:1 1 16rem;margin:0">
-      <label for="scope-bulk-patterns">Full scan branches</label>
-      <input type="text" id="scope-bulk-patterns" name="patterns" class="mono"
-             placeholder="master, main, release/*">
-    </div>
-    <button class="btn" type="submit">Check what this changes</button>
-  </form>
-  {% endif %}
   {% else %}<div class="empty">No repositories yet. Run a scan.</div>{% endif %}
 </div>
+
+{# The security sign offs.
+   The dashboard counts these and its tile linked here with a filter nothing
+   implemented, so the number opened a list of every repository.  A count that
+   cannot be opened is one somebody has to take on trust, which is the thing
+   this product is meant not to ask of anybody. #}
+{% if not certified_filter %}{{ cert_block }}{% endif %}
 <script src="{{ base }}/static/tablefilter.js?v={{ asset_v('tablefilter.js') }}"></script>
 <script src="{{ base }}/static/certbulk.js?v={{ asset_v('certbulk.js') }}"></script>
 <script src="{{ base }}/static/scopebulk.js?v={{ asset_v('scopebulk.js') }}"></script>
