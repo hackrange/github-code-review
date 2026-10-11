@@ -2214,6 +2214,90 @@ async def repository_scope_confirm(repo_id: int, request: Request,
         return page(request, "connection_scope_confirm.html", **context)
 
 
+@router.get("/scope/export.csv")
+def scope_export(request: Request, user: User = Depends(current_user)):
+    """Every branch and whether it gets the vulnerability scans, as CSV.
+
+    The same columns the import reads, so it can be edited and handed back.
+    Administrators only, like changing it.
+    """
+    rbac.require(user, "repo.scope")
+    from app.core import scope_csv
+
+    with session_scope() as db:
+        repos = rbac.visible_repositories(db, user).all()
+        body = scope_csv.export(db, repos)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    return Response(
+        content=body, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":
+                 f'attachment; filename="scan-scope-{stamp}.csv"'})
+
+
+@router.get("/scope/import")
+def scope_import_page(request: Request, user: User = Depends(current_user)):
+    """Where the CSV goes in."""
+    rbac.require(user, "repo.scope")
+    with session_scope() as db:
+        context = _shared(db, user)
+        context.update(active_page="repositories")
+        return page(request, "scope_import.html", **context)
+
+
+@router.post("/scope/import")
+async def scope_import_check(request: Request, user: User = Depends(current_user)):
+    """What a CSV would change, before anything does.
+
+    Read, worked out and shown, and nothing written.  The page that comes
+    back carries the changes themselves rather than the file, so what gets
+    applied is exactly what was shown.
+    """
+    from app.web.security import check_csrf
+    from app.core import scan_scope, scope_csv
+
+    form = await request.form()
+    await check_csrf(request)
+    rbac.require(user, "repo.scope")
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(status_code=400, detail="Choose a file first.")
+    raw = await upload.read()
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="That file is larger than 10MB.")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1", "replace")
+
+    rows, problems = scope_csv.parse(text)
+    with session_scope() as db:
+        allowed = {name for (name,) in rbac.visible_repositories(db, user)
+                   .with_entities(Repository.full_name).all()}
+        changes, unknown, same = scope_csv.plan(db, rows, allowed)
+        visible = rbac.visible_findings(db, user)
+        listing = []
+        totals = {"hide": {}, "show": {}, "hide_total": 0, "show_total": 0}
+        for repository, steps in sorted(changes.items()):
+            impact = scan_scope.preview(db, repository, "", "", "",
+                                        findings=visible, changes=steps)
+            listing.append({"repository": repository, "impact": impact,
+                            "steps": steps})
+            for side in ("hide", "show"):
+                for level, n in impact[side].items():
+                    totals[side][level] = totals[side].get(level, 0) + n
+                totals[side + "_total"] += impact[side + "_total"]
+        context = _shared(db, user)
+        context.update(active_page="repositories", rows=listing, totals=totals,
+                       severities=SEVERITIES, problems=problems,
+                       unknown=sorted({r["repository"] for r in unknown}),
+                       same=same, read=len(rows),
+                       steps=sum(len(r["steps"]) for r in listing),
+                       default_leaves=[r["repository"] for r in listing
+                                       if r["impact"]["default_leaves"]],
+                       today=datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        return page(request, "scope_import_confirm.html", **context)
+
+
 def _diagram_flags(db, user) -> tuple:
     """Which repositories have a drawing, and whether this person may make one."""
     from app.core import ai

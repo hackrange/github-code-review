@@ -3,9 +3,15 @@
 {% block content %}
 <div class="page-head"><div><h1>Repositories</h1>
   <div class="faint small">{{ rows|length }} you can see</div></div>
+  <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+  {% if can_scope %}
+  <a class="btn" href="{{ base }}/scope/export.csv"
+     title="Organization, Repository, Branch, VulnerabilityScanning for every branch">Export scope CSV</a>
+  <a class="btn" href="{{ base }}/scope/import">Import scope CSV</a>
+  {% endif %}
   {% if certified and not certified_filter %}
   <a class="btn" href="#certifications">Certified branches ({{ certified | length }})</a>
-  {% endif %}</div>
+  {% endif %}</div></div>
 
 {% import "_cert_badge.html" as cb %}
 {% import "_diagram_actions.html" as da with context %}

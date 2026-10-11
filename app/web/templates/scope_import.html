@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Import scan scope &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Import scan scope</h1>
+  <div class="faint small">Which repositories and branches get the vulnerability scans</div></div>
+  <a class="btn" href="{{ base }}/scope/export.csv">Export the current scope</a></div>
+
+<div class="card">
+  <div class="card-body">
+    <p>Four columns, with or without the header line:</p>
+    <pre class="mono small" style="margin:.4rem 0 1rem">Organization,Repository,Branch,VulnerabilityScanning
+acme,payments-api,dev,no
+acme,payments-api,main,yes
+acme,old-tools,,no</pre>
+    <ul class="small">
+      <li><strong>no</strong>: credentials only on that branch.  The dependency,
+        code and configuration scans stop there.</li>
+      <li><strong>yes</strong> or blank: credentials and the vulnerability scans.</li>
+      <li>A blank <strong>Branch</strong> is the whole repository, new branches
+        included.  A branch row after it can still say otherwise for one branch.</li>
+      <li>Rows that already match change nothing, so the export can be edited
+        and brought straight back.  Rows that differ update what is there.</li>
+    </ul>
+    <p class="small faint">Credentials are scanned on every branch of every
+      repository whatever the file says.  Findings only on branches that become
+      credentials only are marked not deployed, never deleted, and come back if
+      the branch goes back.  Nothing changes until you have seen the counts on
+      the next page.</p>
+
+    <form method="post" action="{{ base }}/scope/import" enctype="multipart/form-data"
+          style="display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap;margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field" style="margin:0">
+        <label for="scope-file">CSV file</label>
+        <input type="file" id="scope-file" name="file" accept=".csv,text/csv" required>
+      </div>
+      <button class="btn primary" type="submit">Check what this changes</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

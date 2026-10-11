@@ -4846,6 +4846,77 @@ async def draw_diagram(repo_id: int, request: Request,
 MAX_SCOPE_FIELDS = 25000
 
 
+@router.post("/scope/import/apply")
+async def apply_scope_import(request: Request, user: User = Depends(current_user)):
+    """The changes a scope CSV asked for, as the confirmation page showed them."""
+    await request.form(max_fields=MAX_SCOPE_FIELDS)
+    await check_csrf(request)
+    rbac.require(user, "repo.scope")
+
+    from app.core import scan_scope
+    from app.core.models import Repository
+
+    form = await request.form(max_fields=MAX_SCOPE_FIELDS)
+    reason = clean_text(form.get("reason"), "Reason", limit=2000)
+    review = clean_text(form.get("review"), "Review date", limit=10,
+                        required=False)
+    confirmed_default = str(form.get("confirm_default", "")) == "1"
+
+    # "repository:branch:mode", one per change.  A colon can be in neither
+    # a repository nor a branch name.  Checked again here, since a hand built
+    # request can say anything.
+    wanted = {}
+    for raw in form.getlist("change"):
+        repository, _, rest = str(raw).partition(":")
+        branch, _, mode = rest.rpartition(":")
+        ok = (mode in scan_scope.REPO_MODES if not branch
+              else mode in scan_scope.BRANCH_MODES + ("inherit",))
+        if repository and ok and mode != "chosen":
+            wanted.setdefault(repository, []).append((branch, mode, ""))
+    if not wanted:
+        raise HTTPException(status_code=400, detail="Nothing to change.")
+
+    done = steps = hidden = shown = 0
+    with session_scope() as db:
+        allowed = {name for (name,) in rbac.visible_repositories(db, user)
+                   .filter(Repository.full_name.in_(sorted(wanted)))
+                   .with_entities(Repository.full_name).all()}
+        for repository, changes in sorted(wanted.items()):
+            if repository not in allowed:
+                continue
+            impact = scan_scope.preview(db, repository, "", "", "",
+                                        changes=changes)
+            if impact["default_leaves"] and not confirmed_default:
+                raise HTTPException(status_code=400, detail=(
+                    f"This takes {impact['default_branch']}, the default branch "
+                    f"of {repository}, down to credentials only.  Tick the box "
+                    "that says you mean it."))
+            ids, problem = scan_scope.apply_batch(db, repository, changes,
+                                                  reason, review, user.username)
+            if problem:
+                raise HTTPException(status_code=400,
+                                    detail=f"{repository}: {problem}")
+            record(db, "repo.scope_changed", actor=user.username,
+                   target=repository,
+                   detail=(f"changes {ids[0]}-{ids[-1]} from a CSV import: "
+                           f"{impact['describe_before']} -> "
+                           f"{impact['describe_after']}; {len(changes)} setting(s), "
+                           f"{impact['hide_total']} finding(s) now not deployed, "
+                           f"{impact['show_total']} back.  Reason: {reason}")[:4000],
+                   source_ip=client_ip(request))
+            done += 1
+            steps += len(changes)
+            hidden += impact["hide_total"]
+            shown += impact["show_total"]
+
+    request_rewrite()
+    note = (f"Scan scope imported: {steps} change(s) on {done} "
+            f"repositor{'y' if done == 1 else 'ies'}, {hidden} finding(s) now "
+            f"not deployed and {shown} back.  Credentials are still scanned "
+            "everywhere.")
+    return redirect(_back_with("/repositories", note, "ok"))
+
+
 @router.post("/repositories/{repo_id}/scope/apply")
 async def apply_repository_branches(repo_id: int, request: Request,
                                     user: User = Depends(current_user)):

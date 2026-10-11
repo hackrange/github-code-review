@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Confirm scan scope import &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Import scan scope</h1>
+  <div class="faint small">{{ read }} row{{ '' if read == 1 else 's' }} read,
+    {{ steps }} change{{ '' if steps == 1 else 's' }} on {{ rows | length }}
+    repositor{{ 'y' if rows | length == 1 else 'ies' }},
+    {{ same }} already as asked</div></div>
+  <a class="btn" href="{{ base }}/scope/import">Choose another file</a></div>
+
+{% if problems or unknown %}
+<div class="notice warn"><div>
+  {% if problems %}<p><strong>{{ problems | length }} line{{ '' if problems | length == 1 else 's' }}
+    could not be read</strong> and will be left out:</p>
+  <ul class="small">{% for p in problems[:50] %}<li>{{ p }}</li>{% endfor %}
+    {% if problems | length > 50 %}<li>and {{ problems | length - 50 }} more</li>{% endif %}</ul>{% endif %}
+  {% if unknown %}<p><strong>{{ unknown | length }} repositor{{ 'y' if unknown | length == 1 else 'ies' }}
+    not found</strong>, or not one you can see, and will be left out:</p>
+  <p class="mono small">{{ unknown[:50] | join(', ') }}{% if unknown | length > 50 %}
+    and {{ unknown | length - 50 }} more{% endif %}</p>{% endif %}
+</div></div>
+{% endif %}
+
+{% if not rows %}
+<div class="card"><div class="empty">Nothing to change.  Everything in the file
+  is already set that way.</div></div>
+{% elif steps > 20000 %}
+<div class="card"><div class="empty">That is {{ steps }} changes, more than 20000
+  in one go.  Split the file and import it in parts.</div></div>
+{% else %}
+<div class="card">
+  <div class="card-head">What this changes</div>
+  <div class="card-body">
+    <p>
+      {% if totals.hide_total %}
+        <strong>{{ totals.hide_total }}</strong> open finding{{ '' if totals.hide_total == 1 else 's' }}
+        will be marked not deployed:
+        {% for level in severities %}{% if totals.hide.get(level) %}
+          <span class="badge {{ level }}">{{ totals.hide[level] }} {{ level }}</span>
+        {% endif %}{% endfor %}
+      {% else %}No open finding leaves the work list.{% endif %}
+    </p>
+    {% if totals.show_total %}
+    <p><strong>{{ totals.show_total }}</strong> come back:
+      {% for level in severities %}{% if totals.show.get(level) %}
+        <span class="badge {{ level }}">{{ totals.show[level] }} {{ level }}</span>
+      {% endif %}{% endfor %}</p>
+    {% endif %}
+    <p class="faint small">Credentials are still scanned on every branch.</p>
+  </div>
+  <div class="table-scroll">
+    <table class="small">
+      <thead><tr><th>Repository</th><th>Now</th><th>After</th>
+        <th>To credentials only</th><th>To credentials + full scan</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        {% set i = row.impact %}
+        <tr>
+          <td class="mono">{{ row.repository }}
+            {% if i.default_leaves %}<span class="badge pending">default branch leaves the full scan</span>{% endif %}</td>
+          <td>{{ i.describe_before }}</td>
+          <td>{{ i.describe_after }}</td>
+          <td>{{ i.to_credentials | length }}{% if i.to_credentials %}
+            <span class="mono faint">{{ i.to_credentials[:5] | join(', ') }}{% if i.to_credentials | length > 5 %} and more{% endif %}</span>{% endif %}</td>
+          <td>{{ i.to_full | length }}{% if i.to_full %}
+            <span class="mono faint">{{ i.to_full[:5] | join(', ') }}{% if i.to_full | length > 5 %} and more{% endif %}</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="post" action="{{ base }}/scope/import/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% for row in rows %}{% for branch, mode, _ in row.steps %}
+      <input type="hidden" name="change" value="{{ row.repository }}:{{ branch }}:{{ mode }}">
+      {%- endfor %}{% endfor %}
+      <div class="field">
+        <label for="si-reason">Why</label>
+        <input type="text" id="si-reason" name="reason" required minlength="10" maxlength="2000"
+               placeholder="For example: these organizations only need credential scans">
+      </div>
+      <div class="field" style="max-width:220px">
+        <label for="si-review">Review by <span class="faint small">optional</span></label>
+        <input type="date" id="si-review" name="review" min="{{ today }}">
+      </div>
+      {% if default_leaves %}
+      <label class="check">
+        <input type="checkbox" name="confirm_default" value="1" required>
+        I know the default branch of {{ default_leaves | length }}
+        repositor{{ 'y' if default_leaves | length == 1 else 'ies' }}
+        ({{ default_leaves[:5] | join(', ') }}{% if default_leaves | length > 5 %} and more{% endif %})
+        will only get the credential pass.
+      </label>
+      {% endif %}
+      <div style="margin-top:.75rem">
+        <a class="btn" href="{{ base }}/repositories">Cancel</a>
+        <button class="btn primary" type="submit">Import {{ steps }} change{{ '' if steps == 1 else 's' }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
