@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
-from sqlalchemy import case, func, literal, or_ as sa_or
+from sqlalchemy import case, distinct, func, literal, or_ as sa_or
 
 from app.config import APP_NAME, VERSION, settings
 from app.core import baseline as baseline_filter
@@ -737,6 +737,30 @@ def dashboard(request: Request, user: User = Depends(current_user)):
             malicious += int(bad or 0)
             verified += int(real or 0)
 
+        # The same three kinds, each thing counted once.  A secret is its own
+        # identity, so it is the secret.  A code weakness is a rule in a file,
+        # however many lines repeat it.  A vulnerable package is a name at a
+        # version, however many advisories and repositories carry it.  Read
+        # from the findings, since the summaries do not keep these columns,
+        # and from the same rows as the headline numbers.
+        def _joined(*cols):
+            out = func.coalesce(cols[0], "")
+            for col in cols[1:]:
+                out = out + "\x1f" + func.coalesce(col, "")
+            return out
+        _once = query.with_entities(
+            func.count(distinct(case(
+                (Finding.kind == FindingKind.CREDENTIAL, Finding.fingerprint)))),
+            func.count(distinct(case(
+                (Finding.kind == FindingKind.CODE,
+                 _joined(Finding.repository, Finding.file_path, Finding.rule))))),
+            func.count(distinct(case(
+                (Finding.kind == FindingKind.DEPENDENCY,
+                 _joined(Finding.package_name, Finding.package_version)))))).one()
+        unique_by_kind = {"credential": int(_once[0] or 0),
+                          "code": int(_once[1] or 0),
+                          "dependency": int(_once[2] or 0)}
+
         # Where the security sign offs stand.  Amber is counted apart from
         # green on purpose: a review that no longer describes the code is the
         # one somebody has to look at, and one number covering both would
@@ -794,6 +818,7 @@ def dashboard(request: Request, user: User = Depends(current_user)):
 
         context = _shared(db, user)
         context.update(active_page="dashboard", counts=counts, by_kind=by_kind,
+                       unique_by_kind=unique_by_kind,
                        exploited=exploited, verified=verified, worst=worst,
                        malicious=malicious,
                        top_repos=top_repos, runs=runs,

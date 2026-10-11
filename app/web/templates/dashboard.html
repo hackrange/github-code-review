@@ -147,12 +147,18 @@
   </div>
   <div class="card-body">
     <div class="flex" style="gap:2rem;flex-wrap:wrap">
+      {# Each with how many distinct things that is, underneath.  The same
+         package version in forty repositories is forty findings and one
+         upgrade to agree on. #}
       <div><strong>{{ by_kind.get('credential', 0) }}</strong>
-        <span class="faint">credentials</span></div>
+        <span class="faint">credentials</span>
+        <div class="small faint" title="Each secret counted once">({{ unique_by_kind.credential }} unique secrets)</div></div>
       <div><strong>{{ by_kind.get('code', 0) }}</strong>
-        <span class="faint">code weaknesses</span></div>
+        <span class="faint">code weaknesses</span>
+        <div class="small faint" title="The same rule in the same file counted once">({{ unique_by_kind.code }} unique, by rule and file)</div></div>
       <div><strong>{{ by_kind.get('dependency', 0) }}</strong>
-        <span class="faint">vulnerable packages</span></div>
+        <span class="faint">vulnerable packages</span>
+        <div class="small faint" title="Each package at each version counted once">({{ unique_by_kind.dependency }} unique package versions)</div></div>
     </div>
   </div>
 </div>
