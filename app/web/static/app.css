@@ -1034,3 +1034,16 @@ table.heat .heat-actions .btn { margin-left: .3rem; }
 .badge.scope-creds { background: transparent; color: var(--warn); border: 1px solid var(--warn); }
 .branch-hits { white-space: normal; max-width: 22rem; margin-top: .15rem; }
 details.cert-card > summary { cursor: pointer; justify-content: flex-start; gap: .5rem; }
+
+/* The AI page's Settings and Cost tabs, and the cost tab's numbers. */
+.page-tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--border);
+    margin: 0 0 1rem; }
+.page-tabs a { padding: .45rem .9rem; color: var(--text-soft); text-decoration: none;
+    border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.page-tabs a:hover { color: var(--text); }
+.page-tabs a[aria-current="page"] { color: var(--text); border-bottom-color: var(--info);
+    font-weight: 600; }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.chart .usage-bar { fill: var(--info); }
+.chart .usage-bar:hover { opacity: .8; }
+.btn[aria-current="page"] { border-color: var(--info); color: var(--info); }

@@ -683,7 +683,8 @@ def _run(finding_id: int, user, force: bool = False) -> dict:
     sources += code_sources
     sources += notes
 
-    answer = ai.complete(cfg, SYSTEM_PROMPT, _prompt(evidence, advisory, code, notes))
+    answer = ai.complete(cfg, SYSTEM_PROMPT, _prompt(evidence, advisory, code, notes),
+                         purpose="validation")
     if not answer["ok"]:
         return {"ok": False, "detail": answer["error"] or "Validation testing got no answer."}
 
@@ -891,8 +892,9 @@ def _batch(number: int, finding_ids: list, user, rules_only: bool = False) -> No
                 -learned.RANK.get(f.severity.value, 0), f.id))
             plan = []
             for f in order:
-                if learned.protected(f):
-                    plan.append((f.id, f.vuln_id, "protected"))
+                why = learned.protected(f)
+                if why:
+                    plan.append((f.id, f.vuln_id, "protected:" + why))
                     continue
                 done = (db.query(AIGrade).filter(AIGrade.finding_id == f.id,
                                                  AIGrade.source == "analysis").first())
@@ -903,10 +905,10 @@ def _batch(number: int, finding_ids: list, user, rules_only: bool = False) -> No
             rules_before = db.query(LearnedRule).count()
         for finding_id, vuln_id, step in plan:
             label = vuln_id or str(finding_id)
-            if step == "protected":
+            if step.startswith("protected:"):
+                # The reason for this one, not a list of every reason there is.
                 _note(number, done=1, skipped_protected=1,
-                      result=f"{label}: not sent; AI may not lower credentials "
-                             "or known exploited packages")
+                      result=f"{label}: not sent; {step.split(':', 1)[1]}")
                 continue
             if step == "done":
                 _note(number, done=1, skipped_done=1,

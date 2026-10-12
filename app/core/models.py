@@ -1834,6 +1834,33 @@ class RepoDiagram(Base):
     started_at = Column(DateTime(timezone=True))
 
 
+class AIUsage(Base):
+    """One question sent to a model, whatever asked it and however it ended.
+
+    The tables that keep answers only keep the good ones, and a failed or cut
+    off call is billed all the same.  This is the one place every call lands,
+    so the cost page can add them up without missing the ones that went wrong.
+    No prompt and no answer, just the counts.
+    """
+
+    __tablename__ = "ai_usage"
+
+    id = Column(Integer, primary_key=True)
+    at = Column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
+    # validation, diagram, test, or whatever asked.
+    purpose = Column(String(32), default="", nullable=False, index=True)
+    provider = Column(String(32), default="")
+    model = Column(String(120), default="")
+    ok = Column(Boolean, default=True, nullable=False)
+    # What the far end said about how the answer ended: stop, length, and so on.
+    finish = Column(String(32), default="")
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    cache_read_tokens = Column(Integer, default=0)
+    cache_write_tokens = Column(Integer, default=0)
+    duration_ms = Column(Integer, default=0)
+
+
 class AuditEvent(Base):
     """Who did what.  Append only, nothing in the app deletes from here."""
 

@@ -155,6 +155,15 @@ def init_db() -> None:
         made = {t.name for t in Base.metadata.sorted_tables} - existing
         if made:
             log.info("added table(s): %s", ", ".join(sorted(made)))
+        if "ai_usage" in made:
+            # The token counts kept before there was a usage table, so the
+            # cost page has some history to forecast from on the first day.
+            from app.core.ai_cost import backfill
+
+            with session_scope() as session:
+                copied = backfill(session)
+            if copied:
+                log.info("copied %d earlier AI call(s) into the usage table", copied)
         # Widen first, then add.  The order is not arbitrary.
         #
         # MariaDB caps a row at 65,535 bytes counting every varchar in full,

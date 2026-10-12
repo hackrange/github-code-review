@@ -61,8 +61,8 @@ def protected(finding) -> str:
         return ("a credential stays critical until something shows it is dead, "
                 "and a model reading the code cannot show that")
     if finding.kind == FindingKind.DEPENDENCY and getattr(finding, "known_exploited", False):
-        return ("it is known to be exploited, and only evidence that it does "
-                "not ship lowers that")
+        return ("it is on the CISA known exploited list, and only evidence "
+                "that it does not ship lowers that")
     if getattr(finding, "malicious", None):
         return "a malicious package does its harm at install time"
     return ""

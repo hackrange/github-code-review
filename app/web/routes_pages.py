@@ -4058,11 +4058,11 @@ def notifications_page(request: Request, msg: str = "", kind: str = "",
 
 
 @router.get("/ai")
-def ai_page(request: Request, msg: str = "", kind: str = "",
-            user: User = Depends(current_user)):
+def ai_page(request: Request, msg: str = "", kind: str = "", tab: str = "",
+            days: int = 30, user: User = Depends(current_user)):
     """Which language model reads a finding when somebody asks it to."""
     rbac.require(user, "settings.read")
-    from app.core import ai, settings_store as store
+    from app.core import ai, ai_cost, settings_store as store
 
     keys = [name for name in store.DEFAULTS if name.startswith("ai.")]
     with session_scope() as db:
@@ -4085,6 +4085,17 @@ def ai_page(request: Request, msg: str = "", kind: str = "",
             can_write=rbac.can(user, "settings.write"),
             message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")
+        # The cost tab belongs to the custom service, which is the one whose
+        # prices nobody else publishes.
+        has_cost = cfg.get("ai.provider") == "custom"
+        tab = "cost" if tab == "cost" and has_cost else "settings"
+        days = max(1, min(366, int(days or 30)))
+        context.update(tab=tab, has_cost=has_cost, cost_days=days,
+                       cost_windows=(7, 30, 90, 365))
+        if tab == "cost":
+            usage = ai_cost.summary(db, cfg, days)
+            context.update(usage=usage,
+                           usage_chart=ai_cost.chart(usage["daily"], usage["priced"]))
         return page(request, "ai.html", **context)
 
 

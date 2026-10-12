@@ -87,7 +87,17 @@ SETTINGS = {
     "ai.fetch_advisories":     (True, False,
                                 "Read the advisory text from osv.dev for a dependency "
                                 "finding. Only the advisory id is sent."),
+    # What the custom service charges, per million tokens, for the cost page.
+    # Kept as text so 0.10 stays 0.10.  Empty is not counted.
+    "ai.price_input":          ("", False, "Price per million input tokens."),
+    "ai.price_output":         ("", False, "Price per million output tokens."),
+    "ai.price_cache_read":     ("", False, "Price per million tokens read from cache."),
+    "ai.price_cache_write":    ("", False, "Price per million tokens written to cache."),
+    "ai.price_currency":       ("$", False, "Put in front of every amount."),
 }
+
+PRICE_KEYS = ("ai.price_input", "ai.price_output", "ai.price_cache_read",
+              "ai.price_cache_write")
 
 SECRET_KEYS = tuple(key for key, (_d, secret, _w) in SETTINGS.items() if secret)
 
@@ -152,6 +162,29 @@ def read_form(form, text, number, url, checked) -> dict:
         "ai.send_code": checked("ai.send_code"),
         "ai.fetch_advisories": checked("ai.fetch_advisories"),
     }
+
+
+def read_prices(form) -> dict:
+    """The cost tab's form, checked.  -> {key: value}
+
+    A price is a plain number such as 0.10, or empty for one that is not
+    charged.  Kept as the text that was typed, tidied, so a price does not
+    come back as 0.1000000001.
+    """
+    out = {}
+    for key in PRICE_KEYS:
+        typed = str(form.get(key, "")).strip().lstrip("$").strip()
+        if not typed:
+            out[key] = ""
+            continue
+        if not re.fullmatch(r"\d{1,6}(\.\d{1,6})?|\.\d{1,6}", typed):
+            raise ValueError("A price is a number such as 0.10, or empty.")
+        out[key] = typed if not typed.startswith(".") else "0" + typed
+    currency = str(form.get("ai.price_currency", "")).strip()
+    if len(currency) > 4 or any(c in currency for c in "<>&\"'\r\n"):
+        raise ValueError("The currency is a short symbol, such as $.")
+    out["ai.price_currency"] = currency
+    return out
 
 # The models that take the server side fallback.  On these a request the
 # model's safety classifiers decline is run again on another model, inside the
@@ -234,18 +267,23 @@ def describe_model(cfg: dict) -> str:
 
 
 def complete(cfg: dict, system: str, prompt: str, *, max_tokens: int = None,
-             timeout: float = None) -> dict:
+             timeout: float = None, purpose: str = "other") -> dict:
     """Ask once.  -> {ok, text, error, provider, model, input_tokens,
-    output_tokens, duration_ms}
+    output_tokens, cache_read_tokens, cache_write_tokens, finish, cut_off,
+    duration_ms}
 
     Never raises for anything the far end does.  A refused key, a timeout or a
     reply in the wrong shape all come back as ok False with a sentence, because
     the caller is a page and a stack trace is not something to show on one.
+
+    Every call that actually went out is written to the usage table, under
+    purpose, good or bad.
     """
     provider = cfg.get("ai.provider") or "disabled"
     out = {"ok": False, "text": "", "error": "", "provider": provider,
            "model": "", "input_tokens": 0, "output_tokens": 0,
-           "duration_ms": 0}
+           "cache_read_tokens": 0, "cache_write_tokens": 0,
+           "finish": "", "cut_off": False, "duration_ms": 0}
 
     problem = missing(cfg)
     if problem:
@@ -270,14 +308,37 @@ def complete(cfg: dict, system: str, prompt: str, *, max_tokens: int = None,
     if out["ok"] and not (out.get("text") or "").strip():
         out["ok"] = False
         out["error"] = "The model answered with nothing."
+    _record(out, purpose)
     return out
+
+
+def _record(out: dict, purpose: str) -> None:
+    """One row in the usage table.  Never lets a bookkeeping problem fail a call."""
+    try:
+        from app.core.db import session_scope
+        from app.core.models import AIUsage
+
+        with session_scope() as db:
+            db.add(AIUsage(
+                purpose=(purpose or "other")[:32],
+                provider=(out.get("provider") or "")[:32],
+                model=str(out.get("model") or "")[:120],
+                ok=bool(out.get("ok")),
+                finish=str(out.get("finish") or "")[:32],
+                input_tokens=int(out.get("input_tokens") or 0),
+                output_tokens=int(out.get("output_tokens") or 0),
+                cache_read_tokens=int(out.get("cache_read_tokens") or 0),
+                cache_write_tokens=int(out.get("cache_write_tokens") or 0),
+                duration_ms=int(out.get("duration_ms") or 0)))
+    except Exception:
+        log.warning("could not record AI usage", exc_info=True)
 
 
 def test(cfg: dict) -> dict:
     """One tiny question, to prove the wiring before a real one costs money."""
     return complete(cfg, "Answer in as few words as possible.",
                     'Reply with exactly the words "Connection works" and '
-                    "nothing else.", max_tokens=2000, timeout=60)
+                    "nothing else.", max_tokens=2000, timeout=60, purpose="test")
 
 
 # ---------------------------------------------------------------- anthropic
@@ -351,7 +412,11 @@ def _anthropic(cfg: dict, system: str, prompt: str, max_tokens: int,
     usage = getattr(response, "usage", None)
     out = {"model": getattr(response, "model", "") or model,
            "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
-           "output_tokens": int(getattr(usage, "output_tokens", 0) or 0)}
+           "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+           "cache_read_tokens": int(getattr(usage, "cache_read_input_tokens", 0) or 0),
+           "cache_write_tokens": int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+           "finish": str(response.stop_reason or ""),
+           "cut_off": response.stop_reason == "max_tokens"}
 
     # Checked before the content, because a declined request carries none.
     if response.stop_reason == "refusal":
@@ -408,10 +473,16 @@ def _openai(cfg: dict, system: str, prompt: str, max_tokens: int,
         text += ("\n\n[Cut off at the answer length limit. Raise it on the "
                  "AI page for a complete answer.]")
     usage = data.get("usage") or {}
+    # OpenAI counts cached tokens inside prompt_tokens, so they come out of it
+    # here, the same way Anthropic and the custom path report them.
+    cached = int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
     return {"ok": True, "text": str(text).strip(),
             "model": data.get("model") or model,
-            "input_tokens": int(usage.get("prompt_tokens") or 0),
-            "output_tokens": int(usage.get("completion_tokens") or 0)}
+            "input_tokens": max(0, int(usage.get("prompt_tokens") or 0) - cached),
+            "output_tokens": int(usage.get("completion_tokens") or 0),
+            "cache_read_tokens": cached,
+            "finish": str(choice.get("finish_reason") or ""),
+            "cut_off": choice.get("finish_reason") == "length"}
 
 
 # ------------------------------------------------------------------- custom
@@ -473,13 +544,55 @@ def _custom(cfg: dict, system: str, prompt: str, timeout: float) -> dict:
                          "was expected. Set where the answer is on the AI page."}
     usage = data.get("usage") if isinstance(data, dict) else None
     usage = usage if isinstance(usage, dict) else {}
+    found = _custom_counts(data, usage)
+    # A service that stopped the answer at its own limit says so in one of a
+    # few ways.  The answer is still handed back, marked, because a cut off
+    # explanation is still worth reading; a caller that needs the whole thing,
+    # such as JSON, checks cut_off and says why.
+    if found["cut_off"]:
+        text = (str(text).rstrip() + f"\n\n[Cut off by the service after "
+                f"{found['output_tokens']} output tokens.]")
     return {"ok": True, "text": str(text).strip(),
-            "model": str((data.get("model") if isinstance(data, dict) else "")
+            "model": str((data.get("model") or data.get("selected_model")
+                          if isinstance(data, dict) else "")
                          or describe_model(cfg)),
-            "input_tokens": int(usage.get("input_tokens")
-                                or usage.get("prompt_tokens") or 0),
-            "output_tokens": int(usage.get("output_tokens")
-                                 or usage.get("completion_tokens") or 0)}
+            **found}
+
+
+def _custom_counts(data, usage: dict) -> dict:
+    """Tokens, cache use and how the answer ended, from whatever shape came back."""
+    def number(*names):
+        for name in names:
+            try:
+                value = int(usage.get(name) or 0)
+            except (TypeError, ValueError):
+                continue
+            if value:
+                return value
+        return 0
+
+    cache_read = number("cache_read_input_tokens", "cache_read_tokens")
+    cache_write = number("cache_creation_input_tokens", "cache_write_tokens")
+    # Some services count cached tokens inside input_tokens and say how many
+    # were not; that one is what is billed at the full input price.
+    if "uncached_input_tokens" in usage:
+        input_tokens = number("uncached_input_tokens")
+    else:
+        input_tokens = number("input_tokens", "prompt_tokens")
+
+    finish = ""
+    if isinstance(data, dict):
+        choice = (data.get("choices") or [{}])[0] if isinstance(data.get("choices"), list) else {}
+        finish = (data.get("finish_reason") or data.get("stop_reason")
+                  or (choice.get("finish_reason") if isinstance(choice, dict) else "") or "")
+    finish = str(finish)[:32]
+    cropped = bool(data.get("response_cropped")) if isinstance(data, dict) else False
+    return {"input_tokens": input_tokens,
+            "output_tokens": number("output_tokens", "completion_tokens"),
+            "cache_read_tokens": cache_read,
+            "cache_write_tokens": cache_write,
+            "finish": finish,
+            "cut_off": cropped or finish.lower() in ("length", "max_tokens")}
 
 
 def _pluck(data, path: str):

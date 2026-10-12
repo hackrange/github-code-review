@@ -230,3 +230,25 @@ def page(request: Request, template: str, **context) -> HTMLResponse:
     response = HTMLResponse(html)
     issue_csrf(response, token)
     return response
+
+
+def money(value, currency: str = "") -> str:
+    """An amount for the cost tab.  Small ones keep enough places to not read as 0."""
+    try:
+        amount = float(value or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    places = 2 if amount == 0 or abs(amount) >= 0.01 else 4
+    return f"{currency or ''}{amount:,.{places}f}"
+
+
+def thousands(value) -> str:
+    """A whole number with separators, such as 13,380."""
+    try:
+        return f"{int(round(float(value or 0))):,}"
+    except (TypeError, ValueError):
+        return "0"
+
+
+env.filters["money"] = money
+env.filters["thousands"] = thousands

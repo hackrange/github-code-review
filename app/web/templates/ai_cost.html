@@ -1,0 +1,182 @@
+{# The AI page's cost tab.  Every number is read off the usage table, which
+   has one row per question sent, good or bad.  Prices are per million tokens
+   and only what is typed here; nothing is looked up. #}
+{% set cur = usage.currency %}
+{% set t = usage.total %}
+{% set f = usage.forecast %}
+
+<div class="card">
+  <div class="card-head">Window</div>
+  <div class="card-body">
+    <form method="get" action="{{ base }}/ai" class="inline-form">
+      <input type="hidden" name="tab" value="cost">
+      <label>Last
+        <input type="number" name="days" min="1" max="366" value="{{ cost_days }}" style="width:6rem">
+        days
+      </label>
+      <button class="btn" type="submit">Show</button>
+      {% for w in cost_windows %}
+      <a class="btn sm" href="{{ base }}/ai?tab=cost&amp;days={{ w }}"
+         {{ 'aria-current="page"' | safe if w == cost_days }}>{{ w }} days</a>
+      {% endfor %}
+    </form>
+    <p class="faint small">{{ usage.start.strftime('%d %b %Y') }} to {{ usage.end.strftime('%d %b %Y') }}, in UTC.
+      {% if usage.first %}Usage was first recorded on {{ usage.first.strftime('%d %b %Y') }}.{% else %}No usage is recorded yet.{% endif %}</p>
+  </div>
+</div>
+
+{% if not usage.priced %}
+<div class="card"><div class="card-body small">No prices are set, so this shows
+  tokens only.  Type what the service charges per million tokens below, and
+  every amount on this tab is worked out from it.</div></div>
+{% endif %}
+
+<div class="stats">
+  <div class="stat">
+    <div class="n">{% if usage.priced %}{{ t.cost | money(cur) }}{% else %}{{ t.tokens | thousands }}{% endif %}</div>
+    <div class="l">{{ 'Spent' if usage.priced else 'Tokens' }}, last {{ usage.days }} days</div>
+    <div class="l faint" style="font-size:.72rem">{{ t.calls | thousands }} calls{% if usage.priced %}, {{ t.tokens | thousands }} tokens{% endif %}</div>
+  </div>
+  <div class="stat">
+    <div class="n">{% if usage.priced %}{{ f.per_day_cost | money(cur) }}{% else %}{{ f.per_day_tokens | thousands }}{% endif %}</div>
+    <div class="l">Average day</div>
+    <div class="l faint" style="font-size:.72rem">over {{ usage.span }} day{{ '' if usage.span == 1 else 's' }}</div>
+  </div>
+  <div class="stat">
+    <div class="n">{% if usage.priced %}{{ f.cost | money(cur) }}{% else %}{{ f.tokens | thousands }}{% endif %}</div>
+    <div class="l">Next {{ f.days }} days</div>
+    <div class="l faint" style="font-size:.72rem">{{ f.tokens | thousands }} tokens forecast</div>
+  </div>
+  <div class="stat">
+    <div class="n">{% if usage.priced %}{{ f.month_cost | money(cur) }}{% else %}{{ f.month_tokens | thousands }}{% endif %}</div>
+    <div class="l">{{ f.month_name }}, forecast</div>
+    <div class="l faint" style="font-size:.72rem">{% if usage.priced %}{{ f.month_so_far | money(cur) }}{% else %}{{ f.month_tokens_so_far | thousands }}{% endif %} so far</div>
+  </div>
+  <div class="stat {{ 'warn' if t.failed or t.cut_off }}">
+    <div class="n">{{ t.failed | thousands }}</div>
+    <div class="l">Failed calls</div>
+    <div class="l faint" style="font-size:.72rem">{{ t.cut_off | thousands }} cut off at the length limit</div>
+  </div>
+</div>
+<p class="faint small">The forecast is the average day above, carried forward.
+  It moves as soon as usage does, so a busy week of validation raises it and a
+  quiet one lowers it.</p>
+
+<div class="card">
+  <div class="card-head">{{ 'Cost' if usage.priced else 'Tokens' }} per day</div>
+  {% set c = usage_chart %}
+  {% if c.empty %}
+  <div class="card-body faint small">Nothing was asked in this window.</div>
+  {% else %}
+  {# Inline SVG, colored from the stylesheet, so it works in either theme.
+     Each bar names its day and numbers when pointed at. #}
+  <div class="chart-wrap">
+    <svg class="chart" viewBox="0 0 {{ c.width }} {{ c.height }}" preserveAspectRatio="none"
+         role="img" aria-label="{{ 'Cost' if usage.priced else 'Tokens' }} per day over the last {{ usage.days }} days">
+      {% for line in c.grid %}
+      <line class="grid" x1="{{ c.pad_left }}" y1="{{ line.y }}" x2="{{ c.width - 12 }}" y2="{{ line.y }}"/>
+      <text class="axis" x="{{ c.pad_left - 8 }}" y="{{ line.y + 4 }}" text-anchor="end">{% if usage.priced %}{{ line.value | money(cur) }}{% else %}{{ line.value | thousands }}{% endif %}</text>
+      {% endfor %}
+      {% for b in c.bars %}{% if b.h > 0 %}
+      <rect class="usage-bar" x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="{{ 2 if b.w > 6 else 0 }}">
+        <title>{{ b.day.strftime('%d %b %Y') }}: {% if usage.priced %}{{ b.row.cost | money(cur) }}, {% endif %}{{ b.row.tokens | thousands }} tokens, {{ b.row.calls }} call{{ '' if b.row.calls == 1 else 's' }}{% if b.row.failed %}, {{ b.row.failed }} failed{% endif %}</title>
+      </rect>
+      {% endif %}{% endfor %}
+      {% for label in c.labels %}
+      <text class="axis" x="{{ label.x }}" y="{{ c.height - 8 }}" text-anchor="middle">{{ label.text }}</text>
+      {% endfor %}
+    </svg>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head">By what asked</div>
+  <div class="table-scroll">
+  <table>
+    <thead><tr>
+      <th>Purpose</th><th class="num">Calls</th><th class="num">Failed</th><th class="num">Cut off</th>
+      <th class="num">Input</th><th class="num">Output</th><th class="num">Cache read</th><th class="num">Cache write</th>
+      {% if usage.priced %}<th class="num">Cost</th>{% endif %}
+    </tr></thead>
+    <tbody>
+    {% for p in usage.purposes %}
+    <tr>
+      <td>{{ p.purpose }}</td><td class="num">{{ p.calls | thousands }}</td>
+      <td class="num">{{ p.failed | thousands }}</td><td class="num">{{ p.cut_off | thousands }}</td>
+      <td class="num">{{ p.input | thousands }}</td><td class="num">{{ p.output | thousands }}</td>
+      <td class="num">{{ p.cache_read | thousands }}</td><td class="num">{{ p.cache_write | thousands }}</td>
+      {% if usage.priced %}<td class="num">{{ p.cost | money(cur) }}</td>{% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="9" class="faint small">Nothing was asked in this window.</td></tr>
+    {% endfor %}
+    </tbody>
+    {% if usage.purposes %}
+    <tfoot><tr>
+      <th>Total</th><th class="num">{{ t.calls | thousands }}</th><th class="num">{{ t.failed | thousands }}</th>
+      <th class="num">{{ t.cut_off | thousands }}</th><th class="num">{{ t.input | thousands }}</th>
+      <th class="num">{{ t.output | thousands }}</th><th class="num">{{ t.cache_read | thousands }}</th>
+      <th class="num">{{ t.cache_write | thousands }}</th>
+      {% if usage.priced %}<th class="num">{{ t.cost | money(cur) }}</th>{% endif %}
+    </tr></tfoot>
+    {% endif %}
+  </table>
+  </div>
+  {% if t.calls and not t.cache_read and not t.cache_write %}
+  <div class="card-body faint small">The service reported no cache use on any
+    call.  Each question starts with the same instructions, so a service that
+    caches prompts could bill that part at the cache read price instead.
+    That is turned on at the service, not here.</div>
+  {% endif %}
+</div>
+
+<details class="card">
+  <summary class="card-head">Day by day</summary>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Day</th><th class="num">Calls</th><th class="num">Failed</th>
+      <th class="num">Input</th><th class="num">Output</th><th class="num">Cache read</th>
+      <th class="num">Cache write</th>{% if usage.priced %}<th class="num">Cost</th>{% endif %}</tr></thead>
+    <tbody>
+    {% for d in usage.daily | reverse %}
+    <tr><td>{{ d.day.strftime('%d %b %Y') }}</td><td class="num">{{ d.calls | thousands }}</td>
+      <td class="num">{{ d.failed | thousands }}</td><td class="num">{{ d.input | thousands }}</td>
+      <td class="num">{{ d.output | thousands }}</td><td class="num">{{ d.cache_read | thousands }}</td>
+      <td class="num">{{ d.cache_write | thousands }}</td>
+      {% if usage.priced %}<td class="num">{{ d.cost | money(cur) }}</td>{% endif %}</tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+
+<div class="card">
+  <div class="card-head">Prices</div>
+  <div class="card-body">
+    <p class="faint small">What the service charges per million tokens, for
+      example 0.10.  Leave one empty when it is not charged.  Changing a price
+      reprices the whole history shown here, since only token counts are
+      stored.</p>
+    <form method="post" action="{{ base }}/ai/prices">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="days" value="{{ cost_days }}">
+      <label>Input, per million tokens
+        <input type="text" inputmode="decimal" name="ai.price_input" value="{{ values['ai.price_input'] }}" placeholder="0.10" {{ 'disabled' if not can_write }}>
+      </label>
+      <label>Output, per million tokens
+        <input type="text" inputmode="decimal" name="ai.price_output" value="{{ values['ai.price_output'] }}" placeholder="0.50" {{ 'disabled' if not can_write }}>
+      </label>
+      <label>Cache read, per million tokens
+        <input type="text" inputmode="decimal" name="ai.price_cache_read" value="{{ values['ai.price_cache_read'] }}" placeholder="0.01" {{ 'disabled' if not can_write }}>
+      </label>
+      <label>Cache write, per million tokens
+        <input type="text" inputmode="decimal" name="ai.price_cache_write" value="{{ values['ai.price_cache_write'] }}" placeholder="0.125" {{ 'disabled' if not can_write }}>
+      </label>
+      <label>Currency symbol
+        <input type="text" name="ai.price_currency" value="{{ values['ai.price_currency'] }}" maxlength="4" style="width:5rem" {{ 'disabled' if not can_write }}>
+      </label>
+      {% if can_write %}<button class="btn primary" type="submit">Save prices</button>{% endif %}
+    </form>
+  </div>
+</div>

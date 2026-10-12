@@ -3924,6 +3924,34 @@ async def save_ai(request: Request, user: User = Depends(current_user)):
     return redirect("/ai?msg=" + quote("Saved."))
 
 
+@router.post("/ai/prices")
+async def save_ai_prices(request: Request, user: User = Depends(current_user)):
+    """What the custom service charges, for the cost tab."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+
+    from urllib.parse import quote
+
+    from app.core import ai, settings_store as store
+
+    form = await request.form()
+    days = clean_int(form.get("days") or 30, "Days", low=1, high=366)
+    try:
+        values = ai.read_prices(form)
+    except ValueError as exc:
+        return redirect(f"/ai?tab=cost&days={days}&kind=error&msg=" + quote(str(exc)))
+
+    with session_scope() as db:
+        moved = [key for key, value in values.items()
+                 if store.set_value(db, key, value, user.username)]
+        record(db, "ai.changed", actor=user.username,
+               detail=(f"{len(moved)} price setting(s) changed: "
+                       + ", ".join(sorted(moved))) if moved
+                      else "prices saved with nothing changed",
+               source_ip=client_ip(request))
+    return redirect(f"/ai?tab=cost&days={days}&msg=" + quote("Prices saved."))
+
+
 @router.post("/ai/test")
 async def test_ai(request: Request, user: User = Depends(current_user)):
     """One small question, before a real one costs anything."""

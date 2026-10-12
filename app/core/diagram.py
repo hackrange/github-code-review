@@ -736,13 +736,30 @@ def _draw(repository: str, branch: str, connection: str, actor: str) -> None:
 
     prompt = (f"Repository: {repository}\nBranch: {branch}\n\n" + evidence
               + "\n\nNotes on what was sent:\n" + "\n".join(notes))
-    answer = ai.complete(cfg, SYSTEM_PROMPT, prompt)
+    answer = ai.complete(cfg, SYSTEM_PROMPT, prompt, purpose="diagram")
     if not answer["ok"]:
         _finish(repository, status="failed",
                 error=(answer["error"] or "The model gave no answer.")[:1000])
         return
+    if answer.get("cut_off"):
+        # Half a JSON object is not a diagram, and "not valid JSON" sends
+        # somebody looking in the wrong place.
+        _finish(repository, status="failed", error=(
+            f"The answer was cut off after {answer.get('output_tokens') or 'too many'} "
+            f"output tokens, before the diagram was finished.  "
+            + ("Raise the longest answer on the AI page."
+               if answer.get("provider") != "custom" else
+               "The service stopped it at its own limit.  If the service lets "
+               "the template set a lower reasoning level, that leaves more of "
+               "the limit for the answer.")))
+        return
     graph, problem = parse(answer["text"])
     if problem:
+        # The start of what came back, so the next one of these can be
+        # diagnosed from the log instead of guessed at.
+        log.warning("diagram for %s: %s (%d chars, finish %r) starts %r",
+                    repository, problem, len(answer["text"]),
+                    answer.get("finish"), answer["text"][:300])
         _finish(repository, status="failed", error=problem)
         return
     graph["notes"] = notes
