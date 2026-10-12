@@ -1008,6 +1008,7 @@ table.heat .heat-actions .btn { margin-left: .3rem; }
 .repo-filters .field { margin: 0; flex: 0 1 13rem; }
 .repo-filters .field:first-child { flex: 1 1 22rem; max-width: 32rem; }
 .repo-filter-count { padding-bottom: .45rem; }
+.repo-show-archived { display: flex; gap: .35rem; align-items: center; padding-bottom: .45rem; white-space: nowrap; }
 .scope-bar {
     display: flex; flex-wrap: wrap; gap: .5rem .9rem; align-items: center;
     margin: .8rem 0 .6rem; padding: .6rem .8rem;

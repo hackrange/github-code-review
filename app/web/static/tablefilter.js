@@ -18,6 +18,12 @@
  *   <select data-filter-by="repo-table" data-filter-key="org">
  *   <tr data-org="acme">
  *
+ * A tick box with data-filter-show hides every row carrying that attribute
+ * until it is ticked, for rows most people never want to see:
+ *
+ *   <input type="checkbox" data-filter-show="repo-table" data-filter-key="archived">
+ *   <tr data-archived>
+ *
  * Rows that carry data-branches also take branch=name and branch!=name in
  * the search box, and any [data-branch-name] inside the row that the search
  * did not name is hidden.  A row is shown when one of its branches is named by an =
@@ -80,6 +86,8 @@
     var input = document.querySelector('input[data-filter="' + id + '"]');
     var selects = Array.prototype.slice.call(
       document.querySelectorAll('[data-filter-by="' + id + '"]'));
+    var shows = Array.prototype.slice.call(
+      document.querySelectorAll('input[data-filter-show="' + id + '"]'));
     var counter = document.querySelector('[data-filter-count="' + id + '"]');
     var rows = rowsOf(table);
     if (!rows.length) { return; }
@@ -101,12 +109,18 @@
       var picks = selects.filter(function (s) { return s.value; }).map(function (s) {
         return { key: "data-" + s.getAttribute("data-filter-key"), value: s.value };
       });
+      var tucked = shows.filter(function (s) { return !s.checked; }).map(function (s) {
+        return "data-" + s.getAttribute("data-filter-key");
+      });
       var byBranch = query.want.length || query.skip.length;
       var narrowed = query.words.length || byBranch || picks.length;
       var shown = 0;
       for (var i = 0; i < rows.length; i++) {
         var row = rows[i];
         var keep = !query.words.length || matches(text[i], query.words);
+        for (var t = 0; keep && t < tucked.length; t++) {
+          if (row.hasAttribute(tucked[t])) { keep = false; narrowed = true; }
+        }
         for (var p = 0; keep && p < picks.length; p++) {
           var have = (row.getAttribute(picks[p].key) || "").split(/\s+/);
           keep = have.indexOf(picks[p].value) !== -1;
@@ -155,14 +169,15 @@
     }
 
     if (input) { input.addEventListener("input", apply); }
-    selects.forEach(function (s) { s.addEventListener("change", apply); });
+    selects.concat(shows).forEach(function (s) { s.addEventListener("change", apply); });
     /* A back button can restore a typed value without firing input. */
     apply();
   }
 
   var ids = {};
-  document.querySelectorAll("[data-filter], [data-filter-by]").forEach(function (el) {
-    ids[el.getAttribute("data-filter") || el.getAttribute("data-filter-by")] = true;
+  document.querySelectorAll("[data-filter], [data-filter-by], [data-filter-show]").forEach(function (el) {
+    ids[el.getAttribute("data-filter") || el.getAttribute("data-filter-by")
+        || el.getAttribute("data-filter-show")] = true;
   });
   Object.keys(ids).forEach(wire);
 })();

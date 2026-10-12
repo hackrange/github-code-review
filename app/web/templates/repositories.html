@@ -227,6 +227,14 @@
         <option value="set">Changed from the default</option>
       </select>
     </div>
+    {# Off to start with.  The scan already skips archived repositories,
+       so their rows are history nobody can act on and they crowd out the
+       ones that can still change. #}
+    {% if rows | selectattr('archived') | list %}
+    <label class="repo-show-archived small">
+      <input type="checkbox" data-filter-show="repo-table" data-filter-key="archived">
+      Show archived ({{ rows | selectattr('archived') | list | length }})</label>
+    {% endif %}
     <div class="small faint repo-filter-count" data-filter-count="repo-table"></div>
   </div>
   <div class="help small faint" style="margin-top:.35rem">Words match any column.
@@ -278,7 +286,7 @@
         {% set c = counts.get(r.full_name, {}) %}
         {% set cert = certified_default.get(r.full_name) %}
         {% set sc = scopes.get(r.full_name, {}) %}
-        <tr data-org="{{ r.organization }}"
+        <tr data-org="{{ r.organization }}"{{ ' data-archived' if r.archived }}
             {%- set rc = certs_by_repo.get(r.full_name, []) %}
             {%- set ct = namespace(words=[]) %}
             {%- for one in rc %}
