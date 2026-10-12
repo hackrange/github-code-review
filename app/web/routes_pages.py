@@ -30,7 +30,7 @@ from app.core.models import (
 from app.web.render import notice_class, page, render_partial
 from app.core.reports import spreadsheet_row
 from app.web import oneshot as _oneshot
-from app.web.security import clean_text, current_user
+from app.web.security import clean_notice, clean_text, current_user
 
 log = logging.getLogger("gcr.pages")
 router = APIRouter()
@@ -1807,8 +1807,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        ai_model=ai.describe_model(ai_cfg),
                        ai_sends_code=(bool(ai_cfg.get("ai.send_code"))
                                       and row.kind != FindingKind.CREDENTIAL),
-                       flash=clean_text(msg, "message", limit=300,
-                                        required=False),
+                       flash=clean_notice(msg, limit=300),
                        flash_kind=notice_class(kind),
                        **_expiry_window(90))
         return page(request, "finding_detail.html", **context)
@@ -1972,8 +1971,7 @@ def certification_detail(request: Request, repo: str = "", branch: str = "",
                        last_scanned=owner.last_scanned_at,
                        compare=compare, findings_count=found.count(),
                        can_certify=rbac.can(user, "repo.certify"),
-                       message=clean_text(msg, "message", limit=300,
-                                          required=False),
+                       message=clean_notice(msg, limit=300),
                        kind=("warn" if kind == "warn" else "ok"),
                        **_expiry_window(90))
         return page(request, "certification.html", **context)
@@ -2141,8 +2139,7 @@ def repositories(request: Request, user: User = Depends(current_user),
         context.update(drawn=drawn, can_draw=can_draw,
                        repo_ids={row.full_name: row.id for row in rows})
         context.update(scopes=scopes, can_scope=rbac.can(user, "repo.scope"),
-                       flash=clean_text(msg, "message", limit=300,
-                                        required=False),
+                       flash=clean_notice(msg, limit=300),
                        flash_kind=notice_class(kind))
         context.update(active_page="repositories", rows=rows, counts=counts,
                        can_scan=rbac.can(user, "scan.run"),
@@ -2202,8 +2199,7 @@ def repository_scope(repo_id: int, request: Request, msg: str = "",
                            rule, repo.default_branch),
                        history=scan_scope.history(db, repo.full_name),
                        hidden=hidden,
-                       flash=clean_text(msg, "message", limit=300,
-                                        required=False),
+                       flash=clean_notice(msg, limit=300),
                        flash_kind=notice_class(kind))
         return page(request, "scope.html", **context)
 
@@ -2380,8 +2376,7 @@ def repository_diagram(repo_id: int, request: Request, msg: str = "",
         context = _shared(db, user)
         context.update(active_page="repositories", repo=repo,
                        **_diagram_context(db, user, repo),
-                       flash=clean_text(msg, "message", limit=300,
-                                        required=False),
+                       flash=clean_notice(msg, limit=300),
                        flash_kind=notice_class(kind))
         return page(request, "diagram.html", **context)
 
@@ -2462,8 +2457,7 @@ def connection_scope(connection_id: int, request: Request, msg: str = "",
         context = _shared(db, user)
         context.update(active_page="connections", connection=connection,
                        listing=listing,
-                       flash=clean_text(msg, "message", limit=300,
-                                        required=False),
+                       flash=clean_notice(msg, limit=300),
                        flash_kind=notice_class(kind))
         return page(request, "connection_scope.html", **context)
 
@@ -2660,8 +2654,7 @@ def scans(request: Request, msg: str = "", kind: str = "",
                        scan_full=scanner.is_full(),
                        scan_limit=scanner.concurrency(),
                        running_count=len(scanner.running_ids()),
-                       message=clean_text(msg, "message", limit=300,
-                                          required=False),
+                       message=clean_notice(msg, limit=300),
                        message_kind="error" if kind == "error" else "ok")
         return page(request, "scans.html", **context)
 
@@ -3109,8 +3102,7 @@ def users(request: Request, msg: str = "", kind: str = "", tab: str = "",
                        roles=[r.value for r in UserRole],
                        can_write=rbac.can(user, "user.write"),
                        can_impersonate=rbac.can(user, "user.impersonate"),
-                       message=clean_text(msg, "message", limit=400,
-                                          required=False),
+                       message=clean_notice(msg, limit=400),
                        message_kind="error" if kind == "error" else "ok")
         return page(request, "users.html", **context)
 
@@ -3203,7 +3195,7 @@ def connections_page(request: Request, msg: str = "", kind: str = "",
                        if rbac.can(user, "settings.write") else []),
             can_write=rbac.can(user, "settings.write"),
             can_scope=rbac.can(user, "repo.scope"),
-            message=clean_text(msg, "message", limit=1000, required=False),
+            message=clean_notice(msg, limit=1000),
             message_kind=kind if kind in ("error", "warn") else "ok",
         )
         return page(request, "connections.html", **context)
@@ -3247,7 +3239,7 @@ def settings_page(request: Request, msg: str = "", kind: str = "",
             describe=store.describe,
             configured=store.configured(db),
             readiness=store.readiness(db),
-            message=clean_text(msg, "message", limit=300, required=False),
+            message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok",
             can_write=rbac.can(user, "settings.write"),
         )
@@ -3300,7 +3292,7 @@ def exclusions_page(request: Request, msg: str = "", kind: str = "",
             prefill_kind=prefill_kind,
             **_expiry_window(180),
             can_write=rbac.can(user, "exclusion.write"),
-            message=clean_text(msg, "message", limit=300, required=False),
+            message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok",
         )
         return page(request, "exclusions.html", **context)
@@ -3360,7 +3352,7 @@ def severity_page(request: Request, msg: str = "", kind: str = "",
                        severities=[s.value for s in Severity],
                        sensitivity_labels=severity_labels_for(db),
                        can_write=rbac.can(user, "settings.write"),
-                       flash=clean_text(msg, "message", limit=300, required=False),
+                       flash=clean_notice(msg, limit=300),
                        flash_kind=notice_class(kind))
         return page(request, "severity.html", **context)
 
@@ -3400,7 +3392,7 @@ def tokens_page(request: Request, msg: str = "", kind: str = "",
             # arrives in the address is a one time key, not the token.
             fresh=_oneshot.take(shown, user.id) if shown else "",
             api_url=f"{base_url}/api/v1",
-            message=clean_text(msg, "message", limit=300, required=False),
+            message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "tokens.html", **context)
 
@@ -3454,8 +3446,7 @@ def tagging_page(request: Request, q: str = "", org: str = "",
             total=total, untagged=untagged, shown=len(rows),
             filters={"q": search, "org": organization, "show": show},
             can_write=rbac.can(user, "repo.write"),
-            message=clean_text(request.query_params.get("msg", ""), "message",
-                               limit=300, required=False),
+            message=clean_notice(request.query_params.get("msg", ""), limit=300),
             message_kind="error" if request.query_params.get("kind") == "error" else "ok")
         return page(request, "tagging.html", **context)
 
@@ -3940,7 +3931,7 @@ def backup_page(request: Request, msg: str = "", kind: str = "",
             counts=counts,
             total_rows=sum(counts.values()),
             min_password=backup_store.MIN_PASSWORD,
-            message=clean_text(msg, "message", limit=300, required=False),
+            message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "backup.html", **context)
 
@@ -3992,7 +3983,7 @@ def triage_page(request: Request, msg: str = "", kind: str = "",
             drop_below_entropy=bool(triage_settings.get(
                 db, "secrets.drop_below_entropy")),
             can_write=rbac.can(user, "settings.write"),
-            message=clean_text(msg, "message", limit=300, required=False),
+            message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "triage.html", **context)
 
@@ -4033,7 +4024,7 @@ def noise_page(request: Request, msg: str = "", kind: str = "",
             kinds=[k.value for k in FindingKind],
             can_mute=rbac.can(user, "rule.mute.request"),
             can_grade=rbac.can(user, "settings.write"),
-            message=clean_text(msg, "message", limit=300, required=False),
+            message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "noise.html", **context)
 
@@ -4061,7 +4052,7 @@ def notifications_page(request: Request, msg: str = "", kind: str = "",
             active_page="notifications",
             values=values,
             can_write=rbac.can(user, "settings.write"),
-            message=clean_text(msg, "message", limit=300, required=False),
+            message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "notifications.html", **context)
 
@@ -4092,7 +4083,7 @@ def ai_page(request: Request, msg: str = "", kind: str = "",
             custom_example=ai.CUSTOM_EXAMPLE,
             problem=ai.missing(cfg) if ai.enabled(cfg) else "",
             can_write=rbac.can(user, "settings.write"),
-            message=clean_text(msg, "message", limit=300, required=False),
+            message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "ai.html", **context)
 
@@ -4155,7 +4146,7 @@ def learned_page(request: Request, msg: str = "", kind: str = "", batch: int = 0
         context.update(
             active_page="ai", rows=rows, show=show, batch=status,
             can_write=rbac.can(user, "settings.write"),
-            message=clean_text(msg, "message", limit=300, required=False),
+            message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "learned.html", **context)
 

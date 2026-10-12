@@ -545,7 +545,7 @@ def _post(url: str, headers: dict, body: str, timeout: float, who: str) -> dict:
                 detail = (err.get("message") if isinstance(err, dict) else err) \
                     or parsed.get("detail") or parsed.get("message") or ""
         except ValueError:
-            detail = response.text
+            detail = _cloudflare(response) or response.text
         message = f"{who} answered {response.status_code}"
         if detail:
             message += ": " + _short(str(detail))
@@ -557,8 +557,37 @@ def _post(url: str, headers: dict, body: str, timeout: float, who: str) -> dict:
         return {"ok": False, "error": f"{who} answered, but not with JSON."}
 
 
+# Cloudflare's own error codes for a request it refused before it reached the
+# service.  The page around them is mostly script, which is no use to anyone.
+_CLOUDFLARE_CODE = re.compile(r"error ?code(?:<[^>]*>|\W)*(\d{4})", re.I)
+_CLOUDFLARE_MEANS = {
+    "1006": "this server's IP address is banned there",
+    "1007": "this server's IP address is banned there",
+    "1008": "this server's IP address is banned there",
+    "1009": "this server's country is blocked there",
+    "1010": "the request's browser signature is blocked there",
+    "1020": "a firewall rule there blocks this request",
+}
+
+
+def _cloudflare(response) -> str:
+    """One sentence for a Cloudflare refusal.  -> "" when it is not one."""
+    if "cloudflare" not in (response.headers.get("server") or "").lower():
+        return ""
+    match = _CLOUDFLARE_CODE.search(response.text or "")
+    code = match.group(1) if match else ""
+    means = _CLOUDFLARE_MEANS.get(code, "it never reached the service")
+    ray = (response.headers.get("cf-ray") or "").strip()
+    return (f"Cloudflare refused it{f' (error {code})' if code else ''}: "
+            f"{means}. Ask whoever runs {urlparse(str(response.url)).hostname} "
+            f"to allow this server's address."
+            + (f" Ray ID {ray}." if ray else ""))
+
+
 def _short(text: str, limit: int = 300) -> str:
-    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text or "")).strip()
+    text = re.sub(r"<(script|style)\b.*?</\1\s*>", " ", text or "",
+                  flags=re.I | re.S)
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text)).strip()
     return text if len(text) <= limit else text[:limit] + "..."
 
 

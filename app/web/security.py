@@ -433,6 +433,21 @@ def clean_text(value, what: str = "value", limit: int = 500,
     return text
 
 
+def clean_notice(value, limit: int = 300) -> str:
+    """A banner message out of the address bar, clipped rather than refused.
+
+    The message is ours: a redirect wrote it, often with somebody else's
+    error text inside.  clean_text refuses anything over its limit with a
+    plain 400, so a long reason from a remote service took the whole page
+    down with it, and the person saw "message is too long" instead of the
+    reason.  Here the end is cut off and control characters dropped, because
+    the page has to render whatever the banner says.
+    """
+    text = (value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = "".join(c for c in text if ord(c) >= 32 or c in "\n\t")
+    return text if len(text) <= limit else text[:limit - 3].rstrip() + "..."
+
+
 def clean_email(value, what: str = "Address", required: bool = False) -> str:
     """An owner has to be somebody you can actually reach.
 
