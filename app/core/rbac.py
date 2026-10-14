@@ -138,23 +138,47 @@ def require(user: User, permission: str) -> None:
         raise HTTPException(status_code=403, detail="Not allowed")
 
 
+def in_scan_group(user: User) -> bool:
+    """Whether a scanning group decides everything this person sees.
+
+    Two ways in, and never both.  Somebody in a group, Digital Engineering
+    say, sees what their groups cover and nothing else, whatever their login
+    reaches on the host.  Somebody in no group sees what their login reaches
+    and nothing else.  A group meant to fence a contractor in would otherwise
+    widen back out through whatever their login happens to carry.
+
+    Administrators are the exception.  They are the ones who edit the groups,
+    so narrowing them would hide nothing they could not undo.
+    """
+    if user.role == UserRole.ADMIN:
+        return False
+    return bool(getattr(user, "groups", None))
+
+
 def sees_everything(user: User) -> bool:
-    """Admins and readers see the whole estate.  Developers do not."""
-    return user.role in (UserRole.ADMIN, UserRole.READER)
+    """Only administrators see the whole estate.
+
+    Readers used to as well.  The role now says what somebody may do, and
+    what they may see comes from their groups or their login, the same as
+    for a developer.  See in_scan_group.
+    """
+    return user.role == UserRole.ADMIN
 
 
 def scope_pairs(user: User) -> list:
-    """The org and repo pairs a developer has been given.
+    """The org and repo pairs this person's scanning groups cover.
 
-    Their own, plus everything from the groups they are in.  Repository is
-    empty when the whole org is in scope.
+    Empty for anybody in no group, who sees what their login reaches instead.
+    Scopes typed onto an account used to count here too and no longer do: the
+    rows are left in user_scopes, unread.  Repository is empty when the whole
+    org is in scope.
     """
-    pairs = [(s.organization or "", s.repository or "")
-             for s in (user.scopes or [])]
-    for group in (getattr(user, "groups", None) or []):
-        pairs.extend(group.pairs())
+    pairs = []
+    if in_scan_group(user):
+        for group in user.groups:
+            pairs.extend(group.pairs())
 
-    # A group and a personal scope often name the same thing.
+    # Two groups often name the same thing.
     seen, unique = set(), []
     for pair in pairs:
         key = (pair[0].lower(), pair[1].lower())
@@ -169,12 +193,16 @@ def repositories_on_the_host(session, user) -> list:
     """What this person can reach on the host being scanned.
 
     Read from what the last scan collected, so access granted on GitHub shows
-    up here without anybody keeping a second list of it in step.  An account
-    with no login set reaches nothing this way, which is not the same as
-    reaching nothing at all: whatever an administrator assigned still counts.
+    up here without anybody keeping a second list of it in step.  For anybody
+    in no scanning group this is all they see, so an account with no login
+    set and no group sees nothing.
     """
     from app.core.models import RepoAccess
 
+    # A scanning group is all a member gets, so their login adds nothing.
+    # Out of one, this is all they get.
+    if in_scan_group(user):
+        return []
     login = (getattr(user, "github_login", "") or "").strip()
     if not login:
         return []
@@ -214,11 +242,10 @@ def in_scope(user: User, organization: str, repository: str,
 def _scope_filter(user: User, session=None, model=None):
     """A SQL condition matching only what this user may see.
 
-    Two ways in, and either is enough.  An administrator can assign an
-    organization or a repository by hand, and whatever this person can reach on
-    the host counts as well.
+    One way in or the other, never both: the scanning groups this person is
+    in, or, when they are in none, whatever they can reach on the host.
 
-    A developer with neither matches nothing.  That is deliberate: a new
+    Somebody with neither matches nothing.  That is deliberate: a new
     account should see an empty screen, not the whole company.
     """
     # The same condition, over any table that names an organization and a

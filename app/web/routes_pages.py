@@ -3080,7 +3080,6 @@ def users(request: Request, msg: str = "", kind: str = "", tab: str = "",
         for row in rows:
             # Load these while the session is open, or the template gets
             # nothing back.
-            _ = [s.organization for s in row.scopes]
             _ = [g.name for g in row.groups]
         groups = db.query(ScanGroup).order_by(ScanGroup.name).all()
         for group in groups:

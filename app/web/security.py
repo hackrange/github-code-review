@@ -337,17 +337,15 @@ def _load_user(request: Request, allow_half: bool = False):
             if borrowed is not None and not borrowed.disabled:
                 real_name = user.username
                 user = borrowed
-                _ = [x.organization for x in user.scopes]
                 for group in user.groups:
                     _ = group.entries
                 db.expunge(user)
                 user.impersonated_by = real_name
                 return user, row.half_auth
 
-        # Pull the scopes and the groups in now, while the session is open.
-        # Touching them after it closes gives a detached instance error, and
-        # both are read on every page that lists findings.
-        _ = [s.organization for s in user.scopes]
+        # Pull the groups in now, while the session is open.  Touching them
+        # after it closes gives a detached instance error, and they are read
+        # on every page that lists findings.
         for group in user.groups:
             _ = group.entries
         db.expunge(user)

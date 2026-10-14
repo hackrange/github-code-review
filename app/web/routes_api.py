@@ -801,6 +801,9 @@ async def start_scan(request: Request, user: User = Depends(current_user)):
     if not rbac.sees_everything(user):
         orgs = [org for org, repo in rbac.scope_pairs(user) if not repo]
         repos = [f"{org}/{repo}" for org, repo in rbac.scope_pairs(user) if repo]
+        # Out of a scanning group, what their login reaches is all they have.
+        with session_scope() as db:
+            repos += rbac.repositories_on_the_host(db, user)
         if not orgs and not repos:
             raise HTTPException(
                 status_code=403,
@@ -2079,9 +2082,14 @@ async def add_exclusion(request: Request, user: User = Depends(current_user)):
     if organization == "*" and not rbac.can(user, "settings.write"):
         raise HTTPException(status_code=403,
                             detail="Name the organization this covers.")
-    if organization != "*" and not rbac.in_scope(user, organization,
-                                                 repository if repository != "*" else ""):
-        raise HTTPException(status_code=403, detail="That is not yours to exclude.")
+    if organization != "*":
+        # With the session, so somebody whose access comes from their login on
+        # the host can exclude in their own repositories too.
+        with session_scope() as db:
+            mine = rbac.in_scope(user, organization,
+                                 repository if repository != "*" else "", db)
+        if not mine:
+            raise HTTPException(status_code=403, detail="That is not yours to exclude.")
 
     expires_raw = str(form.get("expires", "")).strip()
     expires_at = _parse_expiry(expires_raw) if expires_raw else None
@@ -2432,41 +2440,6 @@ def _apply_groups(db, row: User, form) -> None:
                   if wanted else [])
 
 
-def _apply_scopes(db, row: User, raw: str) -> None:
-    """Replace what a developer can see with the list from the form.
-
-    One per line, either an organization on its own or organization/repository.
-    Anything else is a typo, and a typo that silently becomes a wider scope is
-    the kind of thing that gets found during an audit.
-    """
-    from app.core.models import UserScope
-
-    wanted = []
-    for line in (raw or "").replace(",", "\n").splitlines():
-        entry = line.strip()
-        if not entry:
-            continue
-        if entry.count("/") > 1:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{entry} is not an organization or an organization/repository.")
-        organization, _, repository = entry.partition("/")
-        organization = clean_text(organization, "Organization", limit=255)
-        repository = clean_text(repository, "Repository", limit=255,
-                                required=False)
-        wanted.append((organization, repository))
-
-    db.query(UserScope).filter(UserScope.user_id == row.id).delete()
-    db.flush()
-    seen = set()
-    for organization, repository in wanted:
-        if (organization, repository) in seen:
-            continue
-        seen.add((organization, repository))
-        db.add(UserScope(user_id=row.id, organization=organization,
-                         repository=repository))
-
-
 @router.post("/groups/save")
 async def save_group(request: Request, user: User = Depends(current_user)):
     """Add a scanning group, or change one.
@@ -2631,7 +2604,6 @@ async def add_user(request: Request, user: User = Depends(current_user)):
         db.add(row)
         db.flush()
 
-        _apply_scopes(db, row, str(form.get("scopes", "")))
         _apply_groups(db, row, form)
         record(db, "user.added", actor=user.username, target=username,
                detail=f"{role.value}, {source.value}", source_ip=client_ip(request))
@@ -2687,7 +2659,6 @@ async def save_user(user_id: int, request: Request,
         row.display_name = display_name
         row.email = email
         row.github_login = github_login
-        _apply_scopes(db, row, str(form.get("scopes", "")))
         _apply_groups(db, row, form)
         record(db, "user.changed", actor=user.username, target=row.username,
                detail=f"role {role.value}"

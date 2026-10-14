@@ -15,7 +15,7 @@
     {% else %}
     <button class="btn primary" type="button" data-modal="user-modal"
             data-user_id="" data-username="" data-role="reader"
-            data-display_name="" data-email="" data-scopes=""
+            data-display_name="" data-email=""
             data-groups="">Add an account</button>
     {% endif %}
   </div>
@@ -52,21 +52,23 @@
               {% elif u.totp_confirmed %}<span class="badge ok">on</span>
               {% else %}<span class="badge medium">not set up</span>{% endif %}</td>
           <td class="small">
-            {% if u.role.value == 'admin' or u.role.value == 'reader' %}
+            {% if u.role.value == 'admin' %}
               <span class="faint">everything</span>
-            {% else %}
+            {% elif u.groups %}
+              {# A group is all a member sees.  Their login on the host counts
+                 for nothing while they are in one. #}
               {% for g in u.groups %}<span class="badge ok">{{ g.name }}</span> {% endfor %}
-              {% for s in u.scopes %}{{ s.organization }}{% if s.repository %}/{{ s.repository }}{% endif %}<br>{% endfor %}
-              {# Access on the host counts as well.  A developer with a login
-                 and no assignment still sees their own work, and a login that
-                 resolves to nothing is worth saying out loud rather than
-                 leaving somebody to wonder why their portal is empty. #}
+              <div class="faint">group only</div>
+            {% else %}
+              {# Out of a group, the login on the host is all there is.  A
+                 login that resolves to nothing is worth saying out loud rather
+                 than leaving somebody to wonder why their portal is empty. #}
               {% if u.github_login %}
                 {% set n = reach.get(u.id, 0) %}
                 {% if n %}<span class="badge ok" title="{{ u.github_login }}">{{ n }} repo{{ '' if n == 1 else 's' }} on the host</span>
                 {% else %}<span class="badge medium" title="{{ u.github_login }}">login reaches nothing yet</span>{% endif %}
               {% endif %}
-              {% if not u.groups and not u.scopes and not u.github_login %}
+              {% if not u.github_login %}
                 <span class="badge medium">nothing assigned</span>
               {% endif %}
             {% endif %}
@@ -84,8 +86,7 @@
                       data-email="{{ u.email }}"
                       data-github_login="{{ u.github_login or '' }}"
                       data-role_pinned="{{ '1' if u.role_pinned else '' }}"
-                      data-groups="{% for g in u.groups %}{{ g.id }}{{ ',' if not loop.last }}{% endfor %}"
-                      data-scopes="{% for s in u.scopes %}{{ s.organization }}{% if s.repository %}/{{ s.repository }}{% endif %}{{ '\n' if not loop.last }}{% endfor %}">Edit</button>
+                      data-groups="{% for g in u.groups %}{{ g.id }}{{ ',' if not loop.last }}{% endfor %}">Edit</button>
               {% if can_impersonate and not u.disabled and u.id != user.id %}
               {# Seeing what somebody sees is the only way to answer "why is
                  this repository not on their findings page".  Read only, and
@@ -149,6 +150,9 @@
     A group is a list of repositories with a name on it.  Give somebody the
     group rather than pasting the list onto their account, and when the project
     picks up another repository everybody in the group gets it at once.
+    A group replaces the login on the host.  A member sees only what their
+    groups cover, whatever their login reaches.  Somebody in no group sees
+    only what their login reaches.  Administrators see everything.
   </div>
   {% if groups %}
   <div class="table-scroll">
@@ -247,15 +251,16 @@
           <input type="text" name="github_login" placeholder="A-Person_acme">
           <span class="faint small">Their username on GitHub, GitLab or
             Bitbucket.  Set it and this account sees the findings for whatever
-            that login can reach, worked out from the last scan.  Leave it
-            empty and they see only what is assigned below.</span>
+            that login can reach, worked out from the last scan.  Ignored
+            while any scanning group below is ticked.</span>
         </label>
         <label>Role
           <select name="role">
             {% for r in roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
           </select>
-          <span class="faint small">admin runs the place.  developer sees only
-            what is listed below.  reader sees everything and changes nothing.</span>
+          <span class="faint small">admin runs the place and sees everything.
+            developer and reader see their groups, or their login when they are
+            in none.  reader changes nothing.</span>
         </label>
         <label class="check">
           <input type="checkbox" name="role_pinned" value="1" data-role-pin>
@@ -277,8 +282,8 @@
         {% if groups %}
         <label>Scanning groups
           <span class="faint small">Tick the projects this person works on.
-            Better than pasting a list: when the project grows a repository,
-            everybody in the group gets it.</span>
+            Ticking any group makes the groups all this person sees.  Their
+            login on the host stops counting.</span>
           <div class="check-grid">
             {% for g in groups %}
             <label class="check">
@@ -291,13 +296,6 @@
           </div>
         </label>
         {% endif %}
-        <label>Anything else this person can see
-          <textarea name="scopes" rows="3"
-                    placeholder="acme&#10;acme/api-service"></textarea>
-          <span class="faint small">One per line, on top of the groups above.
-            An organization on its own covers all of it.  Leave it empty for
-            admins and readers, who see everything anyway.</span>
-        </label>
       </div>
       <div class="modal-foot">
         <button type="button" class="btn" data-close-modal>Cancel</button>

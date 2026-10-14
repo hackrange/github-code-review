@@ -226,10 +226,12 @@ class ScanGroup(Base):
 
 
 class UserScope(Base):
-    """What a developer is allowed to see.
+    """What a developer used to be allowed to see.
 
-    An org scope covers every repo under it.  A repo scope is one repo.  Admin
-    and reader ignore this table completely.
+    No longer read.  Access now comes from scanning groups, or from the login
+    on the host for anybody in none (see rbac.in_scan_group), and the form
+    that wrote these is gone.  The rows are kept so nothing an administrator
+    typed is thrown away.
     """
 
     __tablename__ = "user_scopes"
