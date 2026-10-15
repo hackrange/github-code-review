@@ -48,7 +48,13 @@ _rl_write() {
 # Record what a response told us about the budget.
 _rl_record() {
   local hdr="$1"
-  local limit remaining reset
+  local limit remaining reset resource
+  # GitHub keeps separate budgets, and the SBOM one is 100 a minute.  Writing
+  # that over the hourly one had every worker stop for a minute at 98 left
+  # with thousands to spare.  Only the main budget goes in the shared file.
+  # A host that does not say which one it means has just the one.
+  resource=$(grep -i '^x-ratelimit-resource:' "$hdr" | head -1 | cut -d: -f2- | tr -d ' \r' || true)
+  [[ -n "$resource" && "$resource" != "core" ]] && return 0
   limit=$(grep -i '^x-ratelimit-limit:'     "$hdr" | head -1 | tr -dc '0-9' || true)
   remaining=$(grep -i '^x-ratelimit-remaining:' "$hdr" | head -1 | tr -dc '0-9' || true)
   reset=$(grep -i '^x-ratelimit-reset:'     "$hdr" | head -1 | tr -dc '0-9' || true)
