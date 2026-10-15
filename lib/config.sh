@@ -3,6 +3,9 @@
 # shellcheck shell=bash
 
 GHSCAN_CFG_JSON="${GHSCAN_CFG_JSON:-}"
+# Never in the environment.  It can be bigger than Linux lets one variable be,
+# and then no command this starts will run.  Workers get it from a file.
+export -n GHSCAN_CFG_JSON
 GHSCAN_CFG_PATH="${GHSCAN_CFG_PATH:-}"
 
 # Expand ${VAR} references inside every string value of the config.

@@ -168,7 +168,6 @@ review_run() {
       },
       redaction: {prefix_chars: 4, suffix_chars: 3, max_mask_chars: 12}
     }')
-    export GHSCAN_CFG_JSON
   fi
 
   local secrets='[]' code='[]' iac='[]'

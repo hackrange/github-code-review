@@ -229,7 +229,6 @@ apply_overrides() {
   fi
 
   GHSCAN_CFG_JSON=$(printf '%s' "$GHSCAN_CFG_JSON" | jq -c --argjson p "$patch" '. * $p')
-  export GHSCAN_CFG_JSON
 }
 
 # Dependency report
@@ -507,8 +506,8 @@ if [[ "${1:-}" == "__worker" ]]; then
   tmp_init
   # The parent hands over the fully resolved config, so there is no need to read
   # the file again. It also means -c <(jq ...) works: the fd is long gone here.
-  if [[ -n "${GHSCAN_CFG_OVERRIDE:-}" ]]; then
-    GHSCAN_CFG_JSON="$GHSCAN_CFG_OVERRIDE"
+  if [[ -n "${GHSCAN_CFG_FILE:-}" && -r "$GHSCAN_CFG_FILE" ]]; then
+    GHSCAN_CFG_JSON=$(cat -- "$GHSCAN_CFG_FILE") || die "cannot read config: $GHSCAN_CFG_FILE"
     GHSCAN_CFG_PATH="$CONFIG_PATH"
   else
     config_load "$CONFIG_PATH"
@@ -763,8 +762,12 @@ main() {
   log_info "scanning with $jobs parallel worker(s); clones under $work_root"
 
   # Hand each worker the overridden config so CLI flags survive the re-exec.
-  export GHSCAN_CFG_OVERRIDE
-  GHSCAN_CFG_OVERRIDE=$(printf '%s' "$GHSCAN_CFG_JSON" | jq -c '.')
+  # By file, not by environment.  Linux refuses to start anything when one
+  # variable is over 128 KiB, and a few thousand branch rules gets there.
+  # Every command then fails with "Argument list too long" and the scan dies
+  # in two seconds.
+  GHSCAN_CFG_FILE=$(json_file "$GHSCAN_CFG_JSON" config)
+  export GHSCAN_CFG_FILE
   # One budget file for every worker.  Whatever set this already gets to keep
   # its answer: the web app points it at a file named for the credential, so
   # two scans of the same account watch one budget instead of each tracking
