@@ -1816,6 +1816,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        ai_sends_code=(bool(ai_cfg.get("ai.send_code"))
                                       and row.kind != FindingKind.CREDENTIAL),
                        report=report,
+                       report_fp=assessment.awaiting_for(report, row.id),
                        can_assess=(rbac.can(user, "repo.assess")
                                    and ai.enabled(ai_cfg)
                                    and not ai.missing(ai_cfg)),

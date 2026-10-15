@@ -219,6 +219,12 @@
     {% else %}
     <tr><td class="k">Source</td><td>Review of the repository</td></tr>
     {% endif %}
+    {% if i.rating == 'Informational' and (i.lowered or i.awaiting or i.confirmed) %}
+    <tr><td class="k">In the platform</td><td>
+      {%- if i.lowered %}{{ i.lowered }} lowered to info.  {% endif %}
+      {%- if i.confirmed %}{{ i.confirmed }} confirmed by a person and graded info.  {% endif %}
+      {%- if i.awaiting %}{{ i.awaiting | length }} left for a person to confirm, because {{ i.protected_why }}.{% endif %}</td></tr>
+    {% endif %}
   </table>
   {% if i.what %}<p><span class="label">What we found.</span>  {{ i.what | sentence_spaced }}</p>{% endif %}
   {% if i.evidence %}<p><span class="label">Evidence.</span>  {{ i.evidence | sentence_spaced }}</p>{% endif %}

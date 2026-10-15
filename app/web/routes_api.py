@@ -4868,6 +4868,33 @@ async def start_assessment(finding_id: int, request: Request,
               "minutes, and this page refreshes itself until it is done.", "ok"))
 
 
+@router.post("/findings/{finding_id}/false-positive/confirm")
+async def confirm_report_false_positive(finding_id: int, request: Request,
+                                        user: User = Depends(current_user)):
+    """Confirm the false positive group a security report found this finding in.
+
+    For the findings a report may not lower on its own word: credentials and
+    known exploited or malicious packages.  A person's regrade to info, for
+    the whole group at once.
+    """
+    await check_csrf(request)
+    rbac.require(user, "finding.regrade")
+
+    from app.core import assessment
+
+    done, message = assessment.confirm(finding_id, user)
+    if done:
+        with session_scope() as db:
+            row = rbac.visible_finding(db, user, finding_id)
+            record(db, "finding.false_positive_confirmed", actor=user.username,
+                   target=row.repository if row else str(finding_id),
+                   detail=f"{done} finding(s) graded info from the security report, "
+                          f"asked from finding {finding_id}",
+                   source_ip=client_ip(request))
+    return redirect(_back_with(f"/findings/{finding_id}", message,
+                               "ok" if done else "warn"))
+
+
 # Ticked branches on one connection's scope page.  The largest account seen
 # held a few thousand, so this is room for that with plenty over.
 MAX_SCOPE_FIELDS = 25000

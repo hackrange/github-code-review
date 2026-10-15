@@ -294,6 +294,24 @@
   </div>
 </div>
 
+{% if report_fp %}
+<div class="notice warn">
+  {% set others = report_fp.awaiting | length - 1 %}
+  The security report on this branch reads this as a false positive{% if others > 0 %},
+  along with {{ others }} other finding{{ '' if others == 1 else 's' }} in the
+  same group{% endif %}: {{ report_fp.what }}
+  It was not lowered on its own, because {{ report_fp.protected_why }}.
+  {% if can_regrade %}
+  <form method="post" action="{{ base }}/findings/{{ f.id }}/false-positive/confirm"
+        style="display:inline"
+        data-confirm="Grade all {{ report_fp.awaiting | length }} of these info as false positives?  The engine's grade stays on the record, and the grade is lifted if the code changes.">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="btn" type="submit">Confirm {{ 'this false positive' if report_fp.awaiting | length == 1 else 'all ' ~ (report_fp.awaiting | length) ~ ' as false positives' }}</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if report and report.running %}
 <div class="notice info" data-reload-after="15">
   A security report on this branch is being written.
@@ -373,7 +391,7 @@
     {% endfor %}
     {% if ai_grade %}
     <p>Graded <span class="badge {{ ai_grade.severity.value }}">{{ ai_grade.severity.value }}</span>
-      by {{ 'a learned rule' if ai_grade.source == 'rule' else 'validation testing' }}
+      by {{ 'a learned rule' if ai_grade.source == 'rule' else ('a security report' if ai_grade.source == 'report' else 'validation testing') }}
       on {{ ai_grade.created_at | dt('%d %b %Y') }}{% if ai_grade.was %}, from {{ ai_grade.was }}{% endif %}.
       {% if f.custom_severity %}A person's regrade to {{ f.custom_severity.value }} stands over it.{% endif %}
       {% if ai_rule %}<span class="faint small">Rule #{{ ai_rule.id }}: {{ ai_rule_text }}.</span>{% endif %}

@@ -217,6 +217,8 @@ def groups_for(db, repository: str, branch: str) -> tuple:
             "cwe": top.cwe or "",
             "description": (top.description or "")[:600],
             "finding_ids": [f.id for f in members][:12],
+            # Every finding in the group, for correcting a false positive.
+            "all_ids": [f.id for f in members],
         })
     groups.sort(key=lambda g: (SEVERITY_ORDER.get(g["severity"], 9), -g["count"]))
 
@@ -707,11 +709,11 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                         + ", ".join(map(str, group["lines"][:6]))
                         if group["lines"] else "")) if group["file"]
                     else f"{group['package']} {group['version']}".strip(),
-                    finding_ids=group["finding_ids"])
+                    finding_ids=group["finding_ids"], group_ids=group["all_ids"])
         items.append(item)
     for concern in overview["concerns"]:
         concern.update(source="review", rule="", kind="review", count=0,
-                       severity="", location="", finding_ids=[])
+                       severity="", location="", finding_ids=[], group_ids=[])
         items.append(concern)
 
     for item in items:
@@ -727,6 +729,10 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
 
     scored = [i for i in items if i["rating"] != "Informational"]
     overall = scored[0]["rating"] if scored else "Low"
+
+    # ---- false positives, corrected in the platform where policy allows
+    _update(repository, branch, stage="Correcting false positives")
+    correct(items, repository, branch, actor, asker.model or ai.describe_model(cfg))
 
     # ---- the summary, from the rated list
     _update(repository, branch, stage="Writing the summary")
@@ -781,6 +787,122 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             created_by=(actor or "")[:120], created_at=utcnow())
     log.info("%s wrote a security report on %s %s: %d issues, %d questions",
              actor, repository, branch, len(items), asker.calls)
+
+
+def correct(items: list, repository: str, branch: str, actor: str, model: str) -> None:
+    """Act on the false positives the report found, as far as policy allows.
+
+    A group the model read as a false positive is lowered to info through the
+    same door AI validation uses (learned.give): the grade is recorded against
+    the code it was made on, a later scan keeps it while that code is
+    unchanged, and a person's own grade still has the last word.
+
+    A credential, a known exploited package or a malicious one is never
+    lowered on a model's word (learned.protected).  Those are left as they
+    are and listed for a person to confirm, which the finding page offers as
+    one button for the whole group.
+
+    Only scanner groups, only open findings, and never higher: give() refuses
+    anything that would not move the grade down.
+    """
+    from app.core import learned, reports
+    from app.core.audit import record
+    from app.core.models import Severity
+
+    lowered_total = waiting_total = 0
+    with session_scope() as db:
+        for item in items:
+            item["lowered"], item["awaiting"], item["protected_why"] = 0, [], ""
+            if item.get("verdict") != "false_positive" or item.get("source") != "scanner":
+                continue
+            reason = tidy("Security report on %s%s: a false positive.  %s"
+                          % (repository, f" branch {branch}" if branch else "",
+                             item.get("what") or ""), 1500)
+            for finding_id in item.get("group_ids") or []:
+                finding = db.get(Finding, finding_id)
+                if finding is None or finding.state != FindingState.OPEN:
+                    continue
+                why = learned.protected(finding)
+                if why:
+                    item["awaiting"].append(finding.id)
+                    item["protected_why"] = item["protected_why"] or why
+                    continue
+                if learned.give(db, finding, Severity.INFO, source="report",
+                                reason=reason, by=actor or "", model=model):
+                    item["lowered"] += 1
+            lowered_total += item["lowered"]
+            waiting_total += len(item["awaiting"])
+        if lowered_total or waiting_total:
+            record(db, "finding.report_false_positives", actor=actor or "",
+                   target=repository,
+                   detail=f"branch {branch or 'default'}: {lowered_total} lowered to "
+                          f"info, {waiting_total} left for a person to confirm")
+    if lowered_total:
+        reports.request_rewrite()
+
+
+def confirm(finding_id: int, user) -> tuple:
+    """A person confirms the false positive group a finding is in.
+
+    -> (how many were regraded, a sentence).  Each one gets a person's grade
+    of info with the report's reason, the same as a regrade from the page, so
+    it survives the next scan and is lifted if the code changes.
+    """
+    from app.core import learned, rbac, reports
+    from app.core.models import Severity
+
+    with session_scope() as db:
+        row = rbac.visible_finding(db, user, finding_id)
+        if row is None:
+            return 0, "There is no such finding."
+        report = current(db, row.repository, row.branch or _default_branch(db, row.repository))
+        view_ = view(report)
+        item = awaiting_for(view_, finding_id)
+        if item is None:
+            return 0, "The security report does not list this finding as a false positive."
+        visible = {f.id for f in rbac.visible_findings(db, user)
+                   .filter(Finding.id.in_(item["awaiting"])).all()}
+        reason = tidy("Confirmed as a false positive from the security report on "
+                      "%s.  %s" % (row.repository, item.get("what") or ""), 2000)
+        done = 0
+        for fid in item["awaiting"]:
+            finding = db.get(Finding, fid) if fid in visible else None
+            if finding is None or finding.state != FindingState.OPEN:
+                continue
+            finding.engine_severity = finding.engine_severity or finding.severity.value
+            finding.custom_severity = Severity.INFO
+            finding.custom_severity_reason = reason
+            finding.custom_severity_by = user.username
+            finding.custom_severity_at = utcnow()
+            finding.severity = Severity.INFO
+            db.flush()
+            learned.record_basis(db, finding, "person")
+            done += 1
+        result = view_["result"]
+        for each in result["items"]:
+            if each.get("id") == item.get("id"):
+                each["awaiting"] = [fid for fid in each["awaiting"] if fid not in visible]
+                each["confirmed_by"] = user.username
+                each["confirmed"] = (each.get("confirmed") or 0) + done
+        report.result = json.dumps(result)
+    if done:
+        reports.request_rewrite()
+    return done, (f"Confirmed {done} false positive{'' if done == 1 else 's'} and "
+                  f"graded {'it' if done == 1 else 'them'} info.  The engine's grade "
+                  f"is still on the record beside each one.")
+
+
+def awaiting_for(view_, finding_id: int):
+    """The false positive group waiting on a person that holds this finding."""
+    if not (view_ and view_["ready"]):
+        return None
+    return next((i for i in view_["result"]["items"]
+                 if finding_id in (i.get("awaiting") or [])), None)
+
+
+def _default_branch(db, repository: str) -> str:
+    repo = db.query(Repository).filter(Repository.full_name == repository).first()
+    return (repo.default_branch if repo else "") or ""
 
 
 def recover() -> int:
