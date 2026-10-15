@@ -20,7 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.models import (
-    Finding, FindingKind, FindingState, Repository, Severity, utcnow, vuln_id_for,
+    CredentialVerification, Finding, FindingKind, FindingState, Repository,
+    Severity, utcnow, vuln_id_for,
 )
 
 log = logging.getLogger("gcr.ingest")
@@ -1358,6 +1359,24 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         # with the code pass, and the resolve loop reads this to know that.
         engines = row.get("engines") or ([row["engine"]] if row.get("engine") else [])
         finding.engines = ", ".join(str(name) for name in engines)[:120]
+        # The reason a credential could not be confirmed, kept this time rather
+        # than dropped.  Capped because a verifier can return anything; the mask
+        # upstream already keeps the secret itself out of it.
+        finding.verification_error = (row.get("verification_error") or "")[:500]
+        # Why `verified` reads the way it does.  A verifying engine (trufflehog)
+        # that looked with verification on is the difference between "tried and
+        # could not confirm" and "nothing ever checked this".  gitleaks, which
+        # covers deep history, never verifies, so a history-only credential is
+        # UNCHECKED and honest about it rather than a bare, misleading "no".
+        verify_on = bool((document.get("scan") or {}).get(
+            "live_verification_enabled"))
+        checked = any("trufflehog" in str(name).lower() for name in engines)
+        if finding.verified:
+            finding.verification_status = CredentialVerification.VERIFIED
+        elif checked and verify_on:
+            finding.verification_status = CredentialVerification.ATTEMPTED
+        else:
+            finding.verification_status = CredentialVerification.UNCHECKED
         # Triage works this out from the value and the path, and it was being
         # dropped here, so every credential read as unrated.  Confirmed means
         # the provider said yes, which is as high as confidence goes.

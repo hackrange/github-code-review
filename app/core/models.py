@@ -84,6 +84,32 @@ class FindingState(str, enum.Enum):
     FIXED = "fixed"
 
 
+class CredentialVerification(str, enum.Enum):
+    """What the live check actually did to a credential, not just its result.
+
+    `verified` is a yes/no: did a provider confirm the secret works.  On its
+    own a `no` says nothing about why, and the two reasons are worlds apart.
+    An Azure SAS token the verifier tried and could not confirm is a credential
+    somebody still has to look at; a secret only the history engine ever saw
+    was never checked at all, because that engine cannot verify.  Collapsing
+    both into `verified = false` is what let a "not live" read as "safe".
+
+    VERIFIED     a provider confirmed it live.
+    ATTEMPTED    a verifying engine looked, with verification on, and could not
+                 confirm it; `verification_error` carries the reason when the
+                 engine gave one.
+    UNCHECKED    nothing verified it: either no verifying engine saw it (deep
+                 history, or a detector found only by gitleaks) or the run had
+                 verification turned off.
+    UNKNOWN      a finding from before this column existed, or not a credential.
+    """
+
+    VERIFIED = "verified"
+    ATTEMPTED = "attempted"
+    UNCHECKED = "unchecked"
+    UNKNOWN = "unknown"
+
+
 class WaiverStatus(str, enum.Enum):
     """A waiver starts as a request and only an admin can approve it.
 
@@ -521,6 +547,16 @@ class Finding(Base):
     # Credentials only.  Never the value itself, just the mask and a hash.
     secret_preview = Column(String(255), default="")
     verified = Column(Boolean, default=False, nullable=False)
+    # Why `verified` is what it is.  An Enum so it costs the row a byte, not a
+    # varchar, on a table already close to MariaDB's row ceiling.  See
+    # CredentialVerification for what each value means.
+    verification_status = Column(Enum(CredentialVerification), nullable=False,
+                                 default=CredentialVerification.UNKNOWN)
+    # What the verifier said when it could not confirm a credential: an expiry,
+    # a refusal, a network error.  The one signal that tells "tried and failed"
+    # apart from "never checked", and it used to be dropped on the way in.
+    # Text, not a wide varchar, so it stays off the row and off that ceiling.
+    verification_error = Column(Text, default="")
     exposure = Column(String(64), default="")
 
     # Dependencies only.

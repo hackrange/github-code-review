@@ -982,7 +982,7 @@ main() {
         organization, repository, repository_name, branches, primary_branch,
         url, permalink, commit, commit_url, blame_url, file_history_url, branch_urls,
         file, start_line, detector, engines, severity, confidence, classification,
-        verified, exposure, secret_redacted, secret_fingerprint, entropy,
+        verified, verification_error, exposure, secret_redacted, secret_fingerprint, entropy,
         author_name, author_email, author_login, committed_at, first_committed_at
       } ]
     }')

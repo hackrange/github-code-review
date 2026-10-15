@@ -274,6 +274,8 @@ def as_dict(finding: Finding, facts: dict = None) -> dict:
         record["credential"] = {
             "preview": finding.secret_preview or "",
             "verified": bool(finding.verified),
+            "verification_status": _enum(finding.verification_status) or "unknown",
+            "verification_error": finding.verification_error or "",
             "exposure": finding.exposure or "",
         }
     elif _enum(finding.kind) == "dependency":
@@ -365,6 +367,8 @@ def as_row(finding: Finding, facts: dict = None) -> dict:
         # which action it is even about.
         "snippet": finding.snippet or "",
         "verified": "true" if finding.verified else "false",
+        "verification_status": _enum(finding.verification_status) or "unknown",
+        "verification_error": finding.verification_error or "",
         "exposure": finding.exposure or "",
         "author": finding.author_name or "",
         "author_login": finding.author_login or "",

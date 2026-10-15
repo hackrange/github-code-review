@@ -850,6 +850,27 @@
             the pattern alone.</div>
         </td></tr>
         {% endif %}
+        {% if f.kind.value == 'credential' and f.verification_status and f.verification_status.value != 'unknown' %}
+        <tr><th>Liveness</th><td>
+          {% if f.verification_status.value == 'verified' %}
+          <span class="badge critical">confirmed live</span>
+          <div class="faint small">A provider confirmed this credential still
+            works. Rotate it.</div>
+          {% elif f.verification_status.value == 'attempted' %}
+          <span class="badge unknown">not confirmed</span>
+          <div class="faint small">A verifying engine checked this one and could
+            not confirm it live{% if f.verification_error %}: {{ f.verification_error }}{% endif %}.
+            That is not the same as safe, only that the provider did not say
+            yes.</div>
+          {% else %}
+          <span class="badge unknown">not checked</span>
+          <div class="faint small">Nothing verified this one against its
+            provider, so whether it is live is unknown. A credential seen only
+            in deep history, or matched only by the pattern engine, cannot be
+            checked.</div>
+          {% endif %}
+        </td></tr>
+        {% endif %}
         {% if f.exposure %}<tr><th>Exposure</th><td>{{ f.exposure }}</td></tr>{% endif %}
         {% if f.author_name %}<tr><th>Committed by</th><td>{{ f.author_name }}
           {% if f.author_login %}<span class="faint">({{ f.author_login }})</span>{% endif %}</td></tr>{% endif %}
