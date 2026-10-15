@@ -271,11 +271,41 @@
                 title="Fetch this branch and look at the file again. Nothing is saved.">Check again</button>
       </form>
     {% endif %}
+    {# A written security report on the branch this finding sits on.  Asks
+       the model many small questions, so it takes minutes and costs money,
+       and it sends code outside this installation: administrators only, and
+       only when AI analysis is set up. #}
+    {% if report and report.ready %}
+      <a class="btn" href="{{ base }}/findings/{{ f.id }}/assessment.pdf">Download security report</a>
+    {% endif %}
+    {% if can_assess and not (report and report.running) %}
+      <form method="post" action="{{ base }}/findings/{{ f.id }}/assessment"
+            style="display:inline"
+            data-confirm="Write a security report on {{ f.repository }}{% if f.branch %} branch {{ f.branch }}{% endif %}?  The branch is read into memory, {% if ai_sends_code %}code around each finding (never a credential) goes{% else %}scanner details go{% endif %} to {{ ai_model }}, and it takes a few minutes.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn" type="submit"
+                title="An assessment of this branch with an executive summary and a risk matrix, as a PDF">
+          {% if report and report.ready %}Write the security report again{% else %}Security report{% endif %}</button>
+      </form>
+    {% endif %}
     {% if can_waive and f.state.value == 'open' %}
       <button class="btn primary" type="button" data-modal="waive-modal">Waive</button>
     {% endif %}
   </div>
 </div>
+
+{% if report and report.running %}
+<div class="notice info" data-reload-after="15">
+  A security report on this branch is being written.
+  {% if report.row.stage %}Now: {{ report.row.stage }}.{% endif %}
+  This page refreshes itself until it is done.
+</div>
+{% elif report and report.failed %}
+<div class="notice warn">
+  {{ report.row.error or "The security report could not be written." }}
+  {% if report.ready %}The last good report is still available.{% endif %}
+</div>
+{% endif %}
 
 {% if recommendation %}
 {# Derived from what is already on the finding, never a second opinion formed

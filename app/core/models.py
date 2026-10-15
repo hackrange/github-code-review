@@ -1836,6 +1836,45 @@ class RepoDiagram(Base):
     started_at = Column(DateTime(timezone=True))
 
 
+class RepoAssessment(Base):
+    """A written security assessment of one repository branch, asked for from
+    a finding.
+
+    Written by a language model from the open findings and a read of the
+    branch, so it is an opinion to check rather than a fact, and the report
+    says so.  The ratings in it are worked out here from the likelihood and
+    impact the model gave, so the matrix and the text cannot disagree.  It
+    never changes a finding.
+
+    One per repository branch.  Asking again keeps the last good report
+    until the new one is finished, and keeps it if the new one fails.
+    """
+
+    __tablename__ = "repo_assessments"
+
+    id = Column(Integer, primary_key=True)
+    repository = Column(String(320), nullable=False, index=True)
+    branch = Column(String(255), default="", nullable=False)
+    finding_id = Column(Integer, nullable=True)
+    commit = Column(String(64), default="")
+    # idle, running or failed.  A failed run keeps the last good report.
+    status = Column(String(16), default="idle", nullable=False)
+    stage = Column(String(200), default="")
+    error = Column(Text, default="")
+    result = Column(LONG_JSON, default="")
+    code_included = Column(Boolean, default=False, nullable=False)
+    in_memory = Column(Boolean, default=False, nullable=False)
+    provider = Column(String(32), default="")
+    model = Column(String(120), default="")
+    calls = Column(Integer, default=0)
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    created_by = Column(String(120), default="")
+    created_at = Column(DateTime(timezone=True))
+    started_by = Column(String(120), default="")
+    started_at = Column(DateTime(timezone=True))
+
+
 class AIUsage(Base):
     """One question sent to a model, whatever asked it and however it ended.
 

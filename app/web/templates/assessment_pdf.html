@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+{# A security assessment of one repository branch, asked for from a finding.
+
+   Same type, palette and page furniture as report_pdf.html, so the two read
+   as one house's documents.  Every word the model wrote was cleaned to the
+   house style in app/core/assessment.py before it was stored; the fixed
+   sentences here follow the same rule: US English, about a tenth grade
+   reading level, no em dashes, two spaces between sentences.
+
+   Everything below is escaped.  Nothing from the model or the repository is
+   ever marked safe. #}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+{% if organization_name %}<meta name="author" content="{{ organization_name }}">{% endif %}
+<meta name="description" content="Security assessment of {{ r.repository }}">
+<style>
+  @page {
+    size: A4;
+    margin: 20mm 18mm 22mm 18mm;
+    @bottom-left {
+      content: "{{ footer_text }}";
+      font-family: "DejaVu Sans", sans-serif; font-size: 7.5pt; color: #8a8a8a;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: "DejaVu Sans", sans-serif; font-size: 7.5pt; color: #8a8a8a;
+    }
+  }
+  @page :first { @bottom-left { content: ""; } @bottom-right { content: ""; } }
+
+  :root { --ink: #1a1a1a; --soft: #5a5a5a; --faint: #8a8a8a; --rule: #dcdcdc;
+          --sunk: #f4f4f4; --navy: #1f3a5f; }
+  * { box-sizing: border-box; }
+  body { font-family: "DejaVu Sans", sans-serif; font-size: 9.5pt;
+         line-height: 1.55; color: var(--ink); margin: 0; }
+  h1 { font-size: 24pt; line-height: 1.15; margin: 0 0 .35rem; font-weight: 700; }
+  h2 { font-size: 13pt; margin: 7mm 0 .5rem; font-weight: 700; color: var(--navy);
+       padding-bottom: .3rem; border-bottom: 1.5pt solid var(--navy);
+       break-after: avoid; }
+  h3 { font-size: 10.5pt; margin: 5mm 0 .35rem; font-weight: 700; color: var(--navy);
+       break-after: avoid; }
+  p  { margin: 0 0 .6rem; }
+  ul, ol { margin: 0 0 .6rem; padding-left: 5mm; }
+  li { margin-bottom: .25rem; }
+  .soft { color: var(--soft); }
+  .faint { color: var(--faint); font-size: 8pt; }
+  .new-page { break-before: page; }
+
+  .cover { height: 235mm; display: flex; flex-direction: column; }
+  .cover-mid { flex: 1 1 auto; padding-top: 40mm; }
+  .logo { max-height: 22mm; max-width: 70mm; }
+  .wordmark { font-size: 12pt; font-weight: 700; letter-spacing: .02em; }
+  .kicker { font-size: 8.5pt; text-transform: uppercase; letter-spacing: .12em;
+            color: var(--faint); margin-bottom: .8rem; }
+  .cover-scope { font-size: 11pt; color: var(--soft); margin-top: .5rem; }
+  .overall { margin-top: 8mm; font-size: 12pt; font-weight: 700; }
+  .cover-meta { font-size: 9pt; padding-top: 5mm; border-top: .8pt solid var(--rule); }
+  .cover-meta div { margin-bottom: .28rem; }
+  .cover-meta .k { display: inline-block; width: 38mm; color: var(--faint); }
+
+  table { border-collapse: collapse; width: 100%; margin: 2mm 0 4mm; }
+  th, td { border: .5pt solid #c8c8c8; padding: 1.4mm 2mm; text-align: left;
+           vertical-align: top; font-size: 8.5pt; }
+  thead th { background: var(--navy); color: #fff; font-weight: 700; }
+  tr { break-inside: avoid; }
+  td.k { background: #e7ecf3; font-weight: 700; width: 36mm; }
+  td.c, th.c { text-align: center; }
+
+  .badge { display: inline-block; padding: .3mm 2mm; border-radius: 1mm;
+           font-weight: 700; font-size: 8pt; }
+  .r-critical { background: #c00000; color: #fff; }
+  .r-high     { background: #e36c0a; color: #fff; }
+  .r-medium   { background: #ffc000; color: #000; }
+  .r-low      { background: #70ad47; color: #fff; }
+  .r-informational { background: #5b9bd5; color: #fff; }
+  td.badge-cell { text-align: center; }
+
+  table.heat { width: auto; margin: 3mm auto 2mm; }
+  table.heat td, table.heat th { width: 22mm; height: 10mm; text-align: center;
+                                 vertical-align: middle; font-size: 8pt; }
+  table.heat th { background: none; color: var(--soft); border: none; }
+  table.heat td.h-critical { background: #f4b6b6; }
+  table.heat td.h-high     { background: #f8cbad; }
+  table.heat td.h-medium   { background: #ffe699; }
+  table.heat td.h-low      { background: #c6e0b4; }
+  table.heat td { font-weight: 700; }
+
+  .finding { margin-bottom: 6mm; }
+  .finding table { margin-bottom: 3mm; break-inside: avoid; }
+  .finding h3 { break-after: avoid; }
+  table.heat { break-inside: avoid; }
+  .finding .label { font-weight: 700; }
+</style>
+</head>
+<body>
+
+{# ---------------------------------------------------------------- cover #}
+<div class="cover">
+  <div>
+    {% if logo %}<img class="logo" src="{{ logo }}" alt="">
+    {% elif organization_name %}<div class="wordmark">{{ organization_name }}</div>{% endif %}
+  </div>
+  <div class="cover-mid">
+    <div class="kicker">Cybersecurity Assessment</div>
+    <h1>{{ r.repository.split('/')[-1] }}</h1>
+    <div class="cover-scope">{{ r.repository }}{% if r.branch %}, branch {{ r.branch }}{% endif %}</div>
+    <div class="overall">Overall risk rating:
+      <span class="badge r-{{ r.overall | lower }}">{{ r.overall | upper }}</span></div>
+  </div>
+  <div class="cover-meta">
+    {% if organization_name %}<div><span class="k">Prepared by</span>{{ organization_name }}</div>{% endif %}
+    <div><span class="k">Report date</span>{{ issued_at }}</div>
+    {% if r.commit %}<div><span class="k">Commit reviewed</span>{{ r.commit[:12] }}</div>{% endif %}
+    {% if footer_text %}<div><span class="k">Classification</span>{{ footer_text }}</div>{% endif %}
+  </div>
+</div>
+
+{# ---------------------------------------------------- executive summary #}
+<h2 class="new-page" style="margin-top:0">1.  Executive Summary</h2>
+{% for paragraph in r.summary.summary %}<p>{{ paragraph | sentence_spaced }}</p>{% endfor %}
+<p>{{ ("We rate the overall risk as " ~ r.overall ~ ".  We rated "
+      ~ tally['Critical'] ~ " issue" ~ ('' if tally['Critical'] == 1 else 's') ~ " Critical, "
+      ~ tally['High'] ~ " High, " ~ tally['Medium'] ~ " Medium and " ~ tally['Low']
+      ~ " Low.  " ~ (tally['Informational'] ~ " scanner alert group" ~ ('' if tally['Informational'] == 1 else 's')
+      ~ " turned out to be false alarms." if tally['Informational'] else ""))
+     | sentence_spaced }}</p>
+
+{% set top = items | rejectattr('rating', 'equalto', 'Informational') | list %}
+{% if top %}
+<h3>Key Findings</h3>
+<ul>
+  {% for i in top[:5] %}
+  <li><strong>{{ i.title }}</strong> <span class="badge r-{{ i.rating | lower }}">{{ i.rating }}</span>
+    {{ i.what | sentence_spaced }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if r.summary.actions %}
+<h3>What Leadership Needs to Do</h3>
+<ol>
+  {% for a in r.summary.actions %}<li><strong>{{ a.lead }}.</strong>  {{ a.text | sentence_spaced }}</li>{% endfor %}
+</ol>
+{% endif %}
+
+{# ------------------------------------------------------------- scope #}
+<h2>2.  Scope and Approach</h2>
+<table>
+  <tr><td class="k">Repository</td><td>{{ r.repository }}{% if r.facts.visibility %} ({{ r.facts.visibility }} visibility){% endif %}</td></tr>
+  <tr><td class="k">Branch</td><td>{{ r.branch or 'default' }}{% if r.facts.default_branch and r.facts.default_branch != r.branch %} (the default branch is {{ r.facts.default_branch }}){% endif %}</td></tr>
+  {% if r.commit %}<tr><td class="k">Commit</td><td>{{ r.commit }}</td></tr>{% endif %}
+  {% if r.file_count %}<tr><td class="k">Files</td><td>{{ r.file_count }}</td></tr>{% endif %}
+  <tr><td class="k">Open scanner alerts</td><td>{{ r.counts.open }}, in {{ r.counts.groups }} groups by rule and file</td></tr>
+  {% if r.overview.what_it_is %}<tr><td class="k">What it holds</td><td>{{ r.overview.what_it_is | sentence_spaced }}</td></tr>{% endif %}
+</table>
+<h3>Method</h3>
+<ul>
+  <li><strong>Automated scanning.</strong>  {{ "Secret, code, dependency and configuration scanning of the branch and its history." | sentence_spaced }}</li>
+  <li><strong>Review of each alert.</strong>  {{ "Alerts were grouped by rule and file, and each group was judged against the code around it." | sentence_spaced }}</li>
+  <li><strong>Review of the repository.</strong>  {{ "The file tree and key files were read for problems a scanner does not look for, such as access settings and trust placed in browser code." | sentence_spaced }}</li>
+</ul>
+<h3>Limits of This Review</h3>
+<p>{{ "This review was produced by automated analysis of the code and the scanner results.  A person should confirm each finding before acting on it.  No traffic was sent to any running system, so nothing here was tested against a live service.  Credentials were never sent for analysis.  The ratings in this report do not change the grades on the findings themselves." | sentence_spaced }}</p>
+{% for note in r.notes %}<p class="soft">{{ note | sentence_spaced }}</p>{% endfor %}
+
+{# ------------------------------------------------------- rating method #}
+<h2>3.  How Risks Are Rated</h2>
+<p>{{ "Each issue gets a likelihood score and an impact score from 1 to 5.  The risk score is the two multiplied together, and the score sets the rating." | sentence_spaced }}</p>
+<table>
+  <thead><tr><th>Score</th><th>Rating</th><th>Meaning</th></tr></thead>
+  <tr><td>20 to 25</td><td>Critical</td><td>{{ "Act now.  Exposure is direct and the harm is serious." | sentence_spaced }}</td></tr>
+  <tr><td>10 to 16</td><td>High</td><td>{{ "Fix within days.  Real harm is likely if left alone." | sentence_spaced }}</td></tr>
+  <tr><td>5 to 9</td><td>Medium</td><td>Fix within 30 days.</td></tr>
+  <tr><td>1 to 4</td><td>Low</td><td>Fix as part of normal work.</td></tr>
+  <tr><td>Not scored</td><td>Informational</td><td>{{ "No risk.  Recorded for accuracy, such as a false alarm." | sentence_spaced }}</td></tr>
+</table>
+
+{# ---------------------------------------------------------- risk matrix #}
+<h2 class="new-page" style="margin-top:0">4.  Risk Matrix</h2>
+<table>
+  <thead><tr><th>ID</th><th>Issue</th><th class="c">Likelihood</th><th class="c">Impact</th>
+    <th class="c">Score</th><th class="c">Rating</th></tr></thead>
+  {% for i in items %}
+  <tr><td>{{ i.id }}</td><td>{{ i.title }}</td>
+    <td class="c">{{ i.likelihood if i.rating != 'Informational' else 'N/A' }}</td>
+    <td class="c">{{ i.impact if i.rating != 'Informational' else 'N/A' }}</td>
+    <td class="c">{{ i.score if i.rating != 'Informational' else 'N/A' }}</td>
+    <td class="badge-cell"><span class="badge r-{{ i.rating | lower }}">{{ i.rating }}</span></td></tr>
+  {% endfor %}
+</table>
+
+<h3>Heat Map</h3>
+<table class="heat">
+  {% for row in matrix %}
+  <tr><th>{{ row.likelihood }} {{ row.label }}</th>
+    {% for cell in row.cells %}<td class="h-{{ cell.rating }}">{{ cell.ids | join(', ') }}</td>{% endfor %}</tr>
+  {% endfor %}
+  <tr><th></th>{% for n in range(1, 6) %}<th>{{ n }} {{ impact_words[n] }}</th>{% endfor %}</tr>
+</table>
+<p class="faint" style="text-align:center">{{ "Rows are likelihood and columns are impact.  False alarms carry no risk and are not shown." | sentence_spaced }}</p>
+
+{# ---------------------------------------------------- detailed findings #}
+<h2 class="new-page" style="margin-top:0">5.  Detailed Findings</h2>
+{% for i in items %}
+<div class="finding">
+  <h3>{{ i.id }}  {{ i.title }}</h3>
+  <table>
+    <tr><td class="k">Rating</td><td><span class="badge r-{{ i.rating | lower }}">{{ i.rating }}</span></td></tr>
+    {% if i.rating != 'Informational' %}
+    <tr><td class="k">Likelihood x Impact</td><td>{{ i.likelihood }} x {{ i.impact }} = {{ i.score }}</td></tr>
+    {% endif %}
+    {% if i.location %}<tr><td class="k">Location</td><td>{{ i.location }}</td></tr>{% endif %}
+    {% if i.source == 'scanner' %}
+    <tr><td class="k">Scanner reference</td><td>{{ i.count }} alert{{ '' if i.count == 1 else 's' }}
+      {%- if i.rule %} of rule {{ i.rule }}{% endif %}, rated {{ i.severity }}
+      {%- if i.finding_ids %} (finding {{ i.finding_ids[:6] | join(', ') }}{% if i.finding_ids | length > 6 %} and others{% endif %}){% endif %}</td></tr>
+    {% else %}
+    <tr><td class="k">Source</td><td>Review of the repository</td></tr>
+    {% endif %}
+  </table>
+  {% if i.what %}<p><span class="label">What we found.</span>  {{ i.what | sentence_spaced }}</p>{% endif %}
+  {% if i.evidence %}<p><span class="label">Evidence.</span>  {{ i.evidence | sentence_spaced }}</p>{% endif %}
+  {% if i.why %}<p><span class="label">Why it matters.</span>  {{ i.why | sentence_spaced }}</p>{% endif %}
+  {% if i.fixes %}
+  <p class="label" style="margin-bottom:.2rem">What to do.</p>
+  <ul>{% for step in i.fixes %}<li>{{ step | sentence_spaced }}</li>{% endfor %}</ul>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if r.overview.positives %}
+<h2>6.  Positive Observations</h2>
+<ul>{% for p in r.overview.positives %}<li>{{ p | sentence_spaced }}</li>{% endfor %}</ul>
+{% endif %}
+
+{% if r.summary.roadmap %}
+<h2>7.  Remediation Roadmap</h2>
+<table>
+  <thead><tr><th>Timeframe</th><th>Action</th><th>Issues</th><th>Owner</th></tr></thead>
+  {% for step in r.summary.roadmap %}
+  <tr><td>{{ step.timeframe }}</td><td>{{ step.action | sentence_spaced }}</td>
+    <td>{{ step.issues }}</td><td>{{ step.owner }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if r.summary.conclusion %}
+<h2>8.  Conclusion</h2>
+<p>{{ r.summary.conclusion | sentence_spaced }}</p>
+{% endif %}
+
+{# ------------------------------------------------------------- appendix #}
+<h2>Appendix A.  Scanner Alerts</h2>
+<table>
+  <thead><tr><th>Rule or package</th><th>Kind</th><th class="c">Alerts</th><th class="c">Files</th></tr></thead>
+  {% for row in r.counts.by_rule %}
+  <tr><td>{{ row.rule }}</td><td>{{ row.kind }}</td><td class="c">{{ row.count }}</td><td class="c">{{ row.files }}</td></tr>
+  {% endfor %}
+  <tr><td><strong>Total</strong></td><td></td><td class="c"><strong>{{ r.counts.open }}</strong></td><td></td></tr>
+</table>
+{% if r.counts.left_out %}
+<p class="soft">{{ (r.counts.left_out ~ " lower rated group" ~ ('' if r.counts.left_out == 1 else 's') ~ ", holding " ~ r.counts.left_out_alerts ~ " alert" ~ ('' if r.counts.left_out_alerts == 1 else 's') ~ ", were counted here but not reviewed one by one.  They are listed on the findings page.") | sentence_spaced }}</p>
+{% endif %}
+
+</body>
+</html>

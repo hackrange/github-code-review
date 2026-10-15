@@ -100,6 +100,11 @@ def create_app() -> FastAPI:
             _diagram.recover()
         except Exception:            # noqa: BLE001
             log.warning("could not tidy up unfinished diagrams", exc_info=True)
+        try:
+            from app.core import assessment as _assessment
+            _assessment.recover()
+        except Exception:            # noqa: BLE001
+            log.warning("could not tidy up unfinished reports", exc_info=True)
 
         # Whatever those runs had already finished.  The findings are on disk,
         # one file per repository, written as each one completed; a container

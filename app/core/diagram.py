@@ -176,7 +176,8 @@ def _is_text(path: Path) -> bool:
         return False
 
 
-def gather(root: Path, send_code: bool, sources_summary: dict) -> tuple:
+def gather(root: Path, send_code: bool, sources_summary: dict,
+           limit: int = MAX_EVIDENCE_CHARS) -> tuple:
     """-> (the evidence as text, notes on what was left out)."""
     root = Path(root)
     tree, candidates = [], []
@@ -217,7 +218,7 @@ def gather(root: Path, send_code: bool, sources_summary: dict) -> tuple:
         used = sum(len(body) for _, body in sections)
         read = 0
         for _, _, rel in sorted(candidates):
-            if used >= MAX_EVIDENCE_CHARS:
+            if used >= limit:
                 notes.append("Some lower priority files were left out for length.")
                 break
             path = root / rel

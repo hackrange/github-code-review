@@ -204,6 +204,18 @@
         <input type="number" name="ai.timeout" min="30" max="1800"
                value="{{ values['ai.timeout'] }}">
       </label>
+      <label>The service's own answer limit, in tokens
+        <input type="number" name="ai.max_output_tokens" min="1000" max="200000"
+               value="{{ values['ai.max_output_tokens'] }}">
+      </label>
+      <label>Tokens a long job may use per minute
+        <input type="number" name="ai.tokens_per_minute" min="0" max="10000000"
+               value="{{ values['ai.tokens_per_minute'] }}">
+      </label>
+      <p class="faint small">The security report asks many small questions
+        rather than one large one.  It plans each answer to fit well inside the
+        service's limit, thinking included, and spaces its questions out so a
+        minute's budget is never exceeded.  0 means no per minute limit.</p>
     </div>
   </div>
 

@@ -261,8 +261,27 @@ def _semgrep_hits(root: Path, rel_path: str, configs: list) -> tuple:
 MAX_BRANCHES = 20
 
 
+# Shared memory, where there is enough of it.  The same rule the scanner uses
+# for its own temp files (lib/common.sh _tmp_base): code read for a report
+# should leave nothing behind on a disk.
+MEMORY_DIR = "/dev/shm"
+MEMORY_MIN_FREE = 256 * 1024 * 1024
+
+
+def memory_dir() -> str:
+    """-> /dev/shm when it is there, writable and roomy, else ""."""
+    try:
+        if not os.access(MEMORY_DIR, os.W_OK):
+            return ""
+        st = os.statvfs(MEMORY_DIR)
+        return MEMORY_DIR if st.f_bavail * st.f_frsize >= MEMORY_MIN_FREE else ""
+    except OSError:
+        return ""
+
+
 @contextlib.contextmanager
-def branch_tip(connection_name: str, repository: str, branch: str):
+def branch_tip(connection_name: str, repository: str, branch: str,
+               in_memory: bool = False):
     """A read only copy of one branch tip, gone again on the way out.
 
     -> yields (path, "") on success, (None, why) when it could not be fetched.
@@ -287,7 +306,10 @@ def branch_tip(connection_name: str, repository: str, branch: str):
         yield None, "no credential for that account"
         return
 
-    with tempfile.TemporaryDirectory(prefix="gcr-read-") as tmp:
+    # in_memory asks for shared memory, and falls back to the usual temp
+    # directory when there is none.  Either way the copy is gone on the way out.
+    where = memory_dir() if in_memory else ""
+    with tempfile.TemporaryDirectory(prefix="gcr-read-", dir=where or None) as tmp:
         work = Path(tmp)
         token_file = work / "token"
         token_file.write_text(token)

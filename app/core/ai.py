@@ -79,6 +79,16 @@ SETTINGS = {
                                 "Empty tries the common shapes."),
     "ai.max_tokens":           (16000, False, "The longest answer to accept."),
     "ai.timeout":              (300, False, "Seconds to wait for an answer."),
+    # What the service itself will write in one answer, thinking included.
+    # The custom path never sends ai.max_tokens, so the service's own limit is
+    # the one that bites, and nothing here can read it.  Long jobs such as the
+    # security report plan each answer to fit well inside this.
+    "ai.max_output_tokens":    (26000, False,
+                                "The most the service writes in one answer, "
+                                "reasoning included."),
+    "ai.tokens_per_minute":    (40000, False,
+                                "Tokens a long job may use in a minute, in and out "
+                                "together. 0 for no limit."),
     "ai.send_code":            (True, False,
                                 "Send the lines around a finding, and the places a "
                                 "vulnerable package is used, along with it. Never for "
@@ -157,6 +167,10 @@ def read_form(form, text, number, url, checked) -> dict:
         "ai.max_tokens": number(form.get("ai.max_tokens") or 16000,
                                 "Answer length", 1000, 128000),
         "ai.timeout": number(form.get("ai.timeout") or 300, "Time limit", 30, 1800),
+        "ai.max_output_tokens": number(form.get("ai.max_output_tokens") or 26000,
+                                       "Service answer limit", 1000, 200000),
+        "ai.tokens_per_minute": number(form.get("ai.tokens_per_minute") or 0,
+                                       "Tokens per minute", 0, 10_000_000),
         "ai.context_lines": number(form.get("ai.context_lines") or 40,
                                    "Lines of context", 5, 200),
         "ai.send_code": checked("ai.send_code"),

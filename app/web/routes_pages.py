@@ -1765,6 +1765,14 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
         ai_cfg = ai.config(db)
         analyses = analysis.for_finding(db, row.id)
 
+        # The written security report on this finding's branch, if there is
+        # one, and whether this person may ask for one.
+        from app.core import assessment
+
+        report = assessment.view(assessment.current(
+            db, row.repository,
+            row.branch or (about or {}).get("default_branch", "") or ""))
+
         context = _shared(db, user)
         context.update(active_page="findings", f=row, waiver=waiver,
                        host_name=host_name,
@@ -1807,6 +1815,10 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        ai_model=ai.describe_model(ai_cfg),
                        ai_sends_code=(bool(ai_cfg.get("ai.send_code"))
                                       and row.kind != FindingKind.CREDENTIAL),
+                       report=report,
+                       can_assess=(rbac.can(user, "repo.assess")
+                                   and ai.enabled(ai_cfg)
+                                   and not ai.missing(ai_cfg)),
                        flash=clean_notice(msg, limit=300),
                        flash_kind=notice_class(kind),
                        **_expiry_window(90))
@@ -2410,6 +2422,68 @@ def repository_diagram_pdf(repo_id: int, request: Request,
                url_fetcher=report_url_fetcher("")).write_pdf()
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": 'attachment; filename="%s"' % name})
+
+
+@router.get("/findings/{finding_id}/assessment.pdf")
+def finding_assessment_pdf(finding_id: int, request: Request,
+                           user: User = Depends(current_user)):
+    """The security report on this finding's branch, typeset now.
+
+    Typeset on download rather than stored, so the logo, the name on the
+    cover and the footer are always the ones set today.
+    """
+    from app.core import assessment, settings_store
+
+    with session_scope() as db:
+        row = rbac.visible_finding(db, user, finding_id)
+        if row is None or (row.out_of_scope and not rbac.can(user, "repo.scope")):
+            raise HTTPException(status_code=404, detail="No such finding.")
+        report = assessment.view(assessment.current(
+            db, row.repository, row.branch or _default_branch(db, row.repository)))
+        if not (report and report["ready"]):
+            raise HTTPException(status_code=404, detail="No report yet.")
+        organization = settings_store.get(db, "report.organization_name", "") or ""
+        context = assessment.document_context(report)
+        context.update(
+            title="Security Assessment: %s" % row.repository,
+            organization_name=organization,
+            logo=(settings_store.get(db, "report.logo", "") or "").strip(),
+            footer_text=settings_store.get(db, "report.footer", "") or "",
+            issued_at=(report["row"].created_at or datetime.now(timezone.utc))
+            .strftime("%B %d, %Y").replace(" 0", " "))
+        html = render_partial("assessment_pdf.html", **context)
+        name = "security-assessment-%s-%s-%s.pdf" % (
+            row.repository.replace("/", "-"),
+            re.sub(r"[^A-Za-z0-9._-]+", "-", report["result"]["branch"] or "default"),
+            datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    try:
+        from weasyprint import HTML
+    except Exception:
+        log.exception("weasyprint is not available")
+        raise HTTPException(
+            status_code=503,
+            detail="Reports need the typesetting libraries, which are not "
+                   "installed on this server.")
+
+    def finisher(_document, pdf):
+        # The document says whose assessment it is, not what typeset it.
+        import pydyf
+        who = organization or "Security Assessment"
+        pdf.info["Producer"] = pydyf.String(who)
+        pdf.info["Creator"] = pydyf.String(who)
+
+    pdf = HTML(string=html, base_url=str(request.base_url),
+               url_fetcher=report_url_fetcher(context.get("logo") or "")
+               ).write_pdf(finisher=finisher)
+    log.info("security report on %s downloaded by %s", row.repository,
+             getattr(user, "username", "?"))
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": 'attachment; filename="%s"' % name})
+
+
+def _default_branch(db, repository: str) -> str:
+    repo = db.query(Repository).filter(Repository.full_name == repository).first()
+    return (repo.default_branch if repo else "") or ""
 
 
 def _connection_repos(db, user, connection):

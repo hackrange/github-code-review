@@ -71,6 +71,11 @@ PERMISSIONS = {
         # same people who may ask about a finding.  Anybody who can see the
         # repository can look at the result.
         "repo.diagram",
+        # Asking a model for a written security assessment of one repository
+        # branch.  The same weight as a diagram: it sends code outside this
+        # installation and costs money per report.  Anybody who can see the
+        # finding it was asked from can read the result.
+        "repo.assess",
         # Looking at the product as somebody else, to see what they see.
         # Read only: see the note on Session.impersonating_id.
         "user.impersonate",

@@ -4840,6 +4840,34 @@ async def draw_diagram(repo_id: int, request: Request,
 
 
 
+# ---- security reports ------------------------------------------------------
+
+@router.post("/findings/{finding_id}/assessment")
+async def start_assessment(finding_id: int, request: Request,
+                           user: User = Depends(current_user)):
+    """Write a security report on the branch this finding sits on."""
+    await check_csrf(request)
+    rbac.require(user, "repo.assess")
+
+    from app.core import assessment
+
+    with session_scope() as db:
+        row = rbac.visible_finding(db, user, finding_id)
+        if row is None or (row.out_of_scope and not rbac.can(user, "repo.scope")):
+            raise HTTPException(status_code=404, detail="No such finding.")
+        record(db, "repo.assessment_requested", actor=user.username,
+               target=row.repository,
+               detail=f"branch {row.branch or 'default'}, from finding {finding_id}",
+               source_ip=client_ip(request))
+    started, problem = assessment.start(finding_id, user.username)
+    back = f"/findings/{finding_id}"
+    if not started:
+        return redirect(_back_with(back, problem, "warn"))
+    return redirect(_back_with(
+        back, "The security report is being written.  It usually takes a few "
+              "minutes, and this page refreshes itself until it is done.", "ok"))
+
+
 # Ticked branches on one connection's scope page.  The largest account seen
 # held a few thousand, so this is room for that with plenty over.
 MAX_SCOPE_FIELDS = 25000
