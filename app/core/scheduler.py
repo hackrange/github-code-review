@@ -251,6 +251,17 @@ def start() -> None:
                        replace_existing=True, misfire_grace_time=120,
                        coalesce=True, max_instances=1)
 
+    # Organizations nobody has a connection for.  Weekly is plenty, since a new
+    # organization is rare and the check asks GitHub about every token.  It
+    # does nothing unless it is switched on, so arming it always is harmless.
+    from app.core import org_coverage
+
+    _scheduler.add_job(org_coverage.weekly,
+                       CronTrigger(day_of_week="mon", hour=8, minute=0,
+                                   timezone=_zone()),
+                       id="org-coverage", replace_existing=True,
+                       misfire_grace_time=3600, coalesce=True, max_instances=1)
+
     # CPU, memory, disk and network for the Utilization page.  The sample is
     # a few file reads, the breakdown asks the database how big it is, and
     # the rollup averages minutes into the wider tables.

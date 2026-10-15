@@ -372,6 +372,18 @@ DEFAULTS = {
     "notify.smtp_security":    ("starttls", False, "starttls, ssl, or none."),
     "notify.smtp_user":        ("", False, "Leave empty for a server that does not ask."),
     "notify.smtp_password":    ("", True, "Stored encrypted."),
+    # Off by default, like every other message.  A weekly note nobody asked
+    # for is a sender somebody filters.
+    "notify.org_gaps_enabled": (False, False,
+                                "Every Monday morning, say which organizations "
+                                "the GitHub accounts belong to that no connection "
+                                "scans."),
+    "notify.org_gaps_ignore":  ("", False,
+                                "Organizations that are fine without a connection. "
+                                "Several, separated by commas."),
+    # What the last check found, so the page can show it without asking GitHub
+    # every time somebody opens it.
+    "notify.org_gaps_last":    ({}, False, "The last organization check."),
 
     # ---- how times are shown and when schedules fire ----
     "ui.timezone":             ("GMT", False,

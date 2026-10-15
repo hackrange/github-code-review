@@ -3765,6 +3765,10 @@ async def save_notifications(request: Request,
         put("notify.mail_transport", transport)
         put("notify.email_format", fmt)
         put("notify.attach_csv", _checked(form, "notify.attach_csv"))
+        put("notify.org_gaps_enabled", _checked(form, "notify.org_gaps_enabled"))
+        put("notify.org_gaps_ignore", clean_text(
+            form.get("notify.org_gaps_ignore"), "Organizations to leave out",
+            limit=2000, required=False))
         put("notify.graph_tenant", clean_text(form.get("notify.graph_tenant"),
                                               "Tenant id", limit=100,
                                               required=False))
@@ -3833,6 +3837,55 @@ async def test_notifications(request: Request,
             f"Could not send to {', '.join(failed)}. The log says why."))
     return redirect("/notifications?msg=" + quote(
         f"Sent to {', '.join(worked)}."))
+
+
+@router.post("/notifications/org-coverage/send")
+async def send_org_coverage(request: Request,
+                            user: User = Depends(current_user)):
+    """Check for organizations with no connection now, and send what it finds."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+
+    from urllib.parse import quote
+
+    from starlette.concurrency import run_in_threadpool
+
+    from app.core import org_coverage
+
+    # One call per token and one per organization, so it can take a while.
+    result = await run_in_threadpool(org_coverage.survey)
+    with session_scope() as db:
+        org_coverage.save(db, result, user.username)
+        sent = org_coverage.send(db, result)
+        record(db, "notifications.org_coverage", actor=user.username,
+               detail="%d missing, %d problem(s); %s" % (
+                   len(result["missing"]), len(result["problems"]),
+                   ", ".join(f"{name}: {'ok' if ok else 'failed'}"
+                             for name, ok in sorted(sent.items()))
+                   or "nothing sent"),
+               outcome="ok" if not sent or all(sent.values()) else "warn",
+               source_ip=client_ip(request))
+
+    def go(text, error=False):
+        return redirect("/notifications?" + ("kind=error&" if error else "")
+                        + "msg=" + quote(text) + "#org-coverage")
+
+    if not org_coverage.gaps(result):
+        if not result["members"]:
+            return go("No GitHub token could say which organizations its "
+                      "account is in.", error=True)
+        return go(f"Every one of the {result['members']} organizations has a "
+                  "connection.  Nothing was sent.")
+    if not sent:
+        return go("Found gaps, but nothing is configured to send to yet.",
+                  error=True)
+    worked = [name for name, ok in sent.items() if ok]
+    failed = [name for name, ok in sent.items() if not ok]
+    if failed:
+        return go(f"Sent to {', '.join(worked) or 'nothing'}.  "
+                  f"Could not send to {', '.join(failed)}.  The log says why.",
+                  error=True)
+    return go(f"Sent to {', '.join(worked)}.")
 
 
 @router.post("/ai/save")

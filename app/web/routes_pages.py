@@ -4103,6 +4103,16 @@ def noise_page(request: Request, msg: str = "", kind: str = "",
         return page(request, "noise.html", **context)
 
 
+def _when(value):
+    """A stored ISO time back as a datetime, or None."""
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
 @router.get("/notifications")
 def notifications_page(request: Request, msg: str = "", kind: str = "",
                        user: User = Depends(current_user)):
@@ -4121,10 +4131,15 @@ def notifications_page(request: Request, msg: str = "", kind: str = "",
                 values[key] = bool(notify_settings.get(db, key))
             else:
                 values[key] = notify_settings.get(db, key)
+        from app.core import org_coverage
+
+        coverage = org_coverage.last(db)
         context = _shared(db, user)
         context.update(
             active_page="notifications",
             values=values,
+            coverage=coverage,
+            coverage_at=_when(coverage.get("checked_at")),
             can_write=rbac.can(user, "settings.write"),
             message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")

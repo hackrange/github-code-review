@@ -222,11 +222,83 @@
     </div>
   </div>
 
+  <div class="card" id="org-coverage">
+    <div class="card-head">Organizations without a connection</div>
+    <div class="card-body">
+      <label class="check">
+        <input type="checkbox" name="notify.org_gaps_enabled" value="1"
+               {{ 'checked' if values['notify.org_gaps_enabled'] }}>
+        Every Monday morning, say which organizations are not being scanned
+      </label>
+      <p class="faint small">A fine grained token reaches one organization, so
+        each one needs its own <a href="{{ base }}/connections">connection</a>,
+        and nothing says so when a new one appears.  This asks the GitHub tokens
+        you already have which organizations their account belongs to and
+        compares that with the connections.  It also names a connection that
+        is limited to an organization its token cannot reach, and a token
+        whose resource owner is the account rather than an organization.  Both
+        of those sign in fine and scan nothing.  It only sends when it finds
+        something.</p>
+      <label>Organizations to leave out
+        <input type="text" name="notify.org_gaps_ignore"
+               value="{{ values['notify.org_gaps_ignore'] }}"
+               placeholder="sandbox-org, archive-org">
+        <span class="faint small">Ones that are fine without a connection.
+          Several, separated by commas.</span>
+      </label>
+    </div>
+  </div>
+
   <div class="page-actions">
     <button class="btn primary" type="submit">Save</button>
   </div>
 </form>
 <script src="{{ base }}/static/notifications.js?v={{ asset_v('notifications.js') }}"></script>
+
+<div class="card">
+  <div class="card-head">Organization check</div>
+  <div class="card-body">
+    {% if coverage_at %}
+    <p class="small">Last checked {{ coverage_at | dt }}.  The tokens' accounts
+      belong to {{ coverage.members }} organization(s).</p>
+    {% if coverage.missing %}
+    <p class="small"><strong>{{ coverage.missing | length }} with no connection</strong></p>
+    <ul class="small">
+      {% for item in coverage.missing %}
+      <li><span class="mono">{{ item.org }}</span>: {{ item.note }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if coverage.problems %}
+    <p class="small"><strong>{{ coverage.problems | length }} connection(s) that scan nothing they should</strong></p>
+    <ul class="small">
+      {% for item in coverage.problems %}
+      <li><span class="mono">{{ item.connection }}</span>: {{ item.detail | sentence_spaced }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if coverage.skipped %}
+    <p class="faint small">Could not ask {{ coverage.skipped | length }}
+      connection(s), so this list may be short:
+      {% for item in coverage.skipped %}<span class="mono">{{ item.connection }}</span> ({{ item.detail }}){{ ', ' if not loop.last }}{% endfor %}.</p>
+    {% endif %}
+    {% if not coverage.missing and not coverage.problems %}
+    <p class="small">Every organization has a connection.</p>
+    {% endif %}
+    {% else %}
+    <p class="faint small">Not checked yet.</p>
+    {% endif %}
+    {% if can_write %}
+    <p class="faint small">Checks now and sends what it finds to everything
+      configured above, whether or not the weekly message is on.  Nothing is
+      sent when every organization has a connection.</p>
+    <form method="post" action="{{ base }}/notifications/org-coverage/send">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit">Send now</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
 
 <div class="card">
   <div class="card-head">Prove it works</div>
