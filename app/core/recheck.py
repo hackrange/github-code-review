@@ -352,6 +352,9 @@ def _recheck(finding_id: int, actor: str = "") -> dict:
     finding is recorded on gets looked at, and only if all of them come back
     clean is it closed.  Anything less says so and changes nothing, because
     "not on the branch I looked at" and "gone" are still different sentences.
+
+    That closing is for code findings only.  A credential is found in history,
+    which a tip never covers, so a recheck can confirm one but not close it.
     """
     import json as _json
 
@@ -482,6 +485,23 @@ def _recheck(finding_id: int, actor: str = "") -> dict:
                     "detail": "Still there: %s in %s on %s."
                               % (rule or "the finding", rel_path,
                                  ", ".join(found_on))}
+
+        if kind == FindingKind.CREDENTIAL:
+            # Never closed from here.  A credential's branches are the ones
+            # whose history holds the commit, not the ones where it sits at
+            # the tip, and the scan reads that history.  Taking the line out
+            # of the file leaves the commit where it was, so the next scan
+            # finds it and reopens it, which read as the button not working.
+            # Only rewriting history makes it gone, and a tip cannot show that.
+            return {"ok": True, "present": False,
+                    "detail": "The detector did not find it in %s at the tip "
+                              "of %s.  Left open, because a credential stays "
+                              "in the history of every branch that has the "
+                              "commit, and the scan reads that history and "
+                              "would reopen it.  Rotate the credential, then "
+                              "waive it with that reason, or remove it from "
+                              "the history and the next scan will close it."
+                              % (rel_path, _english(walk))}
 
         if complete:
             closed = _record(finding_id, present=False, actor=actor,
