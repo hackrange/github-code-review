@@ -996,6 +996,48 @@
       <button class="btn sm" type="submit">Save</button>
     </form>
     {% endif %}
+
+    {% if can_tag %}
+    {# The same four answers the Tagging page sets, for this one repository.
+       Each box shows what the repository says for itself; the hint is what
+       the connection says, which is what an empty box falls back to. #}
+    <details style="margin-top:.75rem">
+      <summary class="small">Edit what it holds, the application and its owners</summary>
+      <form method="post" action="{{ base }}/repositories/{{ repo_info.id }}/about"
+            style="margin-top:.5rem;max-width:70ch">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="back" value="/findings/{{ f.id }}">
+        <label>What it holds
+          <div class="check-grid">
+            {% for label in tag_labels %}
+            <label class="check"><input type="checkbox" name="holds:{{ label }}" value="1"
+                   {{ 'checked' if label in repo_own.holds }}> {{ label }}</label>
+            {% endfor %}
+          </div>
+        </label>
+        <label>Application
+          <input type="text" name="application_name" maxlength="200"
+                 value="{{ repo_own.application_name }}"
+                 placeholder="{{ repo_info.application_name.value if repo_info.application_name['from'] == 'connection' else 'Payments API' }}">
+        </label>
+        <label>Business owner
+          <input type="email" name="application_owner" multiple
+                 value="{{ repo_own.application_owner }}"
+                 placeholder="{{ repo_info.application_owner.value if repo_info.application_owner['from'] == 'connection' else 'a.person@example.com' }}">
+        </label>
+        <label>Technical owner
+          <input type="email" name="technical_owner" multiple
+                 value="{{ repo_own.technical_owner }}"
+                 placeholder="{{ repo_info.technical_owner.value if repo_info.technical_owner['from'] == 'connection' else 'a.person@example.com' }}">
+          <span class="faint small">Owners are addresses, so somebody can be
+            asked later.  Several are fine, comma separated.  Anything left
+            empty, or with nothing ticked, uses what the connection says.  This
+            changes the repository, so every finding in it shows the same.</span>
+        </label>
+        <button class="btn sm" type="submit">Save</button>
+      </form>
+    </details>
+    {% endif %}
   </div>
 </div>
 {% endif %}

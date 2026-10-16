@@ -129,6 +129,30 @@ def tag(session, repo_ids, values: dict, actor: str = "") -> int:
     return len(rows)
 
 
+def set_own(session, repo, values: dict, actor: str = "") -> list:
+    """One repository's own answers, exactly as given.  -> the fields that moved.
+
+    Not the same as tag().  This is a form that shows what is already there, so
+    an empty box means somebody emptied it, and the field goes back to whatever
+    the connection says.
+    """
+    moved = []
+    for field in FIELDS:
+        if field not in values:
+            continue
+        given = (values.get(field) or "").strip()
+        if given == "-":
+            given = ""
+        if given != (getattr(repo, field, "") or "").strip():
+            setattr(repo, field, given)
+            moved.append(field)
+    if moved:
+        repo.tagged_by = actor or repo.tagged_by or ""
+        repo.tagged_at = utcnow()
+        session.flush()
+    return moved
+
+
 def untagged(session, organization: str = "", base=None):
     """Repositories nobody has said anything about.
 

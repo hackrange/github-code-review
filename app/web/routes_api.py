@@ -3696,6 +3696,60 @@ async def describe_repository(repo_id: int, request: Request,
         back, "Saved." if note else "Description removed."))
 
 
+@router.post("/repositories/{repo_id}/about")
+async def tag_one_repository(repo_id: int, request: Request,
+                             user: User = Depends(current_user)):
+    """What one repository holds, what it is, and who owns it, from its page.
+
+    The same fields the Tagging page sets, for the one somebody is looking at.
+    An empty box goes back to what the connection says.
+    """
+    await check_csrf(request)
+    rbac.require(user, "repo.write")
+
+    from app.core import tagging
+    from app.core.models import Repository as m_Repository
+
+    form = await request.form()
+    back = clean_text(form.get("back"), "Back", limit=300, required=False)
+    back = _safe_back(back) if back else "/tagging"
+
+    values = {
+        "application_name": clean_text(form.get("application_name"),
+                                       "Application", limit=200,
+                                       required=False),
+        "application_owner": clean_email(form.get("application_owner"),
+                                         "Business owner"),
+        "technical_owner": clean_email(form.get("technical_owner"),
+                                       "Technical owner"),
+    }
+
+    with session_scope() as db:
+        repo = (db.query(m_Repository)
+                .filter(m_Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+
+        # Every label offered, plus any this one already carries that the list
+        # no longer has, so saving the form cannot drop one nobody could see.
+        own = tagging.split_labels(repo.sensitivity or "")
+        offered = tagging.labels(db) + [x for x in own
+                                        if x not in tagging.labels(db)]
+        values["sensitivity"] = ", ".join(
+            label for label in offered if _checked(form, f"holds:{label}"))
+
+        moved = tagging.set_own(db, repo, values, actor=user.username)
+        if moved:
+            record(db, "repository.tagged", actor=user.username,
+                   target=repo.full_name,
+                   detail=", ".join(f"{k.replace('_', ' ')}="
+                                    f"{getattr(repo, k) or '(from the connection)'}"
+                                    for k in moved)[:200],
+                   source_ip=client_ip(request))
+
+    return redirect(_back_with(back, "Saved." if moved else "Nothing changed."))
+
+
 @router.post("/notifications/save")
 async def save_notifications(request: Request,
                              user: User = Depends(current_user)):

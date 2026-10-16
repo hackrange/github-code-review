@@ -1754,6 +1754,25 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        for name in (on_branches or [row.branch or ""])}
 
         about = repo_context.for_repository(db, row.repository)
+
+        # What this repository says for itself, as opposed to what it inherits,
+        # for the administrator's edit form.  The form shows the repository's
+        # own answers and leaves the connection's as the hint.
+        can_tag = bool(about) and rbac.can(user, "repo.write")
+        repo_own, tag_labels = {}, []
+        if can_tag:
+            from app.core import tagging
+
+            _own_row = db.get(Repository, about["id"])
+            if _own_row is not None:
+                repo_own = {field: (getattr(_own_row, field, "") or "")
+                            for field in tagging.FIELDS}
+                repo_own["holds"] = tagging.split_labels(repo_own["sensitivity"])
+                tag_labels = tagging.labels(db) + [
+                    x for x in repo_own["holds"] if x not in tagging.labels(db)]
+            else:
+                can_tag = False
+
         risk_context = {"sensitivity": about.get("sensitivity"),
                         "visibility": about.get("visibility"),
                         "people_total": about.get("people_total")} if about else {}
@@ -1782,6 +1801,8 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        can_regrade=rbac.can(user, "finding.regrade"),
                        can_describe=rbac.can(user, "repo.describe"),
                        repo_info=about,
+                       can_tag=can_tag, repo_own=repo_own,
+                       tag_labels=tag_labels,
                        can_scan=rbac.can(user, "scan.run"),
                        scanning_now=_scanning_now(),
                        scanning_now_ids=_scanning_now_ids(),
