@@ -762,6 +762,10 @@ def _set_aside_placeholders(session, document, seen_at, seen_fingerprints) -> in
          "one hash length, and one of several of that same shape in the same "
          "file, which is what a generated report or a lock file looks like and "
          "what a credential never looks like"),
+        ("object_key",
+         "it is the name of the next entry in a JSON object, not a value.  "
+         "The entry before it ends in a word like API, and the rule read the "
+         "comma between them as an equals sign"),
         ("jwt_signature_stub",
          "its signature is the wrong length for the algorithm it names, so "
          "nobody could present it anywhere"),

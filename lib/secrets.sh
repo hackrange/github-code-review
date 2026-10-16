@@ -383,6 +383,44 @@ _digest_siblings() {
     | sort -u | wc -l | tr -d ' '
 }
 
+# Whether the "value" is really the next JSON object key.
+#
+# gitleaks' generic-api-key takes a comma as an assignment, which is right for
+# put("X-API-KEY", "abc...").  It is wrong for a JSON map whose previous value
+# happens to end in a keyword.  An Allure report holds
+#
+#     "...Equipment Alerts vs API","xanR2Klhtr6ujyX7NL0ir":"Create Geofence"
+#
+# and the rule read API = xanR2Klhtr6ujyX7NL0ir, a test id, as a critical
+# credential.  Two things have to hold.  The match is keyword, quote, comma,
+# quote, value, quote.  And every place that exact match sits on its line, a
+# colon comes next, so the value is a name in an object and not something
+# assigned.  put("API_KEY", "abc") never has a colon after it, so it is still
+# reported.  A line nobody can read decides nothing.
+_object_key_neighbor() {
+  local dir="$1" file="$2" commit="$3" lineno="$4" match="$5"
+  [[ -n "$dir" && -n "$file" && -n "$match" && "$lineno" =~ ^[1-9][0-9]*$ ]] \
+    || { printf 'false'; return 0; }
+
+  local text=""
+  if [[ -n "$commit" ]]; then
+    text=$(git -C "$dir" show "$commit:$file" 2>/dev/null \
+           | sed -n "${lineno}{p;q}" | head -c "$_DIGEST_SCAN_BYTES")
+  elif [[ -f "$dir/$file" ]]; then
+    text=$(sed -n "${lineno}{p;q}" -- "$dir/$file" 2>/dev/null \
+           | head -c "$_DIGEST_SCAN_BYTES")
+  fi
+  [[ -n "$text" && "$text" == *"$match"* ]] || { printf 'false'; return 0; }
+
+  local rest="$text" after
+  while [[ "$rest" == *"$match"* ]]; do
+    rest="${rest#*"$match"}"
+    after="${rest#"${rest%%[![:space:]]*}"}"
+    [[ "$after" == :* ]] || { printf 'false'; return 0; }
+  done
+  printf 'true'
+}
+
 derive_secret_facts() {
   local dir="${1:-}"
   local pre suf maxmask pp
@@ -474,10 +512,27 @@ derive_secret_facts() {
         "$(printf '%s' "$line" | jq -r '.commit // ""')")
     fi
 
+    # Only a comma shaped match is worth reading the file for.  Quotes may be
+    # plain or single, and the value has to be the last thing matched.
+    local object_key=false match
+    match=$(printf '%s' "$line" | jq -r '._match // ""')
+    if [[ -n "$match" ]] \
+       && printf '%s' "$line" | jq -e --arg m "$match" --arg s "$secret" '
+            ([39] | implode) as $sq
+            | ($m | endswith($s + "\"") or endswith($s + $sq))
+              and ($m | rtrimstr($s + "\"") | rtrimstr($s + $sq)
+                      | test("[\"\u0027]\\s*,\\s*[\"\u0027]$"))' >/dev/null 2>&1; then
+      object_key=$(_object_key_neighbor "$dir" \
+        "$(printf '%s' "$line" | jq -r '.file // ""')" \
+        "$(printf '%s' "$line" | jq -r '.commit // ""')" \
+        "$(printf '%s' "$line" | jq -r '.start_line // 0')" "$match")
+    fi
+
     printf '%s' "$line" | jq -c \
       --arg fp "$fp" --arg merge "$merge" --arg redacted "$redacted" \
       --argjson slen "$slen" --argjson pp "$pp" --argjson live "$live" \
       --argjson dshape "$digest_shaped" --argjson dsibs "${digest_siblings:-0}" \
+      --argjson objkey "$object_key" \
       --argjson now "$now_epoch" --argjson idc "$JWT_IDENTITY_CLAIMS" \
       --argjson prc "$JWT_PRIVILEGE_CLAIMS" '
       # A JSON web token is not opaque.  Two of its three parts are base64 of
@@ -665,10 +720,13 @@ derive_secret_facts() {
           # Which kind of public key, or empty.  Said here, judged in triage.
           public_key: ($pk != ""),
           public_key_type: $pk,
-          url_stand_in: ($s | url_stand_in($pp))
+          url_stand_in: ($s | url_stand_in($pp)),
+          # The value is the next key in a JSON object.  See _object_key_neighbor.
+          object_key: $objkey
         }
       + ($s | jwt_facts)
-      | del(._secret)'
+      | del(._secret)
+      | del(._match)'
   done <&${bfd}
   exec {bfd}<&-
 }
@@ -910,7 +968,10 @@ normalize_gitleaks() {
       verification_error: null,
       engine_fingerprint: (.Fingerprint // ""),
       tags: (.Tags // []),
-      _secret: (.Secret // .Match // "")
+      _secret: (.Secret // .Match // ""),
+      # What the rule actually matched around the value.  It holds the value
+      # too, so it goes the same way _secret does, in derive_secret_facts.
+      _match: (.Match // "")
     }' "$in" 2>/dev/null
 }
 
