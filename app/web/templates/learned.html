@@ -6,16 +6,31 @@
     <div class="faint small">What AI validation taught the scanner, so the same
       question is never paid for twice.</div></div>
   <div class="page-actions">
+    <form method="get" action="{{ base }}/ai/learned" style="display:inline">
+      {% if show == 'retired' %}<input type="hidden" name="show" value="retired">{% endif %}
+      <input type="search" name="q" value="{{ q }}" placeholder="Rule number or text"
+             aria-label="Find a learned rule by number, repository, rule, path or reason">
+      <button class="btn sm" type="submit">Find</button>
+      {% if q %}<a class="btn sm" href="{{ base }}/ai/learned{% if show == 'retired' %}?show=retired{% endif %}">Clear</a>{% endif %}
+    </form>
     {% if show == 'retired' %}
-    <a class="btn sm" href="{{ base }}/ai/learned">Live rules</a>
+    <a class="btn sm" href="{{ base }}/ai/learned{% if q %}?q={{ q | urlencode }}{% endif %}">Live rules</a>
     {% else %}
-    <a class="btn sm" href="{{ base }}/ai/learned?show=retired">Include retired</a>
+    <a class="btn sm" href="{{ base }}/ai/learned?show=retired{% if q %}&q={{ q | urlencode }}{% endif %}">Include retired</a>
     {% endif %}
     {% if can_write %}
     <form method="post" action="{{ base }}/ai/learned/test" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn sm" type="submit">Run the synthetic tests</button>
     </form>
+    {% if show == 'retired' %}
+    <form method="post" action="{{ base }}/ai/learned/bulk" style="display:inline"
+          data-confirm="Delete every retired rule? The findings they were retired over are forgotten, so the same pattern can be learned again.">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="show" value="retired">
+      <button class="btn sm danger" type="submit" name="action" value="delete_retired">Delete all retired</button>
+    </form>
+    {% endif %}
     {% endif %}
   </div>
 </div>
@@ -65,19 +80,60 @@
     <div class="small" style="margin-top:.3rem">A rule only lowers, never on a
       credential or a known exploited package, and never over a person's own
       regrade. It applies in the repository it was learned in until somebody
-      accepts it for every repository. A model asked again that disagrees with
-      a rule retires it, and every grade it gave is taken back.</div>
+      accepts it for every repository, and a rule that matches on a file path
+      alone, with no code to compare, never leaves its repository. A model asked again that reads a
+      finding the rule graded any differently, higher or lower, retires it:
+      every grade it gave is taken back, and each of those findings is sent
+      for its own reading.</div>
   </div>
 </div>
 
 <div class="card">
+  {% if can_write and rows %}
+  <form method="post" id="rule-bulk" action="{{ base }}/ai/learned/bulk" class="card-head"
+        style="justify-content:flex-start;flex-wrap:wrap">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="show" value="{{ show }}">
+    <span class="small" data-ticked>Nothing ticked</span>
+    <button class="btn sm" type="submit" name="action" value="unaccept"
+            data-confirm="Take the ticked rules back to the repository each was learned in? What they graded elsewhere goes back.">Stop applying everywhere</button>
+    <button class="btn sm" type="submit" name="action" value="retire"
+            data-confirm="Retire the ticked rules and put back every grade they gave?">Retire</button>
+    <button class="btn sm danger" type="submit" name="action" value="delete"
+            data-confirm="Delete the ticked rules for good? Live ones put back every grade they gave first. A deleted rule's refused findings are forgotten, so the same pattern can be learned again.">Delete</button>
+  </form>
+  {% endif %}
+  {% macro pager() %}
+  <div class="card-body flex-between">
+    <span class="small faint">
+      {% if total %}Showing {{ offset + 1 }} to {{ offset + rows|length }} of {{ total }}
+      {% else %}Nothing to show{% endif %}
+    </span>
+    <span class="flex" style="gap:.4rem;align-items:center">
+      <span class="small faint">Rows</span>
+      {% for size in page_sizes %}
+        <a class="btn sm {{ 'primary' if per_page == size }}"
+           href="?{{ page_query }}{% if page_query %}&{% endif %}per_page={{ size }}">{{ size }}</a>
+      {% endfor %}
+      {% if offset > 0 %}
+        <a class="btn sm" href="?{{ page_query }}{% if page_query %}&{% endif %}per_page={{ per_page }}&offset={{ [offset - per_page, 0]|max }}">Back</a>
+      {% endif %}
+      {% if offset + per_page < total %}
+        <a class="btn sm" href="?{{ page_query }}{% if page_query %}&{% endif %}per_page={{ per_page }}&offset={{ offset + per_page }}">Next</a>
+      {% endif %}
+    </span>
+  </div>
+  {% endmacro %}
+  {% if rows %}{{ pager() }}{% endif %}
   <div class="table-scroll">
-    <table>
-      <thead><tr><th>#</th><th>What it covers</th><th>Grade</th><th>Scope</th>
+    <table id="rule-table">
+      <thead><tr>{% if can_write and rows %}<th><input type="checkbox" id="select-rules" aria-label="Tick every rule shown"></th>{% endif %}<th>#</th><th>What it covers</th><th>Grade</th><th>Scope</th>
         <th>Used</th><th>Test</th>{% if can_write %}<th></th>{% endif %}</tr></thead>
       <tbody>
       {% for row in rows %}{% set r = row.rule %}
         <tr{% if r.retired_at %} class="faint"{% endif %}>
+          {% if can_write %}<td><input type="checkbox" name="rule" value="{{ r.id }}" form="rule-bulk"
+              aria-label="Tick rule {{ r.id }}"></td>{% endif %}
           <td>{{ r.id }}</td>
           <td>{{ row.text }}
             {% if r.reason %}<div class="faint small">{{ r.reason }}</div>{% endif %}
@@ -89,9 +145,12 @@
               by {{ r.retired_by or 'the system' }}: {{ r.retired_reason }}</div>{% endif %}
           </td>
           <td><span class="badge {{ r.severity.value }}">{{ r.severity.value }}</span></td>
-          <td class="small">{% if r.global_accepted_by %}Every repository
+          <td class="small">{% if r.global_accepted_by and not row.local_only %}Every repository
             <div class="faint">accepted by {{ r.global_accepted_by }}</div>
-            {% else %}{{ r.repository }}{% endif %}</td>
+            {% else %}{{ r.repository }}
+            {% if row.local_only %}<div class="faint">{% if r.global_accepted_by %}accepted
+              everywhere, but {% endif %}a file path alone, so here only</div>{% endif %}
+            {% endif %}</td>
           <td class="small">{{ r.hits or 0 }}{% if r.last_hit_at %}
             <div class="faint">last {{ r.last_hit_at | dt('%d %b') }}</div>{% endif %}</td>
           <td class="small">{% if r.retired_at %}&nbsp;
@@ -100,7 +159,7 @@
               refuses {{ row.cases.negative | length }}{% endif %}{% endif %}</td>
           {% if can_write %}<td class="nowrap">
             {% if not r.retired_at %}
-            {% if not r.global_accepted_by %}
+            {% if not r.global_accepted_by and not row.local_only %}
             <form method="post" action="{{ base }}/ai/learned/{{ r.id }}/accept" style="display:inline"
                   data-confirm="Apply rule #{{ r.id }} in every repository? It will lower matching findings everywhere.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -116,12 +175,15 @@
           </td>{% endif %}
         </tr>
       {% else %}
-        <tr><td colspan="7" class="faint">Nothing learned yet. Validate findings with
+        <tr><td colspan="8" class="faint">{% if q %}No rule matches “{{ q }}”{% if show != 'retired' and not q.lstrip('#').isdigit() %}
+          among the live rules; include retired to look there too{% endif %}.{% else %}Nothing learned yet. Validate findings with
           AI, one at a time or many at once from the findings list, and what the
-          model says covers other findings shows up here.</td></tr>
+          model says covers other findings shows up here.{% endif %}</td></tr>
       {% endfor %}
       </tbody>
     </table>
   </div>
+  {% if total > per_page %}{{ pager() }}{% endif %}
 </div>
+<script src="{{ base }}/static/learnedbulk.js?v={{ asset_v('learnedbulk.js') }}"></script>
 {% endblock %}

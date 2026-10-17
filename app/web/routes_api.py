@@ -4201,6 +4201,11 @@ async def accept_learned(rule_id: int, request: Request,
         rule = db.get(LearnedRule, rule_id)
         if rule is None or rule.retired_at is not None:
             raise HTTPException(status_code=404, detail="No such live rule.")
+        if learned.local_only(rule):
+            return redirect("/ai/learned?kind=error&msg=" + quote(
+                f"Rule #{rule.id} matches on a file path alone, and a file of the "
+                "same name in another repository is different code, so it "
+                "applies only where it was learned."))
         problems = learned.self_test(rule)
         if problems:
             return redirect("/ai/learned?kind=error&msg=" + quote(
@@ -4243,6 +4248,72 @@ async def retire_learned(rule_id: int, request: Request,
                source_ip=client_ip(request))
     return redirect("/ai/learned?msg=" + quote(
         f"Rule #{rule_id} retired; {restored} finding(s) went back to their grade."))
+
+
+@router.post("/ai/learned/bulk")
+async def learned_bulk(request: Request, user: User = Depends(current_user)):
+    """Do one thing to the ticked rules, or delete every retired one.
+
+    unaccept takes rules back to the repository they were learned in, retire
+    stops them, and delete removes them.  Every grade a rule takes back on the
+    way puts the finding back where it was.
+    """
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+    from urllib.parse import quote
+
+    from app.core import learned
+    from app.core.reports import request_rewrite
+    from app.core.models import LearnedRule
+
+    form = await request.form()
+    action = str(form.get("action", ""))
+    if action not in {"unaccept", "retire", "delete", "delete_retired"}:
+        raise HTTPException(status_code=400, detail="Unknown action.")
+    wanted = {int(raw) for raw in form.getlist("rule") if str(raw).isdigit()}
+    back = "/ai/learned" + ("?show=retired&" if form.get("show") == "retired" else "?")
+
+    with session_scope() as db:
+        query = db.query(LearnedRule)
+        if action == "delete_retired":
+            query = query.filter(LearnedRule.retired_at.isnot(None))
+        elif wanted:
+            query = query.filter(LearnedRule.id.in_(wanted))
+        else:
+            return redirect(back + "kind=error&msg=" + quote("Nothing was ticked."))
+        rules = query.all()
+        done, restored = [], 0
+        for rule in rules:
+            if action == "unaccept":
+                if not rule.global_accepted_by:
+                    continue
+                restored += learned.unaccept(db, rule, user.username)
+            elif action == "retire":
+                if rule.retired_at is not None:
+                    continue
+                restored += learned.retire(db, rule, user.username, "retired by hand")
+            else:
+                restored += learned.delete(db, rule, user.username)
+            done.append(rule.id)
+        if restored:
+            request_rewrite()
+        if done:
+            event = {"unaccept": "unaccepted", "retire": "retired"}.get(action, "deleted")
+            record(db, "learned_rule." + event,
+                   actor=user.username, target=f"{len(done)} rules",
+                   detail=", ".join(f"#{n}" for n in done)[:400],
+                   source_ip=client_ip(request))
+
+    what = {"unaccept": "now apply only in their own repository",
+            "retire": "retired", "delete": "deleted",
+            "delete_retired": "deleted"}[action]
+    if not done:
+        message = "None of the ticked rules could take that action."
+        return redirect(back + "kind=error&msg=" + quote(message))
+    message = (f"{len(done)} rule{'' if len(done) == 1 else 's'} {what}; "
+               f"{restored} finding{'' if restored == 1 else 's'} went back to "
+               f"{'its' if restored == 1 else 'their'} earlier grade.")
+    return redirect(back + "msg=" + quote(message))
 
 
 @router.post("/ai/learned/test")

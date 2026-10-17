@@ -284,6 +284,11 @@ def proposal(finding, severity, pattern: dict) -> tuple:
         # Nothing narrower that still matches: the line itself.  Then the rule
         # covers this code wherever it appears in that path, and nothing else.
         contains = snippet[:500]
+    if not contains:
+        # No code to match on, which is how a workflow finding arrives.  Then
+        # the reason can only be about the one file that was read, and a glob
+        # would carry it to files nobody looked at.
+        glob = finding.file_path or ""
     if not contains and glob in ("", "*", "**"):
         return None, "the pattern would match every finding of that rule"
     fields.update(rule=finding.rule, path_glob=glob, code_contains=contains)
@@ -291,6 +296,32 @@ def proposal(finding, severity, pattern: dict) -> tuple:
 
 
 # ------------------------------------------------------------------ matching
+
+def local_only(rule) -> bool:
+    """A code or configuration rule with no code to match on.
+
+    All it knows is a file path, and .github/workflows/ci.yml is in half the
+    repositories there are.  Another repository's file of the same name is
+    different code, so a rule like this answers only where it was learned.
+    """
+    return rule.kind != "dependency" and not (rule.code_contains or "")
+
+
+def _read_files(rule) -> set:
+    """The files a path-only rule was actually learned from.
+
+    A rule kept before globs were narrowed can say .github/**/* when the
+    model read one workflow.  Only what was read is covered.
+    """
+    files = getattr(rule, "_files", None)
+    if files is None:
+        files = {case.get("file") or "" for case in fixture_of(rule)["positive"]}
+        try:
+            rule._files = files
+        except AttributeError:
+            pass
+    return files
+
 
 def _matches(rule, f: dict) -> bool:
     """Does one learned rule cover these finding facts."""
@@ -321,6 +352,12 @@ def _matches(rule, f: dict) -> bool:
         return True
     if (rule.rule or "").lower() != (f.get("rule") or "").lower():
         return False
+    if local_only(rule):
+        if (f.get("repository") or "").lower() != (rule.repository or "").lower():
+            return False
+        if any(ch in (rule.path_glob or "") for ch in "*?[") and \
+                (f.get("file") or "") not in _read_files(rule):
+            return False
     if rule.path_glob and not fnmatch.fnmatch(f.get("file") or "", rule.path_glob):
         return False
     if rule.code_contains and rule.code_contains not in _norm(f.get("snippet")):
@@ -353,9 +390,11 @@ def match(index: dict, finding):
     for rule in index.get(key, ()):
         if not in_scope(rule, f["repository"]) or not _matches(rule, f):
             continue
+        # Narrowest first, and the newest of two equally narrow ones, since it
+        # was learned from a later reading.
         rank = (rule.repository.lower() == f["repository"].lower(),
                 len(rule.code_contains or ""), len(rule.path_glob or ""),
-                (rule.advisory or "*") != "*")
+                (rule.advisory or "*") != "*", rule.id or 0)
         if best is None or rank > best[0]:
             best = (rank, rule)
     return best[1] if best else None
@@ -389,9 +428,35 @@ def self_test(rule) -> list:
                                                            case.get("rule") or case.get("advisory")))
     for case in data["negative"]:
         if _matches(rule, case):
-            problems.append("it matches %s, which a model refused to lower"
+            problems.append("it matches %s, which a model read differently"
                             % (case.get("file") or case.get("package")))
     return problems
+
+
+def contradiction(session, fields: dict, severity) -> str:
+    """Why an earlier reading says a proposed rule is wrong, or "".
+
+    A retired rule keeps the findings a model read differently from it.  A new
+    rule that would cover one of them at a grade the model did not give is the
+    same mistake learned again, so it is refused.  A case kept before readings
+    were recorded only says the old rule's grade was wrong.
+    """
+    probe = LearnedRule(**fields)
+    _prepare(session, probe)
+    for old in session.query(LearnedRule).filter(
+            LearnedRule.retired_at.isnot(None), LearnedRule.kind == fields["kind"],
+            LearnedRule.repository == fields["repository"]):
+        for case in fixture_of(old)["negative"]:
+            reading = case.get("reading") or ""
+            if reading:
+                wrong = reading != _value(severity)
+            else:
+                wrong = _value(old.severity) == _value(severity)
+            if wrong and _matches(probe, case):
+                return ("it would grade %s %s, and a model read that one as %s"
+                        % (case.get("file") or case.get("package"), _value(severity),
+                           reading or "something else"))
+    return ""
 
 
 def create(session, finding, severity, fields: dict, analysis_id, model: str,
@@ -409,22 +474,27 @@ def create(session, finding, severity, fields: dict, analysis_id, model: str,
                        **{k: v for k, v in fields.items()})
     rule.fixture = json.dumps({"expect": _value(severity), "positive": [facts(finding)],
                                "negative": []})
-    if self_test(rule):
+    if self_test(rule) or contradiction(session, fields, severity):
         return None
     session.add(rule)
     session.flush()
     return rule
 
 
-def add_negative(session, rule, finding, by: str, why: str) -> None:
-    """A model refused to lower something this rule covers: the rule is wrong.
+def add_negative(session, rule, finding, by: str, why: str, reading=None) -> None:
+    """A model read something this rule covers differently: the rule is wrong.
 
-    The finding becomes a negative case, and the rule is retired, because a
-    rule that matches what a model just said should stay graded is broader
-    than the reason it was learned from.  Every grade it gave is taken back.
+    Higher or lower makes no difference.  The rule claims everything it covers
+    deserves its grade for the same reason, and one reading that does not
+    agree shows the reason does not hold across all of it.  The finding
+    becomes a negative case with the reading on it, the rule is retired, and
+    every grade it gave is taken back.
     """
     data = fixture_of(rule)
-    data["negative"].append(facts(finding))
+    case = facts(finding)
+    if reading is not None:
+        case["reading"] = _value(reading)
+    data["negative"].append(case)
     rule.fixture = json.dumps(data)
     retire(session, rule, by, why)
 
@@ -436,14 +506,51 @@ def retire(session, rule, by: str, why: str) -> int:
     rule.retired_reason = (why or "")[:2000]
     restored = 0
     for grade in session.query(AIGrade).filter(AIGrade.rule_id == rule.id).all():
+        restored += _restore(session, grade)
+    return restored
+
+
+def _restore(session, grade) -> bool:
+    """Put a finding back to what stood before an AI grade, and drop the grade."""
+    finding = session.get(Finding, grade.finding_id)
+    restored = False
+    if finding is not None and finding.custom_severity is None and grade.was:
+        try:
+            finding.severity = Severity(grade.was)
+            restored = True
+        except ValueError:
+            pass
+    session.delete(grade)
+    return restored
+
+
+def unaccept(session, rule, by: str) -> int:
+    """Take a rule back to its own repository.  -> findings restored.
+
+    What it graded elsewhere goes back; what it graded at home stays.
+    """
+    rule.global_accepted_by = ""
+    rule.global_accepted_at = None
+    home = (rule.repository or "").lower()
+    restored = 0
+    for grade in session.query(AIGrade).filter(AIGrade.rule_id == rule.id).all():
         finding = session.get(Finding, grade.finding_id)
-        if finding is not None and finding.custom_severity is None and grade.was:
-            try:
-                finding.severity = Severity(grade.was)
-                restored += 1
-            except ValueError:
-                pass
-        session.delete(grade)
+        if finding is not None and (finding.repository or "").lower() == home:
+            continue
+        restored += _restore(session, grade)
+    return restored
+
+
+def delete(session, rule, by: str) -> int:
+    """Remove a rule for good, after taking back what it gave.  -> restored.
+
+    A retired rule's negative cases go with it, so a pattern it was retired
+    for can be learned again.
+    """
+    restored = 0
+    if rule.retired_at is None:
+        restored = retire(session, rule, by, "deleted")
+    session.delete(rule)
     return restored
 
 
@@ -536,7 +643,8 @@ def load_grades(session) -> dict:
 
 def describe(rule) -> str:
     """The rule in a sentence, for pages and audit lines."""
-    scope = "every repository" if rule.global_accepted_by else rule.repository
+    everywhere = rule.global_accepted_by and not local_only(rule)
+    scope = "every repository" if everywhere else rule.repository
     if rule.kind == "dependency":
         what = "%s, %s" % (rule.package, "any advisory" if rule.advisory == "*" else rule.advisory)
     else:

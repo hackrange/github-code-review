@@ -590,13 +590,16 @@ def _parse(text: str) -> tuple:
 
 # --------------------------------------------------------------------- run
 
-def run(finding_id: int, user, force: bool = False, wait: bool = False) -> dict:
+def run(finding_id: int, user, force: bool = False, wait: bool = False,
+        learn: bool = True, requeue: bool = True) -> dict:
     """Ask about one finding and keep the answer.  -> {ok, detail, id}
 
     The caller has already checked the person may see the finding and may ask.
     A learned rule that covers the finding answers instead of the model,
     unless force says to ask anyway.  wait queues for a slot rather than
-    refusing, which is what a bulk run wants.
+    refusing, which is what a bulk run wants.  learn=False keeps the answer
+    to this one finding.  requeue=False leaves the findings of a rule this
+    answer retires at their restored grade instead of asking about each.
     """
     with _busy_lock:
         if finding_id in _busy:
@@ -609,7 +612,7 @@ def run(finding_id: int, user, force: bool = False, wait: bool = False) -> dict:
         return {"ok": False,
                 "detail": "Two validations are already running. Try again in a moment."}
     try:
-        return _run(finding_id, user, force)
+        return _run(finding_id, user, force, learn, requeue)
     finally:
         with _busy_lock:
             _busy.discard(finding_id)
@@ -643,7 +646,8 @@ def _answer_from_rule(db, row, user) -> dict:
             "rule": rule.id, "from_rule": True, "lowered": bool(moved), "detail": detail}
 
 
-def _run(finding_id: int, user, force: bool = False) -> dict:
+def _run(finding_id: int, user, force: bool = False, learn: bool = True,
+         requeue: bool = True) -> dict:
     from app.core import rbac
 
     with session_scope() as db:
@@ -706,8 +710,20 @@ def _run(finding_id: int, user, force: bool = False) -> dict:
         db.add(record)
         db.flush()
         new_id = record.id
-        outcome, lowered = _act_on(db, finding_id, rating, confidence, pattern,
-                                   record, covering_rule_id, user)
+        outcome, lowered, others = _act_on(db, finding_id, rating, confidence, pattern,
+                                           record, covering_rule_id, user, learn)
+
+    # Started after the commit, so the batch reads the grades put back.
+    if others and requeue:
+        number = start_batch(others, user, force=True, learn=False, requeue=False)
+        outcome += (f"  The {len(others)} other finding{'' if len(others) == 1 else 's'} "
+                    f"it graded {'was' if len(others) == 1 else 'were'} put back and "
+                    f"queued for {'its' if len(others) == 1 else 'their'} own reading "
+                    f"(batch {number}).")
+    elif others:
+        outcome += (f"  The {len(others)} other finding{'' if len(others) == 1 else 's'} "
+                    f"it graded {'is' if len(others) == 1 else 'are'} back at "
+                    f"{'its' if len(others) == 1 else 'their'} earlier grade.")
 
     seconds = max(1, round((answer.get("duration_ms") or 0) / 1000))
     return {"ok": True, "id": new_id, "rating": rating, "lowered": lowered,
@@ -718,25 +734,30 @@ def _run(finding_id: int, user, force: bool = False) -> dict:
 
 
 def _act_on(db, finding_id, rating, confidence, pattern, record, covering_rule_id,
-            user) -> tuple:
+            user, learn: bool = True) -> tuple:
     """What the answer changes: the grade, what is learned, what is unlearned.
-    -> (a sentence for the person, whether the grade went down)."""
+    -> (a sentence for the person, whether the grade went down, the ids of
+    other findings a retired rule had graded)."""
     from app.core.models import AIGrade, LearnedRule
 
     finding = db.get(Finding, finding_id)
     target = learned.severity_for(rating)
     if finding is None or target is None:
-        return "", False
+        return "", False, []
     by = getattr(user, "username", "") or ""
     why = learned.protected(finding)
     if why:
         return (f"The grade stays {finding.severity.value}: validation may not "
-                f"lower it, because {why}."), False
+                f"lower it, because {why}."), False, []
 
     # Asked again: start from what stood before any earlier AI grade, so a
-    # model that changed its mind moves the finding to its new reading.
+    # model that changed its mind moves the finding to its new reading.  The
+    # rule that gave the grade is the one being tested, not whichever rule
+    # matches best today.
     earlier = db.query(AIGrade).filter(AIGrade.finding_id == finding.id).one_or_none()
     baseline = finding.severity
+    if earlier is not None and earlier.source == "rule" and earlier.rule_id:
+        covering_rule_id = earlier.rule_id
     if earlier is not None and earlier.was:
         baseline = Severity(earlier.was)
         if finding.custom_severity is None:
@@ -744,17 +765,25 @@ def _act_on(db, finding_id, rating, confidence, pattern, record, covering_rule_i
         db.delete(earlier)
         db.flush()
 
+    # A rule says everything it covers gets its grade for one reason.  A
+    # reading of one of those findings that differs, higher or lower, shows
+    # the reason does not hold for all of them, so the rule goes and what it
+    # graded is asked about one by one.
+    rule = db.get(LearnedRule, covering_rule_id) if covering_rule_id else None
+    retired, others = "", []
+    if rule is not None and rule.retired_at is None and rule.severity != target:
+        others = [grade.finding_id for grade in
+                  db.query(AIGrade).filter(AIGrade.rule_id == rule.id)
+                  if grade.finding_id != finding.id]
+        learned.add_negative(db, rule, finding, by,
+                             "asked again, a model rated %s %s, not %s"
+                             % (finding.vuln_id or finding.id, rating.lower(),
+                                rule.severity.value), reading=target)
+        retired = (f"  Learned rule #{rule.id} covered it and has been retired, "
+                   f"since this reading disagrees; the grades it gave were taken back.")
+
     if not learned.lower(baseline, target):
-        note = f"It stays {finding.severity.value}."
-        rule = db.get(LearnedRule, covering_rule_id) if covering_rule_id else None
-        if rule is not None and rule.retired_at is None:
-            learned.add_negative(db, rule, finding, by,
-                                 "asked again, a model rated %s %s, not %s"
-                                 % (finding.vuln_id or finding.id, rating.lower(),
-                                    rule.severity.value))
-            note += (f"  Learned rule #{rule.id} covered it and has been retired, "
-                     f"since this test disagrees; the grades it gave were taken back.")
-        return note, False
+        return f"It stays {finding.severity.value}." + retired, False, others
 
     moved = learned.give(db, finding, target, source="analysis",
                          reason=f"AI validation #{record.id}: rated {rating.lower()}",
@@ -764,20 +793,29 @@ def _act_on(db, finding_id, rating, confidence, pattern, record, covering_rule_i
     else:
         note = (f"It reads as {target.value}; a person's regrade to "
                 f"{finding.custom_severity.value} still stands.")
+    note += retired
+    if retired:
+        return note + ("  Nothing was learned, because findings that rule "
+                       "covered read differently."), moved, others
+    if not learn:
+        return note, moved, others
     if confidence == "low":
-        return note + "  Nothing was learned, because the reading was not sure.", moved
+        return note + "  Nothing was learned, because the reading was not sure.", moved, others
     fields, refused = learned.proposal(finding, target, pattern)
     if not fields:
-        return note + f"  Nothing was learned: {refused}.", moved
+        return note + f"  Nothing was learned: {refused}.", moved, others
+    conflict = learned.contradiction(db, fields, target)
+    if conflict:
+        return note + f"  Nothing was learned: {conflict}.", moved, others
     rule = learned.create(db, finding, target, fields, record.id, record.model, by)
     if rule is None:
-        return note + "  The pattern failed its own test, so nothing was learned.", moved
-    others = learned.apply_rule_now(db, rule, by)
+        return note + "  The pattern failed its own test, so nothing was learned.", moved, others
+    covered = learned.apply_rule_now(db, rule, by)
     note += f"  Learned rule #{rule.id}: {learned.describe(rule)}."
-    if others:
-        note += (f"  It graded {others} more finding{'' if others == 1 else 's'} "
+    if covered:
+        note += (f"  It graded {covered} more finding{'' if covered == 1 else 's'} "
                  f"here at no cost.")
-    return note, moved
+    return note, moved, others
 
 
 def for_finding(db, finding_id: int) -> list:
@@ -830,13 +868,16 @@ def rule_only(finding_id: int, user) -> dict:
                 "detail": "no learned rule covers it, and AI is off"}
 
 
-def start_batch(finding_ids: list, user, rules_only: bool = False) -> int:
+def start_batch(finding_ids: list, user, rules_only: bool = False, force: bool = False,
+                learn: bool = True, requeue: bool = True) -> int:
     """Validate many findings in the background.  -> the batch number.
 
     Ordered so findings about the same thing sit together: the same
     repository, kind and rule or package.  The first of a group goes to the
     model, and when what it learns covers the rest they are answered from the
     rule without a model call, which is where a bulk run saves its tokens.
+    force asks the model about every one, past any rule, which is how the
+    findings of a retired rule each get their own reading.
     """
     with _batch_lock:
         _batch_seq[0] += 1
@@ -851,7 +892,8 @@ def start_batch(finding_ids: list, user, rules_only: bool = False) -> int:
         # Keep the twenty newest; a batch is a progress display, not a record.
         for old in sorted(_batches)[:-20]:
             _batches.pop(old, None)
-    worker = threading.Thread(target=_batch, args=(number, list(finding_ids), user, rules_only),
+    worker = threading.Thread(target=_batch, args=(number, list(finding_ids), user, rules_only,
+                                                   force, learn, requeue),
                               name=f"ai-batch-{number}", daemon=True)
     worker.start()
     return number
@@ -878,7 +920,8 @@ def _note(number: int, **change) -> None:
             batch["results"] = batch["results"][-200:]
 
 
-def _batch(number: int, finding_ids: list, user, rules_only: bool = False) -> None:
+def _batch(number: int, finding_ids: list, user, rules_only: bool = False,
+           force: bool = False, learn: bool = True, requeue: bool = True) -> None:
     from app.core import rbac
     from app.core.models import AIGrade, LearnedRule
 
@@ -916,7 +959,8 @@ def _batch(number: int, finding_ids: list, user, rules_only: bool = False) -> No
                 continue
             try:
                 result = (rule_only(finding_id, user) if rules_only
-                          else run(finding_id, user, force=False, wait=True))
+                          else run(finding_id, user, force=force, wait=True,
+                                   learn=learn, requeue=requeue))
             except Exception:  # one bad finding must not stop the rest
                 log.exception("bulk validation of %s failed", finding_id)
                 result = {"ok": False, "detail": "failed; see the log"}

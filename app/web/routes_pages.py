@@ -4248,24 +4248,46 @@ def _ai_grade_context(db, row) -> dict:
 
 @router.get("/ai/learned")
 def learned_page(request: Request, msg: str = "", kind: str = "", batch: int = 0,
-                 show: str = "", user: User = Depends(current_user)):
+                 show: str = "", per_page: int = 100, offset: int = 0, q: str = "",
+                 user: User = Depends(current_user)):
     """What AI validation has taught the scanner, and how a bulk run is going."""
     rbac.require(user, "finding.validate")
     from app.core import analysis, learned
     from app.core.models import LearnedRule
 
+    if per_page not in PAGE_SIZES:
+        per_page = 100
+    offset = max(0, offset)
     with session_scope() as db:
         query = db.query(LearnedRule)
-        if show != "retired":
-            query = query.filter(LearnedRule.retired_at.is_(None))
-        rules = query.order_by(LearnedRule.created_at.desc()).limit(500).all()
-        rows = [{"rule": r, "text": learned.describe(r),
+        q = (q or "").strip()[:200]
+        number = q.lstrip("#").strip()
+        if number.isdigit():
+            # A number is one rule, live or retired, since a finding's page
+            # names the rule that graded it either way.
+            query = query.filter(LearnedRule.id == int(number))
+        else:
+            if show != "retired":
+                query = query.filter(LearnedRule.retired_at.is_(None))
+            if q:
+                query = query.filter(sa_or(*[column.contains(q, autoescape=True) for column in (
+                    LearnedRule.repository, LearnedRule.rule, LearnedRule.package,
+                    LearnedRule.path_glob, LearnedRule.reason)]))
+        total = query.count()
+        if offset >= total:
+            offset = 0
+        rules = (query.order_by(LearnedRule.created_at.desc(), LearnedRule.id.desc())
+                 .offset(offset).limit(per_page).all())
+        rows = [{"rule": r, "text": learned.describe(r), "local_only": learned.local_only(r),
                  "problems": learned.self_test(r) if r.retired_at is None else [],
                  "cases": learned.fixture_of(r)} for r in rules]
         status = analysis.batch_status(batch or None)
         context = _shared(db, user)
         context.update(
             active_page="ai", rows=rows, show=show, batch=status,
+            total=total, offset=offset, per_page=per_page, page_sizes=PAGE_SIZES,
+            q=q, page_query=urlencode([(k, v) for k, v in (("show", show), ("q", q))
+                                       if v and (k != "show" or v == "retired")]),
             can_write=rbac.can(user, "settings.write"),
             message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")

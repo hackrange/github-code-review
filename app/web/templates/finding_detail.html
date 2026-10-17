@@ -394,10 +394,10 @@
       by {{ 'a learned rule' if ai_grade.source == 'rule' else ('a security report' if ai_grade.source == 'report' else 'validation testing') }}
       on {{ ai_grade.created_at | dt('%d %b %Y') }}{% if ai_grade.was %}, from {{ ai_grade.was }}{% endif %}.
       {% if f.custom_severity %}A person's regrade to {{ f.custom_severity.value }} stands over it.{% endif %}
-      {% if ai_rule %}<span class="faint small">Rule #{{ ai_rule.id }}: {{ ai_rule_text }}.</span>{% endif %}
+      {% if ai_rule %}<span class="faint small">Rule {% if can_validate %}<a href="{{ base }}/ai/learned?q={{ ai_rule.id }}">#{{ ai_rule.id }}</a>{% else %}#{{ ai_rule.id }}{% endif %}: {{ ai_rule_text }}.</span>{% endif %}
       <span class="faint small">The grade holds on later scans while the flagged code is unchanged.</span></p>
     {% elif ai_rule %}
-    <p class="small">Learned rule #{{ ai_rule.id }} covers this finding: {{ ai_rule_text }}.</p>
+    <p class="small">Learned rule {% if can_validate %}<a href="{{ base }}/ai/learned?q={{ ai_rule.id }}">#{{ ai_rule.id }}</a>{% else %}#{{ ai_rule.id }}{% endif %} covers this finding: {{ ai_rule_text }}.</p>
     {% endif %}
     {% if ai_protected %}
     <p class="faint small">Validation testing can read this finding but not lower it: {{ ai_protected }}.</p>
