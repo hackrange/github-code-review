@@ -155,6 +155,21 @@
   <tr><td class="k">Open scanner alerts</td><td>{{ r.counts.open }}, in {{ r.counts.groups }} groups by rule and file</td></tr>
   {% if r.overview.what_it_is %}<tr><td class="k">What it holds</td><td>{{ r.overview.what_it_is | sentence_spaced }}</td></tr>{% endif %}
 </table>
+{# The web application this code is part of, from the repository's own page,
+   as it stood when the report was written. #}
+{% set site = r.facts.web_app if r.facts else none %}
+{% if site %}
+<h3>Web Application</h3>
+<p>{{ ("This repository is part of the web application " ~ site.name ~ ".  Code that answers on these addresses is reachable by whoever can reach them, which raises the impact of anything exposed to requests.") | sentence_spaced }}</p>
+<table>
+  <tr><td class="k">Application</td><td>{{ site.name }}{% if not site.named %} (no application name is set, so it goes by the repository){% endif %}</td></tr>
+  {% if site.urls %}<tr><td class="k">Served at</td><td>{% for url in site.urls %}{{ url }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td></tr>{% endif %}
+  {% if site.others %}<tr><td class="k">Other repositories in it</td><td>{% for o in site.others %}{{ o.repository }}{% if o.days is not none %} (code changed {{ o.days }} day{{ '' if o.days == 1 else 's' }} ago){% endif %}{% if not loop.last %}<br>{% endif %}{% endfor %}</td></tr>{% endif %}
+  {% if site.owners %}<tr><td class="k">Application owner</td><td>{{ site.owners | join(', ') }}</td></tr>{% endif %}
+  {% if site.technical %}<tr><td class="k">Technical owner</td><td>{{ site.technical | join(', ') }}</td></tr>{% endif %}
+  {% if site.days is not none %}<tr><td class="k">Code last changed</td><td>{{ site.days }} day{{ '' if site.days == 1 else 's' }} before this report{% if site.changed_at %}, on {{ site.changed_at }}{% endif %}{% if site.source == 'push' %} (the host's last push to any branch){% else %} (newest commit on the default branch){% endif %}{% if site.commits_90d is not none %}, with {{ site.commits_90d }} commit{{ '' if site.commits_90d == 1 else 's' }} in the 90 days before the last scan{% endif %}.  {{ "A commit is not a deployment." }}</td></tr>{% endif %}
+</table>
+{% endif %}
 <h3>Method</h3>
 <ul>
   <li><strong>Automated scanning.</strong>  {{ "Secret, code, dependency and configuration scanning of the branch and its history." | sentence_spaced }}</li>

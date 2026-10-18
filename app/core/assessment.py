@@ -594,17 +594,46 @@ def _run(repository: str, branch: str, connection: str, actor: str) -> None:
         _slot.release()
 
 
+def _site_lines(site: dict) -> str:
+    """The web application, as lines for a prompt.  "" when there is none.
+
+    Said plainly, because code that answers on a public address is exposed in
+    a way a library nobody serves is not, and the ratings should know that.
+    """
+    if not site:
+        return ""
+    lines = [f"Part of a web application: {site['name']}"]
+    if site.get("urls"):
+        lines.append(f"Served at: {', '.join(site['urls'][:10])}")
+    if site.get("others"):
+        lines.append("Other repositories in the same application: "
+                     + ", ".join(o["repository"] for o in site["others"][:10]))
+    if site.get("days") is not None:
+        lines.append(f"Code last changed: {site['days']} days ago"
+                     + (" (newest commit on the default branch)"
+                        if site.get("source") == "commit"
+                        else " (the host's last push to any branch)"))
+    return "\n".join(lines) + "\n"
+
+
 def _write(repository: str, branch: str, connection: str, actor: str) -> None:
-    from app.core import diagram, recheck, repo_context
+    from app.core import diagram, recheck, repo_context, webapps
+    from app.core.models import Repository
 
     with session_scope() as db:
         cfg = ai.config(db)
         groups, counts, left_out = groups_for(db, repository, branch)
         about = repo_context.for_repository(db, repository) or {}
+        # The web application this code is part of, as it stood when the
+        # report was written, so the PDF says the same thing next year.
+        site = webapps.for_repository(
+            db, db.query(Repository)
+            .filter(Repository.full_name == repository).one_or_none())
         facts = {"visibility": about.get("visibility") or "",
                  "sensitivity": about.get("sensitivity") or "",
                  "default_branch": about.get("default_branch") or "",
-                 "people": about.get("people_total")}
+                 "people": about.get("people_total"),
+                 "web_app": site}
     send_code = bool(cfg.get("ai.send_code"))
     context = min(20, _int(cfg.get("ai.context_lines"), 5, 200, 20))
     asker = _Asker(cfg)
@@ -627,7 +656,8 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             file_count = sum(1 for p in Path(root).rglob("*")
                              if p.is_file() and ".git" not in p.parts)
             overview_evidence, gather_notes = diagram.gather(
-                root, send_code, {"hosts": [], "repositories": []},
+                root, send_code, {"hosts": [], "repositories": [],
+                                  "served": site.get("urls") or []},
                 limit=OVERVIEW_CHARS)
             overview_evidence = overview_evidence[:OVERVIEW_CHARS + 20_000]
             notes += gather_notes
@@ -646,8 +676,8 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     if overview_evidence:
         _update(repository, branch, stage="Reading the repository")
         prompt = (f"Repository: {repository}\nBranch: {branch}\n"
-                  f"Visibility: {facts['visibility'] or 'unknown'}\n\n"
-                  + overview_evidence)
+                  f"Visibility: {facts['visibility'] or 'unknown'}\n"
+                  + _site_lines(site) + "\n" + overview_evidence)
         obj, problem, cut = asker.ask(OVERVIEW_SYSTEM, prompt, OVERVIEW_TOKENS)
         if obj is None and not cut and "JSON" not in problem:
             raise RuntimeError(problem)
@@ -740,7 +770,8 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         f"{i['id']} | {i['rating']} | {i['verdict']} | {i['title']} | "
         f"{i['location'] or 'repository wide'}" for i in items[:40])
     prompt = (f"Repository: {repository}\nBranch: {branch}\n"
-              f"Overall rating (final): {overall}\n"
+              + _site_lines(site)
+              + f"Overall rating (final): {overall}\n"
               f"Open scanner alerts: {counts['open']} in {counts['groups']} groups\n"
               f"False positives found: {sum(1 for i in items if i['rating'] == 'Informational')}\n"
               f"What the repository is: {overview['what_it_is'] or 'not described'}\n\n"
