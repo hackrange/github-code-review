@@ -376,6 +376,16 @@ class Repository(Base):
     # "Somebody pushed" is a fact nobody can act on; "somebody pushed on
     # Tuesday" is the start of finding out who and why.
     pushed_at = Column(DateTime(timezone=True))
+    # When the default branch last got a commit, and how many it got in the
+    # 90 days before the scan that read it.
+    #
+    # pushed_at above moves for a push to any branch, which says somebody was
+    # busy and not that the code that ships changed.  These read the default
+    # branch itself, as of the last scan.  Neither says anything was deployed.
+    # Empty until a scan has read them; the count is also empty on a shallow
+    # clone, where it would only count what was fetched.
+    default_committed_at = Column(DateTime(timezone=True))
+    default_commits_90d = Column(Integer)
 
     # Every branch the last scan actually walked here, as a list of names.
     #

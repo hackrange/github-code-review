@@ -73,6 +73,8 @@ scan_one_repo() {
   # Which commit each branch is on, so a review of this code can be told
   # apart from a review of what it used to be.
   BRANCH_HEADS_JSON='{}'
+  # When the default branch last got a commit, and how many it got lately.
+  DEFAULT_HEAD_JSON='null'
   # Every branch that is there, as opposed to the ones this run walked.  A
   # branch skipped for being quiet is still a branch, and a sign off on one is
   # not a sign off on code that has gone.
@@ -143,6 +145,7 @@ scan_one_repo() {
       --argjson hist_done "${HISTORY_COMPLETE:-false}" \
       --argjson dast "${DAST_JSON:-null}" \
       --argjson branch_heads "${BRANCH_HEADS_JSON:-{\}}" \
+      --argjson default_head "${DEFAULT_HEAD_JSON:-null}" \
       --argjson branches_present "${BRANCHES_PRESENT_JSON:-[]}" \
       --argjson code_rules "${CODE_RULES_LOADED_JSON:-[]}" '
       {
@@ -157,6 +160,8 @@ scan_one_repo() {
         branches_present: $branches_present,
         # branch name to the commit it was on when this ran.
         branch_heads: $branch_heads,
+        # When the default branch last got a commit, and how many in 90 days.
+        default_head: $default_head,
         branch_count: ($branches[0] | length),
         # The semgrep rules this run had, so a finding whose rule was not among
         # them is held open rather than read as fixed.
@@ -269,6 +274,27 @@ scan_one_repo() {
         | jq -c --arg b "$bh" --arg s "$sha" '. + {($b): $s}')
     done
     BRANCH_HEADS_JSON="$heads_json"
+
+    # When the code that ships last changed.  The host's pushed_at moves for
+    # a push to any branch, and a feature branch nobody deploys is not a
+    # change to the running application, so this reads the default branch
+    # itself.  The committer date, because that is when a commit landed on
+    # the branch, which for a merge is the merge rather than the first draft.
+    # The count is left null on a shallow clone, where it would be a count of
+    # what was fetched rather than of what happened.
+    local dsha dwhen dcount=null
+    dsha=$(git -C "$clone_dir" rev-parse --verify --quiet "$default_branch" 2>/dev/null || echo "")
+    if [[ -n "$dsha" ]]; then
+      dwhen=$(git -C "$clone_dir" log -1 --format=%cI "$dsha" 2>/dev/null || echo "")
+      if [[ "$(git -C "$clone_dir" rev-parse --is-shallow-repository 2>/dev/null)" != "true" ]]; then
+        dcount=$(git -C "$clone_dir" rev-list --count --since="90 days ago" "$dsha" 2>/dev/null || echo null)
+      fi
+      [[ "$dcount" =~ ^[0-9]+$ ]] || dcount=null
+      if [[ -n "$dwhen" ]]; then
+        DEFAULT_HEAD_JSON=$(jq -nc --arg s "$dsha" --arg w "$dwhen" --argjson c "$dcount" \
+          '{sha: $s, committed_at: $w, commits_90d: $c}')
+      fi
+    fi
 
     # And the full list, before the quiet branch filter and the per repository
     # cap.  Recorded so that a branch missing from it means deleted, which is

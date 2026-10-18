@@ -217,6 +217,11 @@ a.stat:hover .l { color: var(--text); }
    off: a clipped name reads as a branch that has gone. */
 .branch-name { word-break: break-word; max-width: 22rem; }
 .repo-about { min-width: 12rem; max-width: 22rem; word-break: break-word; }
+/* Web applications: one tbody per application, and how recent a change is. */
+.webapps tbody.webapp-group + tbody.webapp-group td { border-top: 2px solid var(--border-strong); }
+.webapps td { vertical-align: top; }
+.changed-week { color: var(--bad); }
+.changed-month { color: var(--warn); }
 /* The scan scope menu beside a branch on a finding.  A details element, so
    it opens without a script. */
 .scope-menu { display: inline-block; margin-left: .25rem; }

@@ -930,6 +930,16 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         heads = entry.get("branch_heads")
         if isinstance(heads, dict) and heads:
             repo.branch_heads = json.dumps(heads)
+        # When the default branch last got a commit.  Only from a run that
+        # read it, so a report without it leaves the last answer standing.
+        head = entry.get("default_head")
+        if isinstance(head, dict) and head.get("committed_at"):
+            _committed = _when(head.get("committed_at"))
+            if _committed is not None:
+                repo.default_committed_at = _committed
+                count = head.get("commits_90d")
+                repo.default_commits_90d = (int(count) if isinstance(count, int)
+                                            and count >= 0 else None)
         dast = entry.get("dast")
         if isinstance(dast, dict) and dast.get("verdict"):
             repo.dast_verdict = str(dast.get("verdict"))[:16]

@@ -296,6 +296,9 @@ report_build() {
           # is computed and then discarded is worse than one nobody wrote,
           # because the code that produced it looks like it works.
           branch_heads: (.branch_heads // {}),
+          # When the default branch last got a commit.  What tells a web
+          # application whose code moved apart from one nobody has touched.
+          default_head: (.default_head // null),
           # The semgrep rules the run had for this repository.  Ingest holds open a
           # finding whose rule is missing, so a rule withdrawn upstream is not
           # read as everything it found being fixed.

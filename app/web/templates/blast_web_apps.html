@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Web applications &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Web applications</h1>
+    <div class="faint small">Every repository marked as part of a web
+      application, grouped by application, with how long ago the code behind
+      each one changed.  A penetration test is a point in time and the code
+      keeps moving after it, so the sites at the top are the ones whose code
+      moved most recently.  Changed means the newest commit on the default
+      branch as of the last scan.  It is not a deployment: nothing here can
+      see what is running.</div></div>
+  <div class="page-actions">
+    <a class="btn" href="{{ base }}/repositories/web-apps.csv"
+       title="Every web application repository, with its addresses, owners and when it last changed">CSV</a>
+  </div>
+</div>
+
+{% include "_blast_tabs.html" %}
+
+{% set here = base ~ '/blast-radius/web-apps' %}
+<div class="stats">
+  <div class="stat"><div class="n">{{ totals.applications }}</div><div class="l">Web applications</div></div>
+  <div class="stat"><div class="n">{{ totals.repositories }}</div><div class="l">Repositories behind them</div></div>
+  <a class="stat bad" href="{{ here }}?within=7"><div class="n">{{ totals.week }}</div>
+    <div class="l">Changed in 7 days</div></a>
+  <a class="stat warn" href="{{ here }}?within=30"><div class="n">{{ totals.month }}</div>
+    <div class="l">Changed in 30 days</div></a>
+  <a class="stat" href="{{ here }}?within=90"><div class="n">{{ totals.quarter }}</div>
+    <div class="l">Changed in 90 days</div></a>
+  {% if totals.unknown %}
+  <div class="stat"><div class="n">{{ totals.unknown }}</div><div class="l">Not read yet</div></div>
+  {% endif %}
+</div>
+
+<form method="get" action="{{ here }}" class="filters">
+  <div class="field" style="min-width:280px">
+    <label for="q">Search</label>
+    <input type="text" id="q" name="q" value="{{ q }}" autocomplete="off"
+           placeholder="application, address, owner or repository">
+  </div>
+  <div class="field">
+    <label for="within">Code changed</label>
+    <select id="within" name="within">
+      <option value="">Any time</option>
+      {% for days in windows %}
+      <option value="{{ days }}" {{ 'selected' if within == days }}>In the last {{ days }} days</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button class="btn primary" type="submit">Search</button>
+  <a class="btn" href="{{ here }}">Clear</a>
+</form>
+
+{% macro ago(days, source) -%}
+  {%- if days is none %}<span class="faint">not read yet</span>
+  {%- else %}<strong class="{{ 'changed-week' if days <= 7 else ('changed-month' if days <= 30 else '') }}">
+    {{- 'today' if days == 0 else (days ~ ' day' ~ ('' if days == 1 else 's') ~ ' ago') }}</strong>
+    {%- if source == 'push' %} <span class="badge pending"
+      title="No scan has read this repository's default branch yet, so this is the host's last push, which moves for a push to any branch">push, any branch</span>{% endif %}
+  {%- endif %}
+{%- endmacro %}
+
+<div class="card">
+  <div class="card-head">
+    {{ totals.applications }} web application{{ '' if totals.applications == 1 else 's' }}
+    {% if q or within %}matching{% endif %}
+    <span class="faint small" style="font-weight:400;margin-left:.5rem">most recently changed first</span>
+  </div>
+  {% if apps %}
+  <div class="table-scroll">
+    <table class="webapps">
+      <thead><tr>
+        <th>Web application</th><th>Addresses</th><th>Owners</th>
+        <th>Repository</th><th class="nowrap">Code last changed</th>
+        <th class="nowrap" title="Commits on the default branch in the 90 days before the last scan">Commits, 90 days</th>
+        <th>Open findings</th><th class="nowrap">Last scanned</th>
+      </tr></thead>
+      {% for app in apps %}
+      {# One body per application, so its repositories read as one group. #}
+      <tbody class="webapp-group">
+      {% for r in app.repos %}
+        <tr>
+          {% if loop.first %}
+          <td rowspan="{{ app.repos | length }}">
+            <strong>{{ app.name }}</strong>
+            {%- if not app.named %}<div class="faint small">no application name set</div>{% endif %}
+            <div class="small" style="margin-top:.25rem">{{ ago(app.days, app.source) }}</div>
+          </td>
+          <td rowspan="{{ app.repos | length }}" class="small">
+            {%- for url in app.urls %}<div class="mono"><a rel="noopener noreferrer" target="_blank" href="{{ url }}">{{ url }}</a></div>{% endfor %}</td>
+          <td rowspan="{{ app.repos | length }}" class="small">
+            {%- for one in app.owners %}<div>{{ one }}</div>{% endfor %}
+            {%- for one in app.technical %}<div><span class="faint">Technical:</span> {{ one }}</div>{% endfor %}
+            {%- if not app.owners and not app.technical %}<span class="faint">nobody has said</span>{% endif %}</td>
+          {% endif %}
+          <td class="small"><a href="{{ base }}/repositories/{{ r.id }}">{{ r.full_name }}</a>
+            {%- if r.archived %} <span class="badge waived">archived</span>{% endif %}
+            {%- if r.default_branch %}<div class="faint mono">{{ r.default_branch }}</div>{% endif %}</td>
+          <td class="small nowrap">{{ ago(r.days, r.source) }}
+            {%- if r.changed_at %}<div class="faint">{{ r.changed_at | dt('%Y-%m-%d') }}</div>{% endif %}</td>
+          <td class="small">{{ r.commits_90d if r.commits_90d is not none else '' }}</td>
+          <td class="nowrap">
+            {%- if r.open %}<a href="{{ base }}/findings?repo={{ r.full_name | urlencode }}&state=open" style="text-decoration:none">
+            {%- for level in ['critical','high','medium','low'] %}
+              {%- if r.open.get(level) %}<span class="badge {{ level }}">{{ r.open[level] }}</span> {% endif %}
+            {%- endfor %}</a>
+            {%- else %}<span class="faint small">none</span>{% endif %}</td>
+          <td class="small faint nowrap">{{ r.last_scanned_at | dt('%Y-%m-%d') if r.last_scanned_at else 'never' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+      {% endfor %}
+    </table>
+  </div>
+  {% elif marked %}
+  <div class="empty">Nothing matches that.  <a href="{{ here }}">Show every web application</a></div>
+  {% else %}
+  <div class="empty">No repository is marked as part of a web application yet.
+    Open one from the <a href="{{ base }}/repositories">Repositories page</a> and tick
+    Part of a web application, or set it for many at once with the
+    repositories CSV.</div>
+  {% endif %}
+</div>
+{% endblock %}

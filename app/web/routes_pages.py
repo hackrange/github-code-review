@@ -3646,6 +3646,52 @@ def blast_radius(request: Request, user: User = Depends(current_user)):
         return page(request, "blast_radius.html", **context)
 
 
+# Declared before /blast-radius/{organization} for the same reason as the
+# software page below.
+@router.get("/blast-radius/web-apps")
+def blast_web_apps(request: Request, q: str = "", within: str = "",
+                   user: User = Depends(current_user)):
+    """Every web application, the repositories behind it, and when they moved.
+
+    For deciding which sites may want another penetration test because the
+    code behind them changed.  A commit is not a deployment, and the page says
+    so: this reads the repository, not what is running.
+    """
+    rbac.require(user, "repo.read")
+    from app.core import webapps
+
+    search = clean_text(q, "Search", limit=200, required=False)
+    try:
+        window = int(within or 0)
+    except ValueError:
+        window = 0
+    if window not in webapps.WINDOWS:
+        window = 0
+
+    with session_scope() as db:
+        # Open findings per repository, so the site whose code moved and
+        # already carries something open reads as the first one to look at.
+        counts = {}
+        for repo_name, severity, total in (
+                rbac.visible_findings(db, user)
+                .filter(Finding.state == FindingState.OPEN)
+                .filter(Finding.out_of_scope.is_(False))
+                .with_entities(Finding.repository, Finding.severity,
+                               func.count(Finding.id))
+                .group_by(Finding.repository, Finding.severity).all()):
+            counts.setdefault(repo_name or "", {})[
+                getattr(severity, "value", "")] = total
+        everything = webapps.inventory(
+            db, base=rbac.visible_repositories(db, user), counts=counts)
+        shown = webapps.narrow(everything, search, window)
+        context = _shared(db, user)
+        context.update(active_page="blast-radius", blast_tab="web-apps",
+                       apps=shown, totals=webapps.summary(shown),
+                       marked=len(everything), q=search, within=window,
+                       windows=webapps.WINDOWS)
+        return page(request, "blast_web_apps.html", **context)
+
+
 # Declared before /blast-radius/{organization}, or "software" would be read as
 # the name of an organization and nobody would ever reach this page.
 @router.get("/blast-radius/software")

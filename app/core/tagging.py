@@ -421,7 +421,9 @@ def to_csv(session, organization: str = "", base=None) -> str:
 
 WEB_COLUMNS = ["repository", "application_name", "web_urls",
                "application_owner", "technical_owner", "sensitivity",
-               "visibility", "default_branch"]
+               "visibility", "default_branch", "code_last_changed",
+               "changed_from", "days_since_change", "commits_90d",
+               "last_scanned"]
 
 
 def web_apps_csv(session, base=None) -> str:
@@ -442,6 +444,7 @@ def web_apps_csv(session, base=None) -> str:
     rows = (query.filter(Repository.web_app.is_(True))
             .order_by(Repository.full_name).all())
     applies = effective_many(session, rows)
+    from app.core import webapps
 
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=WEB_COLUMNS,
@@ -449,6 +452,7 @@ def web_apps_csv(session, base=None) -> str:
     writer.writeheader()
     for row in rows:
         said = applies.get(row.id, {})
+        moved = webapps.changed(row)
         writer.writerow(spreadsheet_row({
             "repository": row.full_name,
             "application_name": said.get("application_name", {}).get("value", ""),
@@ -459,6 +463,19 @@ def web_apps_csv(session, base=None) -> str:
                 said.get("sensitivity", {}).get("value", ""))),
             "visibility": row.visibility or "",
             "default_branch": row.default_branch or "",
+            # A commit on the default branch, or the host's last push to any
+            # branch until a scan has read it.  Never a deployment.
+            "code_last_changed": (moved["at"].strftime("%Y-%m-%d")
+                                  if moved["at"] else ""),
+            "changed_from": {"commit": "default branch commit",
+                             "push": "host push, any branch"}.get(
+                                 moved["source"], ""),
+            "days_since_change": ("" if moved["days"] is None
+                                  else moved["days"]),
+            "commits_90d": ("" if row.default_commits_90d is None
+                            else row.default_commits_90d),
+            "last_scanned": (row.last_scanned_at.strftime("%Y-%m-%d")
+                             if row.last_scanned_at else ""),
         }))
     return buffer.getvalue()
 
