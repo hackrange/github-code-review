@@ -1941,6 +1941,37 @@ class RepoAssessment(Base):
     started_at = Column(DateTime(timezone=True))
 
 
+class RepoProposal(Base):
+    """A change to what a repository is, asked for by somebody who cannot make it.
+
+    The people reading findings are often the ones who know that the owner
+    left or that it holds card numbers, and they cannot change the record.
+    This keeps what they said until an administrator edits it, approves it or
+    turns it down.  Nothing on the repository moves before that.
+
+    `changes` is JSON, only the fields that differed from the repository when
+    it was asked for.  One pending per person per repository: asking again
+    replaces the last one.
+    """
+
+    __tablename__ = "repo_proposals"
+
+    id = Column(Integer, primary_key=True)
+    repo_id = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    # pending, approved or rejected.
+    status = Column(String(16), default="pending", nullable=False, index=True)
+    changes = Column(Text, default="{}")
+    # The finding it was asked from, so the reviewer can see what prompted it.
+    finding_id = Column(Integer, nullable=True)
+    proposed_by = Column(String(120), nullable=False)
+    proposed_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    decided_by = Column(String(120), default="")
+    decided_at = Column(DateTime(timezone=True))
+
+    repo = relationship("Repository")
+
+
 class AIUsage(Base):
     """One question sent to a model, whatever asked it and however it ended.
 

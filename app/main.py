@@ -259,7 +259,12 @@ def create_app() -> FastAPI:
 
         location = (exc.headers or {}).get("Location") if exc.headers else None
         if exc.status_code == 307 and location:
-            return RedirectResponse(location, status_code=303)
+            response = RedirectResponse(location, status_code=303)
+            # The page to come back to after signing in rides along.
+            cookie = (exc.headers or {}).get("Set-Cookie")
+            if cookie:
+                response.headers.append("set-cookie", cookie)
+            return response
 
         wants_html = "text/html" in (request.headers.get("accept") or "")
         came_from = request.headers.get("referer") or ""

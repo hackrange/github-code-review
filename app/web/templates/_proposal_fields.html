@@ -1,0 +1,40 @@
+{# The boxes a proposal has, filled from `vals`, with `labels` as the what it
+   holds choices.  Shared by the finding page, where somebody asks, and the
+   Proposed Updates page, where an administrator fixes it up and approves. #}
+<label>What it holds
+  <div class="check-grid">
+    {% for label in labels %}
+    <label class="check"><input type="checkbox" name="holds:{{ label }}" value="1"
+           {{ 'checked' if label in vals.holds }}> {{ label }}</label>
+    {% endfor %}
+  </div>
+</label>
+<label>Application
+  <input type="text" name="application_name" maxlength="200"
+         value="{{ vals.application_name }}" placeholder="Payments API">
+</label>
+<label>Business owner
+  <input type="email" name="application_owner" multiple
+         value="{{ vals.application_owner }}" placeholder="a.person@example.com">
+</label>
+<label>Technical owner
+  <input type="email" name="technical_owner" multiple
+         value="{{ vals.technical_owner }}" placeholder="a.person@example.com">
+</label>
+<label>Description
+  <textarea name="note" rows="3" maxlength="4000"
+            placeholder="What it is, who relies on it, anything somebody reading a finding here needs to know.">{{ vals.note }}</textarea>
+</label>
+<label class="check">
+  <input type="checkbox" name="web_app" value="1" {{ 'checked' if vals.web_app }}>
+  Part of a web application
+</label>
+<label>Web addresses
+  <input type="text" name="web_app_urls" maxlength="4000" class="mono"
+         value="{{ vals.web_app_urls }}"
+         placeholder="https://portal.example.com, https://staging.portal.example.com">
+  <span class="faint small">Owners are email addresses, several comma
+    separated.  Web addresses are http or https, several comma separated, and
+    are needed when it is ticked.  An empty box uses what the connection
+    says.</span>
+</label>

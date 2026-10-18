@@ -3817,6 +3817,148 @@ async def tag_one_repository(repo_id: int, request: Request,
     return redirect(_back_with(back, "Saved." if moved else "Nothing changed."))
 
 
+def _proposal_values(db, form, repo) -> dict:
+    """A proposal form, held to what the repository's own form holds to.
+
+    Used for asking and for approving, so an administrator's edit cannot
+    approve something the asker would have been refused.
+    """
+    from app.core import tagging
+
+    values = {
+        "application_name": clean_text(form.get("application_name"),
+                                       "Application", limit=200,
+                                       required=False),
+        "application_owner": clean_email(form.get("application_owner"),
+                                         "Business owner"),
+        "technical_owner": clean_email(form.get("technical_owner"),
+                                       "Technical owner"),
+        "note": clean_text(form.get("note"), "Description", limit=4000,
+                           required=False),
+    }
+    # The dash that clears a field on the forms means empty here too.
+    for field in ("application_owner", "technical_owner"):
+        if values[field] == "-":
+            values[field] = ""
+
+    urls, why = tagging.web_urls(clean_text(
+        form.get("web_app_urls"), "Web addresses", limit=4000,
+        required=False))
+    if why:
+        raise HTTPException(status_code=400, detail=f"Web addresses: {why}.")
+    values["web_app"] = _checked(form, "web_app")
+    if values["web_app"] and not urls:
+        raise HTTPException(
+            status_code=400,
+            detail="Give the address of the web application it is part "
+                   "of, so it can be found.")
+    values["web_app_urls"] = ", ".join(urls)
+
+    own = tagging.split_labels(repo.sensitivity or "")
+    offered = tagging.labels(db)
+    offered = offered + [x for x in own if x not in offered]
+    values["sensitivity"] = ", ".join(
+        label for label in offered if _checked(form, f"holds:{label}"))
+    return values
+
+
+@router.post("/repositories/{repo_id}/propose")
+async def propose_repository_change(repo_id: int, request: Request,
+                                    user: User = Depends(current_user)):
+    """Somebody who cannot change a repository says what it should say.
+
+    Kept for an administrator to edit and approve.  Only on a repository this
+    person can see, and absent and hidden answer the same.
+    """
+    await check_csrf(request)
+    rbac.require(user, "repo.propose")
+
+    from app.core import proposals
+    from app.core.models import Repository as m_Repository
+
+    form = await request.form()
+    back = clean_text(form.get("back"), "Back", limit=300, required=False)
+    back = _safe_back(back) if back else f"/repositories/{repo_id}"
+    finding_id = (clean_int(form.get("finding_id"), "Finding", low=1)
+                  if form.get("finding_id") else None)
+
+    with session_scope() as db:
+        repo = (rbac.visible_repositories(db, user)
+                .filter(m_Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        values = _proposal_values(db, form, repo)
+        row = proposals.propose(db, repo, values, user.username, finding_id)
+        record(db, "repository.change_proposed" if row
+               else "repository.proposal_withdrawn",
+               actor=user.username, target=repo.full_name,
+               detail=(", ".join(sorted(proposals.changes(row))) if row
+                       else "")[:200],
+               source_ip=client_ip(request))
+
+    return redirect(_back_with(
+        back, "Sent to an administrator to approve." if row
+        else "That is what it already says, so nothing was sent."))
+
+
+def _proposal(db, proposal_id: int):
+    from app.core import proposals
+    from app.core.models import RepoProposal
+
+    row = db.get(RepoProposal, proposal_id)
+    if row is None or row.status != proposals.PENDING:
+        raise HTTPException(status_code=404,
+                            detail="That proposal has already been decided.")
+    return row
+
+
+@router.post("/repositories/proposals/{proposal_id}/approve")
+async def approve_repository_change(proposal_id: int, request: Request,
+                                    user: User = Depends(current_user)):
+    """Write a proposal onto the repository, with whatever the reviewer changed."""
+    await check_csrf(request)
+    rbac.require(user, "repo.write")
+    rbac.require(user, "repo.describe")
+
+    from app.core import proposals
+
+    form = await request.form()
+    with session_scope() as db:
+        row = _proposal(db, proposal_id)
+        values = _proposal_values(db, form, row.repo)
+        asked_by = row.proposed_by
+        moved = proposals.approve(db, row, values, user.username)
+        record(db, "repository.proposal_approved", actor=user.username,
+               target=row.repo.full_name,
+               detail=(f"asked by {asked_by}; "
+                       + (", ".join(f.replace("_", " ") for f in moved)
+                          or "nothing moved"))[:200],
+               source_ip=client_ip(request))
+
+    return redirect(_back_with("/repositories/proposals",
+                               f"Approved the change {asked_by} asked for."))
+
+
+@router.post("/repositories/proposals/{proposal_id}/reject")
+async def reject_repository_change(proposal_id: int, request: Request,
+                                   user: User = Depends(current_user)):
+    await check_csrf(request)
+    rbac.require(user, "repo.write")
+
+    from app.core import proposals
+
+    with session_scope() as db:
+        row = _proposal(db, proposal_id)
+        asked_by = row.proposed_by
+        proposals.reject(db, row, user.username)
+        record(db, "repository.proposal_rejected", actor=user.username,
+               target=row.repo.full_name, detail=f"asked by {asked_by}",
+               source_ip=client_ip(request))
+
+    return redirect(_back_with("/repositories/proposals",
+                               f"Turned down the change {asked_by} asked for."))
+
+
 @router.post("/notifications/save")
 async def save_notifications(request: Request,
                              user: User = Depends(current_user)):

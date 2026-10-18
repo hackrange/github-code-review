@@ -21,7 +21,7 @@ from app.core.models import AuthSource, User
 from app.web.render import page
 from app.web.security import (
     SESSION_COOKIE, check_csrf, client_ip, half_auth_user, issue_csrf,
-    new_csrf_token, redirect,
+    NEXT_COOKIE, landing, new_csrf_token, redirect, safe_next,
 )
 
 log = logging.getLogger("gcr.auth.routes")
@@ -154,7 +154,9 @@ async def totp_submit(request: Request, code: str = Form("")):
                        + (f"; {agent}" if agent else "")))
         must_change = bool(row.must_change_password)
 
-    return redirect("/account/password" if must_change else "/")
+    # Back to the page that sent them here.  A password to change comes
+    # first, and the page waits for the next sign in.
+    return redirect("/account/password") if must_change else landing(request)
 
 
 @router.get("/auth/totp-setup")
@@ -222,7 +224,9 @@ async def totp_setup_submit(request: Request, code: str = Form("")):
             auth_service.clear_bootstrap_file()
 
     response = page(request, "recovery_codes.html", codes=plain,
-                    username=user.username)
+                    username=user.username,
+                    next_url=safe_next(request.cookies.get(NEXT_COOKIE, ""))
+                    or "/")
     response.delete_cookie("gcr_totp_enroll", path=settings.base_path or "/")
     return response
 
@@ -320,7 +324,7 @@ async def oidc_callback(request: Request):
         return page(request, "login.html", stage="password", auth=live.auth_config(),
                     error=str(exc))
 
-    response = redirect("/")
+    response = landing(request)
     _set_session_cookie(response, token)
     issue_csrf(response, new_csrf_token())
     return response

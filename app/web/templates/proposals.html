@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Proposed updates &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Proposed updates</h1>
+  <div class="faint small">Changes to repositories asked for by people who
+    cannot make them.  Nothing on the repository moves until it is
+    approved here.</div></div>
+  <a class="btn" href="{{ base }}/repositories">All repositories</a></div>
+
+{% if not waiting %}
+<div class="card"><div class="card-body faint">Nothing is waiting.</div></div>
+{% endif %}
+
+{% for p in waiting %}
+<div class="card">
+  <div class="card-head"><a href="{{ base }}/repositories/{{ p.repo.id }}">{{ p.repo.full_name }}</a>
+    <span class="faint small">asked by {{ p.proposed_by }},
+      {{ p.proposed_at | dt('%Y-%m-%d %H:%M') }}
+      {%- if p.finding_id %} from <a href="{{ base }}/findings/{{ p.finding_id }}">a finding</a>{% endif %}</span></div>
+  <div class="card-body">
+    <table>
+      <thead><tr><th></th><th>Now</th><th>Asked for</th></tr></thead>
+      <tbody>
+        {% for r in p.rows %}
+        <tr><th>{{ r.label }}</th>
+          {% for value in (r.now, r.asked) %}
+          <td>{% if r.field == 'web_app' %}{{ 'yes' if value else 'no' }}
+              {% elif value %}<span class="audit-detail-text">{{ value }}</span>
+              {% else %}<span class="faint">empty</span>{% endif %}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <details style="margin-top:.75rem" open>
+      <summary class="small">Edit before approving</summary>
+      <form method="post" action="{{ base }}/repositories/proposals/{{ p.id }}/approve"
+            style="margin-top:.5rem;max-width:70ch">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% with vals=p.form, labels=p.labels %}{% include "_proposal_fields.html" %}{% endwith %}
+        <p class="faint small">This is the whole record as approving would
+          leave it, not only what was asked.</p>
+        <button class="btn primary" type="submit">Approve</button>
+      </form>
+    </details>
+    <form method="post" action="{{ base }}/repositories/proposals/{{ p.id }}/reject"
+          style="margin-top:.5rem">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn sm" type="submit">Turn down</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+
+{% if decided %}
+<div class="card">
+  <div class="card-head">Recently decided</div>
+  <div class="card-body">
+    <table>
+      <thead><tr><th>Repository</th><th>Asked for</th><th>By</th><th>Decision</th></tr></thead>
+      <tbody>
+        {% for d in decided %}
+        <tr><td><a href="{{ base }}/repositories/{{ d.repo.id }}">{{ d.repo.full_name }}</a></td>
+          <td class="small">{{ d.fields }}</td>
+          <td>{{ d.proposed_by }}</td>
+          <td><span class="badge {{ 'ok' if d.status == 'approved' else 'waived' }}">{{ d.status }}</span>
+            <span class="faint small">{{ d.decided_by }}{% if d.decided_at %}, {{ d.decided_at | dt('%Y-%m-%d') }}{% endif %}</span></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

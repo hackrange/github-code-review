@@ -1038,6 +1038,30 @@
       </form>
     </details>
     {% endif %}
+
+    {% if can_propose %}
+    {# Not saved onto the repository.  It waits on Proposed Updates for an
+       administrator to edit, approve or turn down. #}
+    <details style="margin-top:.75rem">
+      <summary class="small">Propose a change to what it holds, the application, its owners, description or web addresses</summary>
+      {% if proposed.asked_at %}
+      <p class="faint small" style="margin-top:.5rem">You asked for a change on
+        {{ proposed.asked_at | dt('%Y-%m-%d') }}.  It is waiting for an
+        administrator.  Sending this again replaces it.</p>
+      {% endif %}
+      <form method="post" action="{{ base }}/repositories/{{ repo_info.id }}/propose"
+            style="margin-top:.5rem;max-width:70ch">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="back" value="/findings/{{ f.id }}">
+        <input type="hidden" name="finding_id" value="{{ f.id }}">
+        {% with vals=proposed, labels=tag_labels %}{% include "_proposal_fields.html" %}{% endwith %}
+        <p class="faint small">Nothing changes until an administrator approves
+          it.  It is about the repository, so every finding in it would show
+          the same.</p>
+        <button class="btn sm" type="submit">Send for approval</button>
+      </form>
+    </details>
+    {% endif %}
   </div>
 </div>
 {% endif %}

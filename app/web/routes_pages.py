@@ -202,6 +202,12 @@ def _shared(db, user: User) -> dict:
         pending = (db.query(func.count(Waiver.id))
                    .filter(Waiver.status == WaiverStatus.REQUESTED).scalar()) or 0
 
+    # Changes to repositories somebody asked for and nobody has decided.
+    proposed = 0
+    if rbac.can(user, "repo.write"):
+        from app.core import proposals
+        proposed = proposals.pending_count(db)
+
     last = (db.query(ScanRun)
             .filter(ScanRun.status == "finished")
             .order_by(ScanRun.finished_at.desc())
@@ -209,6 +215,8 @@ def _shared(db, user: User) -> dict:
     return {
         "user": user,
         "pending_waivers": pending,
+        "pending_proposals": proposed,
+        "can_see_proposals": rbac.can(user, "repo.write"),
         "last_scan": _ago(last.finished_at) if last and last.finished_at else "",
         # The shell decides whether to offer the link, so a role without the
         # permission is not shown a page it would be refused at.
@@ -1773,6 +1781,27 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
             else:
                 can_tag = False
 
+        # Everybody else who can see this repository can ask for a change
+        # instead, and sees what they last asked for until it is decided.
+        can_propose = (bool(about) and not can_tag
+                       and rbac.can(user, "repo.propose"))
+        proposed = {}
+        if can_propose:
+            from app.core import proposals, tagging
+
+            _own_row = db.get(Repository, about["id"])
+            if _own_row is None:
+                can_propose = False
+            else:
+                _asked = proposals.mine(db, _own_row.id, user.username)
+                proposed = (proposals.wanted(_asked) if _asked
+                            else proposals.current(_own_row))
+                proposed["holds"] = tagging.split_labels(proposed["sensitivity"])
+                proposed["asked_at"] = _asked.proposed_at if _asked else None
+                tag_labels = tagging.labels(db) + [
+                    x for x in proposed["holds"]
+                    if x not in tagging.labels(db)]
+
         risk_context = {"sensitivity": about.get("sensitivity"),
                         "visibility": about.get("visibility"),
                         "people_total": about.get("people_total")} if about else {}
@@ -1803,6 +1832,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                        repo_info=about,
                        can_tag=can_tag, repo_own=repo_own,
                        tag_labels=tag_labels,
+                       can_propose=can_propose, proposed=proposed,
                        can_scan=rbac.can(user, "scan.run"),
                        scanning_now=_scanning_now(),
                        scanning_now_ids=_scanning_now_ids(),
@@ -2252,6 +2282,58 @@ def repository_about(repo_id: int, request: Request, msg: str = "",
                        flash=clean_notice(msg, limit=300),
                        flash_kind=notice_class(kind))
         return page(request, "repository.html", **context)
+
+
+@router.get("/repositories/proposals")
+def repository_proposals(request: Request, msg: str = "", kind: str = "",
+                         user: User = Depends(current_user)):
+    """Changes to repositories that people asked for, waiting on a decision.
+
+    Each shows what the repository says now beside what was asked, and a
+    form holding the whole record as it would be, so the reviewer can fix
+    it up before approving.
+    """
+    rbac.require(user, "repo.write")
+
+    from app.core import proposals, tagging
+    from app.core.models import RepoProposal
+
+    with session_scope() as db:
+        offered = tagging.labels(db)
+        waiting = []
+        for row in (db.query(RepoProposal)
+                    .filter(RepoProposal.status == proposals.PENDING)
+                    .order_by(RepoProposal.proposed_at)):
+            now, asked = proposals.current(row.repo), proposals.changes(row)
+            form = proposals.wanted(row)
+            form["holds"] = tagging.split_labels(form["sensitivity"])
+            own = tagging.split_labels(row.repo.sensitivity or "")
+            waiting.append({
+                "id": row.id, "repo": row.repo,
+                "proposed_by": row.proposed_by,
+                "proposed_at": row.proposed_at, "finding_id": row.finding_id,
+                "rows": [{"label": proposals.LABELS[f], "field": f,
+                          "now": now[f], "asked": asked[f]}
+                         for f in proposals.FIELDS if f in asked],
+                "form": form,
+                "labels": offered + [x for x in own + form["holds"]
+                                     if x not in offered],
+            })
+        decided = (db.query(RepoProposal)
+                   .filter(RepoProposal.status != proposals.PENDING)
+                   .order_by(RepoProposal.decided_at.desc()).limit(25).all())
+        decided = [{"repo": r.repo, "status": r.status,
+                    "proposed_by": r.proposed_by,
+                    "decided_by": r.decided_by, "decided_at": r.decided_at,
+                    "fields": ", ".join(proposals.LABELS[f]
+                                        for f in proposals.changes(r))}
+                   for r in decided]
+        context = _shared(db, user)
+        context.update(active_page="proposals", waiting=waiting,
+                       decided=decided,
+                       flash=clean_notice(msg, limit=300),
+                       flash_kind=notice_class(kind))
+        return page(request, "proposals.html", **context)
 
 
 def _scope_repo(db, user, repository: str):

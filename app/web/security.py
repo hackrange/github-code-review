@@ -353,16 +353,73 @@ def _load_user(request: Request, allow_half: bool = False):
         return user, row.half_auth
 
 
+# Where somebody was going when they were sent to sign in.  A cookie rather
+# than a query string, because the trip goes through the password page, the
+# code page and possibly the identity provider, and a cookie survives all of
+# them without each one having to pass it along.
+NEXT_COOKIE = "gcr_next"
+NEXT_LIMIT = 2000
+
+
+def safe_next(raw: str) -> str:
+    """A page on this site to land on after signing in, or empty.
+
+    Any page here, query string and all.  Anything that could leave the site
+    is dropped rather than cleaned, since a sign in that ends on somebody
+    else's page is the classic phishing trick.  So are the sign in pages
+    themselves, which would just go round again.
+    """
+    text = (raw or "").strip()
+    if (not text.startswith("/") or text.startswith("//") or "\\" in text
+            or len(text) > NEXT_LIMIT
+            or any(ord(c) < 32 or ord(c) == 127 for c in text)):
+        return ""
+    path = text.split("?", 1)[0]
+    if path in ("/login", "/logout") or path.startswith(("/auth/", "/static/")):
+        return ""
+    return text
+
+
+def _remember_next(request: Request) -> dict:
+    """The header that keeps this page for after sign in, when it is one."""
+    if request.method != "GET":
+        return {}
+    path = request.url.path
+    base = settings.base_path or ""
+    if base and path.startswith(base):
+        path = path[len(base):] or "/"
+    query = request.url.query
+    wanted = safe_next(path + ("?" + query if query else ""))
+    if not wanted or wanted == "/":
+        return {}
+    from starlette.responses import Response
+    holder = Response()
+    holder.set_cookie(NEXT_COOKIE, wanted, max_age=1800, httponly=True,
+                      secure=live.force_https(), samesite="lax",
+                      path=base or "/")
+    return {"Set-Cookie": holder.headers["set-cookie"]}
+
+
+def landing(request: Request, fallback: str = "/") -> RedirectResponse:
+    """Where to go once signed in: the page they were sent away from, if any."""
+    wanted = safe_next(request.cookies.get(NEXT_COOKIE, ""))
+    response = redirect(wanted or fallback)
+    response.delete_cookie(NEXT_COOKIE, path=settings.base_path or "/")
+    return response
+
+
 def current_user(request: Request) -> User:
     """The signed in user, or a redirect to the login page.
 
-    Use this on every page that is not the login page.
+    Use this on every page that is not the login page.  The page they asked
+    for is kept, so signing in lands them back on it.
     """
     user, _half = _load_user(request)
     if user is None:
         raise HTTPException(
             status_code=307,
-            headers={"Location": f"{settings.base_path}/login"},
+            headers={"Location": f"{settings.base_path}/login",
+                     **_remember_next(request)},
             detail="Sign in first.",
         )
 

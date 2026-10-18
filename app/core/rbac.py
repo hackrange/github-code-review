@@ -106,6 +106,9 @@ PERMISSIONS = {
         # A developer can ask for a noisy rule to be set aside.  Somebody else
         # has to agree, the same as an exception.
         "rule.mute.request",
+        # Saying what a repository holds, who owns it and where it is served,
+        # for an administrator to approve.  Nothing moves until one does.
+        "repo.propose",
         # Deliberately not here: "finding.validate".  Asking a model costs money
         # per question, sends the finding and its code outside this
         # installation, and now lowers grades and teaches rules that apply to
@@ -121,7 +124,7 @@ PERMISSIONS = {
     UserRole.READER: {
         "findings.read", "findings.export",
         "trend.read", "report.generate",
-        "repo.read",
+        "repo.read", "repo.propose",
     },
 }
 
