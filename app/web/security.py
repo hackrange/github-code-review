@@ -455,8 +455,6 @@ def clean_email(value, what: str = "Address", required: bool = False) -> str:
 
     Several are allowed, comma separated, because a rota is a real answer.
     """
-    import re as _re
-
     text = (value or "").strip()
     if not text:
         if required:
@@ -465,7 +463,7 @@ def clean_email(value, what: str = "Address", required: bool = False) -> str:
     if text == "-":
         return "-"          # the word that clears a field
 
-    pattern = _re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[a-z]{2,}$", _re.I)
+    from app.core.tagging import ADDRESS as pattern
     cleaned = []
     for part in text.replace(";", ",").split(","):
         part = part.strip()

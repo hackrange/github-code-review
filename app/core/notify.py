@@ -1071,22 +1071,75 @@ def _fan_out(session, title: str, lines: list, link: str = "",
 
     to = recipients(session, connection)
     if to:
-        # Only where the caller asked for one, which is the digest and never the
-        # three urgent kinds.  A spreadsheet is a worse way to read one finding
-        # somebody should stop what they are doing for than four lines of text.
-        sheet = {}
-        if sheet_label is not None and findings and attach_csv(session):
-            sheet = spreadsheet(session, findings, sheet_label)
-        note = attachment_note(sheet)
-        body = text_message(session, title, lines, findings, link, note)
-        html = (html_message(session, title, lines, findings, link, note)
-                if mail_format(session) == "html" else "")
-        transport = (store.get(session, "notify.mail_transport") or "smtp").lower()
-        if transport == "graph":
-            sent["microsoft 365"] = send_graph(session, title, body, html, to,
-                                               sheet)
-        else:
-            sent["email"] = send_email(session, title, body, html, to, sheet)
+        sent.update(_mail(session, title, lines, link, findings, to,
+                          sheet_label))
+    return sent
+
+
+def _mail(session, title: str, lines: list, link: str, findings: list,
+          to: list, sheet_label=None) -> dict:
+    """The mail half of _fan_out, to whoever is named."""
+    # Only where the caller asked for one, which is the digest and never the
+    # three urgent kinds.  A spreadsheet is a worse way to read one finding
+    # somebody should stop what they are doing for than four lines of text.
+    sheet = {}
+    if sheet_label is not None and findings and attach_csv(session):
+        sheet = spreadsheet(session, findings, sheet_label)
+    note = attachment_note(sheet)
+    body = text_message(session, title, lines, findings, link, note)
+    html = (html_message(session, title, lines, findings, link, note)
+            if mail_format(session) == "html" else "")
+    transport = (store.get(session, "notify.mail_transport") or "smtp").lower()
+    if transport == "graph":
+        return {"microsoft 365": send_graph(session, title, body, html, to,
+                                            sheet)}
+    return {"email": send_email(session, title, body, html, to, sheet)}
+
+
+def notify_repositories(session, findings: list, scan_label: str = "",
+                        connection=None) -> int:
+    """Each repository's own people, about that repository only.  -> messages.
+
+    Mail only.  Slack, Teams and the webhook already heard about all of it
+    from _fan_out, and a second copy there reads as a second finding.  Anybody
+    already on the installation or account list is left off, for the same
+    reason.  One message per repository, urgent ones first, rather than one
+    per urgent finding: these are the people who own the thing, and they read
+    it as one list.
+    """
+    from app.core import tagging
+    from app.core.models import Repository
+
+    by_repo = {}
+    for finding in findings:
+        repo_id = getattr(finding, "repo_id", None)
+        if repo_id:
+            by_repo.setdefault(repo_id, []).append(finding)
+    if not by_repo:
+        return 0
+
+    repos = (session.query(Repository)
+             .filter(Repository.id.in_(list(by_repo))).all())
+    told = set(recipients(session, connection))
+    applies = tagging.effective_many(session, repos)
+    root = base_url(session)
+    sent = 0
+    for repo in repos:
+        to = [a for a in tagging.notify_addresses(repo, applies.get(repo.id, {}))
+              if a not in told]
+        if not to:
+            continue
+        mine = sorted(by_repo[repo.id],
+                      key=lambda f: (not is_urgent(f), -_rank(f.severity)))
+        title = f"{len(mine)} new finding(s) in {repo.full_name}"
+        if scan_label:
+            title += f" ({scan_label})"
+        link = (f"{root}/findings?repo={urllib.parse.quote(repo.full_name)}"
+                f"&state=open" if root else "")
+        lines = [(f"URGENT, {is_urgent(f)}: " if is_urgent(f) else "")
+                 + describe(f) for f in mine]
+        _mail(session, title, lines, link, mine, to, sheet_label=scan_label)
+        sent += 1
     return sent
 
 
@@ -1158,6 +1211,11 @@ def announce(session, findings: list, scan_label: str = "",
     if rest:
         notify_digest(session, rest, scan_label, connection=connection)
         results["digest"] = len(rest)
+    # The same findings again for anybody a repository names, after the rest
+    # so a mail server that is down cannot cost the security mailbox its copy.
+    results["repositories"] = notify_repositories(
+        session, [f for f, _why in urgent] + rest, scan_label,
+        connection=connection)
     return results
 
 

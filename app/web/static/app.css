@@ -216,6 +216,7 @@ a.stat:hover .l { color: var(--text); }
    and are the whole identity of the row, so they wrap rather than being cut
    off: a clipped name reads as a branch that has gone. */
 .branch-name { word-break: break-word; max-width: 22rem; }
+.repo-about { min-width: 12rem; max-width: 22rem; word-break: break-word; }
 /* The scan scope menu beside a branch on a finding.  A details element, so
    it opens without a script. */
 .scope-menu { display: inline-block; margin-left: .25rem; }

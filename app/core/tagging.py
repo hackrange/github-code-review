@@ -14,12 +14,33 @@ answer is wrong, rather than 258 times.
 from __future__ import annotations
 
 import logging
+import re
 
 from app.core.models import Repository, utcnow
 
 log = logging.getLogger("gcr.tagging")
 
 FIELDS = ("application_name", "application_owner", "technical_owner", "sensitivity")
+
+# Who hears about one repository.  Kept apart from FIELDS because nothing falls
+# back here: a connection that mails its owners already does that for every
+# repository in it, so these only ever add people.
+NOTIFY_FLAGS = ("notify_application_owner", "notify_technical_owner")
+
+# What an owner has to look like.  The forms check it through clean_email, and
+# the import checks it here, so a spreadsheet cannot put a name where every
+# form insists on an address.
+OWNERS = ("application_owner", "technical_owner")
+ADDRESS = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[a-z]{2,}$", re.I)
+
+
+def bad_address(value: str) -> str:
+    """The first part of an owner cell that is not an address, or ""."""
+    for part in str(value or "").replace(";", ",").split(","):
+        part = part.strip()
+        if part and not ADDRESS.match(part):
+            return part
+    return ""
 
 
 def labels(session) -> list:
@@ -137,7 +158,7 @@ def set_own(session, repo, values: dict, actor: str = "") -> list:
     the connection says.
     """
     moved = []
-    for field in FIELDS:
+    for field in FIELDS + ("notify_extra",):
         if field not in values:
             continue
         given = (values.get(field) or "").strip()
@@ -146,11 +167,43 @@ def set_own(session, repo, values: dict, actor: str = "") -> list:
         if given != (getattr(repo, field, "") or "").strip():
             setattr(repo, field, given)
             moved.append(field)
+    for field in NOTIFY_FLAGS:
+        if field not in values:
+            continue
+        given = bool(values.get(field))
+        if given != bool(getattr(repo, field, False)):
+            setattr(repo, field, given)
+            moved.append(field)
     if moved:
         repo.tagged_by = actor or repo.tagged_by or ""
         repo.tagged_at = utcnow()
         session.flush()
     return moved
+
+
+def notify_addresses(repo, applies: dict) -> list:
+    """Who hears about this repository, beyond the installation and its account.
+
+    `applies` is what effective() said, so a ticked owner is whichever owner
+    actually applies here, set on the repository or inherited.  Only things
+    that look like addresses, once each, for the reason the connection's
+    version gives: a dash or a name handed to a mail server loses the whole
+    message.
+    """
+    wanted = []
+    if getattr(repo, "notify_application_owner", False):
+        wanted.append((applies.get("application_owner") or {}).get("value", ""))
+    if getattr(repo, "notify_technical_owner", False):
+        wanted.append((applies.get("technical_owner") or {}).get("value", ""))
+    wanted.append(getattr(repo, "notify_extra", "") or "")
+
+    out = []
+    for entry in wanted:
+        for part in str(entry).replace(";", ",").split(","):
+            address = part.strip()
+            if "@" in address and address not in out:
+                out.append(address)
+    return out
 
 
 def untagged(session, organization: str = "", base=None):
@@ -294,6 +347,19 @@ def from_csv(session, text: str, actor: str = "") -> dict:
             counts["unknown"] += 1
             if len(problems) < 10:
                 problems.append(f"no repository called {name}")
+            continue
+
+        # Checked before anything is set, so a row with a bad owner changes
+        # nothing at all rather than half of itself.
+        wrong = [(field, bad_address(row[field])) for field in OWNERS
+                 if row.get(field) and row[field] != "-"
+                 and bad_address(row[field])]
+        if wrong:
+            counts["skipped"] += 1
+            if len(problems) < 10:
+                field, part = wrong[0]
+                problems.append(f"{name}: {field.replace('_', ' ')} has to be "
+                                f"an email address, and {part!r} is not one")
             continue
 
         try:

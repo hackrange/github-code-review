@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}{{ repo.name }} &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>{{ repo.name }}</h1>
+  <div class="faint small mono">{{ repo.full_name }}
+    {%- if repo.archived %} <span class="badge waived">archived</span>{% endif %}</div></div>
+  <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+    <a class="btn" href="{{ base }}/findings?repo={{ repo.full_name | urlencode }}&state=open">Open findings ({{ open_count }})</a>
+    {% if can_scope %}<a class="btn" href="{{ base }}/repositories/{{ repo.id }}/scope">Branches and scope</a>{% endif %}
+    {% if repo.html_url %}<a class="btn" rel="noopener noreferrer" target="_blank" href="{{ repo.html_url }}">Open on the host</a>{% endif %}
+    <a class="btn" href="{{ base }}/repositories">All repositories</a>
+  </div></div>
+
+{# What applies now, and where each answer came from.  "Nobody has said" and
+   "the connection said" are different states and are shown as such. #}
+<div class="card">
+  <div class="card-head">About</div>
+  <div class="card-body">
+    <table>
+      <tbody>
+        {% for label, field in [('What it holds', 'sensitivity'),
+                                ('Application', 'application_name'),
+                                ('Application owner', 'application_owner'),
+                                ('Technical owner', 'technical_owner')] %}
+        <tr><th>{{ label }}</th><td>
+          {% if applies[field].value %}
+            {% if field == 'sensitivity' %}
+              {% for one in applies[field].value.split(',') %}
+              <span class="badge medium">{{ one.strip() }}</span>
+              {% endfor %}
+            {% else %}{{ applies[field].value }}{% endif %}
+            <span class="faint small">{{ 'set on this repository' if applies[field]['from'] == 'repository' else 'from the connection' }}</span>
+          {% else %}<span class="faint">nobody has said</span>{% endif %}
+        </td></tr>
+        {% endfor %}
+        <tr><th>Notify</th><td>
+          {% if told %}{{ told | join(', ') }}
+          <div class="faint small">Mailed this repository's new findings, on top of the
+            <a href="{{ base }}/notifications">Notifications page</a> and the connection.</div>
+          {% else %}<span class="faint">nobody beyond the Notifications page and the connection</span>{% endif %}
+        </td></tr>
+        <tr><th>Connection</th><td>{{ repo.connection or 'not recorded' }}</td></tr>
+        <tr><th>Last scanned</th><td>{{ repo.last_scanned_at | dt('%Y-%m-%d %H:%M') if repo.last_scanned_at else 'never' }}</td></tr>
+        {% if repo.tagged_by %}
+        <tr><th>Last changed</th><td>{{ repo.tagged_by }}{% if repo.tagged_at %}, {{ repo.tagged_at | dt('%Y-%m-%d') }}{% endif %}</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if can_tag %}
+{# The repository's own answers in the boxes, the connection's as the hint.
+   An empty box, or nothing ticked, goes back to the connection. #}
+<div class="card">
+  <div class="card-head">Edit</div>
+  <div class="card-body">
+    <form method="post" action="{{ base }}/repositories/{{ repo.id }}/about"
+          style="max-width:70ch">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="back" value="/repositories/{{ repo.id }}">
+      <input type="hidden" name="with_notify" value="1">
+      <label>Application name
+        <input type="text" name="application_name" maxlength="200"
+               value="{{ own.application_name }}"
+               placeholder="{{ applies.application_name.value if applies.application_name['from'] == 'connection' else 'Payments API' }}">
+      </label>
+      <label>Application owner
+        <input type="email" name="application_owner" multiple
+               value="{{ own.application_owner }}"
+               placeholder="{{ applies.application_owner.value if applies.application_owner['from'] == 'connection' else 'a.person@example.com' }}">
+        <span class="faint small">Who answers for the risk.</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="notify_application_owner" value="1"
+               {{ 'checked' if repo.notify_application_owner }}>
+        Send them this repository's new findings
+      </label>
+      <label>Technical owner
+        <input type="email" name="technical_owner" multiple
+               value="{{ own.technical_owner }}"
+               placeholder="{{ applies.technical_owner.value if applies.technical_owner['from'] == 'connection' else 'a.person@example.com' }}">
+        <span class="faint small">Who fixes it.</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="notify_technical_owner" value="1"
+               {{ 'checked' if repo.notify_technical_owner }}>
+        Send them this repository's new findings
+      </label>
+      <label>Also notify
+        <input type="email" name="notify_extra" multiple
+               value="{{ own.notify_extra }}"
+               placeholder="oncall@example.com, tickets@example.com">
+        <span class="faint small">Anybody else who should hear about this one
+          repository.  None of it is sent unless notifications are switched on
+          on the <a href="{{ base }}/notifications">Notifications page</a>.</span>
+      </label>
+      <label>What it holds
+        <div class="check-grid">
+          {% for label in tag_labels %}
+          <label class="check"><input type="checkbox" name="holds:{{ label }}" value="1"
+                 {{ 'checked' if label in own.holds }}> {{ label }}</label>
+          {% endfor %}
+        </div>
+      </label>
+      <p class="faint small">Owners and notify are email addresses, so somebody
+        can be asked later.  Several are fine, comma separated.  Anything left
+        empty, or with nothing ticked, uses what the connection says.  A ticked
+        owner can be the connection's.</p>
+      <button class="btn primary" type="submit">Save</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

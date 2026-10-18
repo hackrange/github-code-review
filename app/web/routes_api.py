@@ -3696,13 +3696,24 @@ async def describe_repository(repo_id: int, request: Request,
         back, "Saved." if note else "Description removed."))
 
 
+def _told(value, field: str) -> str:
+    """One moved field, as the audit line says it."""
+    if field in ("notify_application_owner", "notify_technical_owner"):
+        return "on" if value else "off"
+    if field == "notify_extra":
+        return value or "(nobody)"
+    return value or "(from the connection)"
+
+
 @router.post("/repositories/{repo_id}/about")
 async def tag_one_repository(repo_id: int, request: Request,
                              user: User = Depends(current_user)):
     """What one repository holds, what it is, and who owns it, from its page.
 
     The same fields the Tagging page sets, for the one somebody is looking at.
-    An empty box goes back to what the connection says.
+    An empty box goes back to what the connection says.  The repository's own
+    page also sends who hears about it; the finding page's form does not, so
+    those are only read when the form says it carries them.
     """
     await check_csrf(request)
     rbac.require(user, "repo.write")
@@ -3723,12 +3734,37 @@ async def tag_one_repository(repo_id: int, request: Request,
         "technical_owner": clean_email(form.get("technical_owner"),
                                        "Technical owner"),
     }
+    with_notify = _checked(form, "with_notify")
+    if with_notify:
+        values["notify_extra"] = clean_email(form.get("notify_extra"),
+                                             "Also notify")
+        values["notify_application_owner"] = _checked(
+            form, "notify_application_owner")
+        values["notify_technical_owner"] = _checked(
+            form, "notify_technical_owner")
 
     with session_scope() as db:
         repo = (db.query(m_Repository)
                 .filter(m_Repository.id == repo_id).one_or_none())
         if repo is None:
             raise HTTPException(status_code=404, detail="No such repository.")
+
+        # A tick with nobody behind it would be a setting that silently does
+        # nothing, the same as on a connection.  The owner can come from the
+        # connection, so that counts.
+        if with_notify:
+            inherited = tagging.effective(db, repo)
+            for flag, field, word in (
+                    ("notify_application_owner", "application_owner",
+                     "business"),
+                    ("notify_technical_owner", "technical_owner",
+                     "technical")):
+                if (values[flag] and not values[field]
+                        and inherited[field]["from"] != "connection"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Fill in the {word} owner before sending "
+                               f"them this repository's findings.")
 
         # Every label offered, plus any this one already carries that the list
         # no longer has, so saving the form cannot drop one nobody could see.
@@ -3743,7 +3779,7 @@ async def tag_one_repository(repo_id: int, request: Request,
             record(db, "repository.tagged", actor=user.username,
                    target=repo.full_name,
                    detail=", ".join(f"{k.replace('_', ' ')}="
-                                    f"{getattr(repo, k) or '(from the connection)'}"
+                                    f"{_told(getattr(repo, k), k)}"
                                     for k in moved)[:200],
                    source_ip=client_ip(request))
 

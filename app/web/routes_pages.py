@@ -2166,8 +2166,16 @@ def repositories(request: Request, user: User = Depends(current_user),
 
         drawn, can_draw = _diagram_flags(db, user)
 
+        # The application, its owners, what it holds and who is told, for the
+        # Application column.  One read of the connections for the whole list.
+        from app.core import tagging
+        about = tagging.effective_many(db, rows)
+        told = {row.id: tagging.notify_addresses(row, about.get(row.id, {}))
+                for row in rows}
+
         context = _shared(db, user)
-        context.update(branches=branches, certs_by_repo=certs_by_repo)
+        context.update(branches=branches, certs_by_repo=certs_by_repo,
+                       about=about, told=told)
         # The certified card names repositories, and its diagram link needs
         # the id the main table already has.
         context.update(drawn=drawn, can_draw=can_draw,
@@ -2183,6 +2191,43 @@ def repositories(request: Request, user: User = Depends(current_user),
                        can_certify=rbac.can(user, "repo.certify"),
                        certified_default=certified_default)
         return page(request, "repositories.html", **context)
+
+
+@router.get("/repositories/{repo_id:int}")
+def repository_about(repo_id: int, request: Request, msg: str = "",
+                     kind: str = "", user: User = Depends(current_user)):
+    """One repository: what it holds, what it is, who owns it, who is told.
+
+    Anybody who can see the repository can read this.  Only somebody who can
+    change repositories gets the form, which saves through the same route the
+    finding page's form does.
+    """
+    from app.core import tagging
+
+    with session_scope() as db:
+        repo = (rbac.visible_repositories(db, user)
+                .filter(Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        applies = tagging.effective(db, repo)
+        own = {field: (getattr(repo, field, "") or "")
+               for field in tagging.FIELDS + ("notify_extra",)}
+        own["holds"] = tagging.split_labels(own["sensitivity"])
+        offered = tagging.labels(db)
+        labels = offered + [x for x in own["holds"] if x not in offered]
+        open_count = (rbac.visible_findings(db, user)
+                      .filter(Finding.repository == repo.full_name)
+                      .filter(Finding.state == FindingState.OPEN)
+                      .filter(Finding.out_of_scope.is_(False)).count())
+        context = _shared(db, user)
+        context.update(active_page="repositories", repo=repo, applies=applies,
+                       own=own, tag_labels=labels, open_count=open_count,
+                       told=tagging.notify_addresses(repo, applies),
+                       can_tag=rbac.can(user, "repo.write"),
+                       can_scope=rbac.can(user, "repo.scope"),
+                       flash=clean_notice(msg, limit=300),
+                       flash_kind=notice_class(kind))
+        return page(request, "repository.html", **context)
 
 
 def _scope_repo(db, user, repository: str):

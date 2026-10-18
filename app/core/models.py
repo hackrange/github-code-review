@@ -422,6 +422,18 @@ class Repository(Base):
     tagged_by = Column(String(120), default="")
     tagged_at = Column(DateTime(timezone=True))
 
+    # Who hears about this one repository's findings, on top of the
+    # Notifications page and whatever its connection already names.
+    #
+    # The same three answers a connection has, for the same reason one level
+    # down: one account often holds systems owned by different teams.  An owner
+    # here is whichever one applies, this repository's own or the connection's.
+    # Off by default for the reason the connection's are.  Text rather than a
+    # wide varchar so it stays off the row.
+    notify_application_owner = Column(Boolean, default=False, nullable=False)
+    notify_technical_owner = Column(Boolean, default=False, nullable=False)
+    notify_extra = Column(Text, default="")
+
     # What this repository is, in somebody's own words.
     #
     # The tagging fields above answer fixed questions.  This one is for the

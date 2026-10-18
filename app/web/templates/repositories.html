@@ -273,6 +273,7 @@
       <thead><tr>{% if can_scope %}<th class="nowrap"><input type="checkbox"
           id="select-repos" title="Everything shown"></th>{% endif %}
         <th>Organization</th><th>Repository</th><th>Visibility</th>
+        <th>Application</th>
         <th>Default branch</th>
         <th>Scope</th><th>Branches</th><th>Certified branches</th>
         <th>Open findings</th><th class="nowrap">Last scanned</th>
@@ -301,13 +302,31 @@
           {% if can_scope %}<td class="nowrap"><input type="checkbox" name="repo"
               form="scope-bulk" value="{{ r.full_name }}"></td>{% endif %}
           <td class="small">{{ r.organization }}</td>
-          {# To its branches for somebody who can scope them, so the name is
-             the way to pick branches one repository at a time.  The open
-             findings column still goes to the findings. #}
-          <td class="small"><a href="{{ base }}{{ ('/repositories/' ~ r.id ~ '/scope') if can_scope else ('/findings?q=' ~ (r.name | urlencode)) }}"
-              {%- if can_scope %} title="Every branch of {{ r.name }}, to set what each one gets"{% endif %}>{{ r.name }}</a>
+          {# To the repository's own page, where its application, owners and
+             who is told are read and set.  Branches are the change link in
+             the Scope column, and findings the Open findings column. #}
+          <td class="small"><a href="{{ base }}/repositories/{{ r.id }}"
+              title="What {{ r.name }} is, who owns it and who is told">{{ r.name }}</a>
             {% if r.archived %}<span class="badge waived">archived</span>{% endif %}</td>
           <td class="small faint">{{ r.visibility }}</td>
+          {# What applies, the repository's own or its connection's.  An
+             inherited answer is gray so the rows somebody set stand out. #}
+          {% set ab = about.get(r.id, {}) %}
+          <td class="small repo-about">
+            {%- for field, word in [('application_name', ''),
+                                    ('application_owner', 'Owner'),
+                                    ('technical_owner', 'Technical')] %}
+            {%- set one = ab.get(field, {}) %}
+            {%- if one.value %}<div class="{{ 'faint' if one['from'] != 'repository' }}"
+                 title="{{ 'Set on this repository' if one['from'] == 'repository' else 'From the connection' }}">
+              {%- if word %}<span class="faint">{{ word }}:</span> {% endif %}{{ one.value }}</div>{% endif %}
+            {%- endfor %}
+            {%- set held = ab.get('sensitivity', {}) %}
+            {%- if held.value %}<div>{% for one in held.value.split(',') %}<span class="badge medium">{{ one.strip() }}</span> {% endfor %}</div>{% endif %}
+            {%- if told.get(r.id) %}<div><span class="faint">Notify:</span> {{ told[r.id] | join(', ') }}</div>{% endif %}
+            {%- if not (ab.get('application_name', {}).value or ab.get('application_owner', {}).value
+                        or ab.get('technical_owner', {}).value or held.value or told.get(r.id)) %}
+            <span class="faint">nobody has said</span>{% endif %}</td>
           {# The sign off on this repository's own default branch, beside the
              branch it is about.  The card above is the whole list, which is
              the wrong shape for the question somebody has going down these
