@@ -39,6 +39,11 @@
             <a href="{{ base }}/notifications">Notifications page</a> and the connection.</div>
           {% else %}<span class="faint">nobody beyond the Notifications page and the connection</span>{% endif %}
         </td></tr>
+        <tr><th>Web application</th><td>
+          {% if repo.web_app %}Part of one
+            {% for url in web_urls %}<div class="mono small"><a rel="noopener noreferrer" target="_blank" href="{{ url }}">{{ url }}</a></div>{% endfor %}
+          {% else %}<span class="faint">not marked as part of one</span>{% endif %}
+        </td></tr>
         <tr><th>Connection</th><td>{{ repo.connection or 'not recorded' }}</td></tr>
         <tr><th>Last scanned</th><td>{{ repo.last_scanned_at | dt('%Y-%m-%d %H:%M') if repo.last_scanned_at else 'never' }}</td></tr>
         {% if repo.tagged_by %}
@@ -60,6 +65,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="back" value="/repositories/{{ repo.id }}">
       <input type="hidden" name="with_notify" value="1">
+      <input type="hidden" name="with_web" value="1">
       <label>Application name
         <input type="text" name="application_name" maxlength="200"
                value="{{ own.application_name }}"
@@ -94,6 +100,22 @@
         <span class="faint small">Anybody else who should hear about this one
           repository.  None of it is sent unless notifications are switched on
           on the <a href="{{ base }}/notifications">Notifications page</a>.</span>
+      </label>
+      <label class="check">
+        <input type="checkbox" name="web_app" value="1"
+               {{ 'checked' if repo.web_app }}>
+        Part of a web application
+      </label>
+      <label>Web addresses
+        <input type="text" name="web_app_urls" maxlength="4000"
+               value="{{ own.web_app_urls }}" class="mono"
+               placeholder="https://portal.example.com, https://staging.portal.example.com">
+        <span class="faint small">Where it answers, http or https, several
+          separated by commas.  Needed when it is ticked.  This is for telling
+          which code sits behind which site, and it goes into the
+          <a href="{{ base }}/repositories/web-apps.csv">web applications
+          export</a> for whatever runs dynamic scans.  Nothing here visits
+          them.</span>
       </label>
       <label>What it holds
         <div class="check-grid">

@@ -434,6 +434,14 @@ class Repository(Base):
     notify_technical_owner = Column(Boolean, default=False, nullable=False)
     notify_extra = Column(Text, default="")
 
+    # Whether this repository is part of a web application, and where that
+    # application answers.  For identification: a dynamic scan is usually run
+    # by another system, and the first thing it needs is which code sits
+    # behind which site.  Nothing here fetches them.  Comma separated, http or
+    # https.  Text so it stays off the row.
+    web_app = Column(Boolean, default=False, nullable=False)
+    web_app_urls = Column(Text, default="")
+
     # What this repository is, in somebody's own words.
     #
     # The tagging fields above answer fixed questions.  This one is for the

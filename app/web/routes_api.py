@@ -3638,17 +3638,29 @@ async def import_tagging(request: Request, user: User = Depends(current_user)):
         record(db, "tagging.imported", actor=user.username,
                detail=(f"{result['changed']} changed, "
                        f"{result['unchanged']} unchanged, "
-                       f"{result['unknown']} not recognized"),
-               outcome="warn" if result["unknown"] else "ok",
+                       f"{result['unknown']} not recognized, "
+                       f"{result['skipped']} skipped"),
+               outcome="warn" if (result["unknown"] or result["skipped"])
+               else "ok",
                source_ip=client_ip(request))
 
+    # Every row that did not go in, not only the ones nobody recognized.  A
+    # row refused for a bad owner used to be counted and never mentioned, so
+    # the file read as fully imported when it was not.
     said = (f"{result['changed']} repository(ies) updated, "
             f"{result['unchanged']} already matched")
     if result["unknown"]:
-        said += (f", {result['unknown']} not recognized: "
-                 + "; ".join(result["problems"][:3]))
-    return redirect("/tagging?kind=" + ("warn" if result["unknown"] else "ok")
-                    + "&msg=" + quote(said))
+        said += f", {result['unknown']} not recognized"
+    if result["skipped"]:
+        said += f", {result['skipped']} skipped"
+    if result["problems"]:
+        said += ": " + "; ".join(result["problems"][:3])
+    trouble = result["unknown"] or result["skipped"]
+
+    # Back to the Repositories page when that is where it was sent from.
+    back = "/repositories" if form.get("back") == "/repositories" else "/tagging"
+    return redirect(back + "?kind=" + ("warn" if trouble else "ok")
+                    + "&msg=" + quote(said[:290]))
 
 
 @router.post("/blast-radius/repo/{repo_id}/describe")
@@ -3698,8 +3710,11 @@ async def describe_repository(repo_id: int, request: Request,
 
 def _told(value, field: str) -> str:
     """One moved field, as the audit line says it."""
-    if field in ("notify_application_owner", "notify_technical_owner"):
+    if field in ("notify_application_owner", "notify_technical_owner",
+                 "web_app"):
         return "on" if value else "off"
+    if field == "web_app_urls":
+        return value or "(none)"
     if field == "notify_extra":
         return value or "(nobody)"
     return value or "(from the connection)"
@@ -3742,6 +3757,22 @@ async def tag_one_repository(repo_id: int, request: Request,
             form, "notify_application_owner")
         values["notify_technical_owner"] = _checked(
             form, "notify_technical_owner")
+    # Whether it is part of a web application, and where that answers.  Also
+    # only from the repository's own page.
+    if _checked(form, "with_web"):
+        urls, why = tagging.web_urls(clean_text(
+            form.get("web_app_urls"), "Web addresses", limit=4000,
+            required=False))
+        if why:
+            raise HTTPException(status_code=400,
+                                detail=f"Web addresses: {why}.")
+        values["web_app"] = _checked(form, "web_app")
+        if values["web_app"] and not urls:
+            raise HTTPException(
+                status_code=400,
+                detail="Give the address of the web application it is part "
+                       "of, so it can be found.")
+        values["web_app_urls"] = ", ".join(urls)
 
     with session_scope() as db:
         repo = (db.query(m_Repository)

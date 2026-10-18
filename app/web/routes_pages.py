@@ -2172,10 +2172,14 @@ def repositories(request: Request, user: User = Depends(current_user),
         about = tagging.effective_many(db, rows)
         told = {row.id: tagging.notify_addresses(row, about.get(row.id, {}))
                 for row in rows}
+        web = {row.id: tagging.web_urls(row.web_app_urls)[0]
+               for row in rows if row.web_app}
 
         context = _shared(db, user)
         context.update(branches=branches, certs_by_repo=certs_by_repo,
-                       about=about, told=told)
+                       about=about, told=told, web=web,
+                       can_tag=rbac.can(user, "repo.write"),
+                       sensitivity_labels=tagging.labels(db))
         # The certified card names repositories, and its diagram link needs
         # the id the main table already has.
         context.update(drawn=drawn, can_draw=can_draw,
@@ -2191,6 +2195,25 @@ def repositories(request: Request, user: User = Depends(current_user),
                        can_certify=rbac.can(user, "repo.certify"),
                        certified_default=certified_default)
         return page(request, "repositories.html", **context)
+
+
+@router.get("/repositories/web-apps.csv")
+def export_web_apps(request: Request, user: User = Depends(current_user)):
+    """Every repository that is part of a web application, and where it is.
+
+    For whatever runs dynamic scans, usually another system, so it knows which
+    code sits behind which site and who to ask.  Only what this person can see.
+    """
+    rbac.require(user, "repo.read")
+    from app.core import tagging
+
+    with session_scope() as db:
+        body = tagging.web_apps_csv(db, base=rbac.visible_repositories(db, user))
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    return Response(
+        content=body, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":
+                 f'attachment; filename="web-applications-{stamp}.csv"'})
 
 
 @router.get("/repositories/{repo_id:int}")
@@ -2211,7 +2234,7 @@ def repository_about(repo_id: int, request: Request, msg: str = "",
             raise HTTPException(status_code=404, detail="No such repository.")
         applies = tagging.effective(db, repo)
         own = {field: (getattr(repo, field, "") or "")
-               for field in tagging.FIELDS + ("notify_extra",)}
+               for field in tagging.FIELDS + ("notify_extra", "web_app_urls")}
         own["holds"] = tagging.split_labels(own["sensitivity"])
         offered = tagging.labels(db)
         labels = offered + [x for x in own["holds"] if x not in offered]
@@ -2222,6 +2245,7 @@ def repository_about(repo_id: int, request: Request, msg: str = "",
         context = _shared(db, user)
         context.update(active_page="repositories", repo=repo, applies=applies,
                        own=own, tag_labels=labels, open_count=open_count,
+                       web_urls=tagging.web_urls(repo.web_app_urls)[0],
                        told=tagging.notify_addresses(repo, applies),
                        can_tag=rbac.can(user, "repo.write"),
                        can_scope=rbac.can(user, "repo.scope"),
@@ -3583,6 +3607,7 @@ def tagging_page(request: Request, q: str = "", org: str = "",
             active_page="tagging",
             rows=rows, resolved=resolved, orgs=orgs,
             labels=tagging.labels(db),
+            sensitivity_labels=tagging.labels(db),
             total=total, untagged=untagged, shown=len(rows),
             filters={"q": search, "org": organization, "show": show},
             can_write=rbac.can(user, "repo.write"),

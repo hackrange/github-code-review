@@ -27,15 +27,7 @@
         <button type="button" class="modal-close" data-close-modal>&times;</button></div>
       <div class="modal-body">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <p class="faint small">Export first to see the shape.  The repository
-          column is what each row is matched on; the rest are
-          application_name, application_owner, technical_owner, sensitivity and
-          description.</p>
-        <p class="faint small">An empty cell leaves that value alone, so a
-          column you did not fill in cannot quietly wipe what somebody set last
-          month.  A single <strong>-</strong> clears it, which is the same word
-          the form above uses.  A repository this installation has never seen
-          is reported back rather than created.</p>
+        {% include "_tagging_import_help.html" %}
         <label>The file
           <input type="file" name="file" accept=".csv,text/csv" required>
         </label>

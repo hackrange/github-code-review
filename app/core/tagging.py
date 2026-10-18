@@ -34,6 +34,36 @@ OWNERS = ("application_owner", "technical_owner")
 ADDRESS = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[a-z]{2,}$", re.I)
 
 
+# Enough for production, staging and a few regions, and few enough that the
+# box is still a list of places rather than an inventory.
+MAX_WEB_URLS = 20
+
+
+def web_urls(value: str) -> tuple:
+    """Where a web application answers, cleaned.  -> (urls, problem).
+
+    For identifying the application, mostly to whatever runs dynamic scans,
+    which is another system.  Nothing here fetches them.  Comma or space
+    separated, each http or https with a host, and no user name or password
+    in it: the list gets exported and handed on, and a credential in a scope
+    list ends up in every copy of it.
+    """
+    from urllib.parse import urlparse
+
+    out = []
+    for part in str(value or "").replace(",", " ").split():
+        parsed = urlparse(part)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return [], f"{part!r} is not an http or https address"
+        if parsed.username or parsed.password:
+            return [], f"{part!r} has a user name or password in it"
+        if part not in out:
+            out.append(part)
+    if len(out) > MAX_WEB_URLS:
+        return [], f"more than {MAX_WEB_URLS} addresses"
+    return out, ""
+
+
 def bad_address(value: str) -> str:
     """The first part of an owner cell that is not an address, or ""."""
     for part in str(value or "").replace(";", ",").split(","):
@@ -158,7 +188,7 @@ def set_own(session, repo, values: dict, actor: str = "") -> list:
     the connection says.
     """
     moved = []
-    for field in FIELDS + ("notify_extra",):
+    for field in FIELDS + ("notify_extra", "web_app_urls"):
         if field not in values:
             continue
         given = (values.get(field) or "").strip()
@@ -167,7 +197,7 @@ def set_own(session, repo, values: dict, actor: str = "") -> list:
         if given != (getattr(repo, field, "") or "").strip():
             setattr(repo, field, given)
             moved.append(field)
-    for field in NOTIFY_FLAGS:
+    for field in NOTIFY_FLAGS + ("web_app",):
         if field not in values:
             continue
         given = bool(values.get(field))
@@ -224,11 +254,118 @@ def untagged(session, organization: str = "", base=None):
 # because that is what somebody sorts and matches on in a spreadsheet.
 CSV_COLUMNS = ["repository", "application_name", "application_owner",
                "technical_owner", "sensitivity", "description",
+               "notify_application_owner", "notify_technical_owner",
+               "notify_extra", "web_application", "web_urls",
                "tagged_by", "tagged_date"]
+
+# What a yes or no cell may say.
+YES = ("yes", "y", "true", "1")
+NO = ("no", "n", "false", "0")
 
 # Enough for an estate several times the size of any this has met, and small
 # enough that a pasted spreadsheet cannot exhaust memory.
 MAX_IMPORT_ROWS = 20000
+
+
+# How long each cell may be, the same as the columns it lands in.  Too long
+# for MariaDB fails the whole import at the end rather than the one row.
+LIMITS = {"application_name": 200, "application_owner": 200,
+          "technical_owner": 200, "sensitivity": 400, "notify_extra": 2000,
+          "web_app_urls": 4000}
+
+# The CSV's name for each column that is not called what the model calls it.
+CSV_NAMES = {"web_app": "web_application", "web_app_urls": "web_urls"}
+
+
+def _owners(value: str) -> str:
+    """Addresses as the forms store them, one comma and a space apart.
+
+    Pipes too, which is how the export separates them.
+    """
+    return ", ".join(part.strip() for part in
+                     str(value).replace(";", ",").replace("|", ",").split(",")
+                     if part.strip())
+
+
+def _unquote(value: str) -> str:
+    """A cell without the apostrophe the export put in front of a formula."""
+    from app.core.reports import SPREADSHEET_TRIGGERS
+
+    if value[:1] == "'" and value[1:2] and value[1:2] in SPREADSHEET_TRIGGERS:
+        return value[1:]
+    return value
+
+
+def _read_row(row: dict, repo, offered: list, inherited: dict) -> tuple:
+    """One import row, checked.  -> ({field: value}, "") or ({}, why).
+
+    Only what the row says.  An empty cell is left out, so it leaves that value
+    alone, and a "-" is an empty value, which clears it.
+    """
+    wanted = {}
+
+    for field in FIELDS + ("notify_extra",):
+        given = row.get(field, "")
+        if not given:
+            continue
+        if given == "-":
+            wanted[field] = ""
+            continue
+        if field in OWNERS + ("notify_extra",):
+            bad = bad_address(given.replace("|", ","))
+            if bad:
+                return {}, (f"{field.replace('_', ' ')} has to be an email "
+                            f"address, and {bad!r} is not one")
+            given = _owners(given)
+        elif field == "sensitivity":
+            # Matched without case, and stored the way the list spells it, so
+            # "customer data" and "Customer Data" are one label, not two.
+            by_case = {label.casefold(): label for label in offered}
+            held = []
+            for one in split_labels(given):
+                label = by_case.get(one.casefold())
+                if label is None:
+                    return {}, (f"{one!r} is not one of the labels on the "
+                                f"Settings page ({', '.join(offered)})")
+                if label not in held:
+                    held.append(label)
+            given = ", ".join(held)
+        wanted[field] = given
+
+    for field in NOTIFY_FLAGS + ("web_app",):
+        given = row.get(CSV_NAMES.get(field, field), "").lower()
+        if not given:
+            continue
+        if given not in YES + NO:
+            return {}, (f"{CSV_NAMES.get(field, field).replace('_', ' ')} "
+                        f"has to be yes or no, and {given!r} is neither")
+        wanted[field] = given in YES
+
+    given = row.get("web_urls", "")
+    if given:
+        urls, why = ([], "") if given == "-" else web_urls(given.replace("|", ","))
+        if why:
+            return {}, f"web urls: {why}"
+        wanted["web_app_urls"] = ", ".join(urls)
+
+    for field, limit in LIMITS.items():
+        if len(wanted.get(field) or "") > limit:
+            return {}, f"{CSV_NAMES.get(field, field).replace('_', ' ')} is longer than {limit}"
+
+    # The same two rules the repository's page holds to.  What the row leaves
+    # alone counts as what the repository already has.
+    def after(field):
+        return wanted[field] if field in wanted else getattr(repo, field, None)
+
+    if after("web_app") and not (after("web_app_urls") or "").strip():
+        return {}, "a web application needs its web urls"
+    for flag, field in (("notify_application_owner", "application_owner"),
+                        ("notify_technical_owner", "technical_owner")):
+        if (after(flag) and not (after(field) or "").strip()
+                and (inherited.get(field) or {}).get("from") != "connection"):
+            return {}, (f"{flag.replace('_', ' ')} is yes, but there is no "
+                        f"{field.replace('_', ' ')} to send it to")
+    return wanted, ""
 
 
 def to_csv(session, organization: str = "", base=None) -> str:
@@ -248,24 +385,81 @@ def to_csv(session, organization: str = "", base=None) -> str:
     if organization:
         query = query.filter(Repository.organization == organization)
 
+    from app.core.reports import _quote_formula
+
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(CSV_COLUMNS)
     for row in query.order_by(Repository.full_name).all():
-        writer.writerow([
+        # Every cell quoted against formulas, since this file is opened in a
+        # spreadsheet by design.  from_csv takes the quote off again.
+        writer.writerow([_quote_formula(cell) for cell in [
             row.full_name,
             row.application_name or "",
-            row.application_owner or "",
-            row.technical_owner or "",
+            # Pipes between addresses for the same reason as the labels below.
+            " | ".join(_owners(row.application_owner or "").split(", "))
+            if row.application_owner else "",
+            " | ".join(_owners(row.technical_owner or "").split(", "))
+            if row.technical_owner else "",
             # Pipe rather than comma.  A comma inside a CSV cell is legal and
             # quoted, and then somebody opens it in a spreadsheet, edits it,
             # and the quoting is gone.  A pipe survives that.
             " | ".join(part.strip() for part in
                        (row.sensitivity or "").split(",") if part.strip()),
             (row.note or "").replace("\r", " ").replace("\n", " "),
+            "yes" if row.notify_application_owner else "no",
+            "yes" if row.notify_technical_owner else "no",
+            " | ".join(_owners(row.notify_extra or "").split(", "))
+            if row.notify_extra else "",
+            "yes" if row.web_app else "no",
+            " | ".join(web_urls(row.web_app_urls)[0]),
             row.tagged_by or "",
             row.tagged_at.strftime("%Y-%m-%d") if row.tagged_at else "",
-        ])
+        ]])
+    return buffer.getvalue()
+
+
+WEB_COLUMNS = ["repository", "application_name", "web_urls",
+               "application_owner", "technical_owner", "sensitivity",
+               "visibility", "default_branch"]
+
+
+def web_apps_csv(session, base=None) -> str:
+    """Every repository marked as part of a web application, and where it is.
+
+    For the system that runs dynamic scans, to know what is out there and who
+    to ask before testing it.  What applies rather than what is set here,
+    unlike to_csv: this is not read back, so the owner is the one that
+    actually answers, wherever it came from.  Every cell
+    is quoted against formulas, since this one goes to another team.
+    """
+    import csv
+    import io
+
+    from app.core.reports import spreadsheet_row
+
+    query = base if base is not None else session.query(Repository)
+    rows = (query.filter(Repository.web_app.is_(True))
+            .order_by(Repository.full_name).all())
+    applies = effective_many(session, rows)
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=WEB_COLUMNS,
+                            lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        said = applies.get(row.id, {})
+        writer.writerow(spreadsheet_row({
+            "repository": row.full_name,
+            "application_name": said.get("application_name", {}).get("value", ""),
+            "web_urls": " | ".join(web_urls(row.web_app_urls)[0]),
+            "application_owner": said.get("application_owner", {}).get("value", ""),
+            "technical_owner": said.get("technical_owner", {}).get("value", ""),
+            "sensitivity": " | ".join(split_labels(
+                said.get("sensitivity", {}).get("value", ""))),
+            "visibility": row.visibility or "",
+            "default_branch": row.default_branch or "",
+        }))
     return buffer.getvalue()
 
 
@@ -321,6 +515,16 @@ def from_csv(session, text: str, actor: str = "") -> dict:
                              "first to see the shape"]}
 
     known = {row.full_name: row for row in session.query(Repository).all()}
+    # The labels anybody can tick, so a spreadsheet cannot invent one.  Plus
+    # what repositories already carry, so a file exported before a label was
+    # dropped still goes back in.
+    offered = labels(session)
+    for repo in known.values():
+        offered += [x for x in split_labels(repo.sensitivity or "")
+                    if x not in offered]
+    # What each would inherit, for a notify tick on an owner the row leaves
+    # to the connection.
+    inherited = effective_many(session, list(known.values()))
 
     for raw in reader:
         counts["rows"] += 1
@@ -331,7 +535,8 @@ def from_csv(session, text: str, actor: str = "") -> dict:
         # One bad row is one bad row.  Whatever is wrong with it, the rest of
         # the file still gets read.
         try:
-            row = {(k or "").strip().lower(): (str(v) if v is not None else "").strip()
+            row = {(k or "").strip().lower():
+                   _unquote((str(v) if v is not None else "").strip())
                    for k, v in raw.items() if k}
         except Exception:            # noqa: BLE001
             counts["skipped"] += 1
@@ -349,36 +554,23 @@ def from_csv(session, text: str, actor: str = "") -> dict:
                 problems.append(f"no repository called {name}")
             continue
 
-        # Checked before anything is set, so a row with a bad owner changes
+        # Everything is checked before anything is set, so a bad row changes
         # nothing at all rather than half of itself.
-        wrong = [(field, bad_address(row[field])) for field in OWNERS
-                 if row.get(field) and row[field] != "-"
-                 and bad_address(row[field])]
-        if wrong:
+        wanted, why = _read_row(row, repo, offered, inherited.get(repo.id, {}))
+        if why:
             counts["skipped"] += 1
             if len(problems) < 10:
-                field, part = wrong[0]
-                problems.append(f"{name}: {field.replace('_', ' ')} has to be "
-                                f"an email address, and {part!r} is not one")
+                problems.append(f"{name}: {why}")
             continue
 
         try:
             touched = False
-            for field in FIELDS:
-                if field not in row:
-                    continue
-                given = row[field]
-                if not given:
-                    continue                  # left alone, deliberately
-                if given == "-":
-                    new = ""
-                elif field == "sensitivity":
-                    # However it was separated, stored the way the rest of the
-                    # product writes it.
-                    new = ", ".join(split_labels(given))
-                else:
-                    new = given
-                if (getattr(repo, field, "") or "") != new:
+            for field, new in wanted.items():
+                if field in NOTIFY_FLAGS + ("web_app",):
+                    if bool(getattr(repo, field, False)) != new:
+                        setattr(repo, field, new)
+                        touched = True
+                elif (getattr(repo, field, "") or "") != new:
                     setattr(repo, field, new)
                     touched = True
 

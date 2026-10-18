@@ -1,0 +1,19 @@
+{# What the tagging spreadsheet holds and how a cell is read, for both import
+   forms: the Tagging page and the Repositories page. #}
+<p class="faint small">Export first to see the shape.  The repository column
+  is what each row is matched on.  The rest are application_name,
+  application_owner, technical_owner, sensitivity, description,
+  notify_application_owner, notify_technical_owner, notify_extra,
+  web_application and web_urls.</p>
+<p class="faint small">Owners and notify_extra are email addresses, several
+  separated by <strong>|</strong> or commas.  sensitivity is the labels on the
+  <a href="{{ base }}/settings">Settings page</a>{% if sensitivity_labels %}
+  ({{ sensitivity_labels | join(', ') }}){% endif %}, separated the same way.
+  The notify columns and web_application are yes or no, and web_urls are http
+  or https addresses.  A row with anything else in it is skipped whole and
+  named afterward.</p>
+<p class="faint small">An empty cell leaves that value alone, so a column you
+  did not fill in cannot quietly wipe what somebody set last month.  A single
+  <strong>-</strong> clears it, which is the same word the forms use.  A
+  repository this installation has never seen is reported back rather than
+  created.</p>

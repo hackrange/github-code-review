@@ -9,9 +9,42 @@
      title="Organization, Repository, Branch, VulnerabilityScanning for every branch">Export scope CSV</a>
   <a class="btn" href="{{ base }}/scope/import">Import scope CSV</a>
   {% endif %}
+  {# What each repository is, who owns it, who is told and what it holds,
+     as the spreadsheet the Tagging page reads and writes. #}
+  <a class="btn" href="{{ base }}/tagging/export"
+     title="Application, owners, notify, what it holds and web application, for every repository you can see">Export repositories CSV</a>
+  {% if can_tag %}
+  <button class="btn" type="button" data-modal="repo-import-modal">Import repositories CSV</button>
+  {% endif %}
+  <a class="btn" href="{{ base }}/repositories/web-apps.csv"
+     title="Every repository marked as part of a web application, with its addresses and owners">Export web applications</a>
   {% if certified and not certified_filter %}
   <a class="btn" href="#certifications">Certified branches ({{ certified | length }})</a>
   {% endif %}</div></div>
+
+{% if can_tag %}
+<div class="modal-backdrop" id="repo-import-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/tagging/import"
+          enctype="multipart/form-data">
+      <div class="modal-head">Import repositories
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="back" value="/repositories">
+        {% include "_tagging_import_help.html" %}
+        <label>The file
+          <input type="file" name="file" accept=".csv,text/csv" required>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Import</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
 
 {% import "_cert_badge.html" as cb %}
 {% import "_diagram_actions.html" as da with context %}
@@ -227,6 +260,14 @@
         <option value="set">Changed from the default</option>
       </select>
     </div>
+    <div class="field">
+      <label for="repo-webapp">Web application</label>
+      <select id="repo-webapp" data-filter-by="repo-table" data-filter-key="webapp">
+        <option value="">Any</option>
+        <option value="yes">Part of one</option>
+        <option value="no">Not marked</option>
+      </select>
+    </div>
     {# Off to start with.  The scan already skips archived repositories,
        so their rows are history nobody can act on and they crowd out the
        ones that can still change. #}
@@ -288,6 +329,7 @@
         {% set cert = certified_default.get(r.full_name) %}
         {% set sc = scopes.get(r.full_name, {}) %}
         <tr data-org="{{ r.organization }}"{{ ' data-archived' if r.archived }}
+            data-webapp="{{ 'yes' if r.id in web else 'no' }}"
             {%- set rc = certs_by_repo.get(r.full_name, []) %}
             {%- set ct = namespace(words=[]) %}
             {%- for one in rc %}
@@ -324,8 +366,11 @@
             {%- set held = ab.get('sensitivity', {}) %}
             {%- if held.value %}<div>{% for one in held.value.split(',') %}<span class="badge medium">{{ one.strip() }}</span> {% endfor %}</div>{% endif %}
             {%- if told.get(r.id) %}<div><span class="faint">Notify:</span> {{ told[r.id] | join(', ') }}</div>{% endif %}
+            {%- if r.id in web %}<div><span class="badge scope-full" title="Part of a web application">Web app</span>
+              {%- for url in web[r.id] %} <span class="mono">{{ url }}</span>{% endfor %}</div>{% endif %}
             {%- if not (ab.get('application_name', {}).value or ab.get('application_owner', {}).value
-                        or ab.get('technical_owner', {}).value or held.value or told.get(r.id)) %}
+                        or ab.get('technical_owner', {}).value or held.value or told.get(r.id)
+                        or r.id in web) %}
             <span class="faint">nobody has said</span>{% endif %}</td>
           {# The sign off on this repository's own default branch, beside the
              branch it is about.  The card above is the whole list, which is
