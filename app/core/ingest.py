@@ -940,6 +940,12 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                 count = head.get("commits_90d")
                 repo.default_commits_90d = (int(count) if isinstance(count, int)
                                             and count >= 0 else None)
+                times = head.get("commit_times")
+                repo.default_commit_times = (
+                    json.dumps(sorted((int(t) for t in times
+                                       if isinstance(t, int) and t > 0),
+                                      reverse=True)[:1500])
+                    if isinstance(times, list) else "")
         dast = entry.get("dast")
         if isinstance(dast, dict) and dast.get("verdict"):
             repo.dast_verdict = str(dast.get("verdict"))[:16]

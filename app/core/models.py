@@ -386,6 +386,11 @@ class Repository(Base):
     # clone, where it would only count what was fetched.
     default_committed_at = Column(DateTime(timezone=True))
     default_commits_90d = Column(Integer)
+    # The default branch's commit times for the two years before that scan,
+    # as a JSON list of epoch seconds, newest first and capped.  First parent
+    # only, so a merged pull request is one change.  What lets a site say how
+    # many changes landed since its last test.  Text so it stays off the row.
+    default_commit_times = Column(Text, default="")
 
     # Every branch the last scan actually walked here, as a list of names.
     #
@@ -1970,6 +1975,31 @@ class RepoProposal(Base):
     decided_at = Column(DateTime(timezone=True))
 
     repo = relationship("Repository")
+
+
+class WebAppTest(Base):
+    """A dynamic scan or penetration test of one web application, done elsewhere.
+
+    Recorded here so the Web Applications tab can say which sites have had
+    code change since they were last tested.  The application is matched by
+    `app_key`, the same key the tab groups by: its name without case, or the
+    repository's full name when it has no name.  Every test is kept, and
+    the newest is the one that counts.
+    """
+
+    __tablename__ = "webapp_tests"
+
+    id = Column(Integer, primary_key=True)
+    app_key = Column(String(320), nullable=False, index=True)
+    app_name = Column(String(320), default="")
+    # dast or pentest.
+    kind = Column(String(16), default="pentest", nullable=False)
+    tested_at = Column(DateTime(timezone=True), nullable=False)
+    tested_by = Column(String(200), default="")
+    report_ref = Column(String(500), default="")
+    note = Column(Text, default="")
+    recorded_by = Column(String(120), default="")
+    recorded_at = Column(DateTime(timezone=True), default=utcnow)
 
 
 class AIUsage(Base):

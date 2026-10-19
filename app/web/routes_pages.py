@@ -3757,6 +3757,7 @@ def blast_radius(request: Request, user: User = Depends(current_user)):
 # software page below.
 @router.get("/blast-radius/web-apps")
 def blast_web_apps(request: Request, q: str = "", within: str = "",
+                   due: str = "", msg: str = "", kind: str = "",
                    user: User = Depends(current_user)):
     """Every web application, the repositories behind it, and when they moved.
 
@@ -3788,15 +3789,72 @@ def blast_web_apps(request: Request, q: str = "", within: str = "",
                 .group_by(Finding.repository, Finding.severity).all()):
             counts.setdefault(repo_name or "", {})[
                 getattr(severity, "value", "")] = total
+        from app.core import settings_store
+
         everything = webapps.inventory(
             db, base=rbac.visible_repositories(db, user), counts=counts)
-        shown = webapps.narrow(everything, search, window)
+        max_age = int(settings_store.get(db, "dast.max_age_days") or 0)
+        webapps.judge(everything, webapps.tests_by_key(db), max_age)
+        due_only = due == "1"
+        shown = webapps.narrow(everything, search, window, due_only)
         context = _shared(db, user)
         context.update(active_page="blast-radius", blast_tab="web-apps",
                        apps=shown, totals=webapps.summary(shown),
                        marked=len(everything), q=search, within=window,
-                       windows=webapps.WINDOWS)
+                       due_only=due_only, max_age=max_age,
+                       windows=webapps.WINDOWS, test_kinds=webapps.TEST_KINDS,
+                       can_record=rbac.can(user, "repo.write"),
+                       today=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                       flash=clean_notice(msg, limit=300),
+                       flash_kind=notice_class(kind))
         return page(request, "blast_web_apps.html", **context)
+
+
+@router.get("/blast-radius/web-apps/due.csv")
+def export_due_web_apps(request: Request, user: User = Depends(current_user)):
+    """The web applications due for a test, for whoever runs the tests.
+
+    One row per application: why it is due, its last test, the changes since,
+    where it is served, who owns it and the repositories behind it.  Only what
+    this person can see.
+    """
+    rbac.require(user, "repo.read")
+    import csv
+    import io
+
+    from app.core import dast_due
+    from app.core.reports import _quote_formula
+
+    with session_scope() as db:
+        apps = dast_due.applications(db, base=rbac.visible_repositories(db, user))
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["application", "status", "why", "last_test_date",
+                     "last_test_kind", "last_tested_by", "last_test_report",
+                     "changes_since_test", "code_last_changed", "addresses",
+                     "business_owners", "technical_owners", "repositories"])
+    for app in apps:
+        if not app["due"]["is_due"]:
+            continue
+        last = app["last_test"] or {}
+        commits = app["due"]["commits"]
+        # Quoted against formulas, since this is opened in a spreadsheet.
+        writer.writerow([_quote_formula(cell) for cell in [
+            str(app["name"]), app["due"]["status"],
+            str("; ".join(app["due"]["reasons"])),
+            last["tested_at"].strftime("%Y-%m-%d") if last else "",
+            last.get("kind_name", ""), str(last.get("tested_by", "")),
+            str(last.get("report_ref", "")),
+            "" if commits is None else f"{commits}{'' if app['due']['exact'] else '+'}",
+            app["changed_at"].strftime("%Y-%m-%d") if app["changed_at"] else "",
+            " ".join(app["urls"]), str(", ".join(app["owners"])),
+            str(", ".join(app["technical"])),
+            " ".join(r["full_name"] for r in app["repos"])]])
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    return Response(
+        content=out.getvalue(), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":
+                 f'attachment; filename="web-applications-due-{stamp}.csv"'})
 
 
 # Declared before /blast-radius/{organization}, or "software" would be read as

@@ -641,6 +641,21 @@
   </label>
 </div>
 
+<div class="card" id="webtest">
+  <div class="card-head"><span class="head-text">Web testing<button type="button" class="help-dot" data-modal="help-webtest" aria-label="What this section is for">?</button></span></div>
+  <div class="small faint" style="margin-bottom:.6rem">
+    When a web application is due for another dynamic scan or penetration
+    test.  It is always due when it was never tested or its code changed
+    since the last test.  This adds an age limit on top.
+  </div>
+  <label>Due again after, in days
+    <input type="number" name="dast.max_age_days" min="0" max="3650"
+           value="{{ values['dast.max_age_days'] }}">
+    <span class="faint small">365 is a yearly test.  0 means only a change
+      makes it due.</span>
+  </label>
+</div>
+
 <div class="card" id="limits">
   <div class="card-head"><span class="head-text">Limits<button type="button" class="help-dot" data-modal="help-limits" aria-label="What this section is for">?</button></span></div>
   <div class="small faint" style="margin-bottom:.6rem">

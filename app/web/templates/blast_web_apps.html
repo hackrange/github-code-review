@@ -9,10 +9,16 @@
       keeps moving after it, so the sites at the top are the ones whose code
       moved most recently.  Changed means the newest commit on the default
       branch as of the last scan.  It is not a deployment: nothing here can
-      see what is running.</div></div>
+      see what is running.  Due for testing means never tested, changed since
+      the last recorded test{{ ', or tested more than %d days ago' % max_age if max_age }}.</div></div>
   <div class="page-actions">
+    <a class="btn" href="{{ base }}/blast-radius/web-apps/due.csv"
+       title="The web applications due for a test: why, the last test, changes since, addresses and owners">Due for testing CSV</a>
     <a class="btn" href="{{ base }}/repositories/web-apps.csv"
        title="Every web application repository, with its addresses, owners and when it last changed">CSV</a>
+    {% if can_record %}
+    <button class="btn" type="button" data-modal="import-tests-modal">Import tests</button>
+    {% endif %}
   </div>
 </div>
 
@@ -21,6 +27,11 @@
 {% set here = base ~ '/blast-radius/web-apps' %}
 <div class="stats">
   <div class="stat"><div class="n">{{ totals.applications }}</div><div class="l">Web applications</div></div>
+  <a class="stat bad" href="{{ here }}?due=1" title="Never tested, code changed since the last test{{ ', or tested more than %d days ago' % max_age if max_age }}">
+    <div class="n">{{ totals.due }}</div><div class="l">Due for testing</div></a>
+  {% if totals.never %}
+  <a class="stat warn" href="{{ here }}?due=1"><div class="n">{{ totals.never }}</div><div class="l">Never tested</div></a>
+  {% endif %}
   <div class="stat"><div class="n">{{ totals.repositories }}</div><div class="l">Repositories behind them</div></div>
   <a class="stat bad" href="{{ here }}?within=7"><div class="n">{{ totals.week }}</div>
     <div class="l">Changed in 7 days</div></a>
@@ -48,6 +59,13 @@
       {% endfor %}
     </select>
   </div>
+  <div class="field">
+    <label for="due">Testing</label>
+    <select id="due" name="due">
+      <option value="">Any</option>
+      <option value="1" {{ 'selected' if due_only }}>Due for testing</option>
+    </select>
+  </div>
   <button class="btn primary" type="submit">Search</button>
   <a class="btn" href="{{ here }}">Clear</a>
 </form>
@@ -64,7 +82,7 @@
 <div class="card">
   <div class="card-head">
     {{ totals.applications }} web application{{ '' if totals.applications == 1 else 's' }}
-    {% if q or within %}matching{% endif %}
+    {% if q or within or due_only %}matching{% endif %}
     <span class="faint small" style="font-weight:400;margin-left:.5rem">most recently changed first</span>
   </div>
   {% if apps %}
@@ -86,6 +104,43 @@
             <strong>{{ app.name }}</strong>
             {%- if not app.named %}<div class="faint small">no application name set</div>{% endif %}
             <div class="small" style="margin-top:.25rem">{{ ago(app.days, app.source) }}</div>
+            {% set d = app.due %}
+            <div class="small" style="margin-top:.4rem">
+              {% if d.status == 'never' %}<span class="badge critical">never tested</span>
+              {% elif d.status == 'due' %}<span class="badge high">due for testing</span>
+              {% else %}<span class="badge ok">tested since the last change</span>{% endif %}
+              {% if d.status == 'due' %}<div class="faint">{{ d.reasons | join('; ') }}</div>
+              {% elif d.reasons and d.status == 'current' %}<div class="faint">{{ d.reasons | join('; ') }}</div>{% endif %}
+            </div>
+            {% if app.last_test %}{% set t = app.last_test %}
+            <div class="small faint" style="margin-top:.25rem">Last: {{ t.kind_name }},
+              {{ t.tested_at | dt('%Y-%m-%d') }}{% if t.tested_by %}, {{ t.tested_by }}{% endif %}
+              {%- if t.report_ref %}<div class="mono">{{ t.report_ref }}</div>{% endif %}</div>
+            {% endif %}
+            {% if can_record %}
+            <button class="btn sm" type="button" style="margin-top:.4rem" data-modal="test-modal"
+                    data-app_key="{{ app.key }}" data-app_name="{{ app.name }}">Record a test</button>
+            {% endif %}
+            {% if app.tests %}
+            <details class="small" style="margin-top:.35rem">
+              <summary>{{ app.tests | length }} test{{ '' if app.tests | length == 1 else 's' }} recorded</summary>
+              {% for t in app.tests %}
+              <div style="margin:.3rem 0">{{ t.tested_at | dt('%Y-%m-%d') }}, {{ t.kind_name }}
+                {%- if t.tested_by %}, {{ t.tested_by }}{% endif %}
+                {%- if t.report_ref %} <span class="mono">{{ t.report_ref }}</span>{% endif %}
+                {%- if t.note %}<div class="faint">{{ t.note }}</div>{% endif %}
+                <div class="faint">recorded by {{ t.recorded_by }}</div>
+                {% if can_record %}
+                <form method="post" action="{{ base }}/blast-radius/web-apps/tests/{{ t.id }}/delete" style="display:inline"
+                      data-confirm="Remove this test record?">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button class="btn sm" type="submit">Remove</button>
+                </form>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </details>
+            {% endif %}
           </td>
           <td rowspan="{{ app.repos | length }}" class="small">
             {%- for url in app.urls %}<div class="mono"><a rel="noopener noreferrer" target="_blank" href="{{ url }}">{{ url }}</a></div>{% endfor %}</td>
@@ -98,7 +153,9 @@
             {%- if r.archived %} <span class="badge waived">archived</span>{% endif %}
             {%- if r.default_branch %}<div class="faint mono">{{ r.default_branch }}</div>{% endif %}</td>
           <td class="small nowrap">{{ ago(r.days, r.source) }}
-            {%- if r.changed_at %}<div class="faint">{{ r.changed_at | dt('%Y-%m-%d') }}</div>{% endif %}</td>
+            {%- if r.changed_at %}<div class="faint">{{ r.changed_at | dt('%Y-%m-%d') }}</div>{% endif %}
+            {%- if r.since_test and r.since_test.commits %}<div class="faint">{{ r.since_test.commits }}{{ '' if r.since_test.exact else '+' }} since the test</div>
+            {%- elif r.since_test and r.since_test.changed %}<div class="faint">changed since the test</div>{% endif %}</td>
           <td class="small">{{ r.commits_90d if r.commits_90d is not none else '' }}</td>
           <td class="nowrap">
             {%- if r.open %}<a href="{{ base }}/findings?repo={{ r.full_name | urlencode }}&state=open" style="text-decoration:none">
@@ -122,4 +179,69 @@
     repositories CSV.</div>
   {% endif %}
 </div>
+{% if can_record %}
+<div class="modal-backdrop" id="test-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/blast-radius/web-apps/tests">
+      <div class="modal-head">Record a test of <span data-slot="app_name"></span>
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="app_key" value="">
+        <label>Kind
+          <select name="kind">
+            {% for value, label in test_kinds.items() %}
+            <option value="{{ value }}" {{ 'selected' if loop.first }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Tested on
+          <input type="date" name="tested_at" value="{{ today }}" max="{{ today }}" required>
+          <span class="faint small">The last day of testing.  Commits after
+            that day count as changes since.</span>
+        </label>
+        <label>Tested by
+          <input type="text" name="tested_by" maxlength="200" placeholder="The company or tool that ran it">
+        </label>
+        <label>Report
+          <input type="text" name="report_ref" maxlength="500" placeholder="A ticket, a file name or a link">
+        </label>
+        <label>Note
+          <textarea name="note" rows="2" maxlength="4000" placeholder="Scope, anything left out, anything found"></textarea>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Record</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="import-tests-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/blast-radius/web-apps/tests/import"
+          enctype="multipart/form-data">
+      <div class="modal-head">Import tests
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <p class="faint small">A CSV with the columns <span class="mono">application,
+          kind, tested_at, tested_by, report, note</span>.  The application is
+          its name on this page or any repository behind it.  Kind is pentest or
+          dast, pentest when empty.  tested_at is a date such as 2026-03-31.  The
+          same application, kind and date again updates that test rather than
+          adding another.  Rows that match nothing are skipped and named.</p>
+        <label>The file
+          <input type="file" name="file" accept=".csv,text/csv" required>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Import</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

@@ -315,6 +315,12 @@ DEFAULTS = {
                                 "exception can be told not to cover. Yours to "
                                 "choose: these are a starting point, not a fixed list."),
 
+    # ---- when a site wants testing again ----
+    "dast.max_age_days":       (365, False,
+                                "A web application is due for another test this "
+                                "many days after its last one, even if nothing "
+                                "changed. 0 for no limit."),
+
     # ---- whose sites these are ----
     "web.company_domains":     ([], False,
                                 "The company's own domains. A host on one, or under "
@@ -390,6 +396,15 @@ DEFAULTS = {
     # What the last check found, so the page can show it without asking GitHub
     # every time somebody opens it.
     "notify.org_gaps_last":    ({}, False, "The last organization check."),
+    # Off by default for the same reason.
+    "notify.dast_due_enabled": (False, False,
+                                "Every Monday morning, say which web applications "
+                                "became due for a dynamic scan or penetration test."),
+    "notify.dast_due_owners":  (False, False,
+                                "Send it to each application's owners as well."),
+    # Which applications the last message already named, so the next one only
+    # says what is new.
+    "notify.dast_due_last":    ([], False, "Applications already reported as due."),
 
     # ---- how times are shown and when schedules fire ----
     "ui.timezone":             ("GMT", False,
@@ -452,6 +467,7 @@ SECTIONS = [
     ("Fidelity", ["code.muted_rules"]),
     ("Sensitivity labels", ["sensitivity.labels"]),
     ("Company domains", ["web.company_domains"]),
+    ("Web testing", ["dast.max_age_days"]),
     ("Limits", ["github.parallel_repos", "scan.max_concurrent",
                 "secrets.history_window_days",
                 "scan.timeout_per_repo", "scan.max_hours",

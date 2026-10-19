@@ -282,17 +282,27 @@ scan_one_repo() {
     # the branch, which for a merge is the merge rather than the first draft.
     # The count is left null on a shallow clone, where it would be a count of
     # what was fetched rather than of what happened.
-    local dsha dwhen dcount=null
+    #
+    # The commit times of the last two years go too, newest first and capped,
+    # so a site can say how many commits landed since its last penetration
+    # test or dynamic scan, whenever that was.  Null on a shallow clone too.
+    local dsha dwhen dcount=null dtimes=null
     dsha=$(git -C "$clone_dir" rev-parse --verify --quiet "$default_branch" 2>/dev/null || echo "")
     if [[ -n "$dsha" ]]; then
       dwhen=$(git -C "$clone_dir" log -1 --format=%cI "$dsha" 2>/dev/null || echo "")
       if [[ "$(git -C "$clone_dir" rev-parse --is-shallow-repository 2>/dev/null)" != "true" ]]; then
         dcount=$(git -C "$clone_dir" rev-list --count --since="90 days ago" "$dsha" 2>/dev/null || echo null)
+        dtimes=$(git -C "$clone_dir" log --first-parent --since="730 days ago" \
+                   --max-count=1500 --format=%ct "$dsha" 2>/dev/null \
+                 | jq -Rsc '[split("\n")[] | select(test("^[0-9]+$")) | tonumber]' \
+                   2>/dev/null || echo null)
       fi
       [[ "$dcount" =~ ^[0-9]+$ ]] || dcount=null
+      [[ "$dtimes" == \[* ]] || dtimes=null
       if [[ -n "$dwhen" ]]; then
         DEFAULT_HEAD_JSON=$(jq -nc --arg s "$dsha" --arg w "$dwhen" --argjson c "$dcount" \
-          '{sha: $s, committed_at: $w, commits_90d: $c}')
+          --argjson t "$dtimes" \
+          '{sha: $s, committed_at: $w, commits_90d: $c, commit_times: $t}')
       fi
     fi
 

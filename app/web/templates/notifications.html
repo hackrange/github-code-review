@@ -249,6 +249,29 @@
     </div>
   </div>
 
+  <div class="card" id="dast-due">
+    <div class="card-head">Web applications due for testing</div>
+    <div class="card-body">
+      <label class="check">
+        <input type="checkbox" name="notify.dast_due_enabled" value="1"
+               {{ 'checked' if values['notify.dast_due_enabled'] }}>
+        Every Monday morning, say which web applications became due for a
+        dynamic scan or penetration test
+      </label>
+      <label class="check">
+        <input type="checkbox" name="notify.dast_due_owners" value="1"
+               {{ 'checked' if values['notify.dast_due_owners'] }}>
+        Tell each application's owners about their own as well
+      </label>
+      <p class="faint small">Due means never tested, the code behind it
+        changed since its last test, or that test is older than the limit on
+        the <a href="{{ base }}/settings#webtest">Settings page</a>.  Only
+        applications that became due since the last message are named, and
+        nothing is sent when there are none.  See them all on
+        <a href="{{ base }}/blast-radius/web-apps?due=1">Web Applications</a>.</p>
+    </div>
+  </div>
+
   <div class="page-actions">
     <button class="btn primary" type="submit">Save</button>
   </div>

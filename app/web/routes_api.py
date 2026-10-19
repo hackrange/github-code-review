@@ -1886,6 +1886,8 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
             if domain not in domains:
                 domains.append(domain)
         put("web.company_domains", domains[:200])
+        put("dast.max_age_days", clean_int(form.get("dast.max_age_days", 365) or 0,
+                                           "Due again after", low=0, high=3650))
 
         put("security.force_https", _checked(form, "security.force_https"))
         put("security.trusted_proxies", _csv_list(text("security.trusted_proxies")))
@@ -3982,6 +3984,109 @@ async def add_found_web_urls(repo_id: int, request: Request,
     return redirect(_back_with(back, said))
 
 
+def _visible_apps(db, user) -> list:
+    from app.core import webapps
+    return webapps.inventory(db, base=rbac.visible_repositories(db, user))
+
+
+@router.post("/blast-radius/web-apps/tests")
+async def record_web_app_test(request: Request,
+                              user: User = Depends(current_user)):
+    """Say a web application was tested, by a dynamic scan or a pen test."""
+    await check_csrf(request)
+    rbac.require(user, "repo.write")
+
+    from app.core import webapps
+
+    form = await request.form()
+    back = "/blast-radius/web-apps"
+    kind = webapps.kind_of(form.get("kind") or "")
+    if not kind:
+        raise HTTPException(status_code=400, detail="Pick what kind of test it was.")
+    when = webapps.date_of(form.get("tested_at") or "")
+    if when is None:
+        raise HTTPException(status_code=400,
+                            detail="Give the date it was tested, not in the future.")
+    tested_by = clean_text(form.get("tested_by"), "Tested by", limit=200,
+                           required=False)
+    report_ref = clean_text(form.get("report_ref"), "Report", limit=500,
+                            required=False)
+    note = clean_text(form.get("note"), "Note", limit=4000, required=False)
+    key = clean_text(form.get("app_key"), "Application", limit=320)
+
+    with session_scope() as db:
+        app = next((a for a in _visible_apps(db, user) if a["key"] == key), None)
+        if app is None:
+            raise HTTPException(status_code=404, detail="No such web application.")
+        webapps.record_test(db, app, kind, when, tested_by, report_ref, note,
+                            user.username)
+        record(db, "webapp.tested", actor=user.username, target=app["name"],
+               detail=(f"{webapps.TEST_KINDS[kind]} on {when:%Y-%m-%d}"
+                       + (f" by {tested_by}" if tested_by else ""))[:200],
+               source_ip=client_ip(request))
+        name = app["name"]
+    return redirect(_back_with(back, f"Recorded the test of {name}."))
+
+
+@router.post("/blast-radius/web-apps/tests/{test_id}/delete")
+async def delete_web_app_test(test_id: int, request: Request,
+                              user: User = Depends(current_user)):
+    """Take back a test recorded by mistake."""
+    await check_csrf(request)
+    rbac.require(user, "repo.write")
+
+    from app.core.models import WebAppTest
+
+    with session_scope() as db:
+        row = db.get(WebAppTest, test_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such test.")
+        record(db, "webapp.test_removed", actor=user.username,
+               target=row.app_name,
+               detail=f"{row.kind} on {row.tested_at:%Y-%m-%d}",
+               source_ip=client_ip(request))
+        db.delete(row)
+    return redirect(_back_with("/blast-radius/web-apps", "Removed that test."))
+
+
+@router.post("/blast-radius/web-apps/tests/import")
+async def import_web_app_tests(request: Request,
+                               user: User = Depends(current_user)):
+    """Tests from a spreadsheet, for a backlog of past reports."""
+    await check_csrf(request)
+    rbac.require(user, "repo.write")
+
+    from app.core import webapps
+
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(status_code=400, detail="Choose a file first.")
+    raw = await upload.read()
+    if len(raw) > MAX_IMPORT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"That file is larger than "
+                   f"{MAX_IMPORT_BYTES // (1024 * 1024)}MB.")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1", "replace")
+
+    with session_scope() as db:
+        result = webapps.import_tests(db, text, _visible_apps(db, user),
+                                      user.username)
+        record(db, "webapp.tests_imported", actor=user.username,
+               detail=f"{result['saved']} saved, {len(result['problems'])} skipped",
+               outcome="warn" if result["problems"] else "ok",
+               source_ip=client_ip(request))
+    said = f"Saved {result['saved']} test{'' if result['saved'] == 1 else 's'}."
+    if result["problems"]:
+        said += "  Skipped: " + "  ".join(result["problems"][:5])
+    return redirect(_back_with("/blast-radius/web-apps", said[:290],
+                               "warn" if result["problems"] else "ok"))
+
+
 def _proposal(db, proposal_id: int):
     from app.core import proposals
     from app.core.models import RepoProposal
@@ -4110,6 +4215,8 @@ async def save_notifications(request: Request,
         put("notify.email_format", fmt)
         put("notify.attach_csv", _checked(form, "notify.attach_csv"))
         put("notify.org_gaps_enabled", _checked(form, "notify.org_gaps_enabled"))
+        put("notify.dast_due_enabled", _checked(form, "notify.dast_due_enabled"))
+        put("notify.dast_due_owners", _checked(form, "notify.dast_due_owners"))
         put("notify.org_gaps_ignore", clean_text(
             form.get("notify.org_gaps_ignore"), "Organizations to leave out",
             limit=2000, required=False))

@@ -262,6 +262,16 @@ def start() -> None:
                        id="org-coverage", replace_existing=True,
                        misfire_grace_time=3600, coalesce=True, max_instances=1)
 
+    # Web applications that became due for another test.  Weekly, next to the
+    # organization check, and quiet unless switched on.
+    from app.core import dast_due
+
+    _scheduler.add_job(dast_due.weekly,
+                       CronTrigger(day_of_week="mon", hour=8, minute=15,
+                                   timezone=_zone()),
+                       id="dast-due", replace_existing=True,
+                       misfire_grace_time=3600, coalesce=True, max_instances=1)
+
     # CPU, memory, disk and network for the Utilization page.  The sample is
     # a few file reads, the breakdown asks the database how big it is, and
     # the rollup averages minutes into the wider tables.

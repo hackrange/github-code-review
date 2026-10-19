@@ -247,6 +247,19 @@ SECTIONS = [
             "a second brand or an API domain say.",
         ],
     }),
+    ("webtest", "Web testing", {
+        "title": "Web testing",
+        "what": [
+            "The Web Applications tab under Blast Radius says which sites are "
+            "due for a dynamic scan or a penetration test, which are run "
+            "elsewhere.  A site is due when it was never tested, or when the "
+            "default branch of any repository behind it got a commit after "
+            "its last test.",
+            "This sets an age limit too, so a site nobody changed still comes "
+            "up for its yearly test.  A commit is not a deployment, so due "
+            "means the code changed, not that the site did.",
+        ],
+    }),
     ("limits", "Limits", {
         "title": "Limits",
         "what": [
