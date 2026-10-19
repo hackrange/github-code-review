@@ -2564,7 +2564,8 @@ def _diagram_context(db, user, repo) -> dict:
             waiting += tagging.web_urls(
                 proposals.changes(row).get("web_app_urls", ""))[0]
         found = diagram.suggestions(
-            drawn["graph"], tagging.web_urls(repo.web_app_urls)[0], waiting)
+            drawn["graph"], tagging.web_urls(repo.web_app_urls)[0], waiting,
+            diagram.org_domains(db))
     return {"diagram": drawn,
             "can_draw": rbac.can(user, "repo.diagram") and ai_ready,
             "ai_model": ai.describe_model(cfg) if ai_ready else "",

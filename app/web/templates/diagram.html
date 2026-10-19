@@ -173,17 +173,19 @@
         <p class="faint small">Read from the code by a model, so check each one.
           Serves means the code likely answers there.  Uses means it calls or
           depends on it, which is usually not what a dynamic scan should aim at,
-          so those start unticked.
+          so those start unticked unless they are on a company domain, one
+          already recorded for a web application here.
           {% if can_add_urls %}Ticked addresses are added to the repository and
           it is marked as part of a web application.
           {% else %}Ticked addresses go to an administrator to approve.{% endif %}</p>
         {% for a in found_urls %}
         <label class="check" style="display:flex;gap:.5rem;align-items:flex-start;margin:.4rem 0">
           <input type="checkbox" name="url" value="{{ a.url }}"
-                 {{ 'checked' if a.relation == 'serves' and not a.waiting }}
+                 {{ 'checked' if (a.relation == 'serves' or a.own) and not a.waiting }}
                  {{ 'disabled' if a.waiting }}>
           <span><span class="mono">{{ a.url }}</span>
             <span class="badge {{ 'ok' if a.relation == 'serves' else 'waived' }}">{{ a.relation }}</span>
+            {% if a.own %}<span class="badge medium" title="On a domain already recorded for another web application">company domain</span>{% endif %}
             {% if a.waiting %}<span class="badge pending">waiting for approval</span>{% endif %}
             {% if a.evidence %}<div class="faint small">{{ a.evidence }}</div>{% endif %}</span>
         </label>

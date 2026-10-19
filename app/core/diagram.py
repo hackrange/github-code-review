@@ -425,51 +425,166 @@ def clean_address(value) -> str:
 
 
 _NAMED_HOST = re.compile(
-    r"\b(?:https?://)?((?:[a-z0-9-]+\.)+(?:com|net|org|io|gov|edu|us|co|biz|"
-    r"info|app|dev|cloud|ai))\b(?![.\w-])", re.I)
+    r"(?<![\w./@-])(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?![\w.-])", re.I)
+
+# What a repository is built from rather than where anything is served:
+# code hosts, package and container registries.  Never offered.
+_BUILD_KINDS = ("registry", "repository", "config")
+_BUILD_HOSTS = re.compile(
+    r"(^|\.)(github\.com|githubusercontent\.com|gitlab\.com|bitbucket\.org|"
+    r"npmjs\.(org|com)|docker\.(io|com)|pypi\.org|maven\.org|"
+    r"maven\.apache\.org|nuget\.org|rubygems\.org|golang\.org|gcr\.io|"
+    r"quay\.io|jfrog\.io)$", re.I)
+
+# Two part public suffixes, so a company on example.co.uk is example.co.uk
+# and not co.uk.
+_SECOND_LEVEL = re.compile(r"^(co|com|net|org|gov|ac|edu|ne|or)\.[a-z]{2}$")
 
 
-def _named_hosts(graph: dict) -> list:
+def registrable(host: str) -> str:
+    """The domain a company registers, from a host name: a.b.example.com is example.com."""
+    labels = (host or "").lower().strip(".").split(".")
+    if len(labels) < 2:
+        return ""
+    if len(labels) >= 3 and _SECOND_LEVEL.match(".".join(labels[-2:])):
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+def org_domains(session) -> set:
+    """The company's own domains: those of every web address recorded anywhere.
+
+    The best evidence there is for which host names in the code are the
+    company's sites rather than somebody else's, and it grows as people
+    record more.
+    """
+    from app.core import tagging
+
+    out = set()
+    for (urls,) in session.query(Repository.web_app_urls).filter(
+            Repository.web_app_urls != ""):
+        for url in tagging.web_urls(urls or "")[0]:
+            domain = registrable(_host(url))
+            if domain:
+                out.add(domain)
+    return out
+
+
+# Enough to read a large application's configuration without walking a
+# monorepo for minutes.
+MAX_DISCOVER_FILES = 8000
+MAX_DISCOVER_BYTES = 512 * 1024
+
+
+def discover(root: Path, domains: set) -> list:
+    """Every host under one of the company's domains the checkout names.
+
+    Read here, never sent anywhere.  -> [{url, relation, evidence, own}].
+    """
+    if not domains:
+        return []
+    found, seen = [], 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames
+                             if d not in SKIP_DIRS and not d.startswith("."))
+        for filename in sorted(filenames):
+            path = Path(dirpath) / filename
+            if path.is_symlink() or not _is_text(path):
+                continue
+            seen += 1
+            if seen > MAX_DISCOVER_FILES or len(found) >= MAX_ADDRESSES:
+                return found
+            try:
+                if path.stat().st_size > MAX_DISCOVER_BYTES:
+                    continue
+                text = path.read_text("utf-8", "replace")
+            except OSError:
+                continue
+            rel = str(path.relative_to(root)).replace(os.sep, "/")
+            for match in _NAMED_HOST.finditer(text):
+                host = match.group(1).lower()
+                if registrable(host) not in domains:
+                    continue
+                url = clean_address(host)
+                if url and not any(_host(a["url"]) == host for a in found):
+                    found.append({"url": url, "relation": "serves",
+                                  "evidence": f"seen in {rel}"[:200],
+                                  "own": True})
+                    if len(found) >= MAX_ADDRESSES:
+                        return found
+    return found
+
+
+def merge_addresses(model: list, seen: list, domains: set,
+                    build_hosts: set = ()) -> list:
+    """The model's addresses and what the checkout names, as one list.
+
+    The model's word on serves or uses wins where both have a host.  Code
+    hosts and registries go, and anything on a company domain is marked as
+    the company's own.
+    """
+    out = []
+    for entry in list(model or []) + list(seen or []):
+        host = _host(entry["url"])
+        if (not host or host in build_hosts or _BUILD_HOSTS.search(host)
+                or any(_host(a["url"]) == host for a in out)):
+            continue
+        out.append({**entry, "own": registrable(host) in (domains or ())})
+    return out[:MAX_ADDRESSES]
+
+
+def _named_hosts(graph: dict, domains: set) -> list:
     """Host names written into a drawing made before addresses were asked for.
 
-    A host named by the application's own parts, a web server, service,
-    module or client, is most likely where it is served, staging and test
-    included.  One named by an outside system, a store or a registry is
-    something it uses.
+    Only a web server's own host, or a host on one of the company's domains
+    named by the application's own parts.  Registries, repositories and
+    configuration are what it is built from, and a folder such as config.dev
+    reads like a host name, so neither is trusted here.
     """
-    own = ("webserver", "service", "module", "client")
     out = []
     for node in graph.get("nodes") or []:
+        kind = node.get("kind")
+        if kind in _BUILD_KINDS:
+            continue
         text = f"{node.get('label', '')} {node.get('detail', '')}"
         for match in _NAMED_HOST.finditer(text):
-            url = clean_address(match.group(1))
-            if url and not any(_host(a["url"]) == _host(url) for a in out):
+            host = match.group(1).lower()
+            own = registrable(host) in domains
+            if not own and not (kind == "webserver"
+                                and host == str(node.get("label", "")).lower()):
+                continue
+            url = clean_address(host)
+            if url and not any(_host(a["url"]) == host for a in out):
                 out.append({"url": url,
-                            "relation": ("serves" if node.get("kind") in own
-                                         else "uses"),
-                            "evidence": f"named by {node.get('label', '')}"[:200]})
+                            "relation": "uses" if kind == "external" else "serves",
+                            "evidence": f"named by {node.get('label', '')}"[:200],
+                            "own": own})
             if len(out) >= MAX_ADDRESSES:
                 return out
     return out
 
 
-def suggestions(graph: dict, urls: list, waiting: list = ()) -> list:
+def suggestions(graph: dict, urls: list, waiting: list = (),
+                domains: set = ()) -> list:
     """Addresses the diagram found that the repository does not list yet.
 
     Covered means the repository already names that host.  `waiting` is
     addresses somebody has already proposed, which are shown as such rather
-    than offered again.
+    than offered again.  `domains` is the company's own, from org_domains.
     """
+    domains = set(domains or ())
     have = {_host(u) for u in urls or []}
     asked = {u.rstrip("/").lower() for u in waiting or []}
-    out = []
     found = (graph or {}).get("addresses")
     if found is None:
-        found = _named_hosts(graph or {})
-    for entry in found:
+        found = _named_hosts(graph or {}, domains)
+    out = []
+    for entry in merge_addresses(found, [], domains):
         if _host(entry["url"]) in have:
             continue
         out.append({**entry, "waiting": entry["url"].lower() in asked})
+    # The company's own first, then what the code serves.
+    out.sort(key=lambda a: (not a["own"], a["relation"] != "serves"))
     return out
 
 
@@ -928,6 +1043,7 @@ def _draw(repository: str, branch: str, connection: str, actor: str) -> None:
         own = (db.query(Repository)
                .filter(Repository.full_name == repository).one_or_none())
         site = webapps.for_repository(db, own)
+        domains = org_domains(db)
     served = site.get("urls") or []
     send_code = bool(cfg.get("ai.send_code"))
 
@@ -948,6 +1064,7 @@ def _draw(repository: str, branch: str, connection: str, actor: str) -> None:
         rows = [r for r in rows if r.get("in_estate", "").lower() != repository.lower()]
         summary = dependency_sources.summarize(rows)
         evidence, notes = gather(root, send_code, {**summary, "served": served})
+        seen = discover(root, domains)
 
     prompt = (f"Repository: {repository}\nBranch: {branch}\n\n" + evidence
               + "\n\nNotes on what was sent:\n" + "\n".join(notes))
@@ -978,6 +1095,11 @@ def _draw(repository: str, branch: str, connection: str, actor: str) -> None:
         _finish(repository, status="failed", error=problem)
         return
     notes += add_web_servers(graph, served)
+    # Every host under the company's domains the code names, read here, and
+    # the model's list without the registries the build pulls from.
+    graph["addresses"] = merge_addresses(
+        graph.get("addresses"), seen, domains,
+        {h["host"].lower() for h in summary.get("hosts", [])})
     graph["notes"] = notes
     _finish(repository, status="idle", error="", graph=json.dumps(graph),
             sources=json.dumps({"rows": rows, **summary}), branch=branch,
