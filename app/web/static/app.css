@@ -476,6 +476,10 @@ textarea { min-height: 5rem; resize: vertical; }
 /* A dialog that is only there to explain something.  It has nothing to lose,
    so it reads wider and quieter than a form. */
 .modal.explain { max-width: 34rem; }
+/* A panel holding a table, which needs the room. */
+.modal.wide { max-width: 900px; }
+.confidence { display: inline-block; min-width: 2.2rem; text-align: right;
+              font-variant-numeric: tabular-nums; font-weight: 600; }
 .modal.explain .modal-body p { margin: 0 0 .8rem; line-height: 1.55; }
 .modal.explain .modal-body p:last-child { margin-bottom: 0; }
 .explain-caution {

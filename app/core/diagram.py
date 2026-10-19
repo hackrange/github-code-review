@@ -369,7 +369,8 @@ def parse(text: str) -> tuple:
         relation = str(entry.get("relation") or "").strip().lower()
         addresses.append({"url": url,
                           "relation": "uses" if relation == "uses" else "serves",
-                          "evidence": str(entry.get("evidence") or "")[:200]})
+                          "evidence": str(entry.get("evidence") or "")[:200],
+                          "source": "model"})
     # A web server the model drew under a host name is an address it serves
     # at, even when it forgot to list it.
     for node in nodes:
@@ -378,7 +379,8 @@ def parse(text: str) -> tuple:
         url = clean_address(node["label"])
         if url and not any(_host(a["url"]) == _host(url) for a in addresses):
             addresses.append({"url": url, "relation": "serves",
-                              "evidence": "drawn as a web server"})
+                              "evidence": "drawn as a web server",
+                              "source": "webserver"})
 
     return {"title": str(data.get("title") or "")[:120],
             "summary": str(data.get("summary") or "")[:1500],
@@ -509,23 +511,70 @@ MAX_DISCOVER_FILES = 8000
 MAX_DISCOVER_BYTES = 512 * 1024
 
 
-def discover(root: Path, domains: set) -> list:
-    """Every host under one of the company's domains the checkout names.
+MAX_SCANNED_HOSTS = 3000
 
-    Read here, never sent anywhere.  -> [{url, relation, evidence, own}].
+# How a host was written, from strongest to weakest.  Configuration and
+# deployment files say where something runs or what it talks to.  Code that
+# builds a request says it depends on it.  A link in a page or a README only
+# says somebody pointed at it, and a test or a lock file says less again.
+CONTEXT_WEIGHT = {"config": 30, "code": 20, "doc": 8, "link": 5, "test": 0,
+                  "lock": 0}
+CONTEXT_WORDS = {"config": "configuration", "code": "code", "doc": "documentation",
+                 "link": "a link", "test": "tests", "lock": "a lock file"}
+
+_TEST_PATH = re.compile(
+    r"(^|/)(tests?|spec|__tests__|e2e|fixtures?|mocks?|[\w.-]*\.tests)(/|$)"
+    r"|[._-](test|spec)\.[a-z]+$", re.I)
+_LOCK_FILE = re.compile(r"(^|/)([\w.-]*-lock\.(json|ya?ml)|[\w.-]+\.lock)$", re.I)
+_DOC_EXT = (".md", ".rst", ".txt", ".adoc")
+_MARKUP_EXT = (".html", ".htm", ".htl", ".jsp", ".vue", ".hbs", ".njk", ".ejs")
+_CONFIG_EXT = (".yml", ".yaml", ".json", ".properties", ".cfg", ".conf",
+               ".ini", ".env", ".toml", ".xml", ".tf", ".tfvars", ".farm",
+               ".vhost", ".any", ".config", ".plist", ".gradle")
+_CONFIG_PATH = re.compile(
+    r"(^|/)(config|conf|configs|deploy|deployment|deployments|infra|helm|"
+    r"k8s|kubernetes|terraform|dispatcher|osgiconfig|\.github|nginx)(/|$)"
+    r"|(^|/)(dockerfile|docker-compose[\w.-]*|\.env[\w.-]*|procfile)$", re.I)
+_LINK_BEFORE = re.compile(r"(href|src|action)\s*=\s*[\"']?$|\]\($|<$", re.I)
+
+
+def _context(rel: str, before: str) -> str:
+    """How one mention of a host was written: config, code, doc, link, test or lock."""
+    low = rel.lower()
+    if _LOCK_FILE.search(low):
+        return "lock"
+    if _TEST_PATH.search(low):
+        return "test"
+    if _LINK_BEFORE.search(before.replace("https://", "").replace("http://", "")):
+        return "link"
+    if low.endswith(_DOC_EXT):
+        return "doc"
+    if low.endswith(_MARKUP_EXT):
+        return "link" if "href" in before.lower() else "code"
+    if low.endswith(_CONFIG_EXT) or _CONFIG_PATH.search(low):
+        return "config"
+    return "code"
+
+
+def scan_hosts(root: Path, keep=None) -> dict:
+    """Every host name the checkout writes down, and how.
+
+    -> {host: {"files": [first few], "count": files, "contexts": {kind: n}}}.
+    Read here, never sent anywhere.  Past MAX_SCANNED_HOSTS only hosts that
+    `keep` says yes to are added, so a huge repository cannot crowd out the
+    company's own.
     """
-    if not domains:
-        return []
-    found, seen = [], 0
+    found, read = {}, 0
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames
-                             if d not in SKIP_DIRS and not d.startswith("."))
+                             if d not in SKIP_DIRS
+                             and (not d.startswith(".") or d == ".github"))
         for filename in sorted(filenames):
             path = Path(dirpath) / filename
             if path.is_symlink() or not _is_text(path):
                 continue
-            seen += 1
-            if seen > MAX_DISCOVER_FILES or len(found) >= MAX_ADDRESSES:
+            read += 1
+            if read > MAX_DISCOVER_FILES:
                 return found
             try:
                 if path.stat().st_size > MAX_DISCOVER_BYTES:
@@ -536,33 +585,131 @@ def discover(root: Path, domains: set) -> list:
             rel = str(path.relative_to(root)).replace(os.sep, "/")
             for match in _NAMED_HOST.finditer(text):
                 host = match.group(1).lower()
-                if not on_domain(host, domains):
-                    continue
-                url = clean_address(host)
-                if url and not any(_host(a["url"]) == host for a in found):
-                    found.append({"url": url, "relation": "serves",
-                                  "evidence": f"seen in {rel}"[:200],
-                                  "own": True})
-                    if len(found) >= MAX_ADDRESSES:
-                        return found
+                info = found.get(host)
+                if info is None:
+                    if len(found) >= MAX_SCANNED_HOSTS and not (keep and keep(host)):
+                        continue
+                    info = found[host] = {"files": [], "count": 0, "contexts": {}}
+                kind = _context(rel, text[max(0, match.start() - 12):match.start()])
+                info["contexts"][kind] = info["contexts"].get(kind, 0) + 1
+                if rel not in info["files"]:
+                    info["count"] += 1
+                    if len(info["files"]) < 5:
+                        info["files"].append(rel)
     return found
 
 
+def _seen_words(info: dict) -> str:
+    """Where a host was seen, the way a person would say it."""
+    if not info:
+        return ""
+    best = max(info["contexts"], key=lambda k: CONTEXT_WEIGHT.get(k, 0))
+    more = info["count"] - 1
+    return (f"{CONTEXT_WORDS.get(best, best)} in {info['files'][0]}"
+            + (f" and {more} more file{'s' if more > 1 else ''}" if more > 0 else ""))
+
+
+def discover(root: Path, domains: set, scanned: dict = None) -> list:
+    """Every host on one of the company's domains the checkout names.
+
+    -> [{url, relation, evidence, own, source, seen}].
+    """
+    if not domains:
+        return []
+    if scanned is None:
+        scanned = scan_hosts(root, keep=lambda h: on_domain(h, domains))
+    found = []
+    for host, info in scanned.items():
+        if not on_domain(host, domains):
+            continue
+        url = clean_address(host)
+        if url and not any(_host(a["url"]) == host for a in found):
+            found.append({"url": url, "relation": "serves",
+                          "evidence": f"seen in {_seen_words(info)}"[:200],
+                          "own": True, "source": "code", "seen": info})
+    # The strongest first, so the cap keeps the ones that matter.
+    found.sort(key=lambda a: -confidence(a, True)[0])
+    return found[:MAX_ADDRESSES]
+
+
+def confidence(entry: dict, own: bool) -> tuple:
+    """How likely an address is one this code really serves or depends on.
+
+    -> (5 to 99, [reasons]).  A host on a company domain, written into
+    configuration in several files, scores high.  Another company's site
+    that only appears as a link scores low whatever the model said about it.
+    """
+    score, why = 0, []
+    if own:
+        score += 35
+        why.append("on a company domain")
+    source = entry.get("source") or "model"
+    if source == "model":
+        if entry.get("relation") == "uses":
+            score += 15
+            why.append("the model says the code uses it")
+        else:
+            score += 25
+            why.append("the model says the code serves it")
+    elif source == "webserver":
+        score += 30
+        why.append("drawn as the web server")
+    elif source == "named":
+        score += 15
+        why.append("named by the application's own components")
+    seen = entry.get("seen") or {}
+    kinds = set((seen.get("contexts") or {}).keys())
+    if kinds:
+        best = max(kinds, key=lambda k: CONTEXT_WEIGHT.get(k, 0))
+        score += CONTEXT_WEIGHT.get(best, 0)
+        why.append(f"written in {CONTEXT_WORDS.get(best, best)}")
+        if seen.get("count", 0) > 1:
+            score += min(15, 5 * (seen["count"] - 1))
+            why.append(f"in {seen['count']} files")
+        if kinds <= {"link", "doc"} and not own:
+            score = min(score, 30)
+            why.append("only ever as a link or in documentation")
+        elif kinds <= {"test", "lock"}:
+            score = min(score, 40)
+            why.append("only in tests or lock files")
+    return max(5, min(99, score)), why
+
+
+def level(score: int) -> str:
+    return "high" if score >= 70 else ("medium" if score >= 40 else "low")
+
+
+# Ticked to start with at this confidence and above.
+TICK_AT = 60
+
+
 def merge_addresses(model: list, seen: list, domains: set,
-                    build_hosts: set = ()) -> list:
+                    build_hosts: set = (), scanned: dict = None) -> list:
     """The model's addresses and what the checkout names, as one list.
 
-    The model's word on serves or uses wins where both have a host.  Code
-    hosts and registries go, and anything on a company domain is marked as
-    the company's own.
+    The model's word on serves or uses wins where both have a host, and
+    keeps what the checkout says about how it was written.  Code hosts and
+    registries go, and anything on a company domain is marked as the
+    company's own.
     """
+    scanned = scanned or {}
     out = []
     for entry in list(model or []) + list(seen or []):
         host = _host(entry["url"])
-        if (not host or host in build_hosts or _BUILD_HOSTS.search(host)
-                or any(_host(a["url"]) == host for a in out)):
+        if not host or host in build_hosts or _BUILD_HOSTS.search(host):
             continue
-        out.append({**entry, "own": on_domain(host, domains)})
+        twin = next((a for a in out if _host(a["url"]) == host), None)
+        if twin is not None:
+            if not twin.get("seen") and entry.get("seen"):
+                twin["seen"] = entry["seen"]
+            continue
+        entry = {**entry, "own": on_domain(host, domains)}
+        if not entry.get("seen") and host in scanned:
+            entry["seen"] = scanned[host]
+        if entry.get("seen") and entry.get("source") == "model":
+            entry["evidence"] = (entry.get("evidence") or
+                                 f"seen in {_seen_words(entry['seen'])}")[:200]
+        out.append(entry)
     return out[:MAX_ADDRESSES]
 
 
@@ -583,15 +730,17 @@ def _named_hosts(graph: dict, domains: set) -> list:
         for match in _NAMED_HOST.finditer(text):
             host = match.group(1).lower()
             own = on_domain(host, domains)
-            if not own and not (kind == "webserver"
-                                and host == str(node.get("label", "")).lower()):
+            itself = (kind == "webserver"
+                      and host == str(node.get("label", "")).lower())
+            if not own and not itself:
                 continue
             url = clean_address(host)
             if url and not any(_host(a["url"]) == host for a in out):
                 out.append({"url": url,
                             "relation": "uses" if kind == "external" else "serves",
                             "evidence": f"named by {node.get('label', '')}"[:200],
-                            "own": own})
+                            "own": own,
+                            "source": "webserver" if itself else "named"})
             if len(out) >= MAX_ADDRESSES:
                 return out
     return out
@@ -615,9 +764,12 @@ def suggestions(graph: dict, urls: list, waiting: list = (),
     for entry in merge_addresses(found, [], domains):
         if _host(entry["url"]) in have:
             continue
-        out.append({**entry, "waiting": entry["url"].lower() in asked})
-    # The company's own first, then what the code serves.
-    out.sort(key=lambda a: (not a["own"], a["relation"] != "serves"))
+        score, why = confidence(entry, entry["own"])
+        out.append({**entry, "waiting": entry["url"].lower() in asked,
+                    "confidence": score, "level": level(score), "why": why})
+    # Worked out again on every view, since the company's domains can change
+    # after the drawing.  The most likely first.
+    out.sort(key=lambda a: (-a["confidence"], not a["own"]))
     return out
 
 
@@ -1099,7 +1251,8 @@ def _draw(repository: str, branch: str, connection: str, actor: str) -> None:
         evidence, notes = gather(root, send_code,
                                  {**summary, "served": served,
                                   "domains": sorted(domains)})
-        seen = discover(root, domains)
+        scanned = scan_hosts(root, keep=lambda h: on_domain(h, domains))
+        seen = discover(root, domains, scanned)
 
     prompt = (f"Repository: {repository}\nBranch: {branch}\n\n" + evidence
               + "\n\nNotes on what was sent:\n" + "\n".join(notes))
@@ -1132,9 +1285,11 @@ def _draw(repository: str, branch: str, connection: str, actor: str) -> None:
     notes += add_web_servers(graph, served)
     # Every host under the company's domains the code names, read here, and
     # the model's list without the registries the build pulls from.
+    # How the checkout writes each host the model listed is kept with it, for
+    # the confidence the page shows.
     graph["addresses"] = merge_addresses(
         graph.get("addresses"), seen, domains,
-        {h["host"].lower() for h in summary.get("hosts", [])})
+        {h["host"].lower() for h in summary.get("hosts", [])}, scanned)
     graph["notes"] = notes
     _finish(repository, status="idle", error="", graph=json.dumps(graph),
             sources=json.dumps({"rows": rows, **summary}), branch=branch,

@@ -2570,7 +2570,8 @@ def _diagram_context(db, user, repo) -> dict:
             "can_draw": rbac.can(user, "repo.diagram") and ai_ready,
             "ai_model": ai.describe_model(cfg) if ai_ready else "",
             "ai_sends_code": bool(cfg.get("ai.send_code")),
-            "found_urls": found, "can_add_urls": can_add}
+            "found_urls": found, "can_add_urls": can_add,
+            "tick_at": diagram.TICK_AT}
 
 
 @router.get("/repositories/{repo_id}/diagram")

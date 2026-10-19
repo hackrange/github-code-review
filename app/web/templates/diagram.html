@@ -164,32 +164,46 @@
 
 {% if d and d.ready and found_urls %}
 <div class="modal-backdrop" id="found-urls-modal" hidden>
-  <div class="modal">
+  <div class="modal wide">
     <form method="post" action="{{ base }}/repositories/{{ repo.id }}/web-urls/add">
-      <div class="modal-head">Web addresses found by the diagram
+      <div class="modal-head">URI discovery
         <button type="button" class="modal-close" data-close-modal>&times;</button></div>
       <div class="modal-body">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <p class="faint small">Read from the code by a model, so check each one.
-          Serves means the code likely answers there.  Uses means it calls or
-          depends on it, which is usually not what a dynamic scan should aim at,
-          so those start unticked unless they are on a company domain, one
-          already recorded for a web application here.
+        <p class="faint small">Web addresses the code names that the repository
+          does not list, most likely first.  Confidence goes up for a company
+          domain, for configuration and code that build on the address, and for
+          being named in several files.  It goes down for a link in a page or a
+          README, and for tests.  Serves means the code likely answers there,
+          uses means it calls or depends on it.  {{ tick_at }} and above start
+          ticked.
           {% if can_add_urls %}Ticked addresses are added to the repository and
           it is marked as part of a web application.
           {% else %}Ticked addresses go to an administrator to approve.{% endif %}</p>
-        {% for a in found_urls %}
-        <label class="check" style="display:flex;gap:.5rem;align-items:flex-start;margin:.4rem 0">
-          <input type="checkbox" name="url" value="{{ a.url }}"
-                 {{ 'checked' if (a.relation == 'serves' or a.own) and not a.waiting }}
-                 {{ 'disabled' if a.waiting }}>
-          <span><span class="mono">{{ a.url }}</span>
-            <span class="badge {{ 'ok' if a.relation == 'serves' else 'waived' }}">{{ a.relation }}</span>
-            {% if a.own %}<span class="badge medium" title="On a domain already recorded for another web application">company domain</span>{% endif %}
-            {% if a.waiting %}<span class="badge pending">waiting for approval</span>{% endif %}
-            {% if a.evidence %}<div class="faint small">{{ a.evidence }}</div>{% endif %}</span>
-        </label>
-        {% endfor %}
+        <div class="table-scroll">
+        <table class="small">
+          <thead><tr><th></th><th>Address</th><th>Relation</th>
+            <th title="5 to 99: how likely this code really serves or depends on it">Confidence</th>
+            <th>Why</th></tr></thead>
+          <tbody>
+          {% for a in found_urls %}
+          <tr>
+            <td><input type="checkbox" name="url" value="{{ a.url }}"
+                       aria-label="Add {{ a.url }}"
+                       {{ 'checked' if a.confidence >= tick_at and not a.waiting }}
+                       {{ 'disabled' if a.waiting }}></td>
+            <td><span class="mono">{{ a.url }}</span>
+              {% if a.own %}<div><span class="badge medium">company domain</span></div>{% endif %}
+              {% if a.waiting %}<div><span class="badge pending">waiting for approval</span></div>{% endif %}</td>
+            <td><span class="badge {{ 'ok' if a.relation == 'serves' else 'waived' }}">{{ a.relation }}</span></td>
+            <td><span class="confidence">{{ a.confidence }}</span>
+              <span class="badge {{ {'high': 'ok', 'medium': 'medium', 'low': 'waived'}[a.level] }}">{{ a.level }}</span></td>
+            <td>{{ a.why | join(', ') }}{% if a.evidence %}<div class="faint">{{ a.evidence }}</div>{% endif %}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        </div>
       </div>
       <div class="modal-foot">
         <button type="button" class="btn" data-close-modal>Cancel</button>
