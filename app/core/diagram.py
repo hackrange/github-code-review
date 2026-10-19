@@ -54,6 +54,9 @@ NODE_KINDS = ("user", "client", "webserver", "service", "module", "job",
 # Web servers added for addresses the model left out, so a diagram of a
 # repository tied to a site always shows where that site is served.
 MAX_WEB_SERVERS = 6
+# Web addresses the model says the code serves at or depends on, offered to
+# be added to the repository.  The same cap a repository's list has.
+MAX_ADDRESSES = 20
 
 SKIP_DIRS = dependency_sources.SKIP_DIRS | {"coverage", ".next", ".nuxt",
                                             "bower_components", "Pods"}
@@ -158,6 +161,10 @@ words, such as HTTPS JSON or reads orders"}
      "description": "one sentence",
      "steps": [{"node": "node id", "action": "what happens there, in under ten \
 words"}]}
+  ],
+  "addresses": [
+    {"url": "https://host.name/optional/path", "relation": "serves or uses",
+     "evidence": "the file it was seen in, in under fifteen words"}
   ]
 }
 
@@ -165,7 +172,17 @@ At most 40 nodes, 80 edges and 8 flows of up to 12 steps.  Edges point the \
 way requests or data travel.  Start flows at the user, client or job that \
 begins them.  Include the private registries and shared repositories listed \
 in the dependency section as registry or repository nodes when the build \
-depends on them."""
+depends on them.
+
+List in addresses the web addresses the evidence shows, at most 20.  Use \
+relation serves for an address this application, or the web application it \
+is part of, answers at: base URLs, allowed origins, sign in redirect \
+addresses, deployment host names, the site a README names.  Use relation \
+uses for a web application or API of the same organization that this code \
+calls or depends on.  Leave out public third party services such as \
+payment, analytics, maps, fonts and cloud provider APIs, package \
+registries, and placeholders such as localhost or example.com.  An empty \
+list is the right answer when the evidence shows none."""
 
 
 # ---------------------------------------------------------------- evidence
@@ -335,9 +352,125 @@ def parse(text: str) -> tuple:
                           "description": str(flow.get("description") or "")[:300],
                           "steps": steps})
 
+    addresses = []
+    for entry in data.get("addresses") or []:
+        if not isinstance(entry, dict) or len(addresses) >= MAX_ADDRESSES:
+            continue
+        url = clean_address(entry.get("url"))
+        if not url or any(a["url"] == url for a in addresses):
+            continue
+        relation = str(entry.get("relation") or "").strip().lower()
+        addresses.append({"url": url,
+                          "relation": "uses" if relation == "uses" else "serves",
+                          "evidence": str(entry.get("evidence") or "")[:200]})
+    # A web server the model drew under a host name is an address it serves
+    # at, even when it forgot to list it.
+    for node in nodes:
+        if node["kind"] != "webserver" or len(addresses) >= MAX_ADDRESSES:
+            continue
+        url = clean_address(node["label"])
+        if url and not any(_host(a["url"]) == _host(url) for a in addresses):
+            addresses.append({"url": url, "relation": "serves",
+                              "evidence": "drawn as a web server"})
+
     return {"title": str(data.get("title") or "")[:120],
             "summary": str(data.get("summary") or "")[:1500],
-            "nodes": nodes, "edges": edges, "flows": flows}, ""
+            "nodes": nodes, "edges": edges, "flows": flows,
+            "addresses": addresses}, ""
+
+
+# Hosts that are never somebody's real site.
+_PLACEHOLDER = re.compile(
+    r"(^|\.)(localhost|example\.(com|org|net)|test|invalid|local)$", re.I)
+
+
+def _host(url: str) -> str:
+    from urllib.parse import urlparse
+    return (urlparse(url).hostname or "").lower()
+
+
+def clean_address(value) -> str:
+    """One address from the model, as a web address list would hold it, or empty.
+
+    A bare host gets https.  The query and fragment go, since they are about
+    one request rather than where the site is.  Placeholders, addresses
+    without a dot in the host, loopback, and anything carrying a user name or
+    template braces are dropped.
+    """
+    import ipaddress
+    from urllib.parse import urlparse
+
+    text = str(value or "").strip().strip("'\"<>").rstrip("/.,;")
+    if not text or any(c in text for c in "{}$ \t") or len(text) > 300:
+        return ""
+    if "://" not in text:
+        text = "https://" + text
+    try:
+        parsed = urlparse(text)
+        port = parsed.port
+    except ValueError:
+        return ""
+    host = (parsed.hostname or "").lower()
+    if (parsed.scheme not in ("http", "https") or "." not in host
+            or parsed.username or parsed.password or _PLACEHOLDER.search(host)
+            or not re.fullmatch(r"[a-z0-9.-]+", host)):
+        return ""
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return ""
+    except ValueError:
+        pass
+    netloc = host + (f":{port}" if port else "")
+    return f"{parsed.scheme}://{netloc}{parsed.path.rstrip('/')}"
+
+
+_NAMED_HOST = re.compile(
+    r"\b(?:https?://)?((?:[a-z0-9-]+\.)+(?:com|net|org|io|gov|edu|us|co|biz|"
+    r"info|app|dev|cloud|ai))\b(?![.\w-])", re.I)
+
+
+def _named_hosts(graph: dict) -> list:
+    """Host names written into a drawing made before addresses were asked for.
+
+    A host named by the application's own parts, a web server, service,
+    module or client, is most likely where it is served, staging and test
+    included.  One named by an outside system, a store or a registry is
+    something it uses.
+    """
+    own = ("webserver", "service", "module", "client")
+    out = []
+    for node in graph.get("nodes") or []:
+        text = f"{node.get('label', '')} {node.get('detail', '')}"
+        for match in _NAMED_HOST.finditer(text):
+            url = clean_address(match.group(1))
+            if url and not any(_host(a["url"]) == _host(url) for a in out):
+                out.append({"url": url,
+                            "relation": ("serves" if node.get("kind") in own
+                                         else "uses"),
+                            "evidence": f"named by {node.get('label', '')}"[:200]})
+            if len(out) >= MAX_ADDRESSES:
+                return out
+    return out
+
+
+def suggestions(graph: dict, urls: list, waiting: list = ()) -> list:
+    """Addresses the diagram found that the repository does not list yet.
+
+    Covered means the repository already names that host.  `waiting` is
+    addresses somebody has already proposed, which are shown as such rather
+    than offered again.
+    """
+    have = {_host(u) for u in urls or []}
+    asked = {u.rstrip("/").lower() for u in waiting or []}
+    out = []
+    found = (graph or {}).get("addresses")
+    if found is None:
+        found = _named_hosts(graph or {})
+    for entry in found:
+        if _host(entry["url"]) in have:
+            continue
+        out.append({**entry, "waiting": entry["url"].lower() in asked})
+    return out
 
 
 def add_web_servers(graph: dict, urls: list) -> list:

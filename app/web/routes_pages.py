@@ -1776,6 +1776,8 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                 repo_own = {field: (getattr(_own_row, field, "") or "")
                             for field in tagging.FIELDS}
                 repo_own["holds"] = tagging.split_labels(repo_own["sensitivity"])
+                repo_own["web_app"] = bool(_own_row.web_app)
+                repo_own["web_app_urls"] = _own_row.web_app_urls or ""
                 tag_labels = tagging.labels(db) + [
                     x for x in repo_own["holds"] if x not in tagging.labels(db)]
             else:
@@ -2541,12 +2543,33 @@ def _diagram_context(db, user, repo) -> dict:
     """The stored drawing for a repository, and what this person may do."""
     from app.core import ai, diagram
 
+    from app.core import proposals, tagging
+    from app.core.models import RepoProposal
+
     cfg = ai.config(db)
     ai_ready = ai.enabled(cfg) and not ai.missing(cfg)
-    return {"diagram": diagram.view(diagram.current(db, repo.full_name)),
+    drawn = diagram.view(diagram.current(db, repo.full_name))
+
+    # Web addresses the drawing found that the repository does not list,
+    # for an administrator to add or anybody else to propose.  Ones already
+    # waiting on Proposed Updates say so rather than being offered again.
+    can_add = rbac.can(user, "repo.write")
+    can_offer = can_add or rbac.can(user, "repo.propose")
+    found = []
+    if drawn and drawn["ready"] and can_offer:
+        waiting = []
+        for row in (db.query(RepoProposal)
+                    .filter(RepoProposal.repo_id == repo.id)
+                    .filter(RepoProposal.status == proposals.PENDING)):
+            waiting += tagging.web_urls(
+                proposals.changes(row).get("web_app_urls", ""))[0]
+        found = diagram.suggestions(
+            drawn["graph"], tagging.web_urls(repo.web_app_urls)[0], waiting)
+    return {"diagram": drawn,
             "can_draw": rbac.can(user, "repo.diagram") and ai_ready,
             "ai_model": ai.describe_model(cfg) if ai_ready else "",
-            "ai_sends_code": bool(cfg.get("ai.send_code"))}
+            "ai_sends_code": bool(cfg.get("ai.send_code")),
+            "found_urls": found, "can_add_urls": can_add}
 
 
 @router.get("/repositories/{repo_id}/diagram")

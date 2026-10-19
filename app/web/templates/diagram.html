@@ -7,6 +7,12 @@
     default branch <span class="mono">{{ repo.default_branch }}</span></div></div>
   <div class="flex" style="gap:.5rem;align-items:center">
     {% if d and d.ready %}
+    {% set unrecorded = found_urls | rejectattr('waiting') | list %}
+    {% if unrecorded %}
+    <button class="btn" type="button" data-modal="found-urls-modal"
+            title="Web addresses the diagram found that the repository does not list">URI discovery
+      <span class="badge pending">{{ unrecorded | length }}</span></button>
+    {% endif %}
     <a class="btn" href="{{ base }}/repositories/{{ repo.id }}/diagram.pdf">Save as PDF</a>
     {% endif %}
     {% if can_draw and not (d and d.running) %}
@@ -48,6 +54,17 @@
 </div></div>
 {% else %}
 {% set g = d.graph %}
+{% set offer = found_urls | rejectattr('waiting') | list %}
+{% if found_urls %}
+{# Addresses the drawing found that the repository does not list.  Never
+   saved by drawing: somebody ticks them, and only an administrator's go
+   straight on. #}
+<div class="notice info"><div>This diagram found
+  {{ found_urls | length }} web address{{ 'es' if found_urls | length > 1 }}
+  the code likely serves or depends on that the repository does not list.
+  {% if offer %}<button class="btn sm" type="button" data-modal="found-urls-modal">Review {{ 'and add' if can_add_urls else 'and propose' }}</button>
+  {% else %}All of them are waiting on Proposed Updates.{% endif %}</div></div>
+{% endif %}
 <div class="card">
   <div class="card-head">{{ g.title or repo.name }}
     <span class="faint small">Diagram created for {{ d.row.created_by }} on
@@ -142,6 +159,42 @@
     </table>
   </div>
   {% else %}<div class="empty small">No registries or repositories named in the files.</div>{% endif %}
+</div>
+{% endif %}
+
+{% if d and d.ready and found_urls %}
+<div class="modal-backdrop" id="found-urls-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/repositories/{{ repo.id }}/web-urls/add">
+      <div class="modal-head">Web addresses found by the diagram
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <p class="faint small">Read from the code by a model, so check each one.
+          Serves means the code likely answers there.  Uses means it calls or
+          depends on it, which is usually not what a dynamic scan should aim at,
+          so those start unticked.
+          {% if can_add_urls %}Ticked addresses are added to the repository and
+          it is marked as part of a web application.
+          {% else %}Ticked addresses go to an administrator to approve.{% endif %}</p>
+        {% for a in found_urls %}
+        <label class="check" style="display:flex;gap:.5rem;align-items:flex-start;margin:.4rem 0">
+          <input type="checkbox" name="url" value="{{ a.url }}"
+                 {{ 'checked' if a.relation == 'serves' and not a.waiting }}
+                 {{ 'disabled' if a.waiting }}>
+          <span><span class="mono">{{ a.url }}</span>
+            <span class="badge {{ 'ok' if a.relation == 'serves' else 'waived' }}">{{ a.relation }}</span>
+            {% if a.waiting %}<span class="badge pending">waiting for approval</span>{% endif %}
+            {% if a.evidence %}<div class="faint small">{{ a.evidence }}</div>{% endif %}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">{{ 'Add the ticked addresses' if can_add_urls else 'Propose the ticked addresses' }}</button>
+      </div>
+    </form>
+  </div>
 </div>
 {% endif %}
 {% endblock %}

@@ -3728,7 +3728,8 @@ async def tag_one_repository(repo_id: int, request: Request,
     The same fields the Tagging page sets, for the one somebody is looking at.
     An empty box goes back to what the connection says.  The repository's own
     page also sends who hears about it; the finding page's form does not, so
-    those are only read when the form says it carries them.
+    those are only read when the form says it carries them.  Both send the
+    web application answers.
     """
     await check_csrf(request)
     rbac.require(user, "repo.write")
@@ -3757,8 +3758,8 @@ async def tag_one_repository(repo_id: int, request: Request,
             form, "notify_application_owner")
         values["notify_technical_owner"] = _checked(
             form, "notify_technical_owner")
-    # Whether it is part of a web application, and where that answers.  Also
-    # only from the repository's own page.
+    # Whether it is part of a web application, and where that answers.  Only
+    # read when the form says it carries them, like notify.
     if _checked(form, "with_web"):
         urls, why = tagging.web_urls(clean_text(
             form.get("web_app_urls"), "Web addresses", limit=4000,
@@ -3899,6 +3900,72 @@ async def propose_repository_change(repo_id: int, request: Request,
     return redirect(_back_with(
         back, "Sent to an administrator to approve." if row
         else "That is what it already says, so nothing was sent."))
+
+
+@router.post("/repositories/{repo_id}/web-urls/add")
+async def add_found_web_urls(repo_id: int, request: Request,
+                             user: User = Depends(current_user)):
+    """Add the web addresses somebody ticked from a diagram's findings.
+
+    An administrator's go straight onto the repository.  Anybody else's
+    become a proposal, folded into whatever they already have waiting so it
+    does not replace it.
+    """
+    await check_csrf(request)
+    can_add = rbac.can(user, "repo.write")
+    if not can_add:
+        rbac.require(user, "repo.propose")
+
+    from app.core import proposals, tagging
+    from app.core.models import Repository as m_Repository
+
+    form = await request.form()
+    back = f"/repositories/{repo_id}/diagram"
+    ticked, why = tagging.web_urls(" ".join(
+        clean_text(v, "Web address", limit=300, required=False)
+        for v in form.getlist("url")))
+    if why:
+        raise HTTPException(status_code=400, detail=f"Web addresses: {why}.")
+    if not ticked:
+        return redirect(_back_with(back, "Nothing was ticked.", "warn"))
+
+    with session_scope() as db:
+        repo = (rbac.visible_repositories(db, user)
+                .filter(m_Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        mine = None if can_add else proposals.mine(db, repo.id, user.username)
+        start = proposals.wanted(mine) if mine else proposals.current(repo)
+        urls, why = tagging.web_urls(
+            ", ".join(tagging.web_urls(start["web_app_urls"])[0] + ticked))
+        if why:
+            raise HTTPException(status_code=400, detail=f"Web addresses: {why}.")
+        values = {"web_app": True, "web_app_urls": ", ".join(urls)}
+
+        if can_add:
+            moved = tagging.set_own(db, repo, values, actor=user.username)
+            if moved:
+                record(db, "repository.tagged", actor=user.username,
+                       target=repo.full_name,
+                       detail=("web addresses from the diagram: "
+                               + ", ".join(ticked))[:200],
+                       source_ip=client_ip(request))
+            said = (f"Added {len(ticked)} web address"
+                    f"{'es' if len(ticked) > 1 else ''}." if moved
+                    else "Those are already listed.")
+        else:
+            start.update(values)
+            row = proposals.propose(db, repo, start, user.username)
+            if row:
+                record(db, "repository.change_proposed", actor=user.username,
+                       target=repo.full_name,
+                       detail=("web addresses from the diagram: "
+                               + ", ".join(ticked))[:200],
+                       source_ip=client_ip(request))
+            said = ("Sent to an administrator to approve." if row
+                    else "Those are already listed.")
+
+    return redirect(_back_with(back, said))
 
 
 def _proposal(db, proposal_id: int):

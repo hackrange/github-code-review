@@ -1002,11 +1002,12 @@
        Each box shows what the repository says for itself; the hint is what
        the connection says, which is what an empty box falls back to. #}
     <details style="margin-top:.75rem">
-      <summary class="small">Edit what it holds, the application and its owners</summary>
+      <summary class="small">Edit what it holds, the application, its owners and web addresses</summary>
       <form method="post" action="{{ base }}/repositories/{{ repo_info.id }}/about"
             style="margin-top:.5rem;max-width:70ch">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="back" value="/findings/{{ f.id }}">
+        <input type="hidden" name="with_web" value="1">
         <label>What it holds
           <div class="check-grid">
             {% for label in tag_labels %}
@@ -1033,6 +1034,19 @@
             asked later.  Several are fine, comma separated.  Anything left
             empty, or with nothing ticked, uses what the connection says.  This
             changes the repository, so every finding in it shows the same.</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" name="web_app" value="1"
+                 {{ 'checked' if repo_own.web_app }}>
+          Part of a web application
+        </label>
+        <label>Web addresses
+          <input type="text" name="web_app_urls" maxlength="4000" class="mono"
+                 value="{{ repo_own.web_app_urls }}"
+                 placeholder="https://portal.example.com, https://staging.portal.example.com">
+          <span class="faint small">Where it answers, http or https, several
+            separated by commas.  Needed when it is ticked.  Nothing here
+            visits them.</span>
         </label>
         <button class="btn sm" type="submit">Save</button>
       </form>
