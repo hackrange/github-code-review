@@ -2274,9 +2274,25 @@ def repository_about(repo_id: int, request: Request, msg: str = "",
                       .filter(Finding.repository == repo.full_name)
                       .filter(Finding.state == FindingState.OPEN)
                       .filter(Finding.out_of_scope.is_(False)).count())
+        # What the admin's delete button would take, so the dialog can say.
+        purge = None
+        if rbac.can(user, "findings.delete"):
+            from app.core.models import Exclusion
+            mine = (rbac.visible_findings(db, user)
+                    .filter(Finding.repo_id == repo.id))
+            purge = {
+                "findings": mine.count(),
+                "exceptions": (db.query(Waiver).filter(Waiver.finding_id.in_(
+                    mine.with_entities(Finding.id).scalar_subquery()))
+                    .count()),
+                "rules": (db.query(Exclusion)
+                          .filter(Exclusion.repository == repo.full_name)
+                          .count()),
+            }
         context = _shared(db, user)
         context.update(active_page="repositories", repo=repo, applies=applies,
                        own=own, tag_labels=labels, open_count=open_count,
+                       purge=purge,
                        web_urls=tagging.web_urls(repo.web_app_urls)[0],
                        told=tagging.notify_addresses(repo, applies),
                        can_tag=rbac.can(user, "repo.write"),

@@ -9,6 +9,7 @@
     {% if can_scope %}<a class="btn" href="{{ base }}/repositories/{{ repo.id }}/scope">Branches and scope</a>{% endif %}
     {% if repo.html_url %}<a class="btn" rel="noopener noreferrer" target="_blank" href="{{ repo.html_url }}">Open on the host</a>{% endif %}
     <a class="btn" href="{{ base }}/repositories">All repositories</a>
+    {% if purge %}<button type="button" class="btn danger" data-modal="purge-modal">Delete findings and exceptions</button>{% endif %}
   </div></div>
 
 {# What applies now, and where each answer came from.  "Nobody has said" and
@@ -131,6 +132,45 @@
         owner can be the connection's.</p>
       <button class="btn primary" type="submit">Save</button>
     </form>
+  </div>
+</div>
+{% endif %}
+
+{% if purge %}
+{# Admin only.  The button stays dead until the repository's name is typed,
+   so it is hard to do to the wrong one. #}
+<form method="post" id="purge-form" action="{{ base }}/repositories/{{ repo.id }}/purge">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+</form>
+
+<div class="modal-backdrop" id="purge-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Delete everything found in {{ repo.name }}
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <div class="notice bad">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+        <div>All <strong>{{ purge.findings }}</strong> findings in this
+          repository go, open, fixed and waived alike, with the
+          <strong>{{ purge.exceptions }}</strong> exceptions recorded against
+          them and the <strong>{{ purge.rules }}</strong> exclusion rules
+          written for this repository alone.  This does not undo.</div>
+      </div>
+      <p class="small faint">Rules that cover other repositories as well stay.
+        The repository, its owners and its scope stay.  The next scan reads
+        its whole history again and files whatever the code still holds, with
+        today as the first time anybody saw it.</p>
+      <label>Type <strong>{{ repo.name }}</strong> to confirm
+        <input type="text" name="confirm" value="" form="purge-form"
+               autocomplete="off" spellcheck="false"
+               data-confirm-word="{{ repo.name }}" data-confirm-button="purge-go">
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn" data-close-modal>Cancel</button>
+      <button type="submit" class="btn danger" id="purge-go"
+              form="purge-form" disabled>Delete them</button>
+    </div>
   </div>
 </div>
 {% endif %}

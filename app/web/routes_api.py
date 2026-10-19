@@ -3879,6 +3879,78 @@ def _proposal_values(db, form, repo) -> dict:
     return values
 
 
+@router.post("/repositories/{repo_id}/purge")
+async def purge_repository(repo_id: int, request: Request,
+                           user: User = Depends(current_user)):
+    """Every finding and every exception on one repository, gone.  Admin only.
+
+    The findings take their exceptions with them.  The exclusion rules named
+    for exactly this repository go too, or the next scan would file the same
+    findings straight back as excluded.  Rules that cover more than this one
+    repository stay, because they were written about somewhere else as well.
+
+    The repository is told its history has not been read.  Otherwise a
+    credential that only lives in an old commit would never be filed again,
+    since the catch up pass skips a history it thinks it finished, and that
+    quiet would read as a clean repository.  So the next scan is a full walk.
+    """
+    await check_csrf(request)
+    rbac.require(user, "findings.delete")
+
+    from urllib.parse import quote
+    from app.core.models import Exclusion, Repository as m_Repository
+
+    form = await request.form()
+    with session_scope() as db:
+        repo = (rbac.visible_repositories(db, user)
+                .filter(m_Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+
+        # Typed, like deleting every finding.  The name rather than a fixed
+        # word, so it is hard to do to the wrong repository.
+        typed = str(form.get("confirm", "")).strip().lower()
+        if typed != (repo.name or "").lower():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Type {repo.name} to confirm.")
+
+        ids = [row[0] for row in (rbac.visible_findings(db, user)
+                                  .filter(Finding.repo_id == repo.id)
+                                  .with_entities(Finding.id).all())]
+        removed = waived = 0
+        for start in range(0, len(ids), DELETE_CHUNK):
+            chunk = ids[start:start + DELETE_CHUNK]
+            waived += db.query(Waiver).filter(
+                Waiver.finding_id.in_(chunk)).delete(synchronize_session=False)
+            db.query(FindingAnalysis).filter(
+                FindingAnalysis.finding_id.in_(chunk)).delete(
+                synchronize_session=False)
+            removed += db.query(Finding).filter(Finding.id.in_(chunk)).delete(
+                synchronize_session=False)
+            db.flush()
+
+        rules = db.query(Exclusion).filter(
+            Exclusion.repository == repo.full_name).delete(
+            synchronize_session=False)
+
+        repo.history_from = ""
+        repo.history_complete = False
+
+        record(db, "repository.purged", actor=user.username,
+               target=repo.full_name,
+               detail=f"{removed} findings, {waived} exceptions, "
+                      f"{rules} exclusion rules",
+               source_ip=client_ip(request))
+        if removed or rules:
+            request_rewrite()
+
+    note = (f"{removed} finding(s), {waived} exception(s) and {rules} "
+            "exclusion rule(s) deleted. The next scan reads the whole history "
+            "again and files whatever the code still holds.")
+    return redirect(f"/repositories/{repo_id}?msg={quote(note)}&kind=ok")
+
+
 @router.post("/repositories/{repo_id}/propose")
 async def propose_repository_change(repo_id: int, request: Request,
                                     user: User = Depends(current_user)):

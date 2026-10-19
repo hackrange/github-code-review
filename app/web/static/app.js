@@ -342,3 +342,19 @@
   var seconds = parseInt(marker.getAttribute("data-reload-after"), 10) || 5;
   window.setTimeout(function () { window.location.reload(); }, seconds * 1000);
 })();
+
+/* A dangerous button stays dead until a word is typed.  The field carries
+ * data-confirm-word and the id of the button in data-confirm-button. */
+(function () {
+  document.querySelectorAll("[data-confirm-word]").forEach(function (field) {
+    var go = document.getElementById(field.getAttribute("data-confirm-button"));
+    if (!go) { return; }
+    var word = field.getAttribute("data-confirm-word").trim().toLowerCase();
+    function check() {
+      go.disabled = field.value.trim().toLowerCase() !== word;
+    }
+    field.addEventListener("input", check);
+    field.addEventListener("change", check);
+    check();
+  });
+})();
