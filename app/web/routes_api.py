@@ -1872,6 +1872,20 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
         db.flush()
         put("code.muted_rules", rule_mutes.effective(db))
         put("sensitivity.labels", _csv_list(text("sensitivity.labels")))
+        # Bare domains only, so a typo is refused rather than quietly
+        # matching nothing.
+        from app.core import diagram
+        domains = []
+        for entry in _csv_list(text("web.company_domains")):
+            domain = diagram.clean_domain(entry)
+            if not domain:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Company domains: {entry[:80]!r} is not a domain "
+                           f"name, such as example.com.")
+            if domain not in domains:
+                domains.append(domain)
+        put("web.company_domains", domains[:200])
 
         put("security.force_https", _checked(form, "security.force_https"))
         put("security.trusted_proxies", _csv_list(text("security.trusted_proxies")))

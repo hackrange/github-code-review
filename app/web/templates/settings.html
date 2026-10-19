@@ -622,6 +622,25 @@
   </label>
 </div>
 
+<div class="card" id="domains">
+  <div class="card-head"><span class="head-text">Company domains<button type="button" class="help-dot" data-modal="help-domains" aria-label="What this section is for">?</button></span></div>
+  <div class="small faint" style="margin-bottom:.6rem">
+    The domains your own sites are on.  When a diagram looks for web
+    addresses, any host on one of these, or under one, is offered first and
+    ticked, with the file it was seen in.  Domains already recorded on a
+    repository's web addresses count as well, so this is for the ones nothing
+    is recorded on yet.
+  </div>
+  <label class="wide">Domains
+    <textarea name="web.company_domains" rows="3" class="mono"
+              placeholder="example.com, example.net">{{ values['web.company_domains'] | join(', ') }}</textarea>
+    <span class="faint small">Comma or line separated.  example.com covers
+      www.example.com, stg.example.com and every other host under it.  When
+      sending code is on, the list is also given to the model drawing a
+      diagram.</span>
+  </label>
+</div>
+
 <div class="card" id="limits">
   <div class="card-head"><span class="head-text">Limits<button type="button" class="help-dot" data-modal="help-limits" aria-label="What this section is for">?</button></span></div>
   <div class="small faint" style="margin-bottom:.6rem">

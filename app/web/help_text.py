@@ -234,6 +234,19 @@ SECTIONS = [
             "system holding cardholder data, and one rule can say both.",
         ],
     }),
+    ("domains", "Company domains", {
+        "title": "Company domains",
+        "what": [
+            "The domains your own sites are on.  A diagram uses them to tell "
+            "the company's web addresses from everybody else's: any host on "
+            "one, or under one, that the code names is offered on the "
+            "diagram's URI discovery list, ticked, with the file it was seen "
+            "in.",
+            "Domains already recorded on a repository's web addresses are "
+            "used too.  This list is for the ones nothing is recorded on yet, "
+            "a second brand or an API domain say.",
+        ],
+    }),
     ("limits", "Limits", {
         "title": "Limits",
         "what": [

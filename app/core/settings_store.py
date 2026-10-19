@@ -315,6 +315,12 @@ DEFAULTS = {
                                 "exception can be told not to cover. Yours to "
                                 "choose: these are a starting point, not a fixed list."),
 
+    # ---- whose sites these are ----
+    "web.company_domains":     ([], False,
+                                "The company's own domains. A host on one, or under "
+                                "one, is treated as likely the company's site when a "
+                                "diagram looks for web addresses."),
+
     # ---- rules that report a pattern rather than a problem ----
     # Written back after every save so the page has something to show, and
     # read by nobody: rule_mutes.effective() is the answer.  A default here
@@ -445,6 +451,7 @@ SECTIONS = [
     ("Display", ["ui.timezone"]),
     ("Fidelity", ["code.muted_rules"]),
     ("Sensitivity labels", ["sensitivity.labels"]),
+    ("Company domains", ["web.company_domains"]),
     ("Limits", ["github.parallel_repos", "scan.max_concurrent",
                 "secrets.history_window_days",
                 "scan.timeout_per_repo", "scan.max_hours",

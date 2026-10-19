@@ -181,8 +181,10 @@ addresses, deployment host names, the site a README names.  Use relation \
 uses for a web application or API of the same organization that this code \
 calls or depends on.  Leave out public third party services such as \
 payment, analytics, maps, fonts and cloud provider APIs, package \
-registries, and placeholders such as localhost or example.com.  An empty \
-list is the right answer when the evidence shows none."""
+registries, and placeholders such as localhost or example.com.  When the \
+evidence has a section of the company's own domains, a host on or under one \
+of them is most likely the company's, so list every one the evidence names. \
+An empty list is the right answer when the evidence shows none."""
 
 
 # ---------------------------------------------------------------- evidence
@@ -249,6 +251,11 @@ def gather(root: Path, send_code: bool, sources_summary: dict,
     if served:
         sections.append(("Addresses the application is served at",
                          "\n".join(served[:20])))
+    # The company's own domains, so its hosts can be told from everybody
+    # else's.  Only when code is sent at all: it says whose code this is.
+    domains = sources_summary.get("domains") or []
+    if domains and send_code:
+        sections.append(("The company's own domains", "\n".join(domains[:50])))
 
     if send_code:
         used = sum(len(body) for _, body in sections)
@@ -451,16 +458,42 @@ def registrable(host: str) -> str:
     return ".".join(labels[-2:])
 
 
-def org_domains(session) -> set:
-    """The company's own domains: those of every web address recorded anywhere.
+def clean_domain(value) -> str:
+    """One company domain as somebody typed it, or empty when it is not one.
 
-    The best evidence there is for which host names in the code are the
-    company's sites rather than somebody else's, and it grows as people
-    record more.
+    A bare name such as example.com.  A scheme, a path or a wildcard in
+    front is taken off, since people paste them; a port, a user name or
+    anything else that is not a host name is not a domain.
     """
-    from app.core import tagging
+    text = str(value or "").strip().lower()
+    text = re.sub(r"^[a-z]+://", "", text).split("/", 1)[0]
+    text = text.lstrip("*.").rstrip(".")
+    if (len(text) > 253 or "." not in text
+            or not re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}",
+                                text)):
+        return ""
+    return text
 
-    out = set()
+
+def on_domain(host: str, domains) -> bool:
+    """Whether a host is one of these domains or under one."""
+    host = (host or "").lower()
+    return any(host == d or host.endswith("." + d) for d in domains or ())
+
+
+def org_domains(session) -> set:
+    """The company's own domains, from Settings and from what is recorded.
+
+    The ones somebody listed on the Settings page, plus those of every web
+    address recorded on any repository.  The best evidence there is for which
+    host names in the code are the company's sites rather than somebody
+    else's.  The setting covers a domain before anything on it is recorded.
+    """
+    from app.core import settings_store, tagging
+
+    out = {d for d in (clean_domain(x) for x in
+                       settings_store.get(session, "web.company_domains") or [])
+           if d}
     for (urls,) in session.query(Repository.web_app_urls).filter(
             Repository.web_app_urls != ""):
         for url in tagging.web_urls(urls or "")[0]:
@@ -503,7 +536,7 @@ def discover(root: Path, domains: set) -> list:
             rel = str(path.relative_to(root)).replace(os.sep, "/")
             for match in _NAMED_HOST.finditer(text):
                 host = match.group(1).lower()
-                if registrable(host) not in domains:
+                if not on_domain(host, domains):
                     continue
                 url = clean_address(host)
                 if url and not any(_host(a["url"]) == host for a in found):
@@ -529,7 +562,7 @@ def merge_addresses(model: list, seen: list, domains: set,
         if (not host or host in build_hosts or _BUILD_HOSTS.search(host)
                 or any(_host(a["url"]) == host for a in out)):
             continue
-        out.append({**entry, "own": registrable(host) in (domains or ())})
+        out.append({**entry, "own": on_domain(host, domains)})
     return out[:MAX_ADDRESSES]
 
 
@@ -549,7 +582,7 @@ def _named_hosts(graph: dict, domains: set) -> list:
         text = f"{node.get('label', '')} {node.get('detail', '')}"
         for match in _NAMED_HOST.finditer(text):
             host = match.group(1).lower()
-            own = registrable(host) in domains
+            own = on_domain(host, domains)
             if not own and not (kind == "webserver"
                                 and host == str(node.get("label", "")).lower()):
                 continue
@@ -1063,7 +1096,9 @@ def _draw(repository: str, branch: str, connection: str, actor: str) -> None:
         # A repository does not depend on itself.
         rows = [r for r in rows if r.get("in_estate", "").lower() != repository.lower()]
         summary = dependency_sources.summarize(rows)
-        evidence, notes = gather(root, send_code, {**summary, "served": served})
+        evidence, notes = gather(root, send_code,
+                                 {**summary, "served": served,
+                                  "domains": sorted(domains)})
         seen = discover(root, domains)
 
     prompt = (f"Repository: {repository}\nBranch: {branch}\n\n" + evidence
