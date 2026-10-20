@@ -459,6 +459,7 @@ triage_findings() {
               elif $digest then "content_digest"
               elif $pubkey then "public_key"
               elif $objkey then "json_object_key"
+              elif ($f.mule_ciphertext // false) then "encrypted_value"
               elif $verdict == "placeholder" then "placeholder_or_test_value"
               elif $verdict == "low" then "probable_test_fixture"
               else "unverified_probable_secret" end),
@@ -477,6 +478,12 @@ triage_findings() {
               elif $digest then "a content hash, one of \($f.digest_siblings) of its own shape in the same file"
               elif $pubkey then "a \($f.public_key_type) public key, which is meant to be shared and opens nothing"
               elif $objkey then "the next key in a JSON object, read as a value because the entry before it ends in a keyword"
+              elif ($f.mule_ciphertext // false) and ($f.mule_key_location // "") != "" then
+                "Mule ciphertext, and the key that opens it is committed at \($f.mule_key_location)"
+              elif ($f.mule_ciphertext // false) and ($f.mule_key_checked // false) then
+                "Mule ciphertext, and no key to open it is committed in the repository"
+              elif ($f.mule_ciphertext // false) then
+                "Mule ciphertext, but the repository could not be read to look for its key"
               elif $verdict == "low" then "real-shaped credential under a test or fixture path"
               else "credential survived placeholder triage" end),
             suppressed: $allowed,

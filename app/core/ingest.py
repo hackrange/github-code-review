@@ -1198,6 +1198,39 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                 if not (finding.triage_reason or "").startswith("The token expired"):
                     finding.triage_reason = note
 
+            # A Mule secure properties value, ![...], is ciphertext.  It opens
+            # nothing without the key the app is started with, so when the
+            # scan looked through the repository and found no key, it is info.
+            # Encrypted is not dead, though: with the key committed it is as
+            # good as plain text, and it goes back to the engine's grade.  A
+            # repository the scan could not read proves nothing either way, so
+            # that leaves the grade alone.
+            if (finding.kind == FindingKind.CREDENTIAL
+                    and (finding.token_kind or "") == "mule_encrypted"
+                    and not finding.verified):
+                where = str(row.get("mule_key_location") or "").strip()
+                if where:
+                    # fill_credential already put the engine's grade back.
+                    finding.triage_reason = (
+                        "This value is encrypted with Mule secure properties, "
+                        "but the key that opens it is committed at %s.  "
+                        "Anyone who can read the repository can decrypt it."
+                        % where)[:LONG_TEXT]
+                elif (row.get("mule_key_checked")
+                        and finding.severity != Severity.INFO):
+                    finding.engine_severity = (finding.engine_severity
+                                               or finding.severity.value)
+                    finding.severity = Severity.INFO
+                    finding.triage_reason = (
+                        "This value is encrypted with Mule secure properties.  "
+                        "It can only be read with the app's key, and no key "
+                        "was found in the repository, so it is graded info.")
+                elif not row.get("mule_key_checked"):
+                    # Back at the engine's grade, so the info note is wrong now.
+                    if (finding.triage_reason or "").startswith(
+                            "This value is encrypted with Mule"):
+                        finding.triage_reason = ""
+
             # Somebody is exploiting this in the wild, and nothing here says
             # the code does not ship.  The advisory's own grade is a judgement
             # about the flaw in the abstract; CISA listing it is an
@@ -1426,8 +1459,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             finding.token_privilege_claims = _names(row.get("jwt_privilege_claims"))[:LONG_TEXT]
         else:
             # Said so explicitly rather than left blank, because "the detector
-            # called this a token and it is not one" is the finding.
-            finding.token_kind = ""
+            # called this a token and it is not one" is the finding.  A Mule
+            # ciphertext is named, since that is what the grade below reads.
+            finding.token_kind = ("mule_encrypted" if row.get("mule_ciphertext")
+                                  else "")
             finding.token_expired = None
 
     def _names(value) -> str:

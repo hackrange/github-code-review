@@ -421,6 +421,131 @@ _object_key_neighbor() {
   printf 'true'
 }
 
+# Where a Mule secure properties key is written down in the repository, if
+# anywhere.
+#
+# A Mule value written ![base64] is ciphertext.  The app decrypts it at start
+# up with a key it is handed at run time, usually -Dmule.key.  Without that key
+# the value opens nothing, which is why triage can grade it info.  With it, the
+# value is as good as plain text.  So before a ciphertext is lowered, look for
+# the key in the places Mule projects tend to commit it:
+#
+#   mule.key=..., secure.key: ..., <mule.key>...</mule.key>, -Dmule.key=...
+#   <secure-properties:config ... key="...">  (the key itself, not ${...})
+#
+# The name is the project's own choice.  One real project reads its key from
+# ${decryption.key}, so the names in key="${...}" are read out of the config
+# and looked for as well as the usual ones.
+#
+# A reference to a variable is not a key, so values starting with $, %, {, <,
+# # or * do not count.  The branch heads are read, and the history of the usual
+# config file types, because a key that was committed and then taken out still
+# opens every value encrypted with it.
+#
+# Prints "checked<TAB>where".  where is empty when nothing was found.  Prints
+# nothing at all when there is no clone to read, which is not the same answer.
+_MULE_KEY_NAMES="(mule|secure|encrypt|encryption|decrypt|decryption|secure[._-]properties)[._-]?key"
+_MULE_KEY_VALUE="[\"']?[[:space:]]*(=|:|>)[[:space:]]*[\"']?[^\"'\$%{<#*[:space:]]{4,}"
+_MULE_KEY_ATTR_RE="[[:space:]]key[[:space:]]*=[[:space:]]*\"[^\"\$#{%][^\"]{3,}\""
+# YAML nests its names, so decryption: then key: on the next line never reads
+# as decryption.key to a line search.  This prints each scalar as its dotted
+# path, name=value, which the key pattern can then read.  Lists and block
+# scalars are skipped; a key is never written as either.
+_yaml_dotted() {
+  awk '
+    /^[[:space:]]*(#|$)/ { next }
+    {
+      match($0, /^ */); ind = RLENGTH; line = substr($0, ind + 1)
+      if (line !~ /^[A-Za-z0-9_.-]+[[:space:]]*:/) next
+      k = line; sub(/[[:space:]]*:.*/, "", k)
+      v = line; sub(/^[^:]*:[[:space:]]*/, "", v)
+      while (n > 0 && ind <= at[n]) n--
+      n++; at[n] = ind; name[n] = k
+      if (v == "" || v ~ /^[|>]/) next
+      path = name[1]; for (i = 2; i <= n; i++) path = path "." name[i]
+      print path "=" v
+    }'
+}
+
+_mule_key_location() {
+  local dir="$1"; shift
+  [[ -n "$dir" ]] && git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 \
+    || return 0
+  local -a refs=("$@")
+  (( ${#refs[@]} == 0 )) && refs=(HEAD)
+  (( ${#refs[@]} > 200 )) && refs=("${refs[@]:0:200}")
+
+  # The names this project's configs read the key from, as regex text.
+  local names re
+  names=$(git -C "$dir" grep -h -o -i -E 'key[[:space:]]*=[[:space:]]*"\$\{[A-Za-z0-9._-]+\}"' \
+            "${refs[@]}" -- '*.xml' 2>/dev/null \
+          | sed -E 's/.*\$\{([^}]+)\}.*/\1/' | sort -u | head -20 \
+          | sed 's/[.]/[.]/g' | paste -sd'|' -) || true
+  re="(${_MULE_KEY_NAMES}${names:+|$names})${_MULE_KEY_VALUE}"
+
+  local hit ref
+  # git grep -l prints ref:path.  The ref is cut off by name rather than at
+  # the first colon, since a branch name can hold one.
+  hit=$(git -C "$dir" grep -l -I -i -E -e "$re" "${refs[@]}" -- \
+          2>/dev/null | head -1) || true
+  if [[ -n "$hit" ]]; then
+    for ref in "${refs[@]}"; do
+      [[ "$hit" == "$ref:"* ]] && { hit="${hit#"$ref:"}"; break; }
+    done
+    printf 'checked\t%s' "$hit"; return 0
+  fi
+
+  # The config element spans lines more often than not, so it is read whole.
+  local f block
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    block=$(git -C "$dir" show "$f" 2>/dev/null | head -c "$_DIGEST_SCAN_BYTES" \
+            | tr '\n' ' ' | grep -oiE '<secure-properties:config[^>]*>') || true
+    if [[ -n "$block" ]] && grep -qE -e "$_MULE_KEY_ATTR_RE" <<<"$block"; then
+      for ref in "${refs[@]}"; do
+        [[ "$f" == "$ref:"* ]] && { f="${f#"$ref:"}"; break; }
+      done
+      printf 'checked\t%s' "$f"; return 0
+    fi
+  done < <(git -C "$dir" grep -l -i -F -e 'secure-properties:config' \
+             "${refs[@]}" -- '*.xml' 2>/dev/null | head -50)
+
+  # Nested YAML, at the heads.  Only files with a key: line are read.
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    if git -C "$dir" show "$f" 2>/dev/null | head -c "$_DIGEST_SCAN_BYTES" \
+         | _yaml_dotted | grep -qiE -e "$re"; then
+      for ref in "${refs[@]}"; do
+        [[ "$f" == "$ref:"* ]] && { f="${f#"$ref:"}"; break; }
+      done
+      printf 'checked\t%s' "$f"; return 0
+    fi
+  done < <(git -C "$dir" grep -l -i -E -e '^[[:space:]]*key[[:space:]]*:' \
+             "${refs[@]}" -- '*.yaml' '*.yml' 2>/dev/null | head -200)
+
+  # Nested YAML in the history: every version of a file whose diff touched a
+  # key: line, newest first, read whole.
+  local sha path
+  while IFS=$'\t' read -r sha path; do
+    [[ -n "$sha" && -n "$path" ]] || continue
+    if git -C "$dir" show "$sha:$path" 2>/dev/null | head -c "$_DIGEST_SCAN_BYTES" \
+         | _yaml_dotted | grep -qiE -e "$re"; then
+      printf 'checked\t%s in commit %s' "$path" "$sha"; return 0
+    fi
+  done < <(git -C "$dir" log --all -i -E -G '^[[:space:]]*key[[:space:]]*:' \
+             --format='C %h' --name-only -- '*.yaml' '*.yml' 2>/dev/null \
+           | awk '/^C / { sha = $2; next } NF { print sha "\t" $0 }' | head -300)
+
+  # Taken out since is still committed.  -G reads added and removed lines.
+  hit=$(git -C "$dir" log --all -i -E -G "$re" --format='%h' \
+          --name-only -1 -- '*.properties' '*.yaml' '*.yml' '*.xml' '*.json' \
+          '*.sh' '*.cmd' '*.bat' '*.env' '*.conf' '*.cfg' '*.launch' \
+          '*Jenkinsfile*' '*Dockerfile*' '*.groovy' 2>/dev/null \
+        | awk 'NF { if (!sha) sha = $0; else if (!path) path = $0 }
+               END { if (path) print path " in commit " sha }') || true
+  printf 'checked\t%s' "$hit"
+}
+
 derive_secret_facts() {
   local dir="${1:-}"
   local pre suf maxmask pp
@@ -457,6 +582,20 @@ derive_secret_facts() {
            | ._secret' "$buffered" 2>/dev/null | sort -u > "$patterns"
     _prime_live_heads "$dir" "$patterns" "${allbr[@]}"
     rm -f "$patterns"
+  fi
+
+  # Asked once per repository, and only when there is a Mule ciphertext to ask
+  # it for.  Unchecked and checked-but-empty are kept apart: only the second
+  # one is a reason to lower anything.
+  local mule_checked=false mule_key=""
+  if jq -e -s 'any(.[]; (._secret // "") | startswith("![") )' "$buffered" \
+       >/dev/null 2>&1; then
+    local mule_answer
+    mule_answer=$(_mule_key_location "$dir" "${allbr[@]+"${allbr[@]}"}")
+    if [[ "$mule_answer" == checked$'\t'* ]]; then
+      mule_checked=true
+      mule_key="${mule_answer#checked$'\t'}"
+    fi
   fi
 
   # Opened and unlinked, same as the rest: the loop reads a descriptor and the
@@ -533,6 +672,7 @@ derive_secret_facts() {
       --argjson slen "$slen" --argjson pp "$pp" --argjson live "$live" \
       --argjson dshape "$digest_shaped" --argjson dsibs "${digest_siblings:-0}" \
       --argjson objkey "$object_key" \
+      --argjson mulechecked "$mule_checked" --arg mulekey "$mule_key" \
       --argjson now "$now_epoch" --argjson idc "$JWT_IDENTITY_CLAIMS" \
       --argjson prc "$JWT_PRIVILEGE_CLAIMS" '
       # A JSON web token is not opaque.  Two of its three parts are base64 of
@@ -686,6 +826,22 @@ derive_secret_facts() {
               or any($pp[]?; . as $re | $p | test($re))
               or ($h | test("^(host|hostname|your[-_]?host|my[-_]?host|server|domain|example)$|(^|\\.)example\\.(com|org|net)$|\\.(example|invalid|test)$"))
           end;
+      # A Mule secure properties value: ![base64 ciphertext].  Blowfish and AES
+      # both work in 8 byte blocks (AES in two of them), so the body decodes to
+      # a whole number of blocks.  A 32 character client secret comes out at
+      # 40 bytes and a 40 character AWS secret key at 48, which is the padding
+      # doing its job.  Ciphertext also decodes to bytes nobody can read, while
+      # a secret that was only base64 encoded decodes to plain text and must
+      # stay a credential.  Collected into an array so no match is false, not
+      # nothing.
+      def mule_ciphertext:
+        ([capture("^!\\[(?<b>[A-Za-z0-9+/]+={0,2})\\]$")][0].b) as $b
+        | if $b == null or (($b | length) % 4) != 0 then false
+          else (($b | length) / 4 * 3 - ($b | sub("^[^=]*"; "") | length)) as $n
+            | $n >= 8 and ($n % 8) == 0
+              and ((try ($b | @base64d | explode | any(. < 32 or . > 126))
+                    catch false))
+          end;
       def shannon:
         (explode) as $c
         | ($c | length) as $n
@@ -693,6 +849,7 @@ derive_secret_facts() {
           else ($c | group_by(.) | map(length / $n) | map(-(. * log2)) | add)
           end;
       (._secret // "") as $s
+      | ($s | mule_ciphertext) as $mule
       | ($s | public_key_type) as $pk
       | . + {
           secret_fingerprint: $fp,
@@ -722,7 +879,12 @@ derive_secret_facts() {
           public_key_type: $pk,
           url_stand_in: ($s | url_stand_in($pp)),
           # The value is the next key in a JSON object.  See _object_key_neighbor.
-          object_key: $objkey
+          object_key: $objkey,
+          # Ciphertext, and whether the key that opens it was looked for and
+          # where it turned up.  Said here, graded in ingest.
+          mule_ciphertext: $mule,
+          mule_key_checked: ($mule and $mulechecked),
+          mule_key_location: (if $mule then $mulekey else "" end)
         }
       + ($s | jwt_facts)
       | del(._secret)
