@@ -713,6 +713,12 @@ scan_one_repo() {
         (( agreed > 0 )) && log_info "[$full_name] $agreed finding(s) seen by more than one engine"
       fi
     fi
+    # Mule flows, which nothing above reads.
+    if [[ "$(code_languages "$clone_dir")" == *mule* ]]; then
+      local mule; mule=$(run_mule_check "$clone_dir" "$full_name" "$default_branch" \
+                           "$(cfg '.github.web_url' 'https://github.com')")
+      [[ "$mule" != "[]" ]] && CODE_FINDINGS_JSON=$(code_merge "$CODE_FINDINGS_JSON" "$mule")
+    fi
     # GitHub's CodeQL alerts.  Under the vulnerability sources setting, because
     # that is where an install already said whether it wants them.
     if cfg_json '.scan.vulnerabilities.sources // []' | jq -e 'index("github_code_scanning")' >/dev/null; then

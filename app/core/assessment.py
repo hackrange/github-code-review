@@ -303,7 +303,13 @@ tenth grade reading level, short sentences, no em dashes, no markdown.  Be \
 exact.  Do not soften real problems and do not dramatize small ones.  Never \
 repeat a secret value, even masked."""
 
-CONCERN_FIELDS = ITEM_FIELDS.replace('"the group\'s ref, such as G3"', '"C1, C2 and so on"')
+CONCERN_FIELDS = ITEM_FIELDS.replace('"the group\'s ref, such as G3"', '"C1, C2 and so on"').replace(
+    ' "verdict":',
+    ' "file": "the path of the file the problem is in, exactly as the file tree '
+    'shows it, or empty when it is not in one file",\n'
+    ' "line": the line number of the step or setting at fault, or 0,\n'
+    ' "cwe": "the CWE id, such as CWE-306, or empty",\n'
+    ' "verdict":', 1)
 
 SCALES = """\
 Likelihood: 1 rare, 2 unlikely (needs inside access or rare conditions), \
@@ -674,6 +680,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             notes.append(f"The branch could not be fetched ({why}), so the review "
                          "used the scanner's records only.")
             commit, overview_evidence, file_count = "", "", 0
+            lines_in = {}
         else:
             try:
                 commit = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
@@ -683,6 +690,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                 commit = ""
             file_count = sum(1 for p in Path(root).rglob("*")
                              if p.is_file() and ".git" not in p.parts)
+            lines_in = _line_counts(Path(root))
             overview_evidence, gather_notes = diagram.gather(
                 root, send_code, {"hosts": [], "repositories": [],
                                   "served": site.get("urls") or []},
@@ -715,7 +723,8 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                                      if str(p or "").strip()]
             # A concern the model raised itself is a finding of the review,
             # not a scanner alert it might be doubting.
-            overview["concerns"] = [_clean_item({"verdict": "confirmed", **c})
+            overview["concerns"] = [{**_clean_item({"verdict": "confirmed", **c}),
+                                     **_place(c, lines_in)}
                                     for c in (obj.get("concerns") or [])[:5]
                                     if isinstance(c, dict)]
         else:
@@ -771,7 +780,10 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         items.append(item)
     for concern in overview["concerns"]:
         concern.update(source="review", rule="", kind="review", count=0,
-                       severity="", location="", finding_ids=[], group_ids=[])
+                       severity="", finding_ids=[], group_ids=[],
+                       location=(f"{concern['file']}, line {concern['line']}"
+                                 if concern["file"] and concern["line"]
+                                 else concern["file"]))
         items.append(concern)
 
     for item in items:
@@ -780,6 +792,11 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         else:
             item["score"] = item["likelihood"] * item["impact"]
             item["rating"] = rating_for(item["score"])
+
+    # ---- what the review found that no scanner did, kept as findings
+    _update(repository, branch, stage="Recording what the review found")
+    items = record_concerns(items, repository, branch, actor)
+
     items.sort(key=lambda i: (-i["score"], i["verdict"] != "confirmed",
                               -(i.get("count") or 0)))
     for n, item in enumerate(items, start=1):
@@ -849,6 +866,186 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             created_by=(actor or "")[:120], created_at=utcnow())
     log.info("%s wrote a security report on %s %s: %d issues, %d questions",
              actor, repository, branch, len(items), asker.calls)
+
+
+REPORT_ENGINE = "security-report"
+MAX_LINE_FILES = 20_000
+NEAR_LINES = 3        # the same place, give or take a line or two
+SAME_CWE_LINES = 30   # the same weakness in the same part of the file
+
+
+def _line_counts(root: Path) -> dict:
+    """{path: lines} for the checkout, so a place the model names can be checked."""
+    out = {}
+    for path in root.rglob("*"):
+        if len(out) >= MAX_LINE_FILES:
+            break
+        if ".git" in path.parts or path.is_symlink() or not path.is_file():
+            continue
+        try:
+            if path.stat().st_size > 2_000_000:
+                continue
+            with path.open("rb") as handle:
+                out[str(path.relative_to(root)).replace("\\", "/")] = handle.read().count(b"\n") + 1
+        except OSError:
+            continue
+    return out
+
+
+def _place(raw: dict, lines_in: dict) -> dict:
+    """The file, line and CWE a concern names, kept only if the checkout agrees.
+
+    A model can name a file that is not there, or a line past the end of it.
+    A finding written from that would link to nothing, so the place is dropped
+    and the concern stays in the report only.
+    """
+    rel = str(raw.get("file") or "").strip().lstrip("./")
+    line = _int(raw.get("line"), 0, 10_000_000, 0)
+    if rel not in lines_in:
+        rel, line = "", 0
+    elif not 0 < line <= lines_in[rel]:
+        line = 0
+    cwe = re.sub(r"\D", "", str(raw.get("cwe") or ""))[:8]
+    return {"file": rel, "line": line, "cwe": cwe}
+
+
+def _near(finding, item) -> bool:
+    if (finding.file_path or "") != item["file"]:
+        return False
+    gap = abs((finding.line or 0) - item["line"])
+    if gap <= NEAR_LINES:
+        return True
+    cwes = {c for c in re.split(r"\D+", finding.cwe or "") if c}
+    return bool(item["cwe"]) and item["cwe"] in cwes and gap <= SAME_CWE_LINES
+
+
+def record_concerns(items: list, repository: str, branch: str, actor: str) -> list:
+    """Keep what the review found as findings, unless one is already on record.
+
+    A concern the model raised itself, confirmed, at a file and line the
+    checkout has, is matched against the findings already there:
+
+      open      already reported.  If it is in this report as a scanner item
+                the concern is dropped, as the same thing twice.
+      waived    somebody decided.  It stays in the report, marked waived with
+                their reason, and carries no risk.
+      neither   a new finding from engine security-report, at the report's
+                rating, for a person to confirm.
+
+    A finding this engine made earlier and a scanner now reports at the same
+    place is waived as reported by the scanner, so it is not counted twice.
+    Fixed findings are not matched: the review says the problem is there.
+    -> the items, with the dropped ones taken out.
+    """
+    from app.core.audit import record
+    from app.core.models import Severity, vuln_id_for
+
+    in_report = {fid for i in items if i.get("source") == "scanner"
+                 for fid in (i.get("group_ids") or [])}
+    kept, made, superseded = [], 0, 0
+    now = utcnow()
+    with session_scope() as db:
+        repo = (db.query(Repository).filter(Repository.full_name == repository)
+                .one_or_none())
+        on_record = (db.query(Finding)
+                     .filter(Finding.repository == repository,
+                             Finding.kind.in_([FindingKind.CODE,
+                                               FindingKind.MISCONFIGURATION]),
+                             Finding.state != FindingState.FIXED)
+                     .all())
+        for item in items:
+            item.setdefault("recorded", None)
+            if (item.get("source") != "review" or item.get("verdict") != "confirmed"
+                    or not item.get("file") or not item.get("line")):
+                kept.append(item)
+                continue
+            near = [f for f in on_record if _near(f, item)]
+            ours = [f for f in near if (f.engines or "") == REPORT_ENGINE]
+            theirs = [f for f in near if (f.engines or "") != REPORT_ENGINE]
+            waived = [f for f in near if f.state == FindingState.WAIVED]
+            open_theirs = [f for f in theirs if f.state == FindingState.OPEN]
+
+            if open_theirs:
+                for f in ours:
+                    if f.state == FindingState.OPEN:
+                        f.state = FindingState.WAIVED
+                        f.excepted = True
+                        f.exception_reason = (f"Now reported by the scanner as finding "
+                                              f"{open_theirs[0].id}.")
+                        f.exception_by = "the security report"
+                        f.exception_at = now
+                        superseded += 1
+                if any(f.id in in_report for f in open_theirs):
+                    continue
+                item["recorded"] = {"state": "open", "id": open_theirs[0].id}
+                item["finding_ids"] = [open_theirs[0].id]
+                kept.append(item)
+                continue
+            if waived:
+                f = waived[0]
+                item["recorded"] = {"state": "waived", "id": f.id,
+                                    "reason": tidy(f.exception_reason, 400)}
+                item["finding_ids"] = [f.id]
+                item["score"], item["rating"] = 0, "Informational"
+                kept.append(item)
+                continue
+            if ours:
+                f = ours[0]
+                f.last_found_at = now
+                item["recorded"] = {"state": "open", "id": f.id}
+                item["finding_ids"] = [f.id]
+                kept.append(item)
+                continue
+
+            marker = "report:" + _digest(repository, item["file"], item["line"])
+            # Found here before and marked fixed since.  The review says it is
+            # back, so the same finding opens again rather than a twin.
+            old = db.query(Finding).filter(Finding.fingerprint == marker).one_or_none()
+            if old is not None:
+                old.state, old.resolved_at, old.last_found_at = FindingState.OPEN, None, now
+                on_record.append(old)
+                item["recorded"] = {"state": "reopened", "id": old.id}
+                item["finding_ids"] = [old.id]
+                made += 1
+                kept.append(item)
+                continue
+            web = (repo.html_url if repo is not None and repo.html_url else "").rstrip("/")
+            f = Finding(
+                fingerprint=marker, vuln_id=vuln_id_for(marker),
+                repo_id=repo.id if repo is not None else None,
+                organization=repository.split("/")[0], repository=repository,
+                kind=FindingKind.CODE, state=FindingState.OPEN,
+                severity=Severity(item["rating"].lower()),
+                engine_severity=item["rating"].lower(),
+                branch=branch or "", branches=json.dumps([branch] if branch else []),
+                file_path=item["file"], line=item["line"],
+                rule=REPORT_ENGINE, engines=REPORT_ENGINE,
+                title=item["title"][:500], cwe=item["cwe"],
+                description=tidy(" ".join(x for x in (item["what"], item["evidence"],
+                                                       item["why"]) if x), 3000),
+                confidence="medium",
+                triage_reason=("Found by the AI security report, not by a scanner.  "
+                               "A person should confirm it."),
+                url=(f"{web}/blob/{branch}/{item['file']}#L{item['line']}"
+                     if web and branch else ""),
+                first_found_at=now, last_found_at=now)
+            db.add(f)
+            db.flush()
+            on_record.append(f)
+            made += 1
+            item["recorded"] = {"state": "new", "id": f.id}
+            item["finding_ids"] = [f.id]
+            kept.append(item)
+        if made or superseded:
+            record(db, "finding.report_recorded", actor=actor or "", target=repository,
+                   detail=f"branch {branch or 'default'}: {made} new finding(s) from the "
+                          f"review, {superseded} now reported by the scanner")
+    return kept
+
+
+def _digest(*parts) -> str:
+    import hashlib
+    return hashlib.sha256("|".join(str(p or "") for p in parts).encode()).hexdigest()[:32]
 
 
 def correct(items: list, repository: str, branch: str, actor: str, model: str) -> None:

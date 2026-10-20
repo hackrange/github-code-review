@@ -441,7 +441,31 @@ code_languages() {
   find "$dir" -type d \( -name .git -o -name node_modules -o -name vendor \) -prune -o \
        -type f \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' \) \
        -print -quit 2>/dev/null | grep -q . && langs+=" javascript"
+  # Mule apps keep their flows under src/main/mule.  No other engine here
+  # reads them.
+  find "$dir" -type d \( -name .git -o -name node_modules -o -name target \) -prune -o \
+       -type f -path '*/src/main/mule/*.xml' -print -quit 2>/dev/null | grep -q . && langs+=" mule"
   printf '%s' "${langs# }"
+}
+
+# run_mule_check <dir> <full_name> <branch> <web> -> findings JSON
+#
+# Not a second engine: semgrep and CodeQL do not read Mule flows at all, so
+# this is the only thing that looks at them.  See lib/mule_check.py.
+run_mule_check() {
+  local dir="$1" repo="$2" branch="$3" web="$4"
+  cfg_bool '.scan.code_analysis.mule_check' true || { echo '[]'; return 0; }
+  local python; python=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
+  [[ -n "$python" ]] || { log_debug "no python, so Mule flows are not read"; echo '[]'; return 0; }
+  local out; out=$(tmp_file mulecheck)
+  with_timeout 300 "$python" -I "$GHSCAN_HOME/lib/mule_check.py" "$dir" "$repo" "$branch" \
+    "$web" "$(provider_link_parts)" > "$out" 2>"$GHSCAN_TMPROOT/mulecheck.log" || true
+  if jq -e 'type == "array"' "$out" >/dev/null 2>&1; then
+    cat "$out"
+  else
+    log_warn "[$repo] the Mule check did not run: $(tail -1 "$GHSCAN_TMPROOT/mulecheck.log" 2>/dev/null)"
+    echo '[]'
+  fi
 }
 
 # run_gosec <dir> <full_name> -> findings JSON

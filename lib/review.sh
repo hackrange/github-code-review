@@ -84,6 +84,10 @@ review_code() {
     [[ "$langs" == *javascript* ]] && extras+=("$(run_njsscan "$dir" "$name" "" "")")
     (( ${#extras[@]} > 0 )) && findings=$(code_merge "$findings" "${extras[@]}")
   fi
+  if [[ "$(code_languages "$dir")" == *mule* ]]; then
+    local mule; mule=$(run_mule_check "$dir" "$name" "" "")
+    [[ "$mule" != "[]" ]] && findings=$(code_merge "$findings" "$mule")
+  fi
   printf '%s' "$findings"
 }
 

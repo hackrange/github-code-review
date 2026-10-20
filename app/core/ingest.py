@@ -1806,6 +1806,12 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             # still in the files.  Nothing looked, so nothing is closed.
             seen_by_engines = {e.strip().lower() for e in
                                str(finding.engines or "").split(",") if e.strip()}
+            # A finding the security report recorded was never in any scan, so
+            # a scan not reporting it says nothing.  A person closes it, or the
+            # next report hands it over to a scanner that found the same thing.
+            if seen_by_engines == {"security-report"}:
+                counts["held_open"] = counts.get("held_open", 0) + 1
+                continue
             loaded = rules_loaded.get(finding.repository)
             if (loaded and seen_by_engines == {"semgrep"}
                     and finding.kind in (FindingKind.CODE, FindingKind.CREDENTIAL)

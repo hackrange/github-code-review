@@ -177,7 +177,7 @@
   <li><strong>Review of the repository.</strong>  {{ "The file tree and key files were read for problems a scanner does not look for, such as access settings and trust placed in browser code." | sentence_spaced }}</li>
 </ul>
 <h3>Limits of This Review</h3>
-<p>{{ "This review was produced by automated analysis of the code and the scanner results.  A person should confirm each finding before acting on it.  No traffic was sent to any running system, so nothing here was tested against a live service.  Credentials were never sent for analysis.  The ratings in this report do not change the grades on the findings themselves." | sentence_spaced }}</p>
+<p>{{ "This review was produced by automated analysis of the code and the scanner results.  A person should confirm each finding before acting on it.  No traffic was sent to any running system, so nothing here was tested against a live service.  Credentials were never sent for analysis.  The ratings in this report do not change the grades on the scanner's findings.  A problem the review found that no scanner reported is recorded as a finding for a person to confirm, unless a finding is already on record for it." | sentence_spaced }}</p>
 {% for note in r.notes %}<p class="soft">{{ note | sentence_spaced }}</p>{% endfor %}
 
 {# ------------------------------------------------------- rating method #}
@@ -233,6 +233,13 @@
       {%- if i.finding_ids %} (finding {{ i.finding_ids[:6] | join(', ') }}{% if i.finding_ids | length > 6 %} and others{% endif %}){% endif %}</td></tr>
     {% else %}
     <tr><td class="k">Source</td><td>Review of the repository</td></tr>
+    {% if i.recorded %}
+    <tr><td class="k">In the platform</td><td>
+      {%- if i.recorded.state == 'waived' %}Waived as finding {{ i.recorded.id }}{% if i.recorded.reason %}: {{ i.recorded.reason | sentence_spaced }}{% else %}.{% endif %}  It carries no risk in this report.
+      {%- elif i.recorded.state == 'new' %}Recorded as finding {{ i.recorded.id }}, for a person to confirm.
+      {%- elif i.recorded.state == 'reopened' %}Reopened as finding {{ i.recorded.id }}, which had been marked fixed.
+      {%- else %}Already on record as finding {{ i.recorded.id }}.{% endif %}</td></tr>
+    {% endif %}
     {% endif %}
     {% if i.rating == 'Informational' and (i.lowered or i.awaiting or i.confirmed) %}
     <tr><td class="k">In the platform</td><td>
