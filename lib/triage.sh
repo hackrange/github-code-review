@@ -427,6 +427,9 @@ triage_findings() {
         # The next name in a JSON object, read as a value because the entry
         # before it ended in a keyword and the rule takes a comma as an =.
         | ($f.object_key // false) as $objkey
+        # A Mule Studio doc:id, or an org or environment id in an Anypoint URL.
+        | ($f.mule_identifier // "") as $muleid
+        | ($muleid != "") as $docid
 
         # A hash of content, in a file full of hashes of content.
         #
@@ -447,7 +450,7 @@ triage_findings() {
            and (($f.digest_siblings // 0) >= $mindig)) as $digest
 
         | (if $f.verified then "confirmed"
-           elif $pat_hit or $too_uniform or $jwt_stub or $digest or $pubkey or $url_stub or $objkey then "placeholder"
+           elif $pat_hit or $too_uniform or $jwt_stub or $digest or $pubkey or $url_stub or $objkey or $docid then "placeholder"
            elif $too_short or ($low_entropy and ($tri.drop_unverified_below_entropy // true)) then "placeholder"
            elif $noisy_path then "low"
            else "probable" end) as $verdict
@@ -459,6 +462,7 @@ triage_findings() {
               elif $digest then "content_digest"
               elif $pubkey then "public_key"
               elif $objkey then "json_object_key"
+              elif $docid then "mule_identifier"
               elif ($f.mule_ciphertext // false) then "encrypted_value"
               elif $verdict == "placeholder" then "placeholder_or_test_value"
               elif $verdict == "low" then "probable_test_fixture"
@@ -478,6 +482,8 @@ triage_findings() {
               elif $digest then "a content hash, one of \($f.digest_siblings) of its own shape in the same file"
               elif $pubkey then "a \($f.public_key_type) public key, which is meant to be shared and opens nothing"
               elif $objkey then "the next key in a JSON object, read as a value because the entry before it ends in a keyword"
+              elif $muleid == "doc_id" then "a Mule Studio element id, doc:id, which names a step in a flow"
+              elif $docid then "an Anypoint organization or environment id, part of an Anypoint URL"
               elif ($f.mule_ciphertext // false) and ($f.mule_key_location // "") != "" then
                 "Mule ciphertext, and the key that opens it is committed at \($f.mule_key_location)"
               elif ($f.mule_ciphertext // false) and ($f.mule_key_checked // false) then
@@ -499,6 +505,8 @@ triage_findings() {
               public_key: $pubkey,
               url_stand_in: $url_stub,
               object_key: $objkey,
+              mule_doc_id: ($muleid == "doc_id"),
+              anypoint_path_id: ($muleid == "anypoint_path"),
               non_production_path: $noisy_path
             }
           }

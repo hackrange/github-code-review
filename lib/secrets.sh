@@ -546,6 +546,42 @@ _mule_key_location() {
   printf 'checked\t%s' "$hit"
 }
 
+# Whether the value is a Mule identifier rather than a credential.
+#
+# trufflehog's Anypoint detector takes any UUID near the words anypoint and org
+# as a client id and org id.  Mule projects are full of UUIDs that are neither:
+#
+#   doc_id         Studio writes doc:id="<uuid>" on every element of a flow.
+#                  One restart flow came up as 18 critical credentials.
+#   anypoint_path  .../organizations/<uuid>/environments/<uuid> in an Anypoint
+#                  URL.  Those name an org and an environment, and they are in
+#                  every Anypoint address anybody copies.
+#
+# The rule is strict: every place the value sits in the file, it is wholly one
+# of these.  The same UUID anywhere else, as a client_id say, keeps it
+# reported.  Prints the kind, or nothing.  A file nobody can read decides
+# nothing.
+_mule_identifier() {
+  local dir="$1" file="$2" commit="$3" secret="$4"
+  [[ -n "$dir" && -n "$file" && -n "$secret" ]] || return 0
+
+  local body=""
+  if [[ -n "$commit" ]]; then
+    body=$(git -C "$dir" show "$commit:$file" 2>/dev/null | head -c "$_DIGEST_SCAN_BYTES")
+  elif [[ -f "$dir/$file" ]]; then
+    body=$(head -c "$_DIGEST_SCAN_BYTES" -- "$dir/$file" 2>/dev/null)
+  fi
+  [[ -n "$body" && "$body" == *"$secret"* ]] || return 0
+
+  _count(){ grep -oF -e "$1" <<<"$body" | wc -l | tr -d ' '; }
+  local all docs paths
+  all=$(_count "$secret")
+  docs=$(( $(_count "doc:id=\"$secret\"") + $(_count "doc:id='$secret'") ))
+  paths=$(( $(_count "/organizations/$secret") + $(_count "/environments/$secret") ))
+  (( all > 0 && docs + paths == all )) || return 0
+  if (( docs >= paths )); then printf 'doc_id'; else printf 'anypoint_path'; fi
+}
+
 derive_secret_facts() {
   local dir="${1:-}"
   local pre suf maxmask pp
@@ -667,11 +703,16 @@ derive_secret_facts() {
         "$(printf '%s' "$line" | jq -r '.start_line // 0')" "$match")
     fi
 
+    local mule_id
+    mule_id=$(_mule_identifier "$dir" \
+      "$(printf '%s' "$line" | jq -r '.file // ""')" \
+      "$(printf '%s' "$line" | jq -r '.commit // ""')" "$secret")
+
     printf '%s' "$line" | jq -c \
       --arg fp "$fp" --arg merge "$merge" --arg redacted "$redacted" \
       --argjson slen "$slen" --argjson pp "$pp" --argjson live "$live" \
       --argjson dshape "$digest_shaped" --argjson dsibs "${digest_siblings:-0}" \
-      --argjson objkey "$object_key" \
+      --argjson objkey "$object_key" --arg muleid "$mule_id" \
       --argjson mulechecked "$mule_checked" --arg mulekey "$mule_key" \
       --argjson now "$now_epoch" --argjson idc "$JWT_IDENTITY_CLAIMS" \
       --argjson prc "$JWT_PRIVILEGE_CLAIMS" '
@@ -880,6 +921,8 @@ derive_secret_facts() {
           url_stand_in: ($s | url_stand_in($pp)),
           # The value is the next key in a JSON object.  See _object_key_neighbor.
           object_key: $objkey,
+          # A Mule element id or Anypoint path id.  See _mule_identifier.
+          mule_identifier: $muleid,
           # Ciphertext, and whether the key that opens it was looked for and
           # where it turned up.  Said here, graded in ingest.
           mule_ciphertext: $mule,

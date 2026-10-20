@@ -766,6 +766,14 @@ def _set_aside_placeholders(session, document, seen_at, seen_fingerprints) -> in
          "it is the name of the next entry in a JSON object, not a value.  "
          "The entry before it ends in a word like API, and the rule read the "
          "comma between them as an equals sign"),
+        ("mule_doc_id",
+         "it is a Mule Studio element id, the doc:id that names a step in a "
+         "flow.  Every place it appears in the file it is a doc:id, and an "
+         "element id opens nothing"),
+        ("anypoint_path_id",
+         "it is an Anypoint organization or environment id, read out of an "
+         "Anypoint URL.  Every place it appears in the file it is part of "
+         "such an address, and an id names something without opening it"),
         ("jwt_signature_stub",
          "its signature is the wrong length for the algorithm it names, so "
          "nobody could present it anywhere"),
