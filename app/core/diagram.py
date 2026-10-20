@@ -101,10 +101,21 @@ _PRIORITY = (
 )
 
 # Values that look like credentials, masked before anything leaves.
+#
+# A reference to a value is not the value.  password="${secure::smtp.pass}"
+# and clientSecret: "![...]" used to come out as "****" too, which reads as a
+# password typed straight in, and a report raised three plain text secret
+# issues from that alone.  So ${...} and Mule ciphertext are left showing
+# what they are.  The ciphertext body is still masked, below, and so is a
+# string written inside a Mule expression, #['...'].
 _MASKS = (
     (re.compile(r"(?i)((?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|"
                 r"access[_-]?key|private[_-]?key|auth|credential|client[_-]?secret)"
-                r"[\w.\-]*\s*[:=]\s*)(['\"]?)[^\s'\"#,;]{4,}"), r"\1\2****"),
+                r"[\w.\-]*\s*[:=]\s*(?:(?:bearer|basic|token)\s+)?)(['\"]?)(?!\$\{|!\[)"
+                r"[^\s'\"#,;]{4,}"), r"\1\2****"),
+    (re.compile(r"(?i)((?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|"
+                r"access[_-]?key|private[_-]?key|auth|credential|client[_-]?secret)"
+                r"[\w.\-]*\s*[:=]\s*['\"]?#\[\s*)(['\"]|&quot;)[^'\"&]{4,}\2"), r"\1\2****\2"),
     (re.compile(r"(?i)(://)[^/\s:@]+:[^/\s@]+@"), r"\1****@"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
      "-----PRIVATE KEY MASKED-----"),

@@ -809,7 +809,10 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     if isinstance(obj, dict):
         summary["summary"] = [tidy(p, 1400) for p in (obj.get("summary") or [])[:3]
                               if str(p or "").strip()]
-        summary["actions"] = [{"lead": tidy(a.get("lead"), 80), "text": tidy(a.get("text"), 400)}
+        # The PDF puts its own period after the lead, so one from the model
+        # came out as "now..".
+        summary["actions"] = [{"lead": tidy(a.get("lead"), 80).rstrip(" .!:;"),
+                               "text": tidy(a.get("text"), 400)}
                               for a in (obj.get("actions") or [])[:5] if isinstance(a, dict)]
         # Stored as "issues": a template reading row.items gets the dict's
         # own method rather than the value.
