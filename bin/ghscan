@@ -59,6 +59,7 @@ fi
 # The web app writes a config into a temp directory when a scan starts, then
 # passes it with -c.  There is no config file in the source tree any more.
 CONFIG_PATH="${GHSCAN_CONFIG:-}"
+CONFIG_GIVEN=0
 OUT_DIR=""
 ONLY=""
 FAIL_ON="none"
@@ -139,7 +140,7 @@ parse_args() {
   while (( $# > 0 )); do
     case "$1" in
       scan|review|check|inventory|orgs|coverage|validate|version) COMMAND="$1"; shift ;;
-      -c|--config) CONFIG_PATH="$2"; shift 2 ;;
+      -c|--config) CONFIG_PATH="$2"; CONFIG_GIVEN=1; shift 2 ;;
       -o|--out)    OUT_DIR="$2"; shift 2 ;;
       --repo)      REPO_OVERRIDE+=("$2"); shift 2 ;;
       --org)       ORG_OVERRIDE+=("$2"); shift 2 ;;
@@ -541,8 +542,16 @@ main() {
 
   if [[ "$COMMAND" == "review" ]]; then
     local target="${REVIEW_PATH:-.}"
+    if (( CONFIG_GIVEN )); then
+      # A review brings its own defaults, but given a config it uses that
+      # one, so a review can answer with exactly the rules a scan uses.
+      # Only when -c is on the command line: a GHSCAN_CONFIG left in the
+      # environment for scans would otherwise change what every hook does.
+      require_jq
+      config_load "$CONFIG_PATH"
+    fi
     [[ -d "$target" ]] || { log_error "not a directory: $target"; exit 2; }
-    # No config, no token, no network.  A review reads what is already here.
+    # No token, no network.  A review reads what is already here.
     local out; out=$(review_run "$target" "$DIFF_BASE" "${ONLY:-secrets,code,iac,workflows}")
 
     # The counts below are read off the review document either way.  Only what
@@ -570,7 +579,14 @@ main() {
     n_all=$(printf '%s' "$out" | jq -r '.counts.total // 0')
     case "$FAIL_ON" in
       none) exit 0 ;;
-      secrets|verified-secrets) (( n_secret > 0 )) && exit 3 || exit 0 ;;
+      secrets) (( n_secret > 0 )) && exit 3 || exit 0 ;;
+      # Only the ones the provider said still work.  This used to count every
+      # credential, which made the two names mean the same thing.
+      verified-secrets)
+        local n_live
+        n_live=$(printf '%s' "$out" | jq -r '
+          [ .findings[] | select(.kind == "credential" and .verified == true) ] | length')
+        (( n_live > 0 )) && exit 3 || exit 0 ;;
       *) (( n_all > 0 )) && exit 3 || exit 0 ;;
     esac
   fi

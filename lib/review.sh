@@ -15,11 +15,16 @@
 # secrets would miss the thing the author is more likely to be introducing.
 # shellcheck shell=bash
 
-# review_paths <dir> [--diff <base>] -> the files to look at, one per line
+# review_paths <dir> [<base>] -> the files to look at, one per line
 #
-# With --diff, only what changed against that ref, so an editor and a hook see
+# With a base, only what changed against that ref, so an editor and a hook see
 # the author's own work rather than the repository's backlog.  Somebody opening
 # a file should not be shown two thousand findings they did not write.
+#
+# Files git has never seen count as changed.  They are entirely this person's
+# work, and git diff does not list them, so leaving them out would hide every
+# finding in a file somebody just wrote.  The editor plugin learned the same
+# thing in ide/core/changed.js.
 review_paths() {
   local dir="$1" base="${2:-}"
   if [[ -z "$base" ]]; then
@@ -29,8 +34,27 @@ review_paths() {
   git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || {
     log_warn "not a git checkout, so everything is being looked at"
     printf '%s\n' "$dir"; return 0; }
-  git -C "$dir" diff --name-only --diff-filter=ACMR "$base" 2>/dev/null \
-    | while IFS= read -r f; do [[ -f "$dir/$f" ]] && printf '%s\n' "$f"; done
+  git -C "$dir" rev-parse --verify --quiet "${base}^{commit}" >/dev/null || {
+    log_warn "$base is not a commit here, so everything is being looked at"
+    printf '%s\n' "$dir"; return 0; }
+  { git -C "$dir" diff --name-only -z --diff-filter=ACMRT "$base" -- 2>/dev/null
+    git -C "$dir" ls-files -z --others --exclude-standard 2>/dev/null; } \
+    | while IFS= read -r -d '' f; do [[ -f "$dir/$f" ]] && printf '%s\n' "$f"; done \
+    | sort -u
+}
+
+# review_stage <dir> <list> <dest> -> copies the listed files under dest
+#
+# The engines all take a directory, so a diff is reviewed by copying the files
+# it names into one of its own.  Paths are kept, because a rule that keys on
+# a path (tests/, a Dockerfile, a workflow) has to see the real one.
+review_stage() {
+  local dir="$1" list="$2" dest="$3" f
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    mkdir -p "$dest/$(dirname "$f")"
+    cp -p -- "$dir/$f" "$dest/$f" 2>/dev/null || true
+  done < "$list"
 }
 
 # review_secrets <dir> <name> -> ndjson of credential findings
@@ -113,8 +137,8 @@ review_workflows() {
 
 # review_run <dir> <base> <only> -> the whole thing as one json document
 review_run() {
-  local dir="$1" base="${2:-}" only="${3:-secrets,code}"
-  local name; name="$(basename "$(cd "$dir" && pwd)")"
+  local dir="$1" base="${2:-}" only="${3:-secrets,code}" name="${4:-}"
+  [[ -n "$name" ]] || name="$(basename "$(cd "$dir" && pwd)")"
 
   # Once, here, in this shell.  Everything below runs in a command
   # substitution, and a subshell that makes its own temp root leaves the parent
@@ -173,6 +197,27 @@ review_run() {
       redaction: {prefix_chars: 4, suffix_chars: 3, max_mask_chars: 12}
     }')
   fi
+  # --verify and --no-verify, which a review used to accept and then ignore.
+  # The gate turns it on, because "live" is the one word in its policy that
+  # only the issuing provider can say.
+  if [[ -n "${GHSCAN_ARG_VERIFY:-}" ]]; then
+    GHSCAN_CFG_JSON=$(printf '%s' "$GHSCAN_CFG_JSON" \
+      | jq -c --argjson v "$GHSCAN_ARG_VERIFY" '.scan.secrets.trufflehog.verify = $v')
+  fi
+
+  # With a base, the engines look at a copy holding only what changed.  This
+  # used to record the base and then look at everything, so --diff answered
+  # with the whole repository's backlog while saying it had not.
+  local reviewed="$dir" stage=""
+  if [[ -n "$base" ]]; then
+    local list; list=$(tmp_file rpaths)
+    review_paths "$dir" "$base" > "$list"
+    if [[ "$(head -n 1 "$list")" != "$dir" ]]; then
+      stage=$(tmp_dir rstage)
+      review_stage "$dir" "$list" "$stage"
+      dir="$stage"
+    fi
+  fi
 
   local secrets='[]' code='[]' iac='[]'
   if [[ ",$only," == *",secrets,"* ]]; then
@@ -195,6 +240,27 @@ review_run() {
     iac=$(printf '%s\n%s' "${iac:-[]}" "${wf:-[]}" | jq -c -s 'add // []')
   fi
 
+  if [[ -n "$stage" ]]; then
+    # Paths come back under the copy.  Report them as the caller knows them,
+    # or every link and every editor underline points at a directory that is
+    # already gone.
+    review_document "${secrets:-[]}" "${code:-[]}" "${iac:-[]}" "$reviewed" "$base" \
+      | jq --arg stage "$stage/" --arg dir "${reviewed%/}/" '
+          .findings |= map(.file |= (if startswith($stage)
+                                     then $dir + ltrimstr($stage) else . end))'
+    rm -rf -- "$stage"
+  else
+    review_document "${secrets:-[]}" "${code:-[]}" "${iac:-[]}" "$dir" "$base"
+  fi
+}
+
+# review_document <secrets> <code> <iac> <dir> <base> -> the review document
+#
+# Its own function so the gate can build the same shape for the secrets it
+# finds in commit history, rather than a second copy of the field list that
+# drifts from this one.
+review_document() {
+  local secrets="$1" code="$2" iac="$3" dir="$4" base="${5:-}"
   # Both of these go to jq through a file.  A review of a large repository with
   # no --diff produces thousands of findings, and argv runs out long before jq
   # does.  Everywhere else in here already learned that the hard way.
@@ -223,6 +289,10 @@ review_run() {
             title: (.description // "credential"),
             message: ((.classification // "") + " " + (.severity_reason // "") | ltrimstr(" ")),
             confidence: (.confidence // "medium"),
+            # Whether the issuing provider said it still works.  Only
+            # TruffleHog can ask, and only when verification is on.
+            verified: (.verified == true),
+            commit: (.commit // null),
             preview: (.secret_redacted // null),
             fingerprint: (.secret_fingerprint // null)
           } ]
@@ -237,6 +307,10 @@ review_run() {
             confidence: (.confidence // ""),
             triage: (.triage // null),
             triage_reason: (.triage_reason // null),
+            # What the rule matched.  The web app keys a code finding on it
+            # rather than the line, so this is how a review finds the waiver
+            # on the same finding.
+            matched: (.matched // null),
             # Which engines saw it.  An editor showing "two engines agree" is
             # showing the strongest signal either of them produces.
             engines: (.engines // [ (.source // "semgrep") ]),
