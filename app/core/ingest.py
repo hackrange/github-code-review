@@ -1681,6 +1681,17 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             codeql_unread.add(named)
     # Before anything is closed, because the whole point of it is to keep a
     # value the scanner looked at out of the set that looks like it went away.
+    # A security report that ran before the scanner could see something left
+    # its own finding for it.  Now the scanner reports the same place, so the
+    # report's copy is handed over rather than counted twice.
+    try:
+        from app.core.assessment import hand_over
+        handed = hand_over(session, set(scanned_repos or []) | set(touched_repos))
+        if handed:
+            counts["report_handed_over"] = handed
+    except Exception:                    # noqa: BLE001
+        log.warning("could not hand report findings over to the scanner", exc_info=True)
+
     counts["set_aside"] = _set_aside_placeholders(
         session, document, seen_at, seen_fingerprints)
 

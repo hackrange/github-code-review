@@ -919,6 +919,45 @@ def _near(finding, item) -> bool:
     return bool(item["cwe"]) and item["cwe"] in cwes and gap <= SAME_CWE_LINES
 
 
+def hand_over(session, repositories) -> int:
+    """Waive the report's own findings that a scanner now reports.
+
+    Run by ingest after a scan, so a report that ran before the scanner could
+    see something does not leave its copy beside the scanner's.  Same match
+    as a report uses: same file, within a few lines, or the same CWE nearby.
+    -> how many were handed over.
+    """
+    from app.core.models import utcnow as _now
+    if not repositories:
+        return 0
+    ours = (session.query(Finding)
+            .filter(Finding.repository.in_(list(repositories)),
+                    Finding.engines == REPORT_ENGINE,
+                    Finding.state == FindingState.OPEN)
+            .all())
+    handed = 0
+    for f in ours:
+        place = {"file": f.file_path or "", "line": f.line or 0,
+                 "cwe": re.sub(r"\D", "", f.cwe or "")}
+        if not place["file"] or not place["line"]:
+            continue
+        scanner = next((g for g in session.query(Finding)
+                        .filter(Finding.repository == f.repository,
+                                Finding.file_path == f.file_path,
+                                Finding.kind.in_([FindingKind.CODE,
+                                                  FindingKind.MISCONFIGURATION]),
+                                Finding.state == FindingState.OPEN,
+                                Finding.engines != REPORT_ENGINE)
+                        .all() if _near(g, place)), None)
+        if scanner is None:
+            continue
+        f.state, f.excepted = FindingState.WAIVED, True
+        f.exception_reason = f"Now reported by the scanner as finding {scanner.id}."
+        f.exception_by, f.exception_at = "the security report", _now()
+        handed += 1
+    return handed
+
+
 def record_concerns(items: list, repository: str, branch: str, actor: str) -> list:
     """Keep what the review found as findings, unless one is already on record.
 
@@ -942,7 +981,7 @@ def record_concerns(items: list, repository: str, branch: str, actor: str) -> li
 
     in_report = {fid for i in items if i.get("source") == "scanner"
                  for fid in (i.get("group_ids") or [])}
-    kept, made, superseded = [], 0, 0
+    kept, made, superseded, fresh = [], 0, 0, []
     now = utcnow()
     with session_scope() as db:
         repo = (db.query(Repository).filter(Repository.full_name == repository)
@@ -1028,10 +1067,13 @@ def record_concerns(items: list, repository: str, branch: str, actor: str) -> li
                                "A person should confirm it."),
                 url=(f"{web}/blob/{branch}/{item['file']}#L{item['line']}"
                      if web and branch else ""),
+                connection_id=repo.connection_id if repo is not None else None,
+                connection=(repo.connection or "") if repo is not None else "",
                 first_found_at=now, last_found_at=now)
             db.add(f)
             db.flush()
             on_record.append(f)
+            fresh.append(f)
             made += 1
             item["recorded"] = {"state": "new", "id": f.id}
             item["finding_ids"] = [f.id]
@@ -1040,6 +1082,21 @@ def record_concerns(items: list, repository: str, branch: str, actor: str) -> li
             record(db, "finding.report_recorded", actor=actor or "", target=repository,
                    detail=f"branch {branch or 'default'}: {made} new finding(s) from the "
                           f"review, {superseded} now reported by the scanner")
+        # Told to the same people a scan tells, the same way: urgent ones on
+        # their own, the rest in a digest, and a copy for whoever the
+        # repository names.  Only new ones, as a scan does.  A mail server
+        # that is down must not cost the report, so nothing here may raise.
+        if fresh:
+            try:
+                from app.core import connections as connection_store, notify
+                if notify.enabled(db):
+                    account = (connection_store.by_id(db, repo.connection_id)
+                               if repo is not None and repo.connection_id else None)
+                    notify.announce(db, fresh, scan_label=f"Security report on {repository}",
+                                    connection=account)
+            except Exception:            # noqa: BLE001
+                log.warning("could not send notifications for the security report",
+                            exc_info=True)
     return kept
 
 

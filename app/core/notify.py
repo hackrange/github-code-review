@@ -279,6 +279,9 @@ def advisory_link(finding) -> str:
 def headline(finding) -> str:
     """What this finding is called, in two or three words."""
     named = (finding.rule or finding.vulnerability_id or "").strip()
+    # The security report's findings share one rule name, which says nothing.
+    if named == "security-report":
+        named = ""
     if not named:
         named = (finding.title or "a finding").strip().split(". ")[0][:80]
     return named
