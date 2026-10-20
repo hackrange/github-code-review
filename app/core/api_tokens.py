@@ -31,6 +31,11 @@ SCOPES = {
     # a review token sends code and gets an opinion back, and this one takes
     # away every finding on the estate in a single file.
     "reports": "Download the report files a scan produced",
+    # A CI job's token.  It asks for a verdict on a pull request and reads
+    # the answer back, and that is all.  Its own scope so a pipeline secret
+    # that leaks cannot be used to pull every report, and an editor token
+    # cannot be used to run gate checks.
+    "gate": "Run pull request gate checks",
 }
 
 PREFIX = "gcr_"

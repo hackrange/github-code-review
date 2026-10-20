@@ -1020,6 +1020,8 @@ run_trufflehog() {
   if [[ -n "${GHSCAN_TH_SINCE_COMMIT:-}" ]]; then
     args+=(--since-commit "$GHSCAN_TH_SINCE_COMMIT")
   fi
+  # The gate wants one branch's commits, not every branch the clone has.
+  [[ -n "${GHSCAN_TH_BRANCH:-}" ]] && args+=(--branch "$GHSCAN_TH_BRANCH")
   if cfg_bool '.scan.secrets.trufflehog.verify' true; then
     local res; res=$(cfg '.scan.secrets.trufflehog.results' 'verified,unverified,unknown')
     args+=(--results "$res")

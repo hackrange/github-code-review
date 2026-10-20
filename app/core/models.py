@@ -1271,6 +1271,58 @@ class ScanRun(Base):
     failure_reason = Column(String(400), default="")
 
 
+class GateRun(Base):
+    """One pull request gate check: what was asked, and what it said.
+
+    Nothing a gate finds becomes a Finding.  A PR that never merges should not
+    leave work behind for anybody, and the nightly scan files whatever does
+    merge.  What is kept is the record: who asked about which commits, under
+    which policy, and which findings blocked or were let through on an
+    exception.  The code itself is never stored.
+    """
+
+    __tablename__ = "gate_runs"
+
+    id = Column(Integer, primary_key=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False,
+                        index=True)
+    started_at = Column(DateTime(timezone=True))
+    finished_at = Column(DateTime(timezone=True))
+    # queued, running, done or error.
+    status = Column(String(16), nullable=False, default="queued", index=True)
+
+    repo_id = Column(Integer, ForeignKey("repositories.id", ondelete="SET NULL"),
+                     nullable=True, index=True)
+    repository = Column(String(320), nullable=False, default="", index=True)
+    pull_request = Column(Integer)
+    base_sha = Column(String(64), nullable=False, default="")
+    head_sha = Column(String(64), nullable=False, default="")
+    merge_base = Column(String(64), default="")
+
+    caller = Column(String(120), nullable=False, default="")
+    token_id = Column(Integer)
+    requested_mode = Column(String(16), default="")
+    mode = Column(String(16), default="")
+    policy_version = Column(String(64), default="")
+
+    # pass, warn, fail or error.  would_block is the monitor mode number: the
+    # run passed, and enforcing would have failed it.
+    verdict = Column(String(8), default="", index=True)
+    would_block = Column(Boolean, default=False, nullable=False, index=True)
+    fail_closed = Column(Boolean, default=False, nullable=False)
+
+    counts = Column(LONG_JSON, default="")
+    blocking = Column(LONG_JSON, default="")
+    warnings = Column(LONG_JSON, default="")
+    exceptions_applied = Column(LONG_JSON, default="")
+    # The new findings as SARIF, which is what the CI job uploads.  Messages
+    # and masked previews only, the same as any SARIF file this tool writes.
+    sarif = Column(LONG_JSON, default="")
+
+    duration_ms = Column(Integer)
+    error = Column(String(400), default="")
+
+
 class Schedule(Base):
     """Cron entries.  One for scans, one for refreshing the vulnerability feeds."""
 

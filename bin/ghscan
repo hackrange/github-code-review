@@ -44,6 +44,7 @@ source "$GHSCAN_HOME/lib/threat_intel.sh"
 source "$GHSCAN_HOME/lib/exclusions.sh"
 source "$GHSCAN_HOME/lib/scan.sh"
 source "$GHSCAN_HOME/lib/review.sh"
+source "$GHSCAN_HOME/lib/gate.sh"
 source "$GHSCAN_HOME/lib/report.sh"
 source "$GHSCAN_HOME/lib/sarif.sh"
 source "$GHSCAN_HOME/lib/csv.sh"
@@ -69,6 +70,11 @@ REPO_OVERRIDE=()
 ORG_OVERRIDE=()
 COMMAND="scan"
 DIFF_BASE=""
+GATE_BASE=""
+GATE_HEAD=""
+GATE_POLICY=""
+GATE_FETCH=""
+GATE_MIRROR=""
 REVIEW_PATH=""
 OUT_FORMAT="json"
 
@@ -102,6 +108,7 @@ OPTIONS
       --verify          Force live credential verification on
       --fail-on WHAT    Exit 3 when findings exist:
                           none | secrets | verified-secrets | critical | high | license
+                          | policy (with --base: the gate policy says fail)
   -j, --jobs N          Parallel repositories (overrides scan.parallel_repos)
       --keep-clones     Do not delete the working clones
       --dry-run         Resolve scope and print the plan; scan nothing
@@ -110,6 +117,17 @@ OPTIONS
       --diff REF        With `review`: only files changed against REF, so an
                         editor shows what somebody wrote rather than the
                         repository's whole backlog
+      --base SHA        With `review`: compare against this commit, the way a
+      --head SHA        pull request gate does.  Both trees are reviewed, and
+                        only what head added is marked new.  --fail-on then
+                        counts only the new findings
+      --policy FILE     With --base: the gate policy that decides pass, warn
+                        or fail (default config/gate-policy.yaml).  Use
+                        --fail-on policy to exit 3 on a fail
+      --fetch OWNER/NAME With --base and --mirror: fetch the repository into
+      --mirror DIR      a bare mirror kept at DIR first, with the credential
+                        from -c, and review that.  This is how the server
+                        runs a gate with nothing uploaded
       --format WHAT     With `review`: json (default) or sarif.  SARIF is what
                         a Security tab, a code host and most vulnerability
                         managers already read
@@ -126,6 +144,7 @@ EXAMPLES
   ghscan review . --diff origin/main    # only what this branch changed
   ghscan review . --only secrets --fail-on secrets
   ghscan review . --format sarif --repo acme/payments > review.sarif
+  ghscan review . --base origin/main --head HEAD --fail-on secrets
 
 EXIT CODES
   0  completed, nothing above the --fail-on threshold
@@ -146,6 +165,11 @@ parse_args() {
       --org)       ORG_OVERRIDE+=("$2"); shift 2 ;;
       --only)      ONLY="$2"; shift 2 ;;
       --diff)      DIFF_BASE="$2"; shift 2 ;;
+      --base)      GATE_BASE="$2"; shift 2 ;;
+      --head)      GATE_HEAD="$2"; shift 2 ;;
+      --policy)    GATE_POLICY="$2"; shift 2 ;;
+      --fetch)     GATE_FETCH="$2"; shift 2 ;;
+      --mirror)    GATE_MIRROR="$2"; shift 2 ;;
       --format)
         case "$2" in
           json|sarif) OUT_FORMAT="$2" ;;
@@ -542,7 +566,18 @@ main() {
 
   if [[ "$COMMAND" == "review" ]]; then
     local target="${REVIEW_PATH:-.}"
-    if (( CONFIG_GIVEN )); then
+    if [[ -n "$GATE_FETCH" ]]; then
+      # The one review that does use a config, because it needs a credential
+      # to fetch with.  Nothing else about a review changes.
+      [[ -n "$GATE_MIRROR" && -n "$GATE_BASE" ]] || {
+        log_error "--fetch needs --mirror, --base and --head"; exit 2; }
+      require_jq; need_cmd git
+      config_load "$CONFIG_PATH"
+      auth_init
+      gate_fetch "$GATE_FETCH" "$GATE_MIRROR" || exit 1
+      target="$GATE_MIRROR"
+      REPO_OVERRIDE=("$GATE_FETCH")
+    elif (( CONFIG_GIVEN )); then
       # A review brings its own defaults, but given a config it uses that
       # one, so a review can answer with exactly the rules a scan uses.
       # Only when -c is on the command line: a GHSCAN_CONFIG left in the
@@ -551,8 +586,30 @@ main() {
       config_load "$CONFIG_PATH"
     fi
     [[ -d "$target" ]] || { log_error "not a directory: $target"; exit 2; }
-    # No token, no network.  A review reads what is already here.
-    local out; out=$(review_run "$target" "$DIFF_BASE" "${ONLY:-secrets,code,iac,workflows}")
+    local out gate=0
+    if [[ -n "$GATE_BASE" || -n "$GATE_HEAD" ]]; then
+      [[ -n "$GATE_BASE" && -n "$GATE_HEAD" ]] || {
+        log_error "--base and --head go together"; exit 2; }
+      [[ -z "$DIFF_BASE" ]] || { log_error "--diff or --base, not both"; exit 2; }
+      gate=1
+      # Live checks on unless asked not to.  The gate blocks on a working key,
+      # and only the provider can say a key works.
+      [[ -n "${GHSCAN_ARG_VERIFY:-}" ]] || GHSCAN_ARG_VERIFY=true
+      out=$(gate_run "$target" "$GATE_BASE" "$GATE_HEAD" \
+              "${ONLY:-secrets,code,iac,workflows,deps}" "${REPO_OVERRIDE[0]:-}") || exit $?
+      # The verdict rides on the document, so a pipeline reads one file.
+      local policy="${GATE_POLICY:-$GHSCAN_HOME/config/gate-policy.yaml}"
+      local verdict
+      verdict=$(printf '%s' "$out" | "$(ghscan_python)" "$GHSCAN_HOME/lib/gate_policy.py" - \
+                  --policy "$policy" --repository "${REPO_OVERRIDE[0]:-}") || {
+        log_error "the gate policy could not be applied: $policy"; exit 2; }
+      local f_out f_verdict
+      f_out=$(json_file "$out" gout); f_verdict=$(json_file "$verdict" gverdict)
+      out=$(jq --slurpfile v "$f_verdict" '.gate = $v[0]' "$f_out")
+    else
+      # No config, no token, no network.  A review reads what is already here.
+      out=$(review_run "$target" "$DIFF_BASE" "${ONLY:-secrets,code,iac,workflows}")
+    fi
 
     # The counts below are read off the review document either way.  Only what
     # gets printed changes, so a pipeline that switches format keeps the same
@@ -567,7 +624,12 @@ main() {
         # --repo names the repository being reviewed here, rather than picking
         # one to scan.  Passing it lines the fingerprints up with the ones a
         # scan of the same repository produces.
-        sarif_review "$out" "${REPO_OVERRIDE[0]:-}" || {
+        # A gate annotates the PR with what the PR added.  The rest is the
+        # nightly scan's to report, and showing it here buries the new ones.
+        local sarif_in="$out"
+        (( gate )) && sarif_in=$(printf '%s' "$out" \
+          | jq -c '.findings |= map(select(.new == true))')
+        sarif_review "$sarif_in" "${REPO_OVERRIDE[0]:-}" || {
           log_error "the SARIF writer failed"; exit 1; }
         ;;
     esac
@@ -575,17 +637,26 @@ main() {
     # Same exit codes as a scan, so a hook or a pipeline can act on it without
     # learning a second set.
     local n_secret n_all
-    n_secret=$(printf '%s' "$out" | jq -r '.counts.credential // 0')
-    n_all=$(printf '%s' "$out" | jq -r '.counts.total // 0')
+    if (( gate )); then
+      n_secret=$(printf '%s' "$out" | jq -r '.counts.new.credential // 0')
+      n_all=$(printf '%s' "$out" | jq -r '.counts.new.total // 0')
+    else
+      n_secret=$(printf '%s' "$out" | jq -r '.counts.credential // 0')
+      n_all=$(printf '%s' "$out" | jq -r '.counts.total // 0')
+    fi
     case "$FAIL_ON" in
       none) exit 0 ;;
       secrets) (( n_secret > 0 )) && exit 3 || exit 0 ;;
+      policy)
+        (( gate )) || { log_error "--fail-on policy needs --base and --head"; exit 2; }
+        [[ "$(printf '%s' "$out" | jq -r '.gate.verdict')" == "fail" ]] && exit 3 || exit 0 ;;
       # Only the ones the provider said still work.  This used to count every
       # credential, which made the two names mean the same thing.
       verified-secrets)
         local n_live
-        n_live=$(printf '%s' "$out" | jq -r '
-          [ .findings[] | select(.kind == "credential" and .verified == true) ] | length')
+        n_live=$(printf '%s' "$out" | jq -r --argjson gate "$gate" '
+          [ .findings[] | select(.kind == "credential" and .verified == true)
+            | select($gate == 0 or .new == true) ] | length')
         (( n_live > 0 )) && exit 3 || exit 0 ;;
       *) (( n_all > 0 )) && exit 3 || exit 0 ;;
     esac

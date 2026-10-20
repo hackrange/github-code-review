@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+# gcr-gate: ask Git Code Review whether a pull request may merge.
+#
+# Runs as a CI step.  It works out the base and head commits, asks the server,
+# waits for the answer, writes the new findings as SARIF for the CI system to
+# upload, and exits with a code branch protection can act on:
+#
+#   0  pass, or warnings only
+#   1  fail: at least one blocking finding
+#   2  error: the server could not answer.  What happens next is the failure
+#      policy's call, and --fail-open turns this into a pass with a warning.
+#
+# The server never writes to the code host.  The CI job uploads the SARIF
+# with its own token, which is the whole reason this is a separate step.
+#
+# Needs bash, curl and jq.  gitleaks too, for the fallback: when the server
+# cannot be reached, credentials are still checked here, on the commits in
+# this checkout, because a pushed key is the one miss that cannot wait for
+# the nightly scan.
+set -uo pipefail
+
+VERSION="1.0.1"
+SERVER="${GCR_URL:-}"
+TOKEN="${GCR_TOKEN:-}"
+REPO="" PR="" BASE="" HEAD="" MODE=""
+SARIF="gcr.sarif"
+SUMMARY="${GITHUB_STEP_SUMMARY:-}"
+WAIT=360
+FAIL_OPEN=0
+FALLBACK=1
+
+say()  { printf 'gcr-gate: %s\n' "$*" >&2; }
+warn() {
+  # GitHub Actions turns this line into an annotation on the run.  Anywhere
+  # else it is just a line in the log, which is still the right place for it.
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then printf '::warning title=gcr-gate::%s\n' "$*" >&2
+  else say "warning: $*"; fi
+}
+
+usage() {
+  cat <<'__HELP__'
+gcr-gate - ask Git Code Review whether a pull request may merge
+
+USAGE
+  gcr-gate [--repo OWNER/NAME] [--pr N] [--base SHA] [--head SHA]
+
+  Anything left out is read from the CI system: GitHub Actions, GitLab CI,
+  Azure Pipelines and Jenkins multibranch are recognized.
+
+OPTIONS
+  --repo OWNER/NAME   the repository as Git Code Review knows it
+  --pr N              the pull or merge request number, for the record
+  --base SHA          the target branch's commit
+  --head SHA          the commit being checked
+  --mode WHAT         monitor or enforce.  It can make the check stricter
+                      than the server's policy, never laxer
+  --sarif FILE        where to write the new findings (default gcr.sarif)
+  --summary FILE      also write a Markdown summary here (GitHub Actions'
+                      step summary is used when there is one)
+  --wait SECONDS      how long to wait for an answer (default 360)
+  --fail-open         exit 0 with a warning when the server cannot answer,
+                      unless the repository is fail closed
+  --no-fallback       do not scan for credentials locally when the server
+                      cannot be reached
+  -h, --help          this help
+
+ENVIRONMENT
+  GCR_URL     the server, for example https://gcr.example.com
+  GCR_TOKEN   a token with the gate scope
+__HELP__
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --repo)    REPO="$2"; shift 2 ;;
+    --pr)      PR="$2"; shift 2 ;;
+    --base)    BASE="$2"; shift 2 ;;
+    --head)    HEAD="$2"; shift 2 ;;
+    --mode)    MODE="$2"; shift 2 ;;
+    --sarif)   SARIF="$2"; shift 2 ;;
+    --summary) SUMMARY="$2"; shift 2 ;;
+    --wait)    WAIT="$2"; shift 2 ;;
+    --fail-open)   FAIL_OPEN=1; shift ;;
+    --no-fallback) FALLBACK=0; shift ;;
+    --version) echo "gcr-gate $VERSION"; exit 0 ;;
+    -h|--help) usage; exit 0 ;;
+    *) say "unknown argument: $1"; usage >&2; exit 2 ;;
+  esac
+done
+
+for tool in curl jq git; do
+  command -v "$tool" >/dev/null 2>&1 || { say "$tool is not installed"; exit 2; }
+done
+
+# --- what is being asked about ----------------------------------------------
+
+# Whatever the CI system already knows.  Each one names these differently,
+# and a value given on the command line always wins.
+from_ci() {
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    [[ -n "$REPO" ]] || REPO="${GITHUB_REPOSITORY:-}"
+    if [[ -r "${GITHUB_EVENT_PATH:-}" ]]; then
+      [[ -n "$PR"   ]] || PR=$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")
+      [[ -n "$BASE" ]] || BASE=$(jq -r '.pull_request.base.sha // empty' "$GITHUB_EVENT_PATH")
+      [[ -n "$HEAD" ]] || HEAD=$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")
+    fi
+  elif [[ -n "${GITLAB_CI:-}" ]]; then
+    [[ -n "$REPO" ]] || REPO="${CI_PROJECT_PATH:-}"
+    [[ -n "$PR"   ]] || PR="${CI_MERGE_REQUEST_IID:-}"
+    [[ -n "$BASE" ]] || BASE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}"
+    [[ -n "$HEAD" ]] || HEAD="${CI_COMMIT_SHA:-}"
+  elif [[ -n "${TF_BUILD:-}" ]]; then
+    [[ -n "$REPO" ]] || REPO="${BUILD_REPOSITORY_NAME:-}"
+    [[ -n "$PR"   ]] || PR="${SYSTEM_PULLREQUEST_PULLREQUESTID:-}"
+    [[ -n "$HEAD" ]] || HEAD="${SYSTEM_PULLREQUEST_SOURCECOMMITID:-${BUILD_SOURCEVERSION:-}}"
+    if [[ -z "$BASE" && -n "${SYSTEM_PULLREQUEST_TARGETBRANCH:-}" ]]; then
+      BASE=$(git rev-parse --verify --quiet \
+               "origin/${SYSTEM_PULLREQUEST_TARGETBRANCH#refs/heads/}" 2>/dev/null || true)
+    fi
+  elif [[ -n "${JENKINS_URL:-}" ]]; then
+    [[ -n "$PR"   ]] || PR="${CHANGE_ID:-}"
+    [[ -n "$HEAD" ]] || HEAD="${GIT_COMMIT:-}"
+    if [[ -z "$BASE" && -n "${CHANGE_TARGET:-}" ]]; then
+      BASE=$(git rev-parse --verify --quiet "origin/${CHANGE_TARGET}" 2>/dev/null || true)
+    fi
+  fi
+  [[ -n "$HEAD" ]] || HEAD=$(git rev-parse --verify --quiet HEAD 2>/dev/null || true)
+}
+from_ci
+[[ "$PR" =~ ^[0-9]+$ ]] || PR=""
+
+[[ -n "$REPO" ]] || { say "no repository: pass --repo owner/name"; exit 2; }
+[[ -n "$BASE" && -n "$HEAD" ]] || {
+  say "no base or head commit: pass --base and --head, or run this on a pull request"; exit 2; }
+
+# --- talking to the server ----------------------------------------------------
+
+# The token goes to curl through a config on stdin, so it never appears on a
+# command line that ps or a CI log could show.
+api() {
+  local method="$1" path="$2" body="${3:-}" out="$4"
+  local -a args=(-sS -o "$out" -w '%{http_code}' --max-time 60 -X "$method"
+                 -H "Accept: application/json" -H "User-Agent: gcr-gate/$VERSION")
+  [[ -n "$body" ]] && args+=(-H "Content-Type: application/json" --data-binary @-)
+  if [[ -n "$body" ]]; then
+    { printf 'header = "Authorization: Bearer %s"\n' "$TOKEN"
+      printf 'url = "%s"\n' "${SERVER%/}$path"; } > "$work/curl.cfg"
+    printf '%s' "$body" | curl -K "$work/curl.cfg" "${args[@]}"
+  else
+    printf 'header = "Authorization: Bearer %s"\nurl = "%s"\n' "$TOKEN" "${SERVER%/}$path" \
+      | curl -K - "${args[@]}"
+  fi
+  local rc=$?
+  rm -f -- "$work/curl.cfg"
+  return "$rc"
+}
+
+work=$(mktemp -d)
+chmod 700 "$work"
+trap 'rm -rf -- "$work"' EXIT
+
+# --- when the server cannot answer --------------------------------------------
+
+# Credentials only, on the commits this change adds, with the rules gitleaks
+# ships.  The server would have caught more; this is the part that cannot
+# wait.  A finding here fails the check whatever the failure policy says.
+fallback() {
+  local why="$1" fail_closed="${2:-false}"
+  warn "the server could not answer ($why), so this change was not fully checked"
+  if (( FALLBACK )) && command -v gitleaks >/dev/null 2>&1; then
+    local mb; mb=$(git merge-base "$BASE" "$HEAD" 2>/dev/null || true)
+    if [[ -n "$mb" ]]; then
+      gitleaks git . --log-opts="$mb..$HEAD" --no-banner --redact \
+        --report-format json --report-path "$work/leaks.json" --exit-code 0 \
+        >/dev/null 2>&1 || true
+      local n; n=$(jq 'length' "$work/leaks.json" 2>/dev/null || echo 0)
+      if (( n > 0 )); then
+        say "found $n credential(s) in this change's commits while the server was away:"
+        jq -r '.[] | "  \(.File):\(.StartLine)  \(.RuleID)"' "$work/leaks.json" >&2
+        exit 1
+      fi
+      say "no credentials in this change's commits"
+    else
+      warn "no merge base in this checkout, so the local credential check could not run (fetch-depth: 0)"
+    fi
+  fi
+  [[ "$fail_closed" == "true" ]] && { say "this repository is fail closed"; exit 1; }
+  (( FAIL_OPEN )) && { warn "passing anyway (--fail-open)"; exit 0; }
+  exit 2
+}
+
+[[ -n "$SERVER" ]] || fallback "GCR_URL is not set"
+[[ -n "$TOKEN"  ]] || fallback "GCR_TOKEN is not set"
+
+body=$(jq -cn --arg r "$REPO" --arg b "$BASE" --arg h "$HEAD" --arg m "$MODE" --arg p "$PR" '
+  {repo: $r, base_sha: $b, head_sha: $h}
+  + (if $p == "" then {} else {pr: ($p | tonumber)} end)
+  + (if $m == "" then {} else {mode: $m} end)')
+
+code=$(api POST /api/v1/gate "$body" "$work/start.json") || fallback "it is unreachable"
+case "$code" in
+  202) ;;
+  401) say "the server refused the token: it needs the gate scope"; exit 2 ;;
+  404) say "$(jq -r '.detail // "not found"' "$work/start.json" 2>/dev/null)"; exit 2 ;;
+  400) say "$(jq -r '.detail // "bad request"' "$work/start.json" 2>/dev/null)"; exit 2 ;;
+  *)   fallback "HTTP $code" ;;
+esac
+status_path=$(jq -r '.status_url' "$work/start.json" | sed -E 's#^https?://[^/]+##')
+say "checking $REPO ${PR:+#$PR }at ${HEAD:0:12}: $(jq -r '.status_url' "$work/start.json")"
+
+deadline=$(( $(date +%s) + WAIT ))
+while :; do
+  code=$(api GET "$status_path" "" "$work/run.json") || fallback "it stopped answering"
+  [[ "$code" == "200" ]] || fallback "HTTP $code while waiting"
+  status=$(jq -r '.status' "$work/run.json")
+  [[ "$status" == "done" || "$status" == "error" ]] && break
+  (( $(date +%s) < deadline )) || fallback "no answer in $WAIT seconds" \
+    "$(jq -r '.fail_closed // false' "$work/run.json")"
+  sleep 5
+done
+
+verdict=$(jq -r '.verdict // "error"' "$work/run.json")
+if [[ "$status" == "error" ]]; then
+  say "$(jq -r '.error // "the run failed"' "$work/run.json")"
+  fallback "the run failed" "$(jq -r '.fail_closed // false' "$work/run.json")"
+fi
+
+sarif_path=$(jq -r '.sarif_url // empty' "$work/run.json" | sed -E 's#^https?://[^/]+##')
+if [[ -n "$sarif_path" ]]; then
+  code=$(api GET "$sarif_path" "" "$work/gcr.sarif") || code=0
+  if [[ "$code" == "200" ]]; then mv -- "$work/gcr.sarif" "$SARIF"
+  else warn "the findings could not be downloaded (HTTP $code), so none will show on the PR"; fi
+fi
+
+# --- saying what happened -------------------------------------------------------
+
+report() {
+  jq -r '
+    def row: "| \(.kind) | `\(.file // .package // "")`\(if .line and .line > 0 then ":\(.line)" else "" end) | \(.title // .rule) | \(.reason // "") |";
+    "### Git Code Review: \(.verdict)\(if .mode == "monitor" and .would_block then " (monitor mode: enforcing would have failed this)" else "" end)",
+    "",
+    "Policy \(.policy_version // "unknown").  \(.counts.new.total // 0) new finding(s), \(.blocking | length) blocking, \(.exceptions_applied | length) let through on an exception.",
+    "",
+    (if (.blocking | length) > 0 then
+       "| Kind | Where | What | Why it blocks |", "| --- | --- | --- | --- |", (.blocking[] | row), ""
+     else empty end),
+    (if (.exceptions_applied | length) > 0 then
+       "Let through on an exception:", "", (.exceptions_applied[] | "- `\(.file // .package)` \(.rule): \(.exception)"), ""
+     else empty end)
+  ' "$work/run.json"
+}
+report >&2
+[[ -n "$SUMMARY" ]] && report >> "$SUMMARY"
+
+case "$verdict" in
+  pass|warn) exit 0 ;;
+  fail) exit 1 ;;
+  *) fallback "the verdict was $verdict" ;;
+esac

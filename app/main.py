@@ -296,6 +296,7 @@ def _attach_routes(app: FastAPI) -> None:
         ("app.web.routes_pages", "router"),
         ("app.web.routes_api", "router"),
         ("app.web.routes_api_v1", "router"),
+        ("app.web.routes_api_gate", "router"),
     ):
         try:
             module = __import__(module_name, fromlist=[attr])

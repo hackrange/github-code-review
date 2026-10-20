@@ -1,0 +1,67 @@
+# What holds a pull request.
+#
+# Read by `ghscan review --base --head --policy`, by the gate endpoint, and by
+# the editor plugin, so all three agree about what will block.  Only findings
+# the change itself added are ever looked at.  Everything new that does not
+# block is a warning, and nothing old is either.
+#
+# Bump the version whenever this changes.  Every gate run records it, so a
+# blocked PR can always be traced to the rule that blocked it.
+
+version: "2026-10-20.1"
+
+default:
+  # monitor: a would-be block is recorded and the check passes with a warning.
+  # enforce: it fails the check.  Start every repository in monitor.
+  mode: monitor
+
+  block:
+    # live: only a credential the issuing provider confirmed still works.
+    # any: every new credential.  none: credentials never block.
+    secrets: live
+
+    # Two engines agreeing.  One engine on its own is a warning, because one
+    # engine on its own is how a gate gets a reputation for noise.  require:
+    # any blocks on a single engine.  A learned rule cannot confirm anything,
+    # since it only ever lowers a grade, but it does lower a new finding the
+    # same way it lowers the old one, and that can take it under the line.
+    sast:
+      min_severity: high
+      require: two_engines
+
+    sca:
+      kev: true
+      reachable_critical: true
+
+    # Signals from lib/malicious.py, plus known_malicious for a package with a
+    # published malicious-package advisory (a MAL- id).  not-a-registry and
+    # floating-version warn until somebody allow lists the source.
+    malicious_packages: [known_malicious, typosquat, install-hook]
+
+    iac: [public_storage, open_admin_ports, wildcard_iam, privileged_container]
+    ci_workflows: [untrusted_input_in_run, secrets_to_forks]
+
+# The rule ids behind each name above, as trivy and zizmor report them.  Each
+# one was checked against a file that should trigger it.
+categories:
+  public_storage: [AWS-0086, AWS-0087, AWS-0091, AWS-0092, AWS-0093]
+  # AWS-0107 is SSH and RDP only.  GCR-0001 is our own check for every other
+  # port that is not the web (config/trivy-checks/open-ingress.rego).
+  open_admin_ports: [AWS-0107, GCR-0001]
+  # Empty on purpose.  The trivy release in the image reports nothing for an
+  # Allow of "*" on "*", written as a policy document, jsonencode or a heredoc.
+  # Add the id here once a check that fires on it exists.
+  wildcard_iam: []
+  privileged_container: [KSV-0017]
+  untrusted_input_in_run: [template-injection]
+  secrets_to_forks: [dangerous-triggers]
+
+# Per repository, by owner/name.  Merged over the default one key at a time,
+# so a repository that sets block.secrets: any keeps every other block rule.
+# A list is replaced whole, not added to.
+repos: {}
+#  example-org/payments-api:
+#    mode: enforce
+#  example-org/infra-live:
+#    mode: enforce
+#    fail_closed: true

@@ -615,6 +615,11 @@ def build_review(doc: dict, repository: str = "", root: str = "") -> dict:
                 "secret_redacted": finding.get("preview"),
                 "secret_fingerprint": finding.get("fingerprint"),
             }, rules))
+        elif finding.get("kind") == "dependency":
+            # A gate's dependency findings keep the shape a scan gives them,
+            # so they go through the same writer and get the same rule ids.
+            results.append(_dependency_result(
+                dict(finding, repository=repository), rules))
         elif finding.get("kind") == "misconfiguration":
             results.append(_misconfiguration_result({
                 "repository": repository,

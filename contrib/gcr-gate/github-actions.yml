@@ -1,0 +1,39 @@
+# Git Code Review pull request gate, for GitHub Actions.
+#
+# Copy to .github/workflows/gcr-gate.yml, or better, require it for every
+# repository at once with an organization ruleset.  It only blocks anything
+# once gcr-gate is a required status check on the protected branches.
+#
+# Set GCR_URL as an organization variable and GCR_TOKEN as an organization
+# secret.  The token needs the gate scope and nothing else.  The container
+# is the one contrib/gcr-gate/Dockerfile builds, pushed wherever your runners
+# pull images from.
+name: gcr-gate
+on: pull_request
+
+# Read the code, upload findings.  Nothing else.  The upload uses this
+# workflow's own token, so Git Code Review never writes to GitHub.
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  gate:
+    runs-on: [self-hosted, linux]
+    container: ghcr.io/example-org/gcr-gate:1.0.1
+    steps:
+      # The whole history, so the local credential check still works if the
+      # server cannot be reached.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Git Code Review gate
+        run: gcr-gate --sarif gcr.sarif
+        env:
+          GCR_URL: ${{ vars.GCR_URL }}
+          GCR_TOKEN: ${{ secrets.GCR_TOKEN }}
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('gcr.sarif') != ''
+        with:
+          sarif_file: gcr.sarif
+          category: gcr-gate
