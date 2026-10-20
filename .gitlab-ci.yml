@@ -1,0 +1,66 @@
+# Reviews what each change to this repository adds, using the scanner that
+# change builds.  No Git Code Review server is involved.
+#
+# The image is what changed, so it gets built here, and the review doubles as
+# proof that it still runs.  Needs a runner that can do Docker in Docker,
+# which means a privileged docker executor.
+#
+# The same job lives in .github/workflows/review.yml for the GitHub copy.
+# Change both.
+
+# Merge requests, and pushes to the default branch.  Nothing else, so a push
+# to some other branch does not queue a job.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+review:
+  stage: test
+  image: docker:29.9.1
+  services:
+    - docker:29.9.1-dind
+  variables:
+    GIT_DEPTH: "0"             # the base commit has to be here to compare against
+    DOCKER_TLS_CERTDIR: "/certs"
+  timeout: 1h
+  script:
+    - apk add --no-cache git jq
+    - docker build -t github-code-review:ci .
+    - |
+      if [ -n "${CI_MERGE_REQUEST_DIFF_BASE_SHA:-}" ]; then
+        base="$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+      else
+        # A push compares against what the branch was before it.  A new
+        # branch or a force push leaves nothing there, so use the parent.
+        base="$CI_COMMIT_BEFORE_SHA"
+        git cat-file -e "$base^{commit}" 2>/dev/null || base=$(git rev-parse "$CI_COMMIT_SHA^")
+      fi
+      echo "reviewing $base..$CI_COMMIT_SHA"
+
+      # The checkout belongs to the runner and the image runs as gcr, so git
+      # has to be told this directory is fine.  The shared memory keeps
+      # credentials found along the way off the disk.
+      set +e
+      docker run --rm --shm-size=1g \
+        -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src \
+        -v "$CI_PROJECT_DIR:/src:ro" \
+        --entrypoint /opt/gcr/bin/ghscan \
+        github-code-review:ci \
+        review /src --base "$base" --head "$CI_COMMIT_SHA" --fail-on policy \
+        --format sarif --repo "$CI_PROJECT_PATH" > review.sarif
+      code=$?
+      set -e
+
+      # 3 is the policy saying fail.  Anything else non-zero means the review
+      # itself broke, which is a different problem.
+      case $code in
+        0) echo "passed: $(jq '.runs[0].results | length' review.sarif) new finding(s), none blocking" ;;
+        3) echo "the gate policy says this change should not merge" ;;
+        *) echo "the review did not run cleanly, exit $code" ;;
+      esac
+      exit $code
+  artifacts:
+    when: always
+    paths: [review.sarif]
+    expire_in: 30 days

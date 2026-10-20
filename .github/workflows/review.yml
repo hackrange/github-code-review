@@ -1,0 +1,97 @@
+# Reviews what each change to this repository adds, using the scanner that
+# change builds.  No Git Code Review server is involved.
+#
+# This is the one place building the image in the pipeline is right.  The
+# image is what changed, so it gets built anyway, and the review doubles as
+# proof that it still runs.
+#
+# The same job lives in .gitlab-ci.yml for the GitLab copy.  Change both.
+name: review
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write     # for the upload, not for ghscan
+    steps:
+      # The whole history, so the base commit is here to compare against.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+
+      # Layers come from the Actions cache, so only what changed rebuilds.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: github-code-review:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Review the change
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [[ "$EVENT" == pull_request ]]; then
+            base="$PR_BASE" head="$PR_HEAD"
+          else
+            # A push compares against what master was before it.  A force
+            # push can leave that commit gone, so fall back to the parent.
+            base="$PUSH_BEFORE" head="$GITHUB_SHA"
+            git cat-file -e "$base^{commit}" 2>/dev/null || base=$(git rev-parse "$head^")
+          fi
+          echo "reviewing $base..$head"
+
+          # The checkout belongs to the runner and the image runs as gcr, so
+          # git has to be told this directory is fine.  The shared memory
+          # keeps credentials found along the way off the disk.
+          set +e
+          docker run --rm --shm-size=1g \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src \
+            -v "$PWD:/src:ro" \
+            --entrypoint /opt/gcr/bin/ghscan \
+            github-code-review:ci \
+            review /src --base "$base" --head "$head" --fail-on policy \
+            --format sarif --repo "$REPO" > review.sarif
+          code=$?
+          set -e
+
+          # 3 is the policy saying fail.  Anything else non-zero means the
+          # review itself broke, which is a different problem.
+          case $code in
+            0) echo "passed: $(jq '.runs[0].results | length' review.sarif) new finding(s), none blocking" ;;
+            3) echo "::error title=review::the gate policy says this change should not merge" ;;
+            *) echo "::error title=review::the review did not run cleanly, exit $code"; rm -f review.sarif ;;
+          esac
+          exit $code
+
+      # A fork's token cannot write to the Security tab, so only upload for
+      # changes made here.  The file is kept as an artifact either way.
+      - uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee  # v4.39.0
+        if: always() && hashFiles('review.sarif') != '' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+        with:
+          sarif_file: review.sarif
+          category: ghscan-review
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        if: always() && hashFiles('review.sarif') != ''
+        with:
+          name: review
+          path: review.sarif
+          retention-days: 30
