@@ -13,7 +13,7 @@ Version 1.0.1.  MIT licensed.  Tim Rice <tim.j.rice@hackrange.com>
 | [reports.md](reports.md) | The findings, VEX and SBOM files on disk |
 | [software.md](software.md) | Every package in the estate, and where each one is |
 | [scheduling.md](scheduling.md) | Cron for scans and feed refreshes |
-| [pipelines.md](pipelines.md) | Running it in CI, and putting findings on a pull request |
+| [pipelines.md](pipelines.md) | Running it in CI, the pull request gate that holds a merge, and putting findings on a pull request |
 | [editors.md](editors.md) | The plugin for VS Code, Cursor, JetBrains and Eclipse |
 | [ai-validation.md](ai-validation.md) | Asking a language model whether a finding is real, and what goes to it |
 | [load-balancer.md](load-balancer.md) | Ports, trusted proxies and health checks |

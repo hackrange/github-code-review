@@ -38,15 +38,19 @@ log = logging.getLogger("gcr.gate")
 
 ROOT = Path(__file__).resolve().parents[2]
 GHSCAN = ROOT / "bin" / "ghscan"
-POLICY = Path(os.environ.get("GCR_GATE_POLICY", str(ROOT / "config" / "gate-policy.yaml")))
+BUNDLED_POLICY = ROOT / "config" / "gate-policy.yaml"
+
+# GCR_GATE_POLICY wins when it is set.  Otherwise a gate-policy.yaml in the
+# data volume, so an edit survives an upgrade, and the one in the image last.
+POLICY = Path(os.environ["GCR_GATE_POLICY"]) if os.environ.get("GCR_GATE_POLICY") else None
 
 # The hard limit from the design.  Past this the run is an error and the
 # failure policy decides, rather than a CI job waiting on it for ever.
-TIMEOUT = int(os.environ.get("GCR_GATE_TIMEOUT", "300"))
+TIMEOUT = int(os.environ.get("GCR_GATE_TIMEOUT") or "300")
 
 # Two at a time by default.  A gate run is a small scan, and the nightly scan
 # shares this machine; a burst of pushes should queue rather than starve it.
-WORKERS = max(1, int(os.environ.get("GCR_GATE_WORKERS", "2")))
+WORKERS = max(1, int(os.environ.get("GCR_GATE_WORKERS") or "2"))
 
 # The biggest SARIF a run keeps.  MariaDB takes at most 16 MiB in one write,
 # and the rest of the row goes in the same one.  A PR that adds this much
@@ -75,8 +79,17 @@ def policy_module():
     return _policy_module
 
 
-def load_policy() -> dict:
-    return policy_module().load(str(POLICY))
+def policy_path() -> Path:
+    """The policy file a run uses.  Looked up every run, so copying one into
+    the data volume takes effect without a restart."""
+    if POLICY is not None:
+        return POLICY
+    local = settings.data_dir / "gate-policy.yaml"
+    return local if local.is_file() else BUNDLED_POLICY
+
+
+def load_policy(path: Path | None = None) -> dict:
+    return policy_module().load(str(path or policy_path()))
 
 
 def start(session, user, token, repository, base_sha: str, head_sha: str,
@@ -134,7 +147,8 @@ def _run(run_id: int) -> None:
     from app.core.models import Repository
     from app.core.scanner import _scanner_env
 
-    policy = load_policy()
+    policy_file = policy_path()
+    policy = load_policy(policy_file)
     with session_scope() as db:
         run = db.get(GateRun, run_id)
         if run is None:
@@ -174,7 +188,7 @@ def _run(run_id: int) -> None:
         command = [str(GHSCAN), "review", "--fetch", full_name,
                    "--mirror", str(mirror), "-c", str(config_path),
                    "--base", base_sha, "--head", head_sha,
-                   "--policy", str(POLICY)]
+                   "--policy", str(policy_file)]
         started = time.monotonic()
         try:
             done = subprocess.run(command, env=env, capture_output=True,

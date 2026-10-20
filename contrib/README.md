@@ -40,8 +40,10 @@ commits from the environment; anywhere else pass `--repo`, `--base` and
 
 If the server cannot be reached it still checks the change's commits for
 credentials with gitleaks, and fails on any it finds.  Otherwise it exits 2,
-or 0 with a warning when given `--fail-open`.  A repository marked
-`fail_closed` in the policy fails instead.
+or 0 with a warning when given `--fail-open`.  A run the server took and
+could not finish fails instead when the repository is marked `fail_closed`
+in the policy.  [documentation/pipelines.md](../documentation/pipelines.md)
+has the whole setup.
 
 The same check runs without a server too, given the engines:
 

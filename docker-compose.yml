@@ -158,6 +158,12 @@ services:
       GCR_FORCE_HTTPS: ${GCR_FORCE_HTTPS:-true}
       GCR_BASE_PATH: ${GCR_BASE_PATH:-}
 
+      # The pull request gate.  Blank means the defaults: a gate-policy.yaml
+      # in the data volume if there is one, 300 seconds, two at a time.
+      GCR_GATE_POLICY: ${GCR_GATE_POLICY:-}
+      GCR_GATE_TIMEOUT: ${GCR_GATE_TIMEOUT:-}
+      GCR_GATE_WORKERS: ${GCR_GATE_WORKERS:-}
+
       TZ: ${TZ:-UTC}
 
     volumes:

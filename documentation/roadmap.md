@@ -169,29 +169,34 @@ would draw a cliff that never happened.
 finding is a decision somebody made, not a weakness that went away, and a chart
 where waiving something lowers the line teaches people to waive things.
 
-## A pipeline that blocks on a regression and not on history
+## The rest of the pull request gate
 
-The line itself is drawn.  An organization has a baseline, the findings page
-defaults to what crossed it, and the backlog is one click away with a count
-next to it.  Two places still count everything.
+The gate itself is built: `POST /api/v1/gate`, the policy file, monitor and
+enforce, and the `gcr-gate` client, covered in
+[pipelines.md](pipelines.md#holding-a-merge-the-gate).  Only what a change
+added can block, which was the point of this item when it was called "a
+pipeline that blocks on a regression and not on history".  What is left:
 
-`--fail-on` in the scanner has none, secrets, verified-secrets, the severities
-and license.  It has no `new`, which is the one a pipeline on an old repository
-actually needs: without it, switching the gate on fails every build until
-somebody has worked through ten years of backlog, so nobody switches it on.
-The scanner already knows how to exit 3 and the database already knows which
-side of the line a finding falls on.  What is missing is the scanner being able
-to ask, which on a `review` run means asking the API rather than the database
-it has no access to.
-
-`/api/v1` is the other one.  The page defaults to the work; an editor and a
-pipeline reading the same estate through the API still see everything, so the
-two disagree about what the number is.
-
-What it touches:
-
-- `--fail-on new` in `bin/ghscan`, and a way for a review to find out.
-- The v1 API taking the same default the page takes, with the same override.
+- **A page for the would-be blocks.**  Monitor mode is only worth something
+  if somebody reads what it would have blocked.  Today that is the audit log.
+  It wants a list of runs by repository, each one opening to what blocked and
+  why, and a "this is a false positive" button that feeds the learned rules,
+  so that switching a repository to enforce is a decision made on evidence.
+- **Changing the policy from Settings.**  It is a file in the data volume for
+  now, which is fine for one administrator and awkward for a team.
+- **The editor saying "will block your pull request".**  The editor already
+  reviews with the same engines.  It wants the policy and its version from
+  `/api/v1/rules`, so a finding that would block is marked before the push.
+- **A staged mode for the pre-commit hook.**  `--diff HEAD` reads the working
+  tree, which is not always what is about to be committed.  The hook wants
+  to read the index.
+- **Templates for GitLab, Azure Pipelines and Jenkins.**  The client already
+  reads their environment.  Only GitHub Actions has a file to copy.
+- **A published action**, so a workflow says `uses:` rather than naming an
+  image somebody had to build.
+- **The v1 API defaulting to the baseline**, the same way the findings page
+  does, so an editor and a pipeline reading the estate see the same number
+  as the page.
 
 ## A live credential, and the twenty minutes after it
 
@@ -307,30 +312,19 @@ What it touches:
 - The finding detail template renders it, clearly labeled as a suggestion.
 - A remediation view over `findings`, grouping by package and target version.
 
-## The editor API exists and nothing calls it
+## A pre-commit hook in three lines
 
-`/api/v1/review` was built for editors and pipelines.  It has token auth, scope
-enforcement, size caps, and it writes nothing down.  There is no editor plugin,
-so the hard nine tenths is done and the easy tenth is the part anybody would
-actually touch.
-
-An extension that reviews the open file on save and underlines what it finds is
-the highest leverage thing left for the people this is written for, because it
-catches a credential before the commit exists rather than after it has to be
-rotated.
-
-Two bits of packaging alongside it, both hours rather than days:
-
-- **A published action**, so a pipeline says `uses:` instead of copying a
-  `docker run` line out of the documentation.
-- **A `.pre-commit-hooks.yaml`**, so the hook is three lines in a file
-  thousands of repositories already have.
+The editor plugin catches a credential as it is typed, and the gate catches
+it in a pull request.  The hook sits between the two and is still a script
+somebody copies out of [pipelines.md](pipelines.md#a-pre-commit-hook).  A
+`.pre-commit-hooks.yaml` would make it three lines in a file thousands of
+repositories already have, and it wants the staged mode from the gate item
+above, so it reads what is about to be committed.
 
 What it touches:
 
-- Nothing in the scanner and nothing in the web app.  Two thin clients over an
-  endpoint that is already finished, each in its own repository so the release
-  cycles do not have to agree.
+- A `.pre-commit-hooks.yaml` at the root of the repository, and nothing in
+  the scanner or the web app beyond the staged mode.
 
 ## Answering the questionnaire a customer sends
 

@@ -4,6 +4,160 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-10-20
+
+**A pull request gate.**  A step in the pipeline asks the server whether a
+change may merge, and the server answers pass, warn or fail under one policy,
+`config/gate-policy.yaml`.  Only what the change added can block: the files
+it touched are reviewed at the merge base and at the head, and lines are
+mapped across the diff, so moved or renamed code stays old.  A credential
+added and deleted inside the change is still found.  Out of the box it
+blocks a credential the provider confirmed is live, code two engines agree
+is high or worse, a malicious package, a KEV listing or a reachable
+critical, and a handful of named cloud and workflow mistakes.  Waivers and
+learned rules apply.  Nothing is written to the code host and no finding is
+filed.
+
+Every repository starts in monitor mode, which passes and records that
+enforcing would have failed.  The client is `contrib/gcr-gate`, with a
+GitHub Actions workflow to start from, and it needs a token with the new
+`gate` scope.  If the server is down it still checks the change's commits
+for credentials.  [pipelines.md](pipelines.md#holding-a-merge-the-gate) has
+the setup.  `ghscan review --base --head --fail-on policy` runs the same
+check with no server.
+
+**`--diff` reviews only what changed.**  `ghscan review --diff` recorded the
+base and then read every file anyway, so every pipeline recipe in
+[pipelines.md](pipelines.md) and its pre-commit hook were reviewing the whole
+repository.  It now reads only the files changed against the base, plus
+untracked ones.  The editor plugin was never affected, since it picks out
+changed lines itself.  A base that is not a commit in that checkout still reviews
+everything, with a warning.
+
+**`--fail-on verified-secrets` means verified.**  It counted every
+credential, the same as `secrets`.  It now counts only the ones the
+provider said still work.  A review also reads a config only when `-c` is
+on its command line, so a `GHSCAN_CONFIG` left in the environment for scans
+no longer changes what a hook does.
+
+**Mule flows are read.**  Semgrep and CodeQL do not read Mule flows, so a Mule
+repository had no code findings at all.  A new engine follows an HTTP listener
+with no security filter to mail, a database, an outbound request or a file,
+and flags a credential read from the query string and an SMTP login with no
+TLS.  An encrypted Mule property is info unless its key is committed beside
+it.
+
+**What a security report finds is kept.**  A problem the report finds that no
+scanner did becomes a finding at a real file and line, announced the way a
+scan finding is, and handed over once a scanner reports the same place.
+
+## 2026-10-19
+
+**Due for a test.**  Each web application can record its dynamic scans and
+penetration tests.  It is due when it was never tested, when its code changed
+since the last test, or when that test is older than a year by default.  The
+due list exports as CSV, a backlog of tests imports from one, and a weekly
+mail can name the sites that just became due.
+
+**Addresses found for you.**  A repository's diagram offers the web addresses
+its code serves or uses, each with a confidence from 5 to 99 and the reason,
+and the likely ones start ticked.  The company's own domains, set on Settings,
+count toward an address, and what the build pulls from never does.
+
+**A repository's findings can be removed.**  An administrator can delete every
+finding in a repository, with the exceptions on them and the exclusion rules
+written for it alone, after typing its name.
+
+## 2026-10-18
+
+**A repository page.**  The name on Repositories opens a page with what the
+repository holds, its application, its owners and who is told about it, each
+saying whether it was set there or comes from the connection.  Its owners can
+get its new findings by mail.
+
+**Part of a web application.**  A repository can be marked as part of a web
+application, with the addresses it answers on.  Nothing visits them.  Blast
+Radius lists every web application with how long since its code last moved,
+newest first.
+
+**Anybody can propose a correction.**  Developers and readers can propose what
+a repository holds, who owns it and where it is served.  Nothing changes until
+an administrator approves it from Proposed Updates.
+
+**Sign in returns you to the link.**  Following a link while signed out now
+lands on that page once you sign in, rather than the dashboard.
+
+## 2026-10-15
+
+**A security report on a branch.**  From a finding, an administrator with AI
+set up can ask for a PDF report on its branch: an executive summary, a risk
+matrix, a heat map, detailed findings and a roadmap.  Ratings are worked out
+in code from the model's likelihood and impact.  A false positive it names can
+be lowered across its group with one confirmation.
+
+**Organizations with no connection.**  A fine grained token reaches one
+organization, and an organization that is never scanned looks exactly like a
+clean one.  A weekly mail, or a button, names every organization the accounts
+belong to that no connection covers.
+
+**Why a live check said no.**  A credential now says whether the provider was
+asked and could not confirm it, or whether it was never checked at all because
+only the history or pattern engine saw it.  Not confirmed no longer reads as
+safe.
+
+**Check again leaves credentials open.**  Check again closed a credential once
+its line was gone from the branch tip, and the next scan reopened it from the
+history.  It no longer closes credentials.
+
+**A JSON key is not a credential.**  A key in a JSON object, after a value
+that happened to end in a keyword, was read as an API key.  It no longer is.
+
+**A learned rule stays home.**  A rule learned from a finding with no code to
+compare, a workflow for example, applies only in its own repository and to its
+own files, and cannot be accepted everywhere.
+
+## 2026-10-14
+
+**A group fences people in.**  A scanning group is now all its members see,
+and a login on the host is all anybody else sees.  Access used to be the sum
+of everything on an account, so a group meant to fence somebody in widened
+back out.
+
+**One repositories table.**  Filter, tick and change scope from one table,
+open a repository's branches to tick and scope them together, and export or
+import the scope as CSV.  Archived repositories are hidden until asked for.
+
+**Every download checked.**  Each scanner binary in the image is checked
+against the sha256 its release publishes, and the build stops at the first one
+that does not match.
+
+**Distinct counts on the dashboard.**  Under each kind of problem: unique
+secrets, code weaknesses counted once per rule and file, and vulnerable
+packages once per version.  Forty repositories on one bad version is many
+findings and one upgrade.
+
+**What AI costs.**  The AI page has a cost tab fed by every call, good or
+failed, since a failed call is billed too, and a cut off answer says so.
+
+## 2026-10-09
+
+**Credentials only, where nothing ships.**  A repository can be scanned in
+full on every branch, in full on a list of branches such as release/*, or for
+credentials only.  Credentials are still scanned on every branch of every
+repository.
+
+**A token that lost a repository.**  A connection test now names the private
+repositories its token can no longer see, which had quietly stopped being
+scanned with their findings frozen, and marks the connection partial.
+
+**A pass switched off closes nothing.**  Turning a pass off in Settings used
+to tell ingest it had looked and found nothing, and the next scan closed every
+finding of that kind as fixed.  It now leaves them as they are.
+
+**Diagrams from a finding.**  A finding offers its repository's diagram, to
+draw for an administrator with AI set up, or to open for anybody who can see
+the finding.
+
 ## 2026-10-01
 
 **Validate a finding with AI.**  A new AI analysis page connects one language

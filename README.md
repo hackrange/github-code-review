@@ -320,7 +320,14 @@ seconds even across a large estate.
 
 # CI gate on one repo
 ./bin/ghscan scan --repo "$GITHUB_REPOSITORY" --fail-on verified-secrets
+
+# What a pull request added, under the gate policy, exit 3 to hold it
+./bin/ghscan review . --base origin/main --head HEAD --fail-on policy
 ```
+
+For holding merges across many repositories, the server can answer instead,
+so build agents need no engines: see the pull request gate in
+[documentation/pipelines.md](documentation/pipelines.md#holding-a-merge-the-gate).
 
 ### Other flags
 
@@ -331,7 +338,8 @@ seconds even across a large estate.
 | `--no-verify` | no outbound credential verification |
 | `--keep-clones` | leave the working clones on disk |
 | `--dry-run` | resolve scope, print the plan and request estimate |
-| `--fail-on WHAT` | exit 3 on findings: `secrets`, `verified-secrets`, `critical`, `high`, `license` |
+| `--fail-on WHAT` | exit 3 on findings: `secrets`, `verified-secrets`, `critical`, `high`, `license`, or with `review --base` the gate's `policy` |
+| `--base SHA --head SHA` | with `review`: mark only what head added as new, the way the pull request gate does |
 | `-v` / `-vv` / `-q` | debug / trace / quiet |
 
 Exit codes: `0` clean, `1` fatal, `2` bad config or arguments, `3` findings met

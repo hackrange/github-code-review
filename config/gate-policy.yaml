@@ -1,7 +1,8 @@
 # What holds a pull request.
 #
-# Read by `ghscan review --base --head --policy`, by the gate endpoint, and by
-# the editor plugin, so all three agree about what will block.  Only findings
+# Read by `ghscan review --base --head --policy` and by the gate endpoint, so
+# both agree about what will block.  On a server, copy this file to
+# gate-policy.yaml in the data volume to change it.  Only findings
 # the change itself added are ever looked at.  Everything new that does not
 # block is a warning, and nothing old is either.
 #
