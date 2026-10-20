@@ -87,7 +87,14 @@ _PRIORITY = (
                 r"application)\.(py|js|ts|go|java|cs|rb|php|kt)$", re.I), 75),
     (re.compile(r"(^|/)(urls|views|routes?|router|controllers?|handlers?|api|"
                 r"endpoints?)[^/]*\.(py|js|ts|go|java|cs|rb|php|kt)$", re.I), 65),
+    # A Mule app is its flows.  Nothing above names them, so a Mule
+    # repository used to be read as its pom.xml alone.
+    (re.compile(r"(^|/)mule-artifact\.json$", re.I), 85),
+    (re.compile(r"(^|/)src/main/mule/[^/]+\.xml$", re.I), 75),
     (re.compile(r"(^|/)(settings|config|application)[^/]*\.(py|ya?ml|json|"
+                r"properties|toml)$", re.I), 55),
+    # Settings kept in a folder for them, such as config/common.yaml.
+    (re.compile(r"(^|/)(config|configs|conf|properties)/[^/]+\.(ya?ml|json|"
                 r"properties|toml)$", re.I), 55),
     (re.compile(r"(^|/)(models?|schema|entities)[^/]*\.(py|js|ts|go|java|cs|rb)$", re.I), 50),
     (re.compile(r"\.tf$", re.I), 45),
@@ -108,6 +115,8 @@ _MASKS = (
     (re.compile(r"\b(sk|rk|pk)_(live|test)_[A-Za-z0-9]{16,}\b"), "sk_****"),
     (re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"), "jwt.****"),
     (re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"), "AIza****"),
+    # Mule ciphertext.  The shape says what it is; the body is not sent.
+    (re.compile(r"!\[[A-Za-z0-9+/=]{8,}\]"), "![****]"),
 )
 
 
