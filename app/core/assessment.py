@@ -22,6 +22,13 @@ score, the rating, the order, the matrix and the overall rating are worked
 out here from those numbers, so no part of the document can contradict
 another.  Nothing in here writes to a finding.
 
+What is already decided is not asked again.  A person's own grade, or a
+finding's AI validation that still stands, is its rating here, so the report
+never contradicts the finding page.  A known exploited package is at least
+High until a person rules on it, whoever rated it.  Waived findings are in the
+report with their ratings and the reason they were waived: a waiver accepts a
+risk, it does not remove it.
+
 Everything taken from the repository is untrusted.  It goes to the model
 fenced off and labeled as data, credentials are never sent (the flagged line
 is withheld and everything else is masked), and what comes back is only ever
@@ -90,6 +97,54 @@ def rating_for(score: int) -> str:
     if score >= 5:
         return "Medium"
     return "Low"
+
+
+SEVERITY_RATING = {"critical": "Critical", "high": "High", "medium": "Medium",
+                   "low": "Low", "info": "Informational", "unknown": "Medium"}
+
+KEV_FLOOR = ("it is on the CISA known exploited list, and only evidence that "
+             "it does not ship lowers that")
+
+
+def _floor(item: dict) -> None:
+    """A known exploited package is at least High until a person rules on it."""
+    if not item.get("kev_floor"):
+        return
+    if RATINGS.index(item["rating"]) <= RATINGS.index("High"):
+        return
+    item["floor"] = {"was": item["rating"], "why": KEV_FLOOR}
+    item["rating"] = "High"
+
+
+def _decided_item(group: dict) -> dict:
+    """The report's entry for a group whose grade was already decided."""
+    d = group["decision"]
+    severity = d["severity"]
+    item = {
+        "verdict": "false_positive" if severity == "info" else "confirmed",
+        "title": tidy(group["title"] or group["rule"] or group["package"], 120),
+        "likelihood": 0, "impact": 0, "fixes": [],
+        "decided": {k: v for k, v in d.items() if k not in ("what", "why", "fix")},
+    }
+    if d["by"] == "validation":
+        item["what"] = tidy(d["what"] or group["description"], 600)
+        item["evidence"] = tidy(
+            f"AI validation #{d['id']} rated this {d['rating'].lower()}"
+            + (f" with {d['confidence']} confidence" if d["confidence"] else "")
+            + (f" on {d['at']}" if d["at"] else "") + ".", 600)
+        item["why"] = tidy(d["why"], 600)
+        if d["fix"]:
+            item["fixes"] = [tidy(d["fix"], 300)]
+    else:
+        item["what"] = tidy(group["description"] or group["title"], 600)
+        item["evidence"] = tidy(
+            f"{d['who']} graded this {severity}" + (f" on {d['at']}" if d["at"] else "")
+            + (f": {d['reason']}" if d["reason"] else "."), 600)
+        item["why"] = ""
+    if group["decided_count"] < group["count"]:
+        item["evidence"] = tidy(item["evidence"] + "  The grade shown is the highest "
+                                "of the decided findings in this group.", 600)
+    return item
 
 
 # ------------------------------------------------------------------ house style
@@ -174,35 +229,167 @@ def _on_branch(finding, branch: str) -> bool:
         return False
 
 
-def _group_key(f) -> tuple:
+def _group_key(f, decided: bool) -> tuple:
     kind = f.kind.value
+    # Waived and already decided findings are their own groups, so a waiver
+    # or a validation on one advisory says what it says about that one and
+    # nothing about the rest of the package.
+    state = (f.state == FindingState.WAIVED, decided)
     if kind == "dependency":
-        return (kind, f.package_name or f.title or "", f.package_version or "")
-    return (kind, f.rule or "", f.file_path or "")
+        return (kind, f.package_name or f.title or "", f.package_version or "") + state
+    return (kind, f.rule or "", f.file_path or "") + state
+
+
+# The headings of a validation answer (analysis.SYSTEM_PROMPT), so its parts
+# can be quoted in the report.
+VALIDATION_HEADINGS = ("What it is", "How it would be exploited", "Why this rating",
+                       "What to check", "Mitigation", "Compensating controls")
+
+
+def _section(text: str, heading: str) -> str:
+    out, inside = [], False
+    for line in (text or "").splitlines():
+        bare = line.strip().strip("*#: ").strip()
+        if bare in VALIDATION_HEADINGS:
+            inside = bare == heading
+            continue
+        if bare.lower().startswith("learned pattern"):
+            inside = False
+        if inside and line.strip():
+            out.append(line.strip())
+    return " ".join(out)
+
+
+def _when(moment) -> str:
+    return moment.strftime("%B %d, %Y").replace(" 0", " ") if moment else ""
+
+
+def validations(db, findings) -> dict:
+    """{finding id: the newest AI validation that still stands}.
+
+    One stands while the code it read is the code on record: a grade basis
+    lifted after it was asked, or a flagged line that changed since, means it
+    was an answer about something that is no longer there.
+    """
+    from app.core import learned
+    from app.core.models import FindingAnalysis, GradeBasis
+
+    by_id = {f.id: f for f in findings}
+    if not by_id:
+        return {}
+    newest = {}
+    ids = list(by_id)
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        for row in (db.query(FindingAnalysis)
+                    .filter(FindingAnalysis.finding_id.in_(chunk))
+                    .order_by(FindingAnalysis.created_at.desc(),
+                              FindingAnalysis.id.desc())):
+            if row.finding_id in newest or learned.severity_for(row.rating) is None:
+                continue
+            newest[row.finding_id] = row
+        for basis in (db.query(GradeBasis)
+                      .filter(GradeBasis.finding_id.in_(chunk),
+                              GradeBasis.source == "ai")):
+            row = newest.get(basis.finding_id)
+            if row is None:
+                continue
+            asked = row.created_at
+            lifted = basis.lifted_at
+            if asked is not None and asked.tzinfo is None and lifted is not None:
+                asked = asked.replace(tzinfo=lifted.tzinfo)
+            if lifted is not None and (asked is None or lifted >= asked):
+                newest.pop(basis.finding_id)
+            elif (lifted is None and basis.basis
+                  and learned.basis_of(by_id[basis.finding_id])
+                  and basis.basis != learned.basis_of(by_id[basis.finding_id])):
+                newest.pop(basis.finding_id)
+    out = {}
+    for finding_id, row in newest.items():
+        out[finding_id] = {
+            "id": row.id, "rating": row.rating.upper(),
+            "severity": learned.severity_for(row.rating).value,
+            "confidence": row.confidence or "", "model": row.model or "",
+            "at": _when(row.created_at), "asked_by": row.created_by or "",
+            "what": _section(row.content, "What it is"),
+            "why": _section(row.content, "Why this rating"),
+            "fix": _section(row.content, "Mitigation"),
+        }
+    return out
+
+
+def _decision(f, reading) -> dict | None:
+    """The grade already decided for a finding, by a person or by validation.
+
+    A person's own grade always has the last word.  A validation decides
+    anything but a credential or a malicious package, which policy keeps out
+    of a model's hands; for those it is passed to the review as evidence.  A
+    known exploited package is decided by its validation and floored at High
+    later, the same floor that validation itself works under.
+    """
+    if f.custom_severity is not None and (f.custom_severity_by or "").strip():
+        return {"by": "person", "severity": f.custom_severity.value,
+                "who": f.custom_severity_by, "at": _when(f.custom_severity_at),
+                "reason": (f.custom_severity_reason or "")[:600]}
+    if reading and f.kind != FindingKind.CREDENTIAL and not getattr(f, "malicious", None):
+        return {**reading, "by": "validation"}
+    return None
+
+
+def _waiver(w) -> dict:
+    if w is None:
+        return {"reason": "", "by": "", "until": "", "ticket": "", "category": ""}
+    return {"reason": (w.reason or "")[:600], "by": w.decided_by or w.requested_by or "",
+            "until": _when(w.expires_at), "ticket": w.ticket or "",
+            "category": w.category or ""}
 
 
 def groups_for(db, repository: str, branch: str) -> tuple:
-    """-> (groups to review, counts of everything open, groups left out)."""
+    """-> (groups to review, counts of everything open, groups left out).
+
+    Waived findings are in it.  A waiver is a decision to live with a
+    problem, not a finding that the problem is gone, so a waived finding is
+    rated like any other and the report says why it was waived beside the
+    rating.
+    """
+    from app.core.models import Waiver
+
     rows = (db.query(Finding)
             .filter(Finding.repository == repository,
-                    Finding.state == FindingState.OPEN)
+                    Finding.state.in_([FindingState.OPEN, FindingState.WAIVED]))
             .all())
     rows = [f for f in rows if _on_branch(f, branch) and not f.out_of_scope]
+    readings = validations(db, rows)
+    waivers = {}
+    waived_ids = [f.id for f in rows if f.state == FindingState.WAIVED]
+    for start in range(0, len(waived_ids), 500):
+        for w in db.query(Waiver).filter(
+                Waiver.finding_id.in_(waived_ids[start:start + 500])):
+            waivers[w.finding_id] = w
+    decisions = {f.id: _decision(f, readings.get(f.id)) for f in rows}
 
     grouped = OrderedDict()
     for f in rows:
-        grouped.setdefault(_group_key(f), []).append(f)
+        grouped.setdefault(_group_key(f, decisions[f.id] is not None), []).append(f)
+
+    def rank(f):
+        decided = decisions[f.id]
+        return SEVERITY_ORDER.get(decided["severity"] if decided else f.severity.value, 9)
 
     groups = []
-    for (kind, a, b), members in grouped.items():
-        members.sort(key=lambda f: (SEVERITY_ORDER.get(f.severity.value, 9),
-                                    f.line or 0))
+    for (kind, a, b, waived, decided), members in grouped.items():
+        members.sort(key=lambda f: (rank(f), f.line or 0))
         top = members[0]
+        decision = decisions[top.id]
+        # A validation that was not allowed to decide is still worth the
+        # reviewer reading.
+        reading = next((readings[f.id] for f in members if f.id in readings), None)
         groups.append({
             "kind": kind,
             "rule": top.rule or "",
             "title": (top.title or top.rule or "")[:200],
-            "severity": top.severity.value,
+            "severity": decision["severity"] if decision else top.severity.value,
+            "scanner_severity": top.severity.value,
             "count": len(members),
             "file": top.file_path or "",
             "lines": sorted({f.line for f in members if f.line})[:12],
@@ -212,6 +399,9 @@ def groups_for(db, repository: str, branch: str) -> tuple:
                                   if f.vulnerability_id})[:10],
             "fixed_in": top.fixed_in or "",
             "known_exploited": any(f.known_exploited for f in members),
+            # Known exploited, and no person has ruled on it: the floor holds.
+            "kev_floor": any(f.known_exploited and not (
+                decisions[f.id] and decisions[f.id]["by"] == "person") for f in members),
             "verified": any(f.verified for f in members),
             "engines": top.engines or "",
             "cwe": top.cwe or "",
@@ -223,17 +413,29 @@ def groups_for(db, repository: str, branch: str) -> tuple:
             "engine_severity": top.engine_severity or "",
             "mule_encrypted": all((f.token_kind or "") == "mule_encrypted"
                                   for f in members),
+            "decision": decision,
+            "decided_count": sum(1 for f in members if decisions[f.id]),
+            "validation": None if decision else reading,
+            "waived": waived,
+            "waiver": _waiver(waivers.get(top.id)) if waived else None,
             "finding_ids": [f.id for f in members][:12],
             # Every finding in the group, for correcting a false positive.
             "all_ids": [f.id for f in members],
         })
-    groups.sort(key=lambda g: (SEVERITY_ORDER.get(g["severity"], 9), -g["count"]))
+    groups.sort(key=lambda g: (SEVERITY_ORDER.get(g["severity"], 9), g["waived"],
+                               -g["count"]))
 
-    counts = {"open": len(rows), "groups": len(groups), "by_kind": {}, "by_rule": []}
-    for f in rows:
+    open_rows = [f for f in rows if f.state == FindingState.OPEN]
+    counts = {"open": len(open_rows), "waived": len(rows) - len(open_rows),
+              "groups": sum(1 for g in groups if not g["waived"]),
+              "waived_groups": sum(1 for g in groups if g["waived"]),
+              "by_kind": {}, "by_rule": []}
+    for f in open_rows:
         counts["by_kind"][f.kind.value] = counts["by_kind"].get(f.kind.value, 0) + 1
     by_rule = OrderedDict()
     for g in groups:
+        if g["waived"]:
+            continue
         key = (g["rule"] or g["package"] or g["title"], g["kind"])
         entry = by_rule.setdefault(key, {"rule": key[0], "kind": key[1], "count": 0,
                                          "files": set()})
@@ -376,7 +578,9 @@ SUMMARY_SYSTEM = f"""\
 You are a senior application security assessor writing the executive summary \
 of a security assessment of one code repository branch.  You are given the \
 confirmed issues with their ratings, which are final.  Do not change them, \
-add issues or invent numbers.
+add issues or invent numbers.  An issue marked waived is still a \
+vulnerability: a person accepted the risk for now.  Name a serious waived \
+one as an accepted risk, and leave waived issues out of the roadmap.
 
 {STYLE}
 
@@ -501,6 +705,15 @@ def _group_evidence(ref: str, group: dict, root, send_code: bool, context: int) 
         facts.append(f"engine's original severity: {group['engine_severity']}")
     if group.get("reading"):
         facts.append(f"scanner's reading: {group['reading']}")
+    if group.get("validation"):
+        v = group["validation"]
+        facts.append(f"earlier AI validation #{v['id']}: rated {v['rating']}"
+                     + (f", {v['confidence']} confidence" if v["confidence"] else "")
+                     + (f".  Its reasoning: {v['why'][:500]}" if v["why"] else ""))
+    if group.get("waived"):
+        w = group["waiver"] or {}
+        facts.append("waived by a person (still a vulnerability, rate it as one)"
+                     + (f": {w['reason'][:400]}" if w.get("reason") else ""))
     if group["cwe"]:
         facts.append(f"CWE: {group['cwe']}")
     if group["description"]:
@@ -700,8 +913,11 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         # Everything that reads the code happens inside this block, so the
         # copy is gone before the first question about findings is asked.
         refs = [f"G{i + 1}" for i in range(len(groups))]
+        # A group already decided, by a person or by its own validation, is
+        # not asked about again: the report carries that decision.
         evidence = [_group_evidence(ref, g, root, send_code, context)
-                    for ref, g in zip(refs, groups)]
+                    for ref, g in zip(refs, groups) if not g["decision"]]
+        asked = [ref for ref, g in zip(refs, groups) if not g["decision"]]
 
     if not send_code:
         notes.append("Sending code is switched off on the AI page, so the model saw "
@@ -733,7 +949,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
 
     # ---- the findings, a batch at a time
     batches, current_batch, size = [], [], 0
-    for ref, text in zip(refs, evidence):
+    for ref, text in zip(asked, evidence):
         if current_batch and (len(current_batch) >= asker.batch_size
                               or size + len(text) > MAX_BATCH_CHARS):
             batches.append(current_batch)
@@ -758,7 +974,8 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     # ---- one list of issues, rated here
     items = []
     for ref, group in zip(refs, groups):
-        item = reviewed.get(ref)
+        item = (_decided_item(group) if group["decision"]
+                else reviewed.get(ref))
         if item is None:
             item = _clean_item({"verdict": "needs_review", "title": group["title"],
                                 "likelihood": 3, "impact": 3,
@@ -770,13 +987,16 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                                 "fixes": ["Review this finding by hand."]})
             item["unreviewed"] = True
         item.update(source="scanner", rule=group["rule"], kind=group["kind"],
-                    count=group["count"], severity=group["severity"],
+                    count=group["count"], severity=group["scanner_severity"],
                     location=(group["file"] + (
                         ", line" + ("s " if len(group["lines"]) > 1 else " ")
                         + ", ".join(map(str, group["lines"][:6]))
                         if group["lines"] else "")) if group["file"]
                     else f"{group['package']} {group['version']}".strip(),
-                    finding_ids=group["finding_ids"], group_ids=group["all_ids"])
+                    finding_ids=group["finding_ids"], group_ids=group["all_ids"],
+                    known_exploited=group["known_exploited"],
+                    kev_floor=group["kev_floor"],
+                    waived=group["waived"], waiver=group["waiver"])
         items.append(item)
     for concern in overview["concerns"]:
         concern.update(source="review", rule="", kind="review", count=0,
@@ -787,23 +1007,34 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         items.append(concern)
 
     for item in items:
-        if item["verdict"] == "false_positive":
+        if item.get("decided"):
+            item["score"] = 0
+            item["rating"] = SEVERITY_RATING.get(item["decided"]["severity"], "Medium")
+        elif item["verdict"] == "false_positive":
             item["score"], item["rating"] = 0, "Informational"
         else:
             item["score"] = item["likelihood"] * item["impact"]
             item["rating"] = rating_for(item["score"])
+        _floor(item)
 
     # ---- what the review found that no scanner did, kept as findings
     _update(repository, branch, stage="Recording what the review found")
     items = record_concerns(items, repository, branch, actor)
 
-    items.sort(key=lambda i: (-i["score"], i["verdict"] != "confirmed",
+    items.sort(key=lambda i: (RATINGS.index(i["rating"]), bool(i.get("waived")),
+                              -i["score"], i["verdict"] != "confirmed",
                               -(i.get("count") or 0)))
     for n, item in enumerate(items, start=1):
         item["id"] = f"F-{n:02d}"
 
-    scored = [i for i in items if i["rating"] != "Informational"]
+    # The overall rating is the risk still being carried without a decision
+    # to carry it.  Waived issues keep their own ratings and are counted
+    # beside it, so a waived Critical is never out of sight.
+    scored = [i for i in items if i["rating"] != "Informational" and not i.get("waived")]
     overall = scored[0]["rating"] if scored else "Low"
+    waived_items = [i for i in items if i.get("waived")]
+    waived_top = next((i["rating"] for i in waived_items
+                       if i["rating"] != "Informational"), "")
 
     # ---- false positives, corrected in the platform where policy allows
     _update(repository, branch, stage="Correcting false positives")
@@ -812,12 +1043,14 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     # ---- the summary, from the rated list
     _update(repository, branch, stage="Writing the summary")
     listing = "\n".join(
-        f"{i['id']} | {i['rating']} | {i['verdict']} | {i['title']} | "
+        f"{i['id']} | {i['rating']} | {i['verdict']}"
+        f"{' | waived' if i.get('waived') else ''} | {i['title']} | "
         f"{i['location'] or 'repository wide'}" for i in items[:40])
     prompt = (f"Repository: {repository}\nBranch: {branch}\n"
               + _site_lines(site)
               + f"Overall rating (final): {overall}\n"
               f"Open scanner alerts: {counts['open']} in {counts['groups']} groups\n"
+              f"Waived scanner alerts: {counts['waived']} in {counts['waived_groups']} groups\n"
               f"False positives found: {sum(1 for i in items if i['rating'] == 'Informational')}\n"
               f"What the repository is: {overview['what_it_is'] or 'not described'}\n\n"
               f"Issues (id | rating | verdict | title | location):\n{listing}")
@@ -852,6 +1085,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         "repository": repository, "branch": branch, "commit": commit,
         "file_count": file_count, "facts": facts, "overall": overall,
         "overview": overview, "items": items, "summary": summary,
+        "waived_top": waived_top, "waived_issues": len(waived_items),
         "counts": {**counts, "left_out": len(left_out),
                    "left_out_alerts": sum(g["count"] for g in left_out)},
         "notes": notes, "in_memory": in_memory, "code_included": send_code,
@@ -1131,6 +1365,10 @@ def correct(items: list, repository: str, branch: str, actor: str, model: str) -
             item["lowered"], item["awaiting"], item["protected_why"] = 0, [], ""
             if item.get("verdict") != "false_positive" or item.get("source") != "scanner":
                 continue
+            # Already decided by a person or a validation, which made its own
+            # call on the grade.  The report only repeats it.
+            if item.get("decided"):
+                continue
             reason = tidy("Security report on %s%s: a false positive.  %s"
                           % (repository, f" branch {branch}" if branch else "",
                              item.get("what") or ""), 1500)
@@ -1216,6 +1454,30 @@ def awaiting_for(view_, finding_id: int):
                  if finding_id in (i.get("awaiting") or [])), None)
 
 
+def changes_since(db, row) -> int:
+    """Waivers, grades and validations on the repository since the report.
+
+    The report is a record of one moment.  A decision made after it is not in
+    it, and the finding page says so rather than letting the PDF pass for
+    current.
+    """
+    from app.core.models import FindingAnalysis, Waiver
+    from sqlalchemy import func
+
+    if row is None or row.created_at is None:
+        return 0
+    since = row.created_at
+    in_repo = Finding.repository == row.repository
+    waivers = (db.query(func.count(Waiver.id)).join(Finding, Finding.id == Waiver.finding_id)
+               .filter(in_repo, Waiver.decided_at > since).scalar() or 0)
+    grades = (db.query(func.count(Finding.id))
+              .filter(in_repo, Finding.custom_severity_at > since).scalar() or 0)
+    readings = (db.query(func.count(FindingAnalysis.id))
+                .join(Finding, Finding.id == FindingAnalysis.finding_id)
+                .filter(in_repo, FindingAnalysis.created_at > since).scalar() or 0)
+    return waivers + grades + readings
+
+
 def _default_branch(db, repository: str) -> str:
     repo = db.query(Repository).filter(Repository.full_name == repository).first()
     return (repo.default_branch if repo else "") or ""
@@ -1242,6 +1504,7 @@ def matrix(items: list) -> list:
         cells = []
         for im in range(1, 6):
             ids = [i["id"] for i in items if i["rating"] != "Informational"
+                   and not i.get("decided")
                    and i["likelihood"] == lk and i["impact"] == im]
             cells.append({"ids": ids, "rating": rating_for(lk * im).lower()})
         rows.append({"likelihood": lk, "label": LIKELIHOOD_WORDS[lk], "cells": cells})
@@ -1252,7 +1515,10 @@ def document_context(view_: dict) -> dict:
     """What the PDF template needs, from a stored report."""
     result = view_["result"]
     items = result["items"]
-    tally = {r: sum(1 for i in items if i["rating"] == r) for r in RATINGS}
-    return {"r": result, "items": items, "tally": tally,
+    tally = {r: sum(1 for i in items if i["rating"] == r and not i.get("waived"))
+             for r in RATINGS}
+    waived = {r: sum(1 for i in items if i["rating"] == r and i.get("waived"))
+              for r in RATINGS}
+    return {"r": result, "items": items, "tally": tally, "waived_tally": waived,
             "matrix": matrix(items), "impact_words": IMPACT_WORDS,
             "likelihood_words": LIKELIHOOD_WORDS, "row": view_["row"]}

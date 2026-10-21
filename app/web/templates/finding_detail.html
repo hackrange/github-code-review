@@ -312,6 +312,16 @@
 </div>
 {% endif %}
 
+{% if report_changes and not (report and report.running) %}
+<div class="notice info">
+  {{ report_changes }} waiver{{ '' if report_changes == 1 else 's' }}, grade{{ '' if report_changes == 1 else 's' }}
+  or validation{{ '' if report_changes == 1 else 's' }} on {{ f.repository }} came after the
+  security report was written, so the report does not show
+  {{ 'it' if report_changes == 1 else 'them' }}.
+  {% if can_assess %}Write the security report again to bring it up to date.{% endif %}
+</div>
+{% endif %}
+
 {% if report and report.running %}
 <div class="notice info" data-reload-after="15">
   A security report on this branch is being written.

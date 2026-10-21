@@ -126,8 +126,15 @@
       ~ " Low.  " ~ (tally['Informational'] ~ " scanner alert group" ~ ('' if tally['Informational'] == 1 else 's')
       ~ " turned out to be false alarms." if tally['Informational'] else ""))
      | sentence_spaced }}</p>
+{% if r.waived_issues %}
+<p>{{ (r.waived_issues ~ " more issue" ~ (' is' if r.waived_issues == 1 else 's are')
+      ~ " waived: a person accepted the risk for now.  A waiver does not fix anything, so each waived issue keeps its rating in this report"
+      ~ (", and the most serious is rated " ~ r.waived_top ~ "." if r.waived_top else ".")
+      ~ "  Waived issues are not counted in the overall rating.")
+     | sentence_spaced }}</p>
+{% endif %}
 
-{% set top = items | rejectattr('rating', 'equalto', 'Informational') | list %}
+{% set top = items | rejectattr('rating', 'equalto', 'Informational') | rejectattr('waived') | list %}
 {% if top %}
 <h3>Key Findings</h3>
 <ul>
@@ -153,6 +160,7 @@
   {% if r.commit %}<tr><td class="k">Commit</td><td>{{ r.commit }}</td></tr>{% endif %}
   {% if r.file_count %}<tr><td class="k">Files</td><td>{{ r.file_count }}</td></tr>{% endif %}
   <tr><td class="k">Open scanner alerts</td><td>{{ r.counts.open }}, in {{ r.counts.groups }} groups by rule and file</td></tr>
+  {% if r.counts.waived %}<tr><td class="k">Waived scanner alerts</td><td>{{ r.counts.waived }}, in {{ r.counts.waived_groups }} groups, rated like the rest</td></tr>{% endif %}
   {% if r.overview.what_it_is %}<tr><td class="k">What it holds</td><td>{{ r.overview.what_it_is | sentence_spaced }}</td></tr>{% endif %}
 </table>
 {# The web application this code is part of, from the repository's own page,
@@ -173,7 +181,7 @@
 <h3>Method</h3>
 <ul>
   <li><strong>Automated scanning.</strong>  {{ "Secret, code, dependency and configuration scanning of the branch and its history." | sentence_spaced }}</li>
-  <li><strong>Review of each alert.</strong>  {{ "Alerts were grouped by rule and file, and each group was judged against the code around it." | sentence_spaced }}</li>
+  <li><strong>Review of each alert.</strong>  {{ "Alerts were grouped by rule and file, and each group was judged against the code around it.  An alert a person already graded, or one whose AI validation still stands, keeps that grade and was not judged again." | sentence_spaced }}</li>
   <li><strong>Review of the repository.</strong>  {{ "The file tree and key files were read for problems a scanner does not look for, such as access settings and trust placed in browser code." | sentence_spaced }}</li>
 </ul>
 <h3>Limits of This Review</h3>
@@ -191,6 +199,7 @@
   <tr><td>1 to 4</td><td>Low</td><td>Fix as part of normal work.</td></tr>
   <tr><td>Not scored</td><td>Informational</td><td>{{ "No risk.  Recorded for accuracy, such as a false alarm." | sentence_spaced }}</td></tr>
 </table>
+<p>{{ "Some ratings were already decided before this review.  A grade a person set, or the rating from an alert's own AI validation, is used as it is and is not scored again.  A package on the CISA known exploited list is rated at least High until a person rules on it.  A waived issue is rated the same way as any other, and the reason it was waived is shown beside its rating." | sentence_spaced }}</p>
 
 {# ---------------------------------------------------------- risk matrix #}
 <h2 class="new-page" style="margin-top:0">4.  Risk Matrix</h2>
@@ -198,10 +207,11 @@
   <thead><tr><th>ID</th><th>Issue</th><th class="c">Likelihood</th><th class="c">Impact</th>
     <th class="c">Score</th><th class="c">Rating</th></tr></thead>
   {% for i in items %}
-  <tr><td>{{ i.id }}</td><td>{{ i.title }}</td>
-    <td class="c">{{ i.likelihood if i.rating != 'Informational' else 'N/A' }}</td>
-    <td class="c">{{ i.impact if i.rating != 'Informational' else 'N/A' }}</td>
-    <td class="c">{{ i.score if i.rating != 'Informational' else 'N/A' }}</td>
+  {% set scored = i.rating != 'Informational' and not i.decided %}
+  <tr><td>{{ i.id }}</td><td>{{ i.title }}{% if i.waived %} <span class="soft">(waived)</span>{% endif %}</td>
+    <td class="c">{{ i.likelihood if scored else 'N/A' }}</td>
+    <td class="c">{{ i.impact if scored else 'N/A' }}</td>
+    <td class="c">{{ i.score if scored else 'N/A' }}</td>
     <td class="badge-cell"><span class="badge r-{{ i.rating | lower }}">{{ i.rating }}</span></td></tr>
   {% endfor %}
 </table>
@@ -214,7 +224,7 @@
   {% endfor %}
   <tr><th></th>{% for n in range(1, 6) %}<th>{{ n }} {{ impact_words[n] }}</th>{% endfor %}</tr>
 </table>
-<p class="faint" style="text-align:center">{{ "Rows are likelihood and columns are impact.  False alarms carry no risk and are not shown." | sentence_spaced }}</p>
+<p class="faint" style="text-align:center">{{ "Rows are likelihood and columns are impact.  False alarms carry no risk and are not shown.  Neither are ratings decided before this review, which have no scores." | sentence_spaced }}</p>
 
 {# ---------------------------------------------------- detailed findings #}
 <h2 class="new-page" style="margin-top:0">5.  Detailed Findings</h2>
@@ -222,9 +232,25 @@
 <div class="finding">
   <h3>{{ i.id }}  {{ i.title }}</h3>
   <table>
-    <tr><td class="k">Rating</td><td><span class="badge r-{{ i.rating | lower }}">{{ i.rating }}</span></td></tr>
-    {% if i.rating != 'Informational' %}
+    <tr><td class="k">Rating</td><td><span class="badge r-{{ i.rating | lower }}">{{ i.rating }}</span>
+      {%- if i.waived %}  <strong>Waived</strong>{% endif %}</td></tr>
+    {% if i.waived %}
+    {% set w = i.waiver or {} %}
+    <tr><td class="k">Why it is waived</td><td>{{ (w.reason or "No reason was recorded.") | sentence_spaced }}
+      {%- if w.category == 'not_deployed' %}  Waived as code that is not deployed.{% endif %}
+      {%- if w.by %}  {{ "Approved by " ~ w.by }}{% if w.until %}{{ ", until " ~ w.until }}{% endif %}.{% elif w.until %}  {{ "Until " ~ w.until }}.{% endif %}
+      {%- if w.ticket %}  Ticket {{ w.ticket }}.{% endif %}
+      {{- "  The risk is accepted, not removed." }}</td></tr>
+    {% endif %}
+    {% if i.decided %}
+    <tr><td class="k">Rated by</td><td>
+      {%- if i.decided.by == 'validation' %}{{ ("AI validation #" ~ i.decided.id ~ (" on " ~ i.decided.at if i.decided.at else "") ~ ", rated " ~ (i.decided.rating | lower) ~ (", " ~ i.decided.confidence ~ " confidence" if i.decided.confidence else "") ~ ".  Not judged again for this report.") | sentence_spaced }}
+      {%- else %}{{ (i.decided.who ~ ", a person's own grade" ~ (" set on " ~ i.decided.at if i.decided.at else "") ~ ".  Not judged again for this report.") | sentence_spaced }}{% endif %}</td></tr>
+    {% elif i.rating != 'Informational' %}
     <tr><td class="k">Likelihood x Impact</td><td>{{ i.likelihood }} x {{ i.impact }} = {{ i.score }}</td></tr>
+    {% endif %}
+    {% if i.floor %}
+    <tr><td class="k">Kept at High</td><td>{{ ("Rated " ~ i.floor.was ~ " on its own, and kept at High because " ~ i.floor.why ~ ".  A person can rule on it from the finding page.") | sentence_spaced }}</td></tr>
     {% endif %}
     {% if i.location %}<tr><td class="k">Location</td><td>{{ i.location }}</td></tr>{% endif %}
     {% if i.source == 'scanner' %}
@@ -280,7 +306,7 @@
 {% endif %}
 
 {# ------------------------------------------------------------- appendix #}
-<h2>Appendix A.  Scanner Alerts</h2>
+<h2>Appendix A.  Open Scanner Alerts</h2>
 <table>
   <thead><tr><th>Rule or package</th><th>Kind</th><th class="c">Alerts</th><th class="c">Files</th></tr></thead>
   {% for row in r.counts.by_rule %}
@@ -288,6 +314,9 @@
   {% endfor %}
   <tr><td><strong>Total</strong></td><td></td><td class="c"><strong>{{ r.counts.open }}</strong></td><td></td></tr>
 </table>
+{% if r.counts.waived %}
+<p class="soft">{{ (r.counts.waived ~ " waived alert" ~ (' is' if r.counts.waived == 1 else 's are') ~ " not in this table.  Each waived group is in the detailed findings with its rating and the reason it was waived.") | sentence_spaced }}</p>
+{% endif %}
 {% if r.counts.left_out %}
 <p class="soft">{{ (r.counts.left_out ~ " lower rated group" ~ ('' if r.counts.left_out == 1 else 's') ~ ", holding " ~ r.counts.left_out_alerts ~ " alert" ~ ('' if r.counts.left_out_alerts == 1 else 's') ~ ", were counted here but not reviewed one by one.  They are listed on the findings page.") | sentence_spaced }}</p>
 {% endif %}

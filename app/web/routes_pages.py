@@ -1870,6 +1870,8 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                                       and row.kind != FindingKind.CREDENTIAL),
                        report=report,
                        report_fp=assessment.awaiting_for(report, row.id),
+                       report_changes=(assessment.changes_since(db, report["row"])
+                                       if report and report["ready"] else 0),
                        can_assess=(rbac.can(user, "repo.assess")
                                    and ai.enabled(ai_cfg)
                                    and not ai.missing(ai_cfg)),
