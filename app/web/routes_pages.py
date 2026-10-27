@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
-from sqlalchemy import case, distinct, func, literal, or_ as sa_or
+from sqlalchemy import case, distinct, exists, func, literal, or_ as sa_or
 
 from app.config import APP_NAME, VERSION, settings
 from app.core import baseline as baseline_filter
@@ -475,6 +475,13 @@ def _filtered_findings(db, user, params, model=None):
         query = query.filter(sa_or(model.first_found_at >= cutoff,
                                    model.committed_at >= cutoff))
 
+    # Whether a model has read it, or a rule learned from one has graded it.
+    # Only the findings table knows, so _summary_can_filter sends this live.
+    ai_review = (params.get("ai", "") or "").strip().lower()
+    if ai_review in ("reviewed", "unreviewed") and model is Finding:
+        reviewed = _ai_reviewed()
+        query = query.filter(reviewed if ai_review == "reviewed" else ~reviewed)
+
     archived_want = str(params.get("archived", ""))
     if archived_want in ("0", "1"):
         _archived = (db.query(Repository.full_name)
@@ -607,6 +614,43 @@ def _filtered_findings(db, user, params, model=None):
     return query
 
 
+def _ai_reviewed():
+    """A condition true for a finding a model, or a rule learned from one, read."""
+    from app.core.models import AIGrade, FindingAnalysis
+    return sa_or(exists().where(FindingAnalysis.finding_id == Finding.id),
+                 exists().where(AIGrade.finding_id == Finding.id))
+
+
+def ai_reviews(db, ids) -> dict:
+    """{finding id: what the AI said} for the ids given, for a badge.
+
+    The newest model answer when there is one, otherwise the learned rule
+    that graded it.  Ids nobody asked about are left out.
+    """
+    from app.core.models import AIGrade, FindingAnalysis
+    ids = list({int(i) for i in ids})
+    out = {}
+    if not ids:
+        return out
+    for chunk in range(0, len(ids), 500):
+        part = ids[chunk:chunk + 500]
+        for row in (db.query(FindingAnalysis.finding_id, FindingAnalysis.rating,
+                             FindingAnalysis.created_by, FindingAnalysis.created_at,
+                             FindingAnalysis.id)
+                    .filter(FindingAnalysis.finding_id.in_(part))
+                    .order_by(FindingAnalysis.created_at, FindingAnalysis.id)):
+            # Oldest first, so the newest is the one left standing.
+            out[row.finding_id] = {"rating": row.rating or "", "by": row.created_by or "",
+                                   "when": row.created_at, "rule": None}
+        for row in (db.query(AIGrade.finding_id, AIGrade.severity, AIGrade.rule_id,
+                             AIGrade.created_at)
+                    .filter(AIGrade.finding_id.in_(part))):
+            if row.finding_id not in out:
+                out[row.finding_id] = {"rating": row.severity.value.upper(), "by": "",
+                                       "when": row.created_at, "rule": row.rule_id}
+    return out
+
+
 def _summary_can_filter(db, params) -> bool:
     """Whether every filter in these params is one the summary tables answer.
 
@@ -620,6 +664,8 @@ def _summary_can_filter(db, params) -> bool:
     if (params.get("since", "") or "").strip() in ("1", "7", "14", "30"):
         return False
     if (params.get("branch", "") or "").strip():
+        return False
+    if (params.get("ai", "") or "").strip().lower() in ("reviewed", "unreviewed"):
         return False
     mode = (params.get("baseline", "new") or "new").strip().lower()
     if mode in ("new", "backlog", "") or mode not in baseline_filter.MODES:
@@ -1346,6 +1392,9 @@ def findings(request: Request, user: User = Depends(current_user)):
     since_choice = (params.get("since", "") or "").strip()
     if since_choice not in ("1", "7", "14", "30"):
         since_choice = ""
+    ai_review = (params.get("ai", "") or "").strip().lower()
+    if ai_review not in ("reviewed", "unreviewed"):
+        ai_review = ""
     # The three the dashboard links to.  Read here so sorting, paging and a
     # bulk action keep them: without that, sorting the live credentials list
     # by any column came back as every finding there is.
@@ -1530,6 +1579,7 @@ def findings(request: Request, user: User = Depends(current_user)):
                      "triage": triage, "baseline": since, "reach": reach,
                      "scope": scope,
                      "since": since_choice, "group": grouped,
+                     "ai": ai_review,
                      "exploited": flags.get("exploited", ""),
                      "verified": flags.get("verified", ""),
                      "malicious": flags.get("malicious", "")},
@@ -1538,6 +1588,7 @@ def findings(request: Request, user: User = Depends(current_user)):
             hidden_out_of_scope=hidden_out_of_scope,
             groups=groups, grouped=grouped, folded=folded,
             page_sizes=PAGE_SIZES,
+            ai_reviews=ai_reviews(db, [i for g in groups for i in g["ids"]]),
             connections=sorted({c[0] for c in
                                 rbac.visible(db, user, where)
                                 .with_entities(where.connection).distinct().all()
@@ -1557,6 +1608,7 @@ def findings(request: Request, user: User = Depends(current_user)):
                                    ("triage", triage if triage != "work" else ""),
                                    ("baseline", since if since != "new" else ""),
                                    ("since", since_choice),
+                                   ("ai", ai_review),
                                    ("exploited", flags.get("exploited", "")),
                                    ("verified", flags.get("verified", "")),
                                    ("malicious", flags.get("malicious", "")),

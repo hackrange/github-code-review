@@ -360,6 +360,9 @@ def _keep_what_finished(run_id, results_dir, why: str) -> dict:
         log.exception("could not keep what the scan had already found")
         return {"repositories": 0}
 
+    from app.core import analysis
+    analysis.auto_review(kept.pop("new_finding_ids", None))
+
     if not kept.get("repositories"):
         return kept
 
@@ -449,6 +452,8 @@ def salvage_interrupted() -> int:
                                    f"from a run that was interrupted"),
                            outcome="warn")
             _drop_results(directory)
+            from app.core import analysis
+            analysis.auto_review(kept.pop("new_finding_ids", None))
         except Exception:            # noqa: BLE001 - never stop the app booting
             log.exception("could not salvage %s", directory.name)
 
@@ -1000,6 +1005,9 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
                     tagged = connection_store.by_id(db, connection.id)
                 counts = ingest_report(db, report, scanned_repos=scanned,
                                        connection=tagged)
+                # Ids now, while the rows are attached.  The review starts once
+                # this session has committed them.
+                new_ids = [f.id for f in counts.get("new_findings") or []]
 
                 # The software inventory, from the SBOM bundle beside the
                 # report.  Its own step because it can fail on a scan that
@@ -1056,6 +1064,9 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
 
             counts.pop("new_findings", None)
             log.info("scan done: %s", counts)
+
+            from app.core import analysis
+            analysis.auto_review(new_ids)
 
             # The findings are in the database now, so the copies on disk have
             # done their job.  Removed here rather than in a finally, because

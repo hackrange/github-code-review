@@ -4,6 +4,16 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-10-27
+
+**Auto LLM review.**  A switch on the AI page has the model read every new
+finding a scan turns up, with no one pressing a button.  It keeps to a
+requests per minute setting, shared by every scan, and reads at most a set
+number of new findings per scan, worst first.  The findings list now badges
+every finding AI has reviewed and has an **AI review** filter for reviewed or
+not reviewed.  [ai-validation.md](ai-validation.md#reading-every-new-finding-automatically)
+has the details.
+
 ## 2026-10-20
 
 **A pull request gate.**  A step in the pipeline asks the server whether a

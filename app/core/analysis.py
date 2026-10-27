@@ -41,14 +41,16 @@ import logging
 import re
 import subprocess
 import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 
 from app.core import ai, learned
 from app.core.db import session_scope
 from app.core.models import (Finding, FindingAnalysis, FindingKind,
-                             FindingState, Severity, Waiver, utcnow)
+                             FindingState, Severity, UserRole, Waiver, utcnow)
 
 log = logging.getLogger("gcr.analysis")
 
@@ -591,7 +593,7 @@ def _parse(text: str) -> tuple:
 # --------------------------------------------------------------------- run
 
 def run(finding_id: int, user, force: bool = False, wait: bool = False,
-        learn: bool = True, requeue: bool = True) -> dict:
+        learn: bool = True, requeue: bool = True, paced: bool = False) -> dict:
     """Ask about one finding and keep the answer.  -> {ok, detail, id}
 
     The caller has already checked the person may see the finding and may ask.
@@ -600,6 +602,7 @@ def run(finding_id: int, user, force: bool = False, wait: bool = False,
     refusing, which is what a bulk run wants.  learn=False keeps the answer
     to this one finding.  requeue=False leaves the findings of a rule this
     answer retires at their restored grade instead of asking about each.
+    paced keeps any batch this starts under the automatic review's rate.
     """
     with _busy_lock:
         if finding_id in _busy:
@@ -612,7 +615,7 @@ def run(finding_id: int, user, force: bool = False, wait: bool = False,
         return {"ok": False,
                 "detail": "Two validations are already running. Try again in a moment."}
     try:
-        return _run(finding_id, user, force, learn, requeue)
+        return _run(finding_id, user, force, learn, requeue, paced)
     finally:
         with _busy_lock:
             _busy.discard(finding_id)
@@ -647,7 +650,7 @@ def _answer_from_rule(db, row, user) -> dict:
 
 
 def _run(finding_id: int, user, force: bool = False, learn: bool = True,
-         requeue: bool = True) -> dict:
+         requeue: bool = True, paced: bool = False) -> dict:
     from app.core import rbac
 
     with session_scope() as db:
@@ -715,7 +718,8 @@ def _run(finding_id: int, user, force: bool = False, learn: bool = True,
 
     # Started after the commit, so the batch reads the grades put back.
     if others and requeue:
-        number = start_batch(others, user, force=True, learn=False, requeue=False)
+        number = start_batch(others, user, force=True, learn=False, requeue=False,
+                             paced=paced)
         outcome += (f"  The {len(others)} other finding{'' if len(others) == 1 else 's'} "
                     f"it graded {'was' if len(others) == 1 else 'were'} put back and "
                     f"queued for {'its' if len(others) == 1 else 'their'} own reading "
@@ -869,7 +873,7 @@ def rule_only(finding_id: int, user) -> dict:
 
 
 def start_batch(finding_ids: list, user, rules_only: bool = False, force: bool = False,
-                learn: bool = True, requeue: bool = True) -> int:
+                learn: bool = True, requeue: bool = True, paced: bool = False) -> int:
     """Validate many findings in the background.  -> the batch number.
 
     Ordered so findings about the same thing sit together: the same
@@ -877,7 +881,8 @@ def start_batch(finding_ids: list, user, rules_only: bool = False, force: bool =
     model, and when what it learns covers the rest they are answered from the
     rule without a model call, which is where a bulk run saves its tokens.
     force asks the model about every one, past any rule, which is how the
-    findings of a retired rule each get their own reading.
+    findings of a retired rule each get their own reading.  paced spaces the
+    questions out to the automatic review's rate.
     """
     with _batch_lock:
         _batch_seq[0] += 1
@@ -888,12 +893,12 @@ def start_batch(finding_ids: list, user, rules_only: bool = False, force: bool =
             "done": 0, "asked": 0, "from_rules": 0, "lowered": 0,
             "skipped_protected": 0, "skipped_done": 0, "errors": 0,
             "tokens": 0, "rules_learned": 0, "skipped_no_rule": 0,
-            "rules_only": rules_only, "results": []}
+            "rules_only": rules_only, "paced": paced, "results": []}
         # Keep the twenty newest; a batch is a progress display, not a record.
         for old in sorted(_batches)[:-20]:
             _batches.pop(old, None)
     worker = threading.Thread(target=_batch, args=(number, list(finding_ids), user, rules_only,
-                                                   force, learn, requeue),
+                                                   force, learn, requeue, paced),
                               name=f"ai-batch-{number}", daemon=True)
     worker.start()
     return number
@@ -921,7 +926,8 @@ def _note(number: int, **change) -> None:
 
 
 def _batch(number: int, finding_ids: list, user, rules_only: bool = False,
-           force: bool = False, learn: bool = True, requeue: bool = True) -> None:
+           force: bool = False, learn: bool = True, requeue: bool = True,
+           paced: bool = False) -> None:
     from app.core import rbac
     from app.core.models import AIGrade, LearnedRule
 
@@ -934,6 +940,11 @@ def _batch(number: int, finding_ids: list, user, rules_only: bool = False,
                 (f.package_name if f.kind == FindingKind.DEPENDENCY else f.rule) or "",
                 -learned.RANK.get(f.severity.value, 0), f.id))
             plan = []
+            # A finding a rule already covers is answered without a request,
+            # so it does not wait its turn.  A rule learned partway through
+            # can only make the pacing slower than it needs to be.
+            rules = learned.load_rules(db) if paced and not force else []
+            per_minute = int(ai.config(db).get("ai.auto_review_per_minute") or 0)
             for f in order:
                 why = learned.protected(f)
                 if why:
@@ -944,7 +955,8 @@ def _batch(number: int, finding_ids: list, user, rules_only: bool = False,
                 if done is not None:
                     plan.append((f.id, f.vuln_id, "done"))
                     continue
-                plan.append((f.id, f.vuln_id, "ask"))
+                covered = bool(rules) and learned.match(rules, f) is not None
+                plan.append((f.id, f.vuln_id, "rule" if covered else "ask"))
             rules_before = db.query(LearnedRule).count()
         for finding_id, vuln_id, step in plan:
             label = vuln_id or str(finding_id)
@@ -957,10 +969,12 @@ def _batch(number: int, finding_ids: list, user, rules_only: bool = False,
                 _note(number, done=1, skipped_done=1,
                       result=f"{label}: already validated for this code")
                 continue
+            if paced and step == "ask" and not rules_only:
+                _wait_turn(per_minute)
             try:
                 result = (rule_only(finding_id, user) if rules_only
                           else run(finding_id, user, force=force, wait=True,
-                                   learn=learn, requeue=requeue))
+                                   learn=learn, requeue=requeue, paced=paced))
             except Exception:  # one bad finding must not stop the rest
                 log.exception("bulk validation of %s failed", finding_id)
                 result = {"ok": False, "detail": "failed; see the log"}
@@ -985,3 +999,72 @@ def _batch(number: int, finding_ids: list, user, rules_only: bool = False,
         with _batch_lock:
             if number in _batches:
                 _batches[number]["finished"] = utcnow()
+
+
+# ------------------------------------------------------------ automatic
+
+# Who the automatic review says it is.  It reads what a scan found for
+# everybody, so it sees what an administrator sees, and its name is on every
+# answer it leaves so nobody mistakes it for a person.
+AUTO_REVIEWER = SimpleNamespace(username="auto-review", role=UserRole.ADMIN,
+                                disabled=False)
+
+# One clock for every paced batch.  Two scans finishing close together start
+# two batches, and each keeping to the rate on its own would be twice it.
+_pace_lock = threading.Lock()
+_next_turn = [0.0]
+
+
+def _wait_turn(per_minute: int) -> None:
+    """Hold until the next question may go.  0 or less never waits."""
+    if per_minute <= 0:
+        return
+    gap = 60.0 / per_minute
+    with _pace_lock:
+        now = time.monotonic()
+        turn = max(now, _next_turn[0])
+        _next_turn[0] = turn + gap
+    if turn > now:
+        time.sleep(turn - now)
+
+
+def auto_review(finding_ids) -> int:
+    """Hand a scan's new findings to the model, when that is switched on.
+    -> the batch number, or 0 when nothing was started.
+
+    Worst first, up to the per scan limit, so a first scan of a large estate
+    reads the criticals and stops instead of running up a bill for every low
+    there is.  The rest are still there to pick from the findings list.
+    Never raises: a scan is not worth failing over this.
+    """
+    from app.core.audit import record
+
+    ids = sorted({int(i) for i in finding_ids or []})
+    if not ids:
+        return 0
+    try:
+        with session_scope() as db:
+            cfg = ai.config(db)
+            if not cfg.get("ai.auto_review") or not ai.enabled(cfg) or ai.missing(cfg):
+                return 0
+            limit = int(cfg.get("ai.auto_review_max") or 0)
+            rows = (db.query(Finding.id, Finding.severity)
+                    .filter(Finding.id.in_(ids)).all())
+            rows.sort(key=lambda r: (-learned.RANK.get(learned._value(r.severity), 0), r.id))
+            chosen = [r.id for r in rows]
+            left = 0
+            if limit and len(chosen) > limit:
+                left = len(chosen) - limit
+                chosen = chosen[:limit]
+            if not chosen:
+                return 0
+            number = start_batch(chosen, AUTO_REVIEWER, paced=True)
+            record(db, "ai.auto_review", actor=AUTO_REVIEWER.username,
+                   detail=(f"batch {number}: {len(chosen)} new finding(s) queued at "
+                           f"{cfg.get('ai.auto_review_per_minute')} a minute"
+                           + (f", {left} over the per scan limit left for a person"
+                              if left else "")))
+            return number
+    except Exception:            # noqa: BLE001
+        log.exception("could not start the automatic review")
+        return 0

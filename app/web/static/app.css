@@ -321,6 +321,8 @@ td.reason { width: 40%; white-space: normal; overflow-wrap: anywhere; }
 .badge.ok       { background: var(--ok-bg);   color: var(--ok); }
 .badge.waived   { background: var(--bg-sunk); color: var(--text-faint); }
 .badge.pending  { background: var(--warn-bg); color: var(--warn); }
+.badge.ai       { background: transparent; color: var(--info); border-color: var(--info);
+                  text-decoration: none; }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.ok { background: var(--ok); }

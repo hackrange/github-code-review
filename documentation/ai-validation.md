@@ -56,6 +56,35 @@ The answer is kept on the finding, newest first, with the model, the person who
 asked and when.  *What it was given* lists every piece of evidence that went
 out.
 
+### Reading every new finding automatically
+
+**Auto LLM review** on the AI page validates every finding a scan turns up
+for the first time, the same way as pressing the button on each one.  It runs
+in the background after the scan is saved.  The answer is kept on the finding
+under the name `auto-review`.  A finding a learned rule already covers is
+answered by the rule and sends nothing.  Credentials and known exploited
+packages are not sent, the same as a bulk run, and nothing goes out while the
+provider is off.
+
+Two settings keep it inside what the provider allows.  **Requests per minute**
+spaces the questions out so no more than that many go in a minute, even when
+two scans finish at once.  Set it below the provider's limit to leave room for
+people and for the security report.  **New findings per scan** reads the worst
+first and stops there, so a first scan of a large estate, where everything is
+new, does not turn into a very large bill.  0 means no limit.  What is left
+over can be found on the findings list and validated by hand.  Each run is in
+the audit log as `ai.auto_review`, with how many were queued and how many were
+over the limit.
+
+### Which findings were read
+
+A finding a model has read, or a learned rule has graded, has an **AI
+reviewed** badge on the findings list.  Hovering it says who asked and what
+the model said, or which rule graded it.  A folded row where only some of its
+findings were read says how many, such as *AI reviewed 2/7*.  The **AI review**
+filter shows only the ones read, or only the ones not read yet, and works with
+*Select all matching these filters*, so the leftovers can be sent in one go.
+
 ### When the model reads it lower
 
 A reading lower than the finding's grade lowers it, and the finding says the

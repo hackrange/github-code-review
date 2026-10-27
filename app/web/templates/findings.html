@@ -120,6 +120,14 @@
       </select>
     </div>
     <div class="field">
+      <label for="ai">AI review</label>
+      <select id="ai" name="ai" data-autosubmit>
+        <option value="">Reviewed or not</option>
+        <option value="reviewed" {{ 'selected' if filters.ai == 'reviewed' }}>AI reviewed</option>
+        <option value="unreviewed" {{ 'selected' if filters.ai == 'unreviewed' }}>Not AI reviewed</option>
+      </select>
+    </div>
+    <div class="field">
       <label for="reach">Reachable</label>
       <select id="reach" name="reach" data-autosubmit>
         <option value="" {{ 'selected' if not filters.reach }}>Anything the code may reach</option>
@@ -489,6 +497,14 @@
             {% elif f.reachability == 'unlikely' %}<span class="badge medium"
                 title="{{ f.reachability_reason }}">not reached</span>{% endif %}
             {% if f.state.value == 'waived' %}<span class="badge waived">waived</span>{% endif %}
+            {# Counted over the whole row, so a folded row read only in part
+               says so rather than speaking for the ones nobody asked about. #}
+            {% set read = g.ids | select('in', ai_reviews) | list %}
+            {% if read %}
+              {% set said = ai_reviews.get(f.id) or ai_reviews[read[0]] %}
+              <a class="badge ai" href="{{ base }}/findings/{{ f.id }}"
+                 title="{% if said.rule %}Graded {{ said.rating | lower }} by learned rule #{{ said.rule }}{% else %}Read by {{ said.by or 'a person' }}{% if said.rating %}: {{ said.rating | lower }}{% endif %}{% endif %}">AI reviewed{% if g.count > 1 and read | length < g.count %} {{ read | length }}/{{ g.count }}{% endif %}</a>
+            {% endif %}
           </td>
           <td class="small mono">{{ f.file_path[-46:] if f.file_path else f.package_name }}{% if f.line %}:{{ f.line }}{% endif %}
             {# The action the row is grouped on, spelled out.  Without this a
@@ -562,6 +578,7 @@
   <input type="hidden" name="exploited" value="{{ filters.exploited }}">
   <input type="hidden" name="verified" value="{{ filters.verified }}">
   <input type="hidden" name="malicious" value="{{ filters.malicious }}">
+  <input type="hidden" name="ai" value="{{ filters.ai }}">
 </form>
 
 {% if can_validate_ai %}
@@ -725,6 +742,7 @@
   <input type="hidden" name="exploited" value="{{ filters.exploited }}">
   <input type="hidden" name="verified" value="{{ filters.verified }}">
   <input type="hidden" name="malicious" value="{{ filters.malicious }}">
+  <input type="hidden" name="ai" value="{{ filters.ai }}">
 </form>
 
 <div class="modal-backdrop" id="delete-modal" hidden>

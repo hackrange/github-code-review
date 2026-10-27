@@ -219,6 +219,41 @@
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-head">Auto LLM review</div>
+    <div class="card-body">
+      <label class="check">
+        <input type="checkbox" name="ai.auto_review" value="1"
+               {{ 'checked' if values['ai.auto_review'] }}>
+        Have the model read every new finding a scan turns up
+      </label>
+      <p class="faint small">When a scan finishes, the findings it saw for the
+        first time are validated the same way as pressing the button on each
+        one, and the answer is kept on the finding under the name
+        <span class="mono">auto-review</span>.  A finding a learned rule
+        already covers is answered by the rule, with no request sent.
+        Credentials and known exploited packages are not sent, because
+        validation may not lower them.  Nothing goes out while the provider
+        above is off.</p>
+      <label>Requests per minute
+        <input type="number" name="ai.auto_review_per_minute" min="1" max="600"
+               value="{{ values['ai.auto_review_per_minute'] }}">
+      </label>
+      <p class="faint small">The automatic review waits between questions so it
+        never sends more than this in a minute, however many scans finish at
+        once.  Set it below what your provider allows, to leave room for
+        people pressing the button and for the security report.</p>
+      <label>New findings per scan
+        <input type="number" name="ai.auto_review_max" min="0" max="100000"
+               value="{{ values['ai.auto_review_max'] }}">
+      </label>
+      <p class="faint small">The worst are read first.  A first scan of a large
+        estate turns up everything as new, and this keeps it from becoming a
+        very large bill.  Whatever is over the limit can still be picked from
+        the findings list with the AI review filter.  0 means no limit.</p>
+    </div>
+  </div>
+
   {% if can_write %}
   <div class="page-actions">
     <button class="btn primary" type="submit">Save</button>

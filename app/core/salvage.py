@@ -218,8 +218,10 @@ def salvage(session, results_dir) -> dict:
             log.warning("could not keep the software inventory from the "
                         "interrupted scan", exc_info=True)
 
-    counts.pop("new_findings", None)
+    new_ids = [f.id for f in counts.pop("new_findings", None) or []]
     counts["repositories"] = len(entries)
     log.warning("salvaged %d repository(ies) from an interrupted scan: %s",
                 len(entries), counts)
+    # For the automatic review, which the caller starts once these commit.
+    counts["new_finding_ids"] = new_ids
     return counts

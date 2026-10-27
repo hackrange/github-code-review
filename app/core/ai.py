@@ -97,6 +97,16 @@ SETTINGS = {
     "ai.fetch_advisories":     (True, False,
                                 "Read the advisory text from osv.dev for a dependency "
                                 "finding. Only the advisory id is sent."),
+    # Off by default for the same reason the provider is.  On, every finding
+    # a scan turns up for the first time is read without anybody asking.
+    "ai.auto_review":          (False, False,
+                                "Have the model read every new finding a scan turns up."),
+    "ai.auto_review_per_minute": (6, False,
+                                  "Most questions the automatic review sends in a "
+                                  "minute."),
+    "ai.auto_review_max":      (200, False,
+                                "Most new findings one scan hands to the automatic "
+                                "review, worst first. 0 for no limit."),
     # What the custom service charges, per million tokens, for the cost page.
     # Kept as text so 0.10 stays 0.10.  Empty is not counted.
     "ai.price_input":          ("", False, "Price per million input tokens."),
@@ -175,6 +185,11 @@ def read_form(form, text, number, url, checked) -> dict:
                                    "Lines of context", 5, 200),
         "ai.send_code": checked("ai.send_code"),
         "ai.fetch_advisories": checked("ai.fetch_advisories"),
+        "ai.auto_review": checked("ai.auto_review"),
+        "ai.auto_review_per_minute": number(form.get("ai.auto_review_per_minute") or 6,
+                                            "Questions per minute", 1, 600),
+        "ai.auto_review_max": number(form.get("ai.auto_review_max") or 200,
+                                     "New findings per scan", 0, 100_000),
     }
 
 
