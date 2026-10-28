@@ -1093,6 +1093,12 @@ run_trufflehog_worktree() {
   local dir="$1" full_name="$2" out="$3"
   have_cmd trufflehog || { : > "$out"; return 0; }
   local args=(filesystem "$dir" --json --no-update)
+  # The files as they are, not the history again.  Left alone this also reads
+  # .git/objects, which is every commit decompressed, and reports a key at
+  # .git/objects/8e/4d0004..., a link nobody can open.
+  local skip="$GHSCAN_TMPROOT/trufflehog.exclude"
+  printf '%s\n' '(^|/)\.git/' > "$skip"
+  args+=(--exclude-paths "$skip")
   if cfg_bool '.scan.secrets.trufflehog.verify' true; then
     args+=(--results "$(cfg '.scan.secrets.trufflehog.results' 'verified,unverified,unknown')")
   else
@@ -1186,7 +1192,10 @@ normalize_trufflehog() {
   local in="$1" full_name="$2"
   jq -c --arg repo "$full_name" --argjson alias "$(detector_alias_map)" "$JQ_CANON_DETECTOR"'
     select(.DetectorName != null) |
-    (.SourceMetadata.Data.Git // {}) as $g |
+    # A history walk says where under Git, a branch-head scan under
+    # Filesystem.  Reading only the first left every branch-head hit with no
+    # file and no line, so its link went to the repository home page.
+    (.SourceMetadata.Data.Git // .SourceMetadata.Data.Filesystem // {}) as $g |
     {
       engine: "trufflehog",
       repository: $repo,
