@@ -1,0 +1,145 @@
+{# The API reference tab.  Built from app/core/api_reference.py, the same list
+   the OpenAPI file and the Postman collection come from. #}
+<div class="settings" id="api-ref" data-api="{{ api_url }}">
+
+<div class="card">
+  <div class="card-head">
+    <span>Using the API</span>
+    <span class="nowrap">
+      <a class="btn sm" href="{{ base }}/tokens/openapi.json" download>OpenAPI (Swagger) JSON</a>
+      <a class="btn sm" href="{{ base }}/tokens/postman.json" download>Postman collection</a>
+    </span>
+  </div>
+  <div class="card-body small">
+    <p>Every call goes to <span class="mono">{{ api_url }}</span> with the
+      token in a header:
+      <span class="mono">Authorization: Bearer &lt;token&gt;</span>.  Each answer
+      holds only what the token's owner can open in this web app.  A
+      repository you cannot see answers 404, the same as one that does not
+      exist.</p>
+    <p>The <span class="mono">reports</span> scope covers findings, SBOMs,
+      trends, exceptions and the deploy check.  The OpenAPI file opens in
+      Swagger UI, Insomnia and most code generators.  In Postman, import the
+      collection and put your token in its <span class="mono">token</span>
+      variable.</p>
+
+    <label class="api-token-box">Token for trying calls on this page
+      <input type="password" id="api-token" autocomplete="off" spellcheck="false"
+             placeholder="gcr_...">
+      <span class="faint small">Kept only while this tab is open.  It is not
+        saved anywhere, and it is sent only to this server.  Calls made here are
+        real: asking for an exception creates a request.</span>
+    </label>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">Checking before a deploy</div>
+  <div class="card-body small">
+    <p>The deploy check answers <span class="mono">pass</span>,
+      <span class="mono">fail</span> or <span class="mono">unknown</span> for one
+      repository and branch.  <span class="mono">unknown</span> means that branch
+      was never scanned, so treat it as a stop, not a pass.  A script like this
+      stops a deploy when there is something to fix:</p>
+    <pre class="mono api-pre">#!/usr/bin/env bash
+# Stops the deploy when the last scan found something to fix.
+set -euo pipefail
+GCR="{{ api_url }}"
+REPO="acme/payments"     # org/name
+BRANCH="main"
+
+answer=$(curl -fsS -G "$GCR/check" \
+  -H "Authorization: Bearer $GCR_TOKEN" \
+  --data-urlencode "repo=$REPO" \
+  --data-urlencode "branch=$BRANCH" \
+  --data-urlencode "fail_on=high")
+
+verdict=$(jq -r .verdict &lt;&lt;&lt;"$answer")
+jq -r .message &lt;&lt;&lt;"$answer"
+jq -r '.blocking[] | "  [\(.severity)] \(.area): \(.title) \(.file)\n    \(.fix // .link)"' &lt;&lt;&lt;"$answer"
+
+[ "$verdict" = "pass" ] || exit 1</pre>
+    <p class="faint">It answers from the last scan, and says when that was in
+      <span class="mono">last_scanned_at</span>.  For code that has not been
+      scanned yet, such as a pull request, use the pull request gate.</p>
+  </div>
+</div>
+
+{% for group, blurb, items in reference %}
+<div class="card">
+  <div class="card-head">{{ group }}</div>
+  <div class="card-body small">
+    <p class="faint">{{ blurb }}</p>
+    {% for e in items %}
+    <details class="api-op" data-method="{{ e.method }}" data-path="{{ e.path }}"
+             id="op-{{ e.id }}">
+      <summary>
+        <span class="api-method {{ e.method | lower }}">{{ e.method }}</span>
+        <span class="mono">{{ e.path }}</span>
+        <span class="faint">{{ e.summary }}</span>
+        {% if e.scope %}<span class="badge">{{ e.scope }}</span>{% endif %}
+      </summary>
+      <div class="api-op-body">
+        <p>{{ e.description }}</p>
+        <p class="faint">Token scope:
+          <span class="mono">{{ e.scope or 'any' }}</span>{% if e.permission %}.
+          Account permission: <span class="mono">{{ e.permission }}</span>{% endif %}.</p>
+
+        {% if e.params %}
+        <div class="table-scroll">
+          <table class="api-params">
+            <thead><tr><th>Name</th><th>In</th><th>Value</th><th>About</th></tr></thead>
+            <tbody>
+            {% for p in e.params %}
+              <tr>
+                <td class="mono nowrap">{{ p.name }}{% if p.required %} <span class="badge critical">required</span>{% endif %}</td>
+                <td class="faint nowrap">{{ p['in'] }}</td>
+                <td>
+                  {% if p.enum %}
+                  <select data-param="{{ p.name }}" data-in="{{ p['in'] }}">
+                    <option value="">{{ '(default ' ~ p.default ~ ')' if p.default is not none else '' }}</option>
+                    {% for choice in p.enum %}<option value="{{ choice }}">{{ choice }}</option>{% endfor %}
+                  </select>
+                  {% else %}
+                  <input type="text" data-param="{{ p.name }}" data-in="{{ p['in'] }}"
+                         value="{{ p.example if p['in'] == 'path' and p.example is not none else '' }}"
+                         placeholder="{{ p.example if p.example is not none else (p.default if p.default is not none else '') }}">
+                  {% endif %}
+                </td>
+                <td>{{ p.description }}</td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% endif %}
+
+        {% if e.body %}
+        <p><strong>Body</strong>, as JSON:</p>
+        <ul class="api-fields">
+          {% for f in e.body %}
+          <li><span class="mono">{{ f.name }}</span>
+            <span class="faint">{{ f.type }}{{ ', required' if f.required }}</span>
+            &middot; {{ f.description }}</li>
+          {% endfor %}
+        </ul>
+        <textarea class="mono api-body" rows="8" spellcheck="false">{{ e.body_text }}</textarea>
+        {% endif %}
+
+        <div class="api-actions">
+          <button class="btn primary sm api-send" type="button">Send</button>
+          <span class="api-status faint"></span>
+        </div>
+        <pre class="mono api-pre api-curl"></pre>
+        <pre class="mono api-pre api-result" hidden></pre>
+
+        <p class="faint">Example answer{% if e.status %} ({{ e.status }}){% endif %}:</p>
+        <pre class="mono api-pre">{{ e.example_text }}</pre>
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+</div>
+{% endfor %}
+</div>
+<script src="{{ base }}/static/apiref.js?v={{ asset_v('apiref.js') }}"></script>

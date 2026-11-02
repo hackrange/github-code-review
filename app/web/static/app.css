@@ -1061,3 +1061,28 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .chart .usage-bar { fill: var(--info); }
 .chart .usage-bar:hover { opacity: .8; }
 .btn[aria-current="page"] { border-color: var(--info); color: var(--info); }
+
+/* The API reference tab on the IDE tokens page. */
+.api-token-box { display: flex; flex-direction: column; gap: .3rem; max-width: 36rem;
+  margin-top: .6rem; }
+.api-pre { overflow-x: auto; padding: .7rem; background: var(--bg-soft);
+  border: 1px solid var(--border); border-radius: var(--radius); white-space: pre;
+  max-height: 28rem; overflow-y: auto; }
+.api-op { border: 1px solid var(--border); border-radius: var(--radius);
+  margin: .5rem 0; }
+.api-op > summary { cursor: pointer; padding: .55rem .7rem; display: flex;
+  flex-wrap: wrap; align-items: center; gap: .6rem; list-style: none; }
+.api-op > summary::-webkit-details-marker { display: none; }
+.api-op[open] > summary { border-bottom: 1px solid var(--border); }
+.api-op-body { padding: .2rem .8rem .8rem; min-width: 0; }
+.api-method { font-weight: 700; font-size: .75rem; padding: .1rem .45rem;
+  border-radius: var(--radius); border: 1px solid currentColor; min-width: 3.2rem;
+  text-align: center; }
+.api-method.get  { color: var(--info); }
+.api-method.post { color: var(--ok); }
+.api-params input, .api-params select { width: 100%; min-width: 9rem; }
+.api-body { width: 100%; box-sizing: border-box; }
+.api-fields { margin: .3rem 0 .6rem 1.1rem; padding: 0; }
+.api-actions { display: flex; align-items: center; gap: .7rem; margin: .6rem 0; }
+.api-good { color: var(--ok); }
+.api-bad { color: var(--bad); }

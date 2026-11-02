@@ -3,12 +3,21 @@
 {% block content %}
 <div class="page-head">
   <div><h1>IDE tokens</h1>
-    <div class="faint small">For an editor plugin or a pipeline, which cannot
-      sign in the way a browser does.  A token is you with less of you: it
-      reaches the repositories you were given, it can ask for a review and read
-      the rules, and it can do nothing else.  Make your own; there is no reason
-      to share one.</div></div>
+    <div class="faint small">For an editor plugin, a pipeline or a deploy
+      script, which cannot sign in the way a browser does.  A token is you with
+      less of you: it reaches the repositories you were given and only does
+      what its scopes allow.  Make your own; there is no reason to share
+      one.</div></div>
 </div>
+
+<div class="filters" style="gap:.4rem">
+  <a class="btn {{ 'primary' if tab == 'tokens' }}" href="{{ base }}/tokens">Tokens</a>
+  <a class="btn {{ 'primary' if tab == 'reference' }}" href="{{ base }}/tokens?tab=reference">API reference</a>
+</div>
+
+{% if tab == 'reference' %}
+{% include "tokens_reference.html" %}
+{% else %}
 
 {% if message %}
 <div class="card {{ 'bad' if message_kind == 'error' else 'ok' }}">
@@ -63,9 +72,13 @@
           </label>
           {% endfor %}
         </div>
-        <span class="faint small">Neither of these can change anything.  A
-          review is worked out and thrown away, and the rules are the ones you
-          can already read.</span>
+        <span class="faint small">None of these can change a setting or
+          approve anything.  A review is worked out and thrown away, the rules
+          are the ones you can already read, and <span class="mono">reports</span>
+          reaches only the repositories your account can open.  The one thing
+          it can write is a request for an exception, which still waits for an
+          administrator.  The <a href="{{ base }}/tokens?tab=reference">API
+          reference</a> lists every call.</span>
       </label>
       <div class="wide"><button class="btn primary" type="submit">Make the token</button></div>
     </div>
@@ -194,4 +207,5 @@
   </div>
 </div>
 </div>
+{% endif %}
 {% endblock %}

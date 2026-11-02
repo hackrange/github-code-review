@@ -4,6 +4,27 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-11-02
+
+**More for a reports token, and an API reference.**  A token with the
+`reports` scope now reads its owner's findings, SBOMs and trend lines, and
+asks for exceptions.  Each answer holds only what that person can open in the
+web app, so a developer's token never names another team's repository.  An
+exception asked for with a token is always a request, even on an
+administrator's token, and still has to be approved in the browser.  The
+whole estate report files stay with administrators.
+
+**A check before a deploy.**  `GET /api/v1/check` takes a repository and a
+branch and answers pass, fail or unknown.  It covers vulnerable packages,
+packages in container images and problems in the build, such as CI
+workflows, Dockerfiles and packages only the build uses.  A branch nobody
+scanned answers unknown, not pass.  [pipelines.md](pipelines.md#checking-before-a-deploy)
+has a script.
+
+**An API reference tab** on the IDE tokens page lists every call, lets you
+try each one with your token, and downloads an OpenAPI (Swagger) file and a
+Postman collection.
+
 ## 2026-10-27
 
 **Auto LLM review.**  A switch on the AI page has the model read every new

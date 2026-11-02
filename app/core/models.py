@@ -1406,10 +1406,11 @@ class ApiToken(Base):
     the clear as well, purely so the page can show which token a row is without
     being able to reconstruct it.
 
-    Scopes are deliberately thin.  A token can ask for a review and read the
-    rules, and that is all.  Nothing here can change a setting, approve an
-    exception or read a finding from another team's repository, because a
-    credential that lives on a laptop is the one most likely to walk.
+    Scopes are deliberately thin.  A token can ask for a review, read the
+    rules, read its owner's own findings, SBOMs and trends, and ask for an
+    exception.  Nothing here can change a setting, approve an exception or
+    read a finding from another team's repository, because a credential that
+    lives on a laptop is the one most likely to walk.
     """
 
     __tablename__ = "api_tokens"

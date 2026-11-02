@@ -26,11 +26,13 @@ log = logging.getLogger("gcr.api_tokens")
 SCOPES = {
     "review": "Send code to be looked at",
     "rules": "Read the triage rules and exclusions",
-    # The files a scan wrote, whole.  Its own scope rather than a corner of
-    # another, so a token handed to an editor cannot reach them by accident:
-    # a review token sends code and gets an opinion back, and this one takes
-    # away every finding on the estate in a single file.
-    "reports": "Download the report files a scan produced",
+    # Your findings, SBOMs and trend lines, and asking for an exception.  Each
+    # is cut down to what the owner can open on the screen.  The whole estate
+    # report files sit behind this scope too, and stay with the people allowed
+    # them.  Its own scope rather than a corner of another, so a token handed
+    # to an editor cannot pull every finding by accident.
+    "reports": ("Read your findings, SBOMs and trends, and ask for "
+                "exceptions"),
     # A CI job's token.  It asks for a verdict on a pull request and reads
     # the answer back, and that is all.  Its own scope so a pipeline secret
     # that leaks cannot be used to pull every report, and an editor token

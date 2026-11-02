@@ -3708,7 +3708,10 @@ def tokens_page(request: Request, msg: str = "", kind: str = "",
     """
     from app.core import api_tokens
 
+    from app.core import api_reference
+
     show_dead = request.query_params.get("dead") == "1"
+    tab = "reference" if request.query_params.get("tab") == "reference" else "tokens"
 
     # The address a plugin has to be pointed at.  Worked out from the request
     # rather than stored, because whatever somebody reached this page on is
@@ -3733,9 +3736,45 @@ def tokens_page(request: Request, msg: str = "", kind: str = "",
             # arrives in the address is a one time key, not the token.
             fresh=_oneshot.take(shown, user.id) if shown else "",
             api_url=f"{base_url}/api/v1",
+            tab=tab,
+            reference=api_reference.grouped() if tab == "reference" else [],
             message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "tokens.html", **context)
+
+
+def _api_download(request: Request, body: dict, filename: str):
+    import json as json_module
+
+    return Response(
+        content=json_module.dumps(body, indent=2) + "\n",
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"',
+                 "Cache-Control": "no-store"})
+
+
+@router.get("/tokens/openapi.json")
+def tokens_openapi(request: Request, user: User = Depends(current_user)):
+    """The token API as an OpenAPI file, for Swagger UI and code generators.
+
+    Built from the same list as the API reference tab.  It names no data, only
+    what the endpoints are, so anybody signed in may have it.
+    """
+    from app.core import api_reference
+
+    base_url = str(request.base_url).rstrip("/") + (settings.base_path or "")
+    return _api_download(request, api_reference.openapi(f"{base_url}/api/v1"),
+                         "gcr-openapi.json")
+
+
+@router.get("/tokens/postman.json")
+def tokens_postman(request: Request, user: User = Depends(current_user)):
+    """The token API as a Postman collection.  The token is left blank."""
+    from app.core import api_reference
+
+    base_url = str(request.base_url).rstrip("/") + (settings.base_path or "")
+    return _api_download(request, api_reference.postman(f"{base_url}/api/v1"),
+                         "gcr-postman-collection.json")
 
 
 @router.get("/tagging")

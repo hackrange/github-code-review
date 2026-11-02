@@ -630,6 +630,57 @@ see is a 404, the same as one that does not exist.
 - **Nothing is uploaded.**  The server always fetches the commits itself.
   Sending the changed files instead is refused rather than ignored.
 
+## Checking before a deploy
+
+The gate asks about a change.  A deploy asks a different question: is there
+anything on this repository and branch, as it stands, that has to be fixed
+first.  `GET /api/v1/check` answers that from what the scans already found,
+in about a second.
+
+Make a token with the `reports` scope on the **IDE tokens** page.  The token
+is you, so it answers only for repositories your account can open.  Then:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+answer=$(curl -fsS -G "https://<your server>/api/v1/check" \
+  -H "Authorization: Bearer $GCR_TOKEN" \
+  --data-urlencode "repo=acme/payments" \
+  --data-urlencode "branch=main" \
+  --data-urlencode "fail_on=high")
+jq -r .message <<<"$answer"
+jq -r '.blocking[] | "  [\(.severity)] \(.area): \(.title) \(.file)"' <<<"$answer"
+[ "$(jq -r .verdict <<<"$answer")" = "pass" ] || exit 1
+```
+
+`verdict` is one of three words:
+
+- **pass**: nothing at or above `fail_on`.
+- **fail**: `blocking` lists what to fix.  A package carries the version to
+  move to in `fix`.
+- **unknown**: that branch was never scanned, so there is nothing to check
+  it against.  Treat it as a stop.  The script above does.
+
+Each finding is put in an area, so the right person gets it:
+
+| Area | What it is |
+|---|---|
+| `package` | a vulnerable package the application ships with |
+| `image` | a vulnerable package in a container image |
+| `build` | a problem in how it is built: a CI workflow, a Dockerfile, a build script, or a package only the build and tests use |
+| `config` | any other misconfiguration, such as Terraform |
+| `credential`, `code` | the other two kinds |
+
+The default is `include=package,image,build`.  Pass `include=all` to add the
+rest.  A known exploited or malicious package fails at any severity unless
+`block_exploited=0`.  A finding with an approved exception does not count.
+The check reads what the last scan found, and says when that was in
+`last_scanned_at`.  It does not read new code.  For that, use the gate.
+
+Every call the token can make, with a page to try them on, is on the **API
+reference** tab of the IDE tokens page.  The same tab downloads an OpenAPI
+file and a Postman collection.
+
 ## What this does not do
 
 `ghscan review` without `--base` reads the working tree, not the history.  A
