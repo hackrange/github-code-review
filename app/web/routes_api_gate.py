@@ -47,7 +47,8 @@ def _repo_name(raw) -> str:
 
 
 def _base_url(request: Request) -> str:
-    return str(request.base_url).rstrip("/")
+    from app.web.security import public_base
+    return public_base(request)
 
 
 def _here(db, user):

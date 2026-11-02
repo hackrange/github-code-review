@@ -1,0 +1,43 @@
+# Git Code Review: check before deploying
+#
+# Stops a deploy when the last scan of this repository and branch found
+# something serious.  Copy this file to .github/workflows/ in your repository,
+# and copy the "bash" folder from the sample kit to .github/gcr/bash/.
+#
+# Needs, under Settings > Secrets and variables > Actions:
+#   secret   GCR_TOKEN    a token with the "reports" scope
+#   variable GCR_URL      your server's API address, ending in /api/v1
+#   variable GCR_RUNNER   optional: the runner label to use, such as self-hosted
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security-check:
+    name: Git Code Review check
+    runs-on: ${{ vars.GCR_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Check for anything to fix
+        env:
+          GCR_URL: ${{ vars.GCR_URL }}
+          GCR_TOKEN: ${{ secrets.GCR_TOKEN }}
+        # high: fail on high or critical findings.  Change to critical to only
+        # stop the deploy for the worst ones.
+        run: bash .github/gcr/bash/gcr-deploy-check.sh --fail-on high
+
+  deploy:
+    name: Deploy
+    needs: security-check   # only runs when the check passed
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Your deploy steps go here."

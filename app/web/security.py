@@ -34,6 +34,23 @@ CSRF_HEADER = "X-CSRF-Token"
 # ---------------------------------------------------------------------------
 # Who is asking
 # ---------------------------------------------------------------------------
+def public_base(request: Request) -> str:
+    """The address this server is reached on, for links that leave it.
+
+    Uvicorn runs without proxy headers on purpose (see the Dockerfile), so a
+    request that came through a TLS load balancer looks like plain http here.
+    A link handed to a pipeline or an editor that says http then gets a
+    redirect, which turns a POST into a GET.  When the install is marked as
+    being behind TLS, links say https.  No base path is added.
+    """
+    from app.core import live
+
+    base = str(request.base_url).rstrip("/")
+    if base.startswith("http://") and live.force_https():
+        base = "https://" + base[len("http://"):]
+    return base
+
+
 def client_ip(request: Request) -> str:
     """The caller's address.
 

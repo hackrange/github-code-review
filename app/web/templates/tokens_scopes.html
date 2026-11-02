@@ -1,0 +1,43 @@
+{# What each token scope is for.  Shown on the Tokens tab and the Pipeline
+   sample code tab, so the two can never say different things. #}
+<div class="table-scroll">
+  <table>
+    <thead><tr><th>Scope</th><th>What it is for</th><th>What it can reach</th><th>Give it to</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="mono nowrap">reports</td>
+        <td>Pipelines and scripts that read results: the fix plan, the deploy
+          check, findings, SBOMs, trends, and asking for an exception.</td>
+        <td>Only repositories your account can open.  It can ask for an
+          exception but never approve one.  The whole-estate report files need
+          an administrator's account as well.</td>
+        <td>A build or deploy pipeline.  This is the one the sample kit uses.</td>
+      </tr>
+      <tr>
+        <td class="mono nowrap">review</td>
+        <td>Sends code to be checked and gets the problems back, without
+          saving anything.  Used by the editor plugins.</td>
+        <td>Only the code it sends.  Nothing is stored and no finding is made.</td>
+        <td>Your editor (VS Code, JetBrains, Eclipse).</td>
+      </tr>
+      <tr>
+        <td class="mono nowrap">rules</td>
+        <td>Reads the triage rules and exclusions, so an editor hides the same
+          noise this server does.</td>
+        <td>The rules, and only the exclusions for repositories you can see.</td>
+        <td>Your editor, alongside <span class="mono">review</span>.</td>
+      </tr>
+      <tr>
+        <td class="mono nowrap">gate</td>
+        <td>Runs the pull request gate: scans only what a pull request changed
+          and answers pass, warn or fail before it merges.</td>
+        <td>The pull requests it is asked about, on repositories you can see.</td>
+        <td>A pull request check in CI.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<p class="faint">Tick only what a token needs.  A pipeline that only reads
+  results needs <span class="mono">reports</span> alone, so if it leaks it
+  cannot be used to send code or run gate checks.  Make one token per
+  pipeline, so one can be revoked without breaking the others.</p>

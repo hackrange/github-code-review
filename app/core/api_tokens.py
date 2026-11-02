@@ -24,20 +24,20 @@ from app.core.models import ApiToken, utcnow
 log = logging.getLogger("gcr.api_tokens")
 
 SCOPES = {
-    "review": "Send code to be looked at",
-    "rules": "Read the triage rules and exclusions",
+    "review": "Editors: send code to be checked, nothing is saved",
+    "rules": "Editors: read the triage rules and exclusions",
     # Your findings, SBOMs and trend lines, and asking for an exception.  Each
     # is cut down to what the owner can open on the screen.  The whole estate
     # report files sit behind this scope too, and stay with the people allowed
     # them.  Its own scope rather than a corner of another, so a token handed
     # to an editor cannot pull every finding by accident.
-    "reports": ("Read your findings, SBOMs and trends, and ask for "
-                "exceptions"),
+    "reports": ("Pipelines: read your findings, fix plan, SBOMs and trends, "
+                "and ask for exceptions"),
     # A CI job's token.  It asks for a verdict on a pull request and reads
     # the answer back, and that is all.  Its own scope so a pipeline secret
     # that leaks cannot be used to pull every report, and an editor token
     # cannot be used to run gate checks.
-    "gate": "Run pull request gate checks",
+    "gate": "Pull requests: run the gate check before a merge",
 }
 
 PREFIX = "gcr_"

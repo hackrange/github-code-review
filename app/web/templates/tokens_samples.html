@@ -1,0 +1,81 @@
+{# The Pipeline sample code tab.  The zip comes from app/core/pipeline_samples.py
+   and has this server's address written into it. #}
+<div class="settings">
+
+<div class="card">
+  <div class="card-head">
+    <span>Pipeline sample code</span>
+    {% if kit and kit.ok %}
+    <a class="btn primary sm" href="{{ base }}/tokens/pipeline-samples.zip" download>Download the kit (.zip)</a>
+    {% endif %}
+  </div>
+  <div class="card-body small">
+    <p>Ready-made scripts that let a build pipeline ask this server what needs
+      fixing before code ships.  They tell whoever runs the pipeline:</p>
+    <ul class="api-fields">
+      <li><strong>Secrets in the code</strong>, and that each one has to be rotated first.</li>
+      <li><strong>Packages to upgrade</strong>, with the exact version to move to.</li>
+      <li><strong>Container images to rebuild</strong>, when the base image is out of date.</li>
+      <li><strong>Problems in build and CI files</strong>, such as GitHub Actions workflows and Dockerfiles.</li>
+      <li><strong>Code fixes</strong>, only for findings an AI review has already read.</li>
+    </ul>
+    <p>They can also stop a deploy when something serious is found, attach an
+      SBOM to a release, and warn before a token expires.</p>
+
+    {% if kit and kit.ok %}
+    <p><strong>In the zip:</strong> a step-by-step guide (PDF and Word) written
+      for people new to pipelines, a Python script, the same features as bash
+      scripts, and three GitHub Actions workflows.  This server's address
+      (<span class="mono">{{ api_url }}</span>) is already filled in.  No token
+      is included: you make your own.</p>
+    <p class="faint">SHA-256 of the zip:
+      <span class="mono" style="word-break:break-all">{{ kit.sha256 }}</span>
+      ({{ (kit.bytes / 1024) | round(0) | int }} KB).  Compare it with
+      <span class="mono">sha256sum {{ kit.filename }}</span> on Linux, or
+      <span class="mono">Get-FileHash {{ kit.filename }}</span> in PowerShell.</p>
+    {% else %}
+    <div class="notice warn">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+      <div>{{ kit.problem if kit else 'The sample kit is not available.' }}</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">Getting started in GitHub Actions, in three steps</div>
+  <div class="card-body small">
+    <p><strong>1. Make a token.</strong>  On the
+      <a href="{{ base }}/tokens">Tokens</a> tab, tick only
+      <span class="mono">reports</span>, give it a name such as
+      <em>payments pipeline</em>, and copy it.</p>
+    <p><strong>2. Store it in GitHub, never in a file.</strong>  In your
+      repository open <em>Settings &gt; Secrets and variables &gt; Actions</em>:</p>
+    <ul class="api-fields">
+      <li>under <em>Secrets</em>, add <span class="mono">GCR_TOKEN</span> holding the token</li>
+      <li>under <em>Variables</em>, add <span class="mono">GCR_URL</span> holding
+        <span class="mono">{{ api_url }}</span></li>
+    </ul>
+    <p><strong>3. Add the files.</strong>  Copy the kit's <span class="mono">bash</span>
+      and <span class="mono">python</span> folders to <span class="mono">.github/gcr/</span>,
+      and a workflow from <span class="mono">github-actions/</span> to
+      <span class="mono">.github/workflows/</span>.  Push, and open the
+      <em>Actions</em> tab to see the result.</p>
+    <div class="notice warn" style="margin-top:.8rem">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+      <div>If the run says <span class="mono">HTTP 403: refused before the
+        API</span>, the runner's IP address is not allowed through to this
+        server.  Ask an administrator to allow it, or use a self-hosted runner
+        inside your network.  The guide's FAQ covers this and every other
+        message.</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">What each token scope allows</div>
+  <div class="card-body small">
+    {% include "tokens_scopes.html" %}
+  </div>
+</div>
+</div>

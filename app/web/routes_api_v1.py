@@ -480,17 +480,79 @@ def _own_waiver(user, waiver):
     return None
 
 
-def _finding_dict(db, user, finding, facts) -> dict:
-    from app.core.models import Waiver
-    from app.core.reports import as_dict
+def _ai_reviews(db, rows) -> dict:
+    """{finding id: what the AI said that still holds}, for a page of rows.
 
-    body = {"id": finding.id}
-    body.update(as_dict(finding, facts))
-    body["excepted"] = bool(finding.excepted)
-    waiver = _own_waiver(user, db.query(Waiver).filter(
-        Waiver.finding_id == finding.id).one_or_none())
-    body["exception"] = _exception_dict(waiver) if waiver else None
-    return body
+    The newest model answer that still stands, the same one the security
+    report quotes: an answer about code that has since changed is left out.
+    Failing that, the learned rule that graded it, which carries a reason but
+    no fix.  A finding nobody asked about has no entry.
+    """
+    from app.core import assessment
+    from app.core.models import AIGrade
+
+    out = {}
+    if not rows:
+        return out
+    for finding_id, said in assessment.validations(db, rows).items():
+        out[finding_id] = {
+            "source": "analysis",
+            "rating": said["rating"],
+            "severity": said["severity"],
+            "confidence": said["confidence"],
+            "model": said["model"],
+            "reviewed_at": _stamp(said.get("created_at")),
+            "summary": said["what"],
+            "why": said["why"],
+            "fix": said["fix"],
+            "what_to_check": said.get("check", ""),
+            "compensating_controls": said.get("controls", ""),
+        }
+    ids = [r.id for r in rows if r.id not in out]
+    for start in range(0, len(ids), 500):
+        for grade in (db.query(AIGrade)
+                      .filter(AIGrade.finding_id.in_(ids[start:start + 500]),
+                              AIGrade.rule_id.isnot(None))
+                      .order_by(AIGrade.created_at.asc(), AIGrade.id.asc())):
+            sev = getattr(grade.severity, "value", str(grade.severity or ""))
+            out[grade.finding_id] = {
+                "source": "learned_rule",
+                "rule": grade.rule_id,
+                "rating": sev.upper(),
+                "severity": sev,
+                "reviewed_at": _stamp(grade.created_at),
+                "why": grade.reason or "",
+                "fix": "",
+            }
+    return out
+
+
+def _finding_dicts(db, user, rows) -> list:
+    """The API's view of a page of findings.  Lookups are made once per page."""
+    from app.core.models import Waiver
+    from app.core.reports import as_dict, repo_facts
+
+    if not rows:
+        return []
+    facts = repo_facts(db, rows)
+    ids = [r.id for r in rows]
+    waivers = {}
+    for start in range(0, len(ids), 500):
+        for w in db.query(Waiver).filter(Waiver.finding_id.in_(ids[start:start + 500])):
+            waivers[w.finding_id] = w
+    reviews = _ai_reviews(db, rows)
+
+    out = []
+    for finding in rows:
+        body = {"id": finding.id}
+        body.update(as_dict(finding, facts))
+        body["excepted"] = bool(finding.excepted)
+        waiver = _own_waiver(user, waivers.get(finding.id))
+        body["exception"] = _exception_dict(waiver) if waiver else None
+        body["ai_reviewed"] = finding.id in reviews
+        body["ai_review"] = reviews.get(finding.id)
+        out.append(body)
+    return out
 
 
 @router.get("/findings")
@@ -498,7 +560,6 @@ def list_findings(request: Request,
                   caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
     """Findings, filtered the way the Findings page filters them."""
     from app.core.models import Finding
-    from app.core.reports import repo_facts
     from app.web.routes_pages import _filtered_findings, _priority_order
 
     _require(caller.user, "findings.read")
@@ -512,8 +573,7 @@ def list_findings(request: Request,
         rows = (query.order_by(_priority_order(), Finding.last_found_at.desc(),
                                Finding.id.asc())
                 .offset(offset).limit(limit).all())
-        facts = repo_facts(db, rows)
-        findings = [_finding_dict(db, me, row, facts) for row in rows]
+        findings = _finding_dicts(db, me, rows)
 
     return JSONResponse({"total": total, "limit": limit, "offset": offset,
                          "count": len(findings), "findings": findings})
@@ -524,7 +584,6 @@ def one_finding(finding_id: int,
                 caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
     """One finding, if it is yours to see.  Otherwise it does not exist."""
     from app.core import rbac
-    from app.core.reports import repo_facts
 
     _require(caller.user, "findings.read")
     with session_scope() as db:
@@ -532,8 +591,7 @@ def one_finding(finding_id: int,
         row = rbac.visible_finding(db, me, finding_id)
         if row is None:
             raise HTTPException(status_code=404, detail="No such finding.")
-        return JSONResponse(_finding_dict(db, me, row,
-                                          repo_facts(db, [row])))
+        return JSONResponse(_finding_dicts(db, me, [row])[0])
 
 
 @router.get("/exceptions")
@@ -901,7 +959,13 @@ def _area(finding) -> str:
     return "credential" if kind == "credential" else "code"
 
 
-def _check_row(finding, area: str, blocking: bool, why: str, link: str) -> dict:
+CREDENTIAL_FIX = ("Rotate this credential at its provider first, then take it out of "
+                  "the code and load it from a secret store.  Deleting the line is not "
+                  "enough on its own: the old value stays in the git history.")
+
+
+def _check_row(finding, area: str, blocking: bool, why: str, link: str,
+               review: dict = None) -> dict:
     kind = getattr(finding.kind, "value", str(finding.kind or "")).lower()
     severity = getattr(finding.severity, "value", str(finding.severity or "")).lower()
     row = {
@@ -914,8 +978,10 @@ def _check_row(finding, area: str, blocking: bool, why: str, link: str) -> dict:
         "why": why,
         "title": finding.title or "",
         "branch": finding.branch or "",
-        "file": (finding.manifest_path or finding.file_path or "") if kind == "dependency"
-                else (finding.file_path or ""),
+        # From the repository root.  Some manifest paths are stored with a
+        # leading slash, and tools matching a path to a file do not want one.
+        "file": ((finding.manifest_path or finding.file_path or "") if kind == "dependency"
+                 else (finding.file_path or "")).lstrip("/"),
         "line": finding.line or 0,
         "rule": finding.rule or "",
         "known_exploited": bool(finding.known_exploited),
@@ -936,6 +1002,25 @@ def _check_row(finding, area: str, blocking: bool, why: str, link: str) -> dict:
                       if finding.fixed_in else
                       "No fixed version is published yet.  Remove or replace the package, "
                       "or ask for an exception.")
+    elif kind == "credential":
+        row["credential"] = {
+            "preview": finding.secret_preview or "",
+            "verified": bool(finding.verified),
+            "verification_status": getattr(finding.verification_status, "value",
+                                           str(finding.verification_status or "")) or "unknown",
+            "exposure": finding.exposure or "",
+            "commit": finding.commit_sha or "",
+            "commit_url": finding.commit_url or "",
+        }
+        row["fix"] = CREDENTIAL_FIX
+    else:
+        # Code and configuration advice only comes from an AI review that still
+        # holds for the code as it is.  A generic tip for a rule is not advice
+        # about this line.
+        if review and review.get("fix"):
+            row["fix"] = review["fix"]
+    row["ai_reviewed"] = review is not None
+    row["ai_review"] = review
     return row
 
 
@@ -988,7 +1073,9 @@ def deploy_check(request: Request,
 
     from app.config import settings
 
-    site = str(request.base_url).rstrip("/") + (settings.base_path or "")
+    from app.web.security import public_base
+
+    site = public_base(request) + (settings.base_path or "")
 
     with session_scope() as db:
         me = _me(db, caller)
@@ -1035,6 +1122,7 @@ def deploy_check(request: Request,
                 Finding.repository == repository).filter(
                 branch_scope.matches(branch)).exists()).scalar()
 
+        reviews = _ai_reviews(db, [f for f in rows if _area(f) in areas])
         blocking, other = [], []
         by_area = {a: 0 for a in sorted(areas)}
         by_severity = {s: 0 for s in SEVERITY_RANK}
@@ -1051,7 +1139,8 @@ def deploy_check(request: Request,
             if block_exploited and f.malicious:
                 reasons.append("malicious package")
             link = f"{site}/findings/{f.id}"
-            row = _check_row(f, area, bool(reasons), "; ".join(reasons), link)
+            row = _check_row(f, area, bool(reasons), "; ".join(reasons), link,
+                             reviews.get(f.id))
             (blocking if reasons else other).append(row)
             by_area[area] = by_area.get(area, 0) + 1
             by_severity[severity] = by_severity.get(severity, 0) + 1

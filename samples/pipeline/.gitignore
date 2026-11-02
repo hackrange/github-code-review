@@ -1,0 +1,14 @@
+# Settings and tokens must never be committed.
+.env
+.env.*
+!.env.example
+*.token
+token.gpg
+*.gpg
+
+# What the scripts write.
+fix-plan.md
+*.cdx.json
+*.spdx.json
+findings.csv
+__pycache__/

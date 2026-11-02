@@ -314,6 +314,9 @@ def validations(db, findings) -> dict:
             "what": _section(row.content, "What it is"),
             "why": _section(row.content, "Why this rating"),
             "fix": _section(row.content, "Mitigation"),
+            "check": _section(row.content, "What to check"),
+            "controls": _section(row.content, "Compensating controls"),
+            "created_at": row.created_at,
         }
     return out
 

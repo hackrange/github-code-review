@@ -31,6 +31,7 @@ from app.web.render import notice_class, page, render_partial
 from app.core.reports import spreadsheet_row
 from app.web import oneshot as _oneshot
 from app.web.security import clean_notice, clean_text, current_user
+from app.web.security import public_base as _public_base
 
 log = logging.getLogger("gcr.pages")
 router = APIRouter()
@@ -3711,13 +3712,15 @@ def tokens_page(request: Request, msg: str = "", kind: str = "",
     from app.core import api_reference
 
     show_dead = request.query_params.get("dead") == "1"
-    tab = "reference" if request.query_params.get("tab") == "reference" else "tokens"
+    tab = request.query_params.get("tab", "")
+    if tab not in ("reference", "samples"):
+        tab = "tokens"
 
     # The address a plugin has to be pointed at.  Worked out from the request
     # rather than stored, because whatever somebody reached this page on is
     # the address that works for them, and a value in a settings table is one
     # more thing to be wrong behind a proxy.
-    base_url = str(request.base_url).rstrip("/") + (settings.base_path or "")
+    base_url = _public_base(request) + (settings.base_path or "")
 
     with session_scope() as db:
         rows = api_tokens.listing(db, user, include_dead=show_dead)
@@ -3738,9 +3741,51 @@ def tokens_page(request: Request, msg: str = "", kind: str = "",
             api_url=f"{base_url}/api/v1",
             tab=tab,
             reference=api_reference.grouped() if tab == "reference" else [],
+            kit=_kit_summary(f"{base_url}/api/v1") if tab == "samples" else None,
             message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "tokens.html", **context)
+
+
+def _kit_summary(api_url: str) -> dict:
+    """What the Pipeline sample code tab says about the zip."""
+    from app.core import pipeline_samples
+
+    if not pipeline_samples.available():
+        return {"ok": False, "problem": "The sample kit is not in this installation."}
+    try:
+        body, digest, listing = pipeline_samples.build(api_url)
+    except pipeline_samples.UnsafeKit as exc:
+        log.error("pipeline samples: %s", exc)
+        return {"ok": False, "problem": "The sample kit could not be built.  "
+                                        "An administrator can see why in the log."}
+    return {"ok": True, "sha256": digest, "bytes": len(body), "files": listing,
+            "filename": pipeline_samples.FILENAME}
+
+
+@router.get("/tokens/pipeline-samples.zip")
+def tokens_pipeline_samples(request: Request, user: User = Depends(current_user)):
+    """The pipeline sample kit, with this server's address filled in.
+
+    Scripts, workflows and the guide.  No data and no token is in it, so
+    anybody signed in may have it.
+    """
+    from app.core import pipeline_samples
+
+    if not pipeline_samples.available():
+        raise HTTPException(status_code=404, detail="The sample kit is not installed.")
+    api_url = _public_base(request) + (settings.base_path or "") + "/api/v1"
+    try:
+        body, digest, _listing = pipeline_samples.build(api_url)
+    except pipeline_samples.UnsafeKit as exc:
+        log.error("pipeline samples: %s", exc)
+        raise HTTPException(status_code=500, detail="The sample kit could not be built.")
+    return Response(
+        content=body, media_type="application/zip",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{pipeline_samples.FILENAME}"',
+                 "X-Content-SHA256": digest,
+                 "Cache-Control": "no-store"})
 
 
 def _api_download(request: Request, body: dict, filename: str):
@@ -3762,7 +3807,7 @@ def tokens_openapi(request: Request, user: User = Depends(current_user)):
     """
     from app.core import api_reference
 
-    base_url = str(request.base_url).rstrip("/") + (settings.base_path or "")
+    base_url = _public_base(request) + (settings.base_path or "")
     return _api_download(request, api_reference.openapi(f"{base_url}/api/v1"),
                          "gcr-openapi.json")
 
@@ -3772,7 +3817,7 @@ def tokens_postman(request: Request, user: User = Depends(current_user)):
     """The token API as a Postman collection.  The token is left blank."""
     from app.core import api_reference
 
-    base_url = str(request.base_url).rstrip("/") + (settings.base_path or "")
+    base_url = _public_base(request) + (settings.base_path or "")
     return _api_download(request, api_reference.postman(f"{base_url}/api/v1"),
                          "gcr-postman-collection.json")
 
@@ -4701,7 +4746,7 @@ def editors_page(request: Request, user: User = Depends(current_user)):
 
     # The address they reached this on, which is the one that works for them.
     # A value in a settings table is one more thing to be wrong behind a proxy.
-    base_url = str(request.base_url).rstrip("/") + (settings.base_path or "")
+    base_url = _public_base(request) + (settings.base_path or "")
 
     packages = []
     problem = ""

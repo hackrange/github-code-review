@@ -6,6 +6,27 @@ moved.
 
 ## 2026-11-02
 
+**Pipeline sample code.**  A new tab on the IDE tokens page downloads a kit
+for build pipelines: a step by step guide in Word and PDF, a Python script,
+the same features as bash scripts, and three GitHub Actions workflows.  The
+server's address is filled in, and no token is ever included.  Its main tool,
+the fix plan, lists secrets to rotate, packages to upgrade with the version
+to move to, container images to rebuild, problems in build files, and code
+fixes from AI reviews.  The scripts keep the token out of files other users
+can read and off command lines, refuse plain http, and can read the token
+from an encrypted file or a keychain.
+
+**AI reviews over the API.**  A finding an AI review has read now carries the
+review in the token API: the rating, the fix, what to check and what to do
+meanwhile.  Only a review that still holds for the code as it is counts.
+The deploy check passes the fix along, and says whether a secret was
+confirmed live.
+
+**Links say https.**  Addresses the server hands out, in the OpenAPI file,
+the deploy check and the pull request gate, said http behind a TLS load
+balancer.  They now say https when the install is marked as behind TLS.
+
+
 **More for a reports token, and an API reference.**  A token with the
 `reports` scope now reads its owner's findings, SBOMs and trend lines, and
 asks for exceptions.  Each answer holds only what that person can open in the

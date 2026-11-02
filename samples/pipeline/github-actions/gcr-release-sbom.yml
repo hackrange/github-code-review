@@ -1,0 +1,33 @@
+# Git Code Review: attach the SBOM to every release
+#
+# When a release is published, downloads this repository's software bill of
+# materials in CycloneDX and SPDX and attaches both files to the release.
+name: Release SBOM
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write   # needed to attach files to the release
+
+jobs:
+  sbom:
+    runs-on: ${{ vars.GCR_RUNNER || 'ubuntu-latest' }}
+    env:
+      GCR_URL: ${{ vars.GCR_URL }}
+      GCR_TOKEN: ${{ secrets.GCR_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Download the SBOM
+        run: |
+          bash .github/gcr/bash/gcr-sbom.sh --format cdx  --out sbom.cdx.json
+          bash .github/gcr/bash/gcr-sbom.sh --format spdx --out sbom.spdx.json
+
+      - name: Attach it to the release
+        run: gh release upload "$TAG" sbom.cdx.json sbom.spdx.json --clobber

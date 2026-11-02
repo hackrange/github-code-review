@@ -60,6 +60,9 @@ def _finding_filters():
         _p("malicious", "1 for malicious packages only.", choices=["1"]),
         _p("exploited", "1 for known exploited (KEV) only.", choices=["1"]),
         _p("verified", "1 for credentials that were proven live.", choices=["1"]),
+        _p("ai", "reviewed for findings an AI review has read, unreviewed for the "
+                 "rest.  A reviewed finding carries ai_review, with the fix.",
+           choices=["reviewed", "unreviewed"]),
         _p("archived", "1 for archived repositories only, 0 to leave them out.",
            choices=["0", "1"]),
     ] + PAGING
@@ -166,7 +169,11 @@ def endpoints() -> list:
             "summary": "List findings",
             "description": "The same filters and order as the Findings page.  "
                            "total is the full count behind the filter, and limit "
-                           "and offset page through it.",
+                           "and offset page through it.  ai_review is filled in "
+                           "only when an AI review still holds for the code as it "
+                           "is: its rating, a summary, the fix, what to check and "
+                           "what to do in the meantime.  A learned rule gives a "
+                           "rating and a reason but no fix.",
             "params": _finding_filters(),
             "example": {"total": 1, "limit": 100, "offset": 0, "count": 1, "findings": [{
                 "id": 4182, "vuln_id": "GCR-7Q2K9", "kind": "dependency",
@@ -179,7 +186,8 @@ def endpoints() -> list:
                             "ecosystem": "npm", "fixed_in": "4.17.21"},
                 "vulnerability": {"id": "CVE-2021-23337", "cvss_score": 7.2,
                                   "known_exploited": False, "epss_score": 0.01},
-                "excepted": False, "exception": None}]},
+                "excepted": False, "exception": None,
+                "ai_reviewed": False, "ai_review": None}]},
         },
         {
             "id": "finding", "group": "Findings", "method": "GET",
@@ -190,9 +198,21 @@ def endpoints() -> list:
                            "answers 404, the same as one that does not exist.",
             "params": [_p("finding_id", "The finding number, the id field in a list.",
                           where="path", kind="integer", example=1)],
-            "example": {"id": 4182, "vuln_id": "GCR-7Q2K9", "severity": "high",
-                        "state": "open", "repository": "acme/payments",
-                        "exception": None},
+            "example": {"id": 5120, "vuln_id": "GCR-3M8T1", "kind": "code",
+                        "severity": "high", "state": "open",
+                        "repository": "acme/payments", "file": "src/report.py",
+                        "line": 42, "title": "SQL built from request input",
+                        "exception": None, "ai_reviewed": True,
+                        "ai_review": {
+                            "source": "analysis", "rating": "HIGH",
+                            "severity": "high", "confidence": "medium",
+                            "model": "example-model",
+                            "reviewed_at": "2026-10-30T14:02:00Z",
+                            "summary": "The month parameter is put into the SQL text.",
+                            "why": "The route needs no sign in.",
+                            "fix": "Pass month as a bound parameter to cursor.execute.",
+                            "what_to_check": "Whether any proxy limits the value.",
+                            "compensating_controls": "Give the report user read access only."}},
         },
         {
             "id": "exceptions", "group": "Exceptions", "method": "GET",

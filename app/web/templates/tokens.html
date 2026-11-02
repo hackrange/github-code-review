@@ -13,10 +13,13 @@
 <div class="filters" style="gap:.4rem">
   <a class="btn {{ 'primary' if tab == 'tokens' }}" href="{{ base }}/tokens">Tokens</a>
   <a class="btn {{ 'primary' if tab == 'reference' }}" href="{{ base }}/tokens?tab=reference">API reference</a>
+  <a class="btn {{ 'primary' if tab == 'samples' }}" href="{{ base }}/tokens?tab=samples">Pipeline sample code</a>
 </div>
 
 {% if tab == 'reference' %}
 {% include "tokens_reference.html" %}
+{% elif tab == 'samples' %}
+{% include "tokens_samples.html" %}
 {% else %}
 
 {% if message %}
@@ -68,7 +71,7 @@
           <label class="check">
             <input type="checkbox" name="scope:{{ scope }}" value="1"
                    {{ 'checked' if scope == 'review' }}>
-            <span><span class="mono">{{ scope }}</span> &mdash; {{ what }}</span>
+            <span><span class="mono">{{ scope }}</span>: {{ what }}</span>
           </label>
           {% endfor %}
         </div>
@@ -80,6 +83,10 @@
           administrator.  The <a href="{{ base }}/tokens?tab=reference">API
           reference</a> lists every call.</span>
       </label>
+      <details class="api-scope-help wide">
+        <summary class="small">What each of these is for, and which to pick</summary>
+        <div class="small">{% include "tokens_scopes.html" %}</div>
+      </details>
       <div class="wide"><button class="btn primary" type="submit">Make the token</button></div>
     </div>
   </form>

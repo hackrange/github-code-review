@@ -1086,3 +1086,6 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .api-actions { display: flex; align-items: center; gap: .7rem; margin: .6rem 0; }
 .api-good { color: var(--ok); }
 .api-bad { color: var(--bad); }
+.api-scope-help { margin-top: .5rem; }
+.api-scope-help > summary { cursor: pointer; color: var(--info); }
+.api-scope-help > div { margin-top: .5rem; }
