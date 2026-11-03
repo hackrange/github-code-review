@@ -408,6 +408,13 @@ def _f(name, kind, required, description):
 _ASSET = {"id": 12, "host": "shop.example.com", "kind": "subdomain",
           "parent_domain": "example.com", "application": "Storefront",
           "tags": ["ecommerce"], "no_scan": False, "scan_blocked": False,
+          "executive_owner": "owner@example.com", "technical_owner": "team@example.com",
+          "comments": "", "status": "active", "environment": "prod",
+          "external_auth_needed": False, "whitelist_needed": True,
+          "change_frequency_days": 14,
+          "fields": {"nameservers": {"value": "ns1.example.net, ns2.example.net",
+                                     "scan": "ns1.example.net, ns2.example.net",
+                                     "manual": False}},
           "telemetry": {"at": "2026-11-03T10:00:00+00:00", "grade": "B",
                         "category": "live", "status_code": 200, "ip": "203.0.113.10",
                         "open_ports": [80, 443], "tls_days_left": 61,
@@ -443,6 +450,23 @@ _RECORD_BODY = [
 ]
 
 
+_DETAILS = [
+    _f("executive_owner", "string", False, "Email addresses, comma separated."),
+    _f("technical_owner", "string", False, "Email addresses, comma separated."),
+    _f("comments", "string", False, "Anything else about the site."),
+    _f("status", "string", False, "active or obsolete."),
+    _f("environment", "string", False, "prod, dev, stage or clone."),
+    _f("external_auth_needed", "boolean", False, "Signing in goes through something outside the site."),
+    _f("whitelist_needed", "boolean", False, "The scanner has to be let through a firewall."),
+    _f("change_frequency_days", "integer", False, "How often the site changes, in days."),
+    _f("repositories", "array", False, "Objects with repository (org/name) and an optional "
+                                       "branch.  Replaces what was picked before."),
+    _f("telemetry_fields", "object", False, "Telemetry filled in by hand, by field name: "
+                                            "nameservers, isp, asn, registrar, tls_issuer and "
+                                            "the rest.  null clears one."),
+]
+
+
 def _external_endpoints() -> list:
     asset_id = _p("asset_id", "The site's id.", where="path", kind="integer", example=12)
     scan_id = _p("scan_id", "The scan's id.", where="path", kind="integer", example=40)
@@ -465,8 +489,8 @@ def _external_endpoints() -> list:
                    _f("no_scan", "boolean", False, "True when it must never be scanned, "
                                                    "a SaaS product for example."),
                    _f("no_scan_reason", "string", False, "Why not."),
-                   _f("notes", "string", False, "Anything else."),
-                   _f("telemetry", "boolean", False, "False to skip the first read.")],
+                   _f("telemetry", "boolean", False, "False to skip the first read.")]
+             + _DETAILS,
              body_example={"host": "shop.example.com", "application": "Storefront",
                            "tags": ["ecommerce"]}, example=_ASSET),
         _ext("ext-get", "GET", "/external/assets/{asset_id}", "One site",
@@ -476,9 +500,8 @@ def _external_endpoints() -> list:
              "stay as they are.", [asset_id],
              body=[_f("application", "string", False, "The application."),
                    _f("tags", "array", False, "Replaces the tags."),
-                   _f("notes", "string", False, "Notes."),
                    _f("no_scan", "boolean", False, "Never scan it."),
-                   _f("no_scan_reason", "string", False, "Why not.")],
+                   _f("no_scan_reason", "string", False, "Why not.")] + _DETAILS,
              body_example={"no_scan": True, "no_scan_reason": "Vendor hosted"},
              example=_ASSET),
         _ext("ext-delete", "DELETE", "/external/assets/{asset_id}", "Remove a site",

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
+{% from "_external_fields.html" import detail_fields %}
 {% block title %}External sites &middot; Git Code Review{% endblock %}
-{% block head %}{% if running %}<meta http-equiv="refresh" content="20">{% endif %}{% endblock %}
+{% block head %}{% if running %}<meta name="gcr-refresh" content="20">{% endif %}{% endblock %}
 {% block content %}
 <div class="page-head">
   <div><h1>External sites</h1>
@@ -58,6 +59,12 @@
   <div class="field"><label for="grade">Grade</label>
     <select id="grade" name="grade"><option value="">Any</option>
       {% for g in ['A','B','C','D','F','N/A'] %}<option {{ 'selected' if g == grade }}>{{ g }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="env">Environment</label>
+    <select id="env" name="env"><option value="">Any</option>
+      {% for k, l in environments.items() %}<option value="{{ k }}" {{ 'selected' if k == env }}>{{ l }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="status">Status</label>
+    <select id="status" name="status"><option value="">Any</option>
+      {% for k, l in statuses.items() %}<option value="{{ k }}" {{ 'selected' if k == status }}>{{ l }}</option>{% endfor %}</select></div>
   <div class="field"><label for="scope">Show</label>
     <select id="scope" name="scope"><option value="">Every site</option>
       {% for v, l in [('mapped','Mapped to a repository'),('unmapped','Not mapped'),('no-scan','No scan')] %}<option value="{{ v }}" {{ 'selected' if v == scope }}>{{ l }}</option>{% endfor %}</select></div>
@@ -75,7 +82,7 @@
   <div class="table-scroll">
     <table>
       <thead><tr>
-        <th></th><th>Site</th><th>Telemetry</th><th>Last dynamic scan</th>
+        <th><input type="checkbox" data-tick-all aria-label="Tick every site shown"></th><th>Site</th><th>Telemetry</th><th>Last dynamic scan</th>
         <th>Code behind it</th><th>Combined risk</th>
       </tr></thead>
       <tbody>
@@ -89,7 +96,12 @@
             <div class="small faint">{{ a.kind }}{% if a.kind == 'subdomain' %} of {{ a.parent_domain }}{% endif %}</div>
             {% if a.application %}<div class="small">{{ a.application }}</div>{% endif %}
             <div style="margin-top:.2rem">{% for t in r.tags %}<a class="badge" href="{{ here }}?tag={{ t | urlencode }}">{{ t }}</a> {% endfor %}</div>
-            {% if r.blocked %}<span class="badge waived" title="{{ a.no_scan_reason or 'under a domain marked no scan' }}">no scan</span>{% endif %}</td>
+            {% if r.blocked %}<span class="badge waived" title="{{ a.no_scan_reason or 'under a domain marked no scan' }}">no scan</span>{% endif %}
+            <div style="margin-top:.2rem"><span class="badge {{ 'high' if a.environment == 'prod' else 'info' }}">{{ environments.get(a.environment, a.environment) }}</span>
+              {% if a.status == 'obsolete' %}<span class="badge waived">obsolete</span>{% endif %}
+              {% if a.external_auth_needed %}<span class="badge info" title="External auth needed">ext auth</span>{% endif %}
+              {% if a.whitelist_needed %}<span class="badge pending" title="Whitelist needed">whitelist</span>{% endif %}</div>
+            {% if a.executive_owner or a.technical_owner %}<div class="small faint">{{ a.executive_owner }}{% if a.executive_owner and a.technical_owner %}; {% endif %}{{ a.technical_owner }}</div>{% endif %}</td>
           <td class="small">
             {% if a.telemetry_status == 'running' %}<span class="badge pending">reading</span>
             {% elif not a.telemetry_at %}<span class="faint">not read yet</span>
@@ -110,8 +122,11 @@
               <div class="faint">{{ a.last_dast_server }}</div>
               {% if a.last_dast_url %}<div><a rel="noopener noreferrer" {% if a.last_dast_url.startswith('http') %}target="_blank" href="{{ a.last_dast_url }}"{% else %}href="{{ base }}{{ a.last_dast_url }}"{% endif %}>result</a></div>{% endif %}
               {% if r.due == 'due' %}<span class="badge pending">overdue</span>{% endif %}
+            {% elif a.status == 'obsolete' %}<span class="faint">obsolete</span>
             {% elif r.blocked %}<span class="faint">not to be scanned</span>
-            {% else %}<span class="badge pending">never scanned</span>{% endif %}</td>
+            {% else %}<span class="badge pending">never scanned</span>{% endif %}
+            {% if not r.blocked and a.status != 'obsolete' %}
+              <div style="margin-top:.3rem"><a class="btn sm" href="{{ base }}/external/{{ a.id }}#scan">Scan</a></div>{% endif %}</td>
           <td class="small">
             {% for l in r.links %}<div><a href="{{ base }}/repositories/{{ l.id }}">{{ l.full_name }}</a></div>{% endfor %}
             {% if r.links %}<div style="margin-top:.2rem">
@@ -126,13 +141,39 @@
       </tbody>
     </table>
   </div>
-  <div class="card-body"><button class="btn sm" type="submit" form="pick">Refresh the ticked sites</button></div>
+  <div class="card-body" style="display:flex;gap:.4rem;flex-wrap:wrap">
+    <button class="btn sm" type="submit" form="pick" formaction="{{ here }}/refresh" data-needs-tick>Refresh telemetry</button>
+    <button class="btn sm" type="button" data-modal="scan-many-modal" data-needs-tick>Scan the ticked sites</button>
+    <button class="btn sm danger" type="submit" form="pick" formaction="{{ here }}/delete-many" data-needs-tick
+            data-ext-confirm="Remove the ticked sites and every scan recorded against them?">Delete the ticked sites</button>
+    <span class="faint small" data-tick-count style="align-self:center"></span>
+  </div>
   {% elif totals.sites %}
   <div class="empty">Nothing matches that.  <a href="{{ here }}">Show every site</a></div>
   {% else %}
   <div class="empty">No sites yet.  Add some, or import the company domains from
     Settings and the web addresses already on repositories.</div>
   {% endif %}
+</div>
+
+<div class="modal-backdrop" id="scan-many-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Scan the ticked sites <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <label>Profile
+        <select name="profile" form="pick">
+          {% for name, what in profiles.items() %}<option value="{{ name }}">{{ name }}: {{ what }}</option>{% endfor %}
+        </select></label>
+      <label class="check"><input type="checkbox" name="confirm" value="1" form="pick">
+        <span>I am allowed to scan these sites with attack payloads.  Needed for standard and up.</span></label>
+      <label class="check"><input type="checkbox" name="ai" value="1" form="pick">
+        <span>Have the model triage each scan's findings.  Counted on the AI cost page.</span></label>
+      <div class="faint small">Sites marked no scan, or already scanning, are skipped.  Up to 50
+        at a time, run one after another.</div>
+    </div>
+    <div class="modal-foot"><button class="btn primary" type="submit" form="pick" formaction="{{ here }}/scan-many">Start</button>
+      <button class="btn" type="button" data-close-modal>Cancel</button></div>
+  </div>
 </div>
 
 <div class="modal-backdrop" id="add-modal" hidden>
@@ -149,6 +190,7 @@
         <label>Application <input type="text" name="application" maxlength="200" placeholder="for lines that do not say">
         </label>
         <label>Tags <input type="text" name="tags" maxlength="500" placeholder="added to every host, comma separated"></label>
+        {{ detail_fields(none, environments, statuses) }}
         <label class="check"><input type="checkbox" name="no_scan" value="1">
           <span>No scan.  We are not allowed to scan these, a SaaS product on our name for example.
             No ports, no TLS probing and no dynamic scan, only one look at the front page.</span></label>
@@ -156,9 +198,11 @@
         <label class="check"><input type="checkbox" name="probe" value="1" checked>
           <span>Read their telemetry now</span></label>
       </div>
+      <div class="faint small" style="padding:0 1rem">The details and repositories go on every host added here.</div>
       <div class="modal-foot"><button class="btn primary" type="submit">Add</button>
         <button class="btn" type="button" data-close-modal>Cancel</button></div>
     </form>
   </div>
 </div>
+<script src="{{ base }}/static/external.js?v={{ asset_v('external.js') }}"></script>
 {% endblock %}

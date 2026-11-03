@@ -50,6 +50,10 @@ SCAN_SOURCES = {"builtin": "Built in", "remote": "DAST server", "recorded": "Rec
 SERVER_KINDS = {"nextgen-dast": "nextgen-dast (started and read from here)",
                 "other": "Other (scans are recorded by hand or through the API)"}
 BUILTIN_SERVER = "Git Code Review"
+ENVIRONMENTS = {"prod": "Prod", "dev": "Dev", "stage": "Stage", "clone": "Clone"}
+STATUSES = {"active": "Active", "obsolete": "Obsolete"}
+MAX_PICKS = 200
+MAX_BRANCHES = 300
 
 # How sure a worked out link between a host and a repository has to be before
 # it counts without anybody saying so.  Below this it is a suggestion.
@@ -140,6 +144,269 @@ def clean_tags(values) -> list:
     return out[:30]
 
 
+def clean_owners(value, what: str) -> str:
+    """One or more addresses, comma or space separated.  -> "a@x.com, b@y.com"
+
+    Raises ValueError naming the first entry that is not an address.  An owner
+    field holding a name instead of an address is one nobody can mail.
+    """
+    from app.core import tagging
+
+    out = []
+    for part in re.split(r"[,;\s]+", str(value or "").strip()):
+        if not part:
+            continue
+        if not tagging.ADDRESS.fullmatch(part) or len(part) > 254:
+            raise ValueError(f"{what}: {part[:80]!r} is not an email address.")
+        if part.lower() not in (o.lower() for o in out):
+            out.append(part)
+    text = ", ".join(out)
+    if len(text) > 500:
+        raise ValueError(f"{what}: too many addresses.")
+    return text
+
+
+def clean_details(data: dict, partial: bool = False) -> dict:
+    """The fields a person fills in about a site, checked.
+
+    data holds strings as a form sends them, or JSON values from the API.
+    With partial, fields that are absent are left out of the answer so an
+    update only touches what it names.  Raises ValueError with a sentence.
+    """
+    out = {}
+
+    def present(key):
+        return key in data and data[key] is not None
+
+    if present("executive_owner") or not partial:
+        out["executive_owner"] = clean_owners(data.get("executive_owner"), "Executive owner")
+    if present("technical_owner") or not partial:
+        out["technical_owner"] = clean_owners(data.get("technical_owner"), "Technical owner")
+    for key in ("comments", "notes"):
+        if present(key):
+            out["notes"] = str(data[key])[:4000].strip()
+            break
+    else:
+        if not partial:
+            out["notes"] = ""
+    if present("status") or not partial:
+        value = str(data.get("status") or "active").strip().lower()
+        if value not in STATUSES:
+            raise ValueError("Status is Active or Obsolete.")
+        out["status"] = value
+    if present("environment") or not partial:
+        value = str(data.get("environment") or "prod").strip().lower()
+        if value not in ENVIRONMENTS:
+            raise ValueError("Environment is Prod, Dev, Stage or Clone.")
+        out["environment"] = value
+    for key in ("external_auth_needed", "whitelist_needed"):
+        if present(key) or not partial:
+            value = data.get(key)
+            if isinstance(value, str):
+                value = value.strip().lower() in ("1", "on", "true", "yes")
+            out[key] = bool(value)
+    if present("change_frequency_days") or not partial:
+        raw = data.get("change_frequency_days")
+        if raw in (None, ""):
+            out["change_frequency_days"] = None
+        else:
+            try:
+                days = int(str(raw).strip())
+            except ValueError:
+                raise ValueError("Change frequency is a number of days.")
+            if not 0 < days <= 3650:
+                raise ValueError("Change frequency is between 1 and 3650 days.")
+            out["change_frequency_days"] = days
+    return out
+
+
+def apply_details(asset: ExternalAsset, details: dict) -> None:
+    for key, value in details.items():
+        setattr(asset, key, value)
+
+
+def branches_of(repo) -> list:
+    """Every branch name the scans have seen on a repository, default first."""
+    names = []
+    for raw in (repo.branch_names_present, repo.branch_names):
+        try:
+            for name in json.loads(raw or "[]") or []:
+                if isinstance(name, str) and name and name not in names:
+                    names.append(name)
+        except ValueError:
+            continue
+    default = repo.default_branch or ""
+    if default:
+        names = [default] + [n for n in names if n != default]
+    return names[:MAX_BRANCHES]
+
+
+def recommend(db, user, hosts: list, application: str = "", tags=None,
+              asset: ExternalAsset = None) -> list:
+    """Repositories likely behind these hosts, best first, for the picker.
+
+    The same evidence the site page uses: web addresses on the Repositories
+    page, another environment of one of them, the code a diagram read, and
+    the application and repository names.  -> [{id, full_name, score,
+    reasons, links_itself, hosts}]
+    """
+    from app.core.external_probe import clean_host
+
+    mapper = Mapper(db, user)
+    found = {}
+    targets = [asset] if asset is not None else []
+    for raw in (hosts or [])[:50]:
+        host = clean_host(raw)
+        if host:
+            probe = ExternalAsset(host=host, application=application or "")
+            probe.tags = [ExternalAssetTag(tag=t) for t in clean_tags(tags or [])]
+            targets.append(probe)
+    for target in targets:
+        for link in mapper.links(target):
+            if link["source"] == "hidden":
+                continue
+            entry = found.setdefault(link["id"], {
+                "id": link["id"], "full_name": link["full_name"], "score": 0,
+                "reasons": [], "hosts": []})
+            entry["score"] = max(entry["score"], link["score"])
+            for reason in link["reasons"]:
+                if reason not in entry["reasons"]:
+                    entry["reasons"].append(reason)
+            if target.host not in entry["hosts"]:
+                entry["hosts"].append(target.host)
+    out = sorted(found.values(), key=lambda e: (-e["score"], e["full_name"]))
+    for entry in out:
+        entry["links_itself"] = entry["score"] >= LINK_THRESHOLD
+    apps, seen = [], set()
+    for target in targets:
+        for app in mapper.applications(target):
+            if app["key"] in seen:
+                continue
+            seen.add(app["key"])
+            apps.append({"name": app["name"] if app["named"] else "",
+                         "owners": app["owners"], "technical": app["technical"],
+                         "urls": app["urls"][:10],
+                         "repositories": [r["full_name"] for r in app["repos"]][:20],
+                         "exact": target.host in {clean_host(u) for u in app["urls"]}})
+    apps.sort(key=lambda a: not a["exact"])
+    return {"repositories": out[:40], "applications": apps[:10]}
+
+
+def repo_choices(db, user) -> list:
+    """Every repository this person may see, with its branches, for the picker."""
+    from app.core import rbac
+
+    out = []
+    for repo in (rbac.visible_repositories(db, user)
+                 .order_by(Repository.organization, Repository.name).all()):
+        out.append({"id": repo.id, "organization": repo.organization,
+                    "repository": repo.name, "full_name": repo.full_name,
+                    "default": repo.default_branch or "",
+                    "branches": branches_of(repo),
+                    "archived": bool(getattr(repo, "archived", False))})
+    return out
+
+
+def parse_picks(values) -> list:
+    """Picks as a form sends them, "<repository id>|<branch>".  -> [(id, branch)]"""
+    out = []
+    for value in values or []:
+        text = str(value or "")
+        repo_id, _, branch = text.partition("|")
+        try:
+            pick = (int(repo_id), branch.strip()[:255])
+        except ValueError:
+            raise ValueError("A repository pick was not understood.")
+        if pick not in out:
+            out.append(pick)
+    if len(out) > MAX_PICKS:
+        raise ValueError(f"Pick at most {MAX_PICKS} repositories and branches.")
+    return out
+
+
+def picks_from_names(db, items) -> list:
+    """The API's form: [{"repository": "org/name", "branch": "main"}]."""
+    if not isinstance(items, list):
+        raise ValueError("repositories has to be a list.")
+    out = []
+    for item in items:
+        if isinstance(item, str):
+            item = {"repository": item}
+        if not isinstance(item, dict) or not isinstance(item.get("repository"), str):
+            raise ValueError("Each repository is an object with a repository name.")
+        repo = (db.query(Repository)
+                .filter(Repository.full_name == item["repository"].strip()).one_or_none())
+        if repo is None:
+            raise ValueError(f"No repository called {item['repository'][:120]}.")
+        branch = item.get("branch") or ""
+        if not isinstance(branch, str):
+            raise ValueError("branch has to be a string.")
+        out.append((repo.id, branch.strip()[:255]))
+    return out
+
+
+def set_picks(db, asset: ExternalAsset, picks: list, actor: str, user=None) -> list:
+    """Make the repositories and branches somebody picked the site's own links.
+
+    Picks for repositories the person cannot see, and branches the scans have
+    never seen on that repository, are refused the same way: as not there.
+    Links that were picked before and are not picked now go back to being
+    worked out.  Links found in the code by a scan and links hidden on
+    purpose are left alone unless the repository is picked again.
+    -> the repositories linked, as full names
+    """
+    from app.core import rbac
+
+    base = rbac.visible_repositories(db, user) if user is not None else db.query(Repository)
+    wanted = {}
+    for repo_id, branch in picks:
+        repo = base.filter(Repository.id == repo_id).one_or_none()
+        if repo is None:
+            raise ValueError("One of the picked repositories is not one you can see.")
+        if branch and branch not in branches_of(repo):
+            raise ValueError(f"{repo.full_name} has no branch called {branch[:120]}.")
+        entry = wanted.setdefault(repo.id, {"repo": repo, "branches": []})
+        if branch and branch not in entry["branches"]:
+            entry["branches"].append(branch)
+    if asset.id is None:
+        db.flush()
+    rows = {r.repository_id: r for r in db.query(ExternalAssetRepo)
+            .filter(ExternalAssetRepo.asset_id == asset.id)}
+    for repo_id, row in rows.items():
+        if row.source == "manual" and repo_id not in wanted:
+            db.delete(row)
+    for repo_id, entry in wanted.items():
+        row = rows.get(repo_id)
+        if row is None:
+            row = ExternalAssetRepo(asset_id=asset.id, repository_id=repo_id)
+            db.add(row)
+        row.source = "manual"
+        row.branches = json.dumps(entry["branches"]) if entry["branches"] else ""
+        row.added_by = (actor or "")[:120]
+        row.added_at = utcnow()
+    db.flush()
+    return [e["repo"].full_name for e in wanted.values()]
+
+
+def picks_of(db, asset: ExternalAsset) -> list:
+    """What was picked, as the form sends it: ["<id>|<branch>", ...]."""
+    out = []
+    for row in (db.query(ExternalAssetRepo)
+                .filter(ExternalAssetRepo.asset_id == asset.id,
+                        ExternalAssetRepo.source == "manual")):
+        branches = _branch_list(row.branches)
+        out += [f"{row.repository_id}|{b}" for b in branches] or [f"{row.repository_id}|"]
+    return out
+
+
+def _branch_list(raw) -> list:
+    try:
+        value = json.loads(raw or "[]")
+    except ValueError:
+        return []
+    return [b for b in value if isinstance(b, str)] if isinstance(value, list) else []
+
+
 def set_tags(asset: ExternalAsset, tags) -> None:
     wanted = clean_tags(tags)
     keep = {t.casefold() for t in wanted}
@@ -153,9 +420,12 @@ def set_tags(asset: ExternalAsset, tags) -> None:
 
 
 def add_assets(db, rows: list, actor: str, no_scan: bool = False,
-               no_scan_reason: str = "", extra_tags=None) -> dict:
+               no_scan_reason: str = "", extra_tags=None, details: dict = None,
+               picks: list = None, user=None) -> dict:
     """Add hosts.  An existing host gets the new tags and, when it had none,
-    the application.  -> {added, existing}"""
+    the application.  details and picks go on the hosts added here, not on
+    ones already listed, which keep what somebody already said about them.
+    -> {added, existing}"""
     added, existing = [], []
     for row in rows:
         asset = db.query(ExternalAsset).filter(ExternalAsset.host == row["host"]).one_or_none()
@@ -169,6 +439,10 @@ def add_assets(db, rows: list, actor: str, no_scan: bool = False,
                                   no_scan_reason=(row.get("no_scan_reason")
                                                   or no_scan_reason or "")[:300])
             db.add(asset)
+            apply_details(asset, details or {})
+            db.flush()
+            if picks:
+                set_picks(db, asset, picks, actor, user)
             added.append(row["host"])
         else:
             existing.append(row["host"])
@@ -232,16 +506,25 @@ class Mapper:
         self.repos = {r.id: r for r in repos}
         applies = tagging.effective_many(db, repos)
         self.by_host, self.by_app, self.by_stem = {}, {}, {}
+        # The same site in another environment: prodorders and qaorders are
+        # one application, so a repository serving one likely serves both.
+        self.by_url_stem, self.by_app_stem = {}, {}
         for repo in repos:
             said = applies.get(repo.id, {})
             name = ((said.get("application_name") or {}).get("value") or "").strip()
             if name:
                 self.by_app.setdefault(name.casefold(), []).append(repo.id)
+                app_stem = _stem(name)
+                if len(app_stem) >= 4:
+                    self.by_app_stem.setdefault(app_stem, []).append(repo.id)
             urls = (said.get("web_app_urls") or {}).get("value") or repo.web_app_urls or ""
             for part in str(urls).replace(",", " ").split():
                 host = clean_host(part)
                 if host:
                     self.by_host.setdefault(host, {}).setdefault(repo.id, "its web addresses")
+                    url_stem = _stem(host.split(".")[0])
+                    if len(url_stem) >= 4:
+                        self.by_url_stem.setdefault(url_stem, {}).setdefault(repo.id, host)
             stem = _stem(repo.name)
             if len(stem) >= 4:
                 self.by_stem.setdefault(stem, []).append(repo.id)
@@ -260,10 +543,43 @@ class Mapper:
                 host = clean_host((entry or {}).get("url") or "")
                 if host:
                     self.by_host.setdefault(host, {}).setdefault(repo.id, "the code, found by its diagram")
+        # The Web Applications tab's view: repositories grouped by
+        # application, with the addresses and owners each application has.
+        # A host one application lists ties every repository in it to the
+        # site, not only the one that happens to carry the address.
+        from app.core import webapps
+
+        self.apps_by_host, self.apps_by_stem = {}, {}
+        try:
+            apps = webapps.inventory(db, base=base)
+        except Exception:  # noqa: BLE001 - the mapping still works without it
+            log.warning("could not read the web applications", exc_info=True)
+            apps = []
+        for app in apps:
+            app["repo_ids"] = [r["id"] for r in app["repos"] if r["id"] in self.repos]
+            for url in app["urls"]:
+                host = clean_host(url)
+                if not host:
+                    continue
+                if app not in self.apps_by_host.setdefault(host, []):
+                    self.apps_by_host[host].append(app)
+                url_stem = _stem(host.split(".")[0])
+                if len(url_stem) >= 4:
+                    self.apps_by_stem.setdefault(url_stem, {}).setdefault(app["key"], (app, host))
         self.manual = {}
         for row in db.query(ExternalAssetRepo).filter(
                 ExternalAssetRepo.repository_id.in_(list(self.repos) or [0])).all():
             self.manual.setdefault(row.asset_id, {})[row.repository_id] = row
+
+    def applications(self, asset: ExternalAsset) -> list:
+        """The web applications this host belongs to, exactly or as another
+        environment of one of their addresses.  -> [app], exact ones first."""
+        out = list(self.apps_by_host.get(asset.host, []))
+        stem = _stem(asset.host.split(".")[0])
+        for app, _other in (self.apps_by_stem.get(stem) or {}).values() if len(stem) >= 4 else []:
+            if app not in out:
+                out.append(app)
+        return out
 
     def links(self, asset: ExternalAsset) -> list:
         """-> [{repo, score, reasons, linked, source}] best first."""
@@ -277,6 +593,9 @@ class Mapper:
 
         for repo_id, how in (self.by_host.get(asset.host) or {}).items():
             add(repo_id, 95 if how == "its web addresses" else 80, f"host named in {how}")
+        for app in self.apps_by_host.get(asset.host, []):
+            for repo_id in app["repo_ids"]:
+                add(repo_id, 90, f"part of web application {app['name']}, which lists this host")
         names = [asset.application] + [t.tag for t in asset.tags]
         for name in names:
             for repo_id in self.by_app.get((name or "").strip().casefold(), []):
@@ -284,8 +603,23 @@ class Mapper:
         label = asset.host.split(".")[0]
         stem = _stem(label)
         if len(stem) >= 4:
+            for repo_id, other in (self.by_url_stem.get(stem) or {}).items():
+                if other != asset.host:
+                    add(repo_id, 75, f"another environment of {other}, in its web addresses")
+            for app, other in (self.apps_by_stem.get(stem) or {}).values():
+                if other != asset.host:
+                    for repo_id in app["repo_ids"]:
+                        add(repo_id, 75, f"web application {app['name']} lists {other}, "
+                                         "another environment of this host")
             for repo_id in self.by_stem.get(stem, []):
                 add(repo_id, 60, f"host {label} matches the repository name")
+            for repo_id in self.by_app_stem.get(stem, []):
+                add(repo_id, 60, f"host {label} matches its application name")
+            if len(stem) >= 6:
+                for other, ids in self.by_app_stem.items():
+                    if other != stem and len(other) >= 5 and (other in stem or stem in other):
+                        for repo_id in ids:
+                            add(repo_id, 40, f"host {label} is like its application name")
             if len(stem) >= 6:
                 for other, ids in self.by_stem.items():
                     if other != stem and len(other) >= 6 and (other in stem or stem in other):
@@ -299,8 +633,9 @@ class Mapper:
             entry = found.setdefault(repo_id, {"score": 0, "reasons": []})
             entry["score"] = 100
             entry["reasons"].insert(0, "confirmed in the code by a scan"
-                                    if row.source == "code" else f"linked by {row.added_by or 'hand'}")
+                                    if row.source == "code" else f"picked by {row.added_by or 'hand'}")
             entry["source"] = row.source
+            entry["branches"] = _branch_list(row.branches)
         for repo_id, entry in found.items():
             repo = self.repos.get(repo_id)
             if repo is None:
@@ -309,7 +644,8 @@ class Mapper:
                         "application": self.app_names.get(repo_id, ""),
                         "score": entry["score"], "reasons": entry["reasons"],
                         "linked": entry["score"] >= LINK_THRESHOLD,
-                        "source": entry.get("source", "found")})
+                        "source": entry.get("source", "found"),
+                        "branches": entry.get("branches") or []})
         out.sort(key=lambda e: (-e["score"], e["full_name"]))
         return out
 
@@ -389,9 +725,195 @@ def combined_risk(asset: ExternalAsset, counts: dict) -> dict:
             "reasons": reasons}
 
 
+# ------------------------------------------------------------------ telemetry fields
+
+# Every telemetry field, in the order the site page shows them.  The scan
+# fills each one in, and any of them can be filled in or corrected by hand.
+# The first group is what the standalone site report wrote to its CSV; the
+# DNS and registration fields are on top of that.
+TELEMETRY_FIELDS = [
+    ("Summary", [
+        ("category", "Status"), ("status_code", "HTTP status"),
+        ("probe_url", "Probe URL"), ("final_url", "Final URL"),
+        ("redirect_target", "Redirect target"), ("title", "Page title"),
+        ("server", "Server header"), ("powered_by", "X-Powered-By"),
+        ("waf_block", "Firewall block page"), ("http_to_https", "HTTP redirects to HTTPS"),
+        ("grade", "Grade"), ("score", "Score"),
+    ]),
+    ("Network", [
+        ("ip", "Resolved IP"), ("ips", "All IPv4 addresses"), ("ipv6", "IPv6 addresses"),
+        ("ptr", "Reverse DNS"), ("isp", "ISP / netblock owner"), ("asn", "ASN"),
+        ("netblock", "Netblock"), ("open_ports", "Open ports"),
+    ]),
+    ("DNS and registration", [
+        ("nameservers", "Nameservers"), ("cname", "CNAME chain"), ("mx", "Mail servers"),
+        ("registrar", "Registrar"), ("domain_created", "Domain created"),
+        ("domain_expires", "Domain expires"),
+    ]),
+    ("TLS", [
+        ("tls_version", "Negotiated version"), ("tls_cipher", "Negotiated cipher"),
+        ("tls_key_type", "Key type"), ("tls_key_bits", "Key bits"),
+        ("tls_signature", "Signature algorithm"), ("tls_subject", "Subject"),
+        ("tls_issuer", "Issuer"), ("tls_not_before", "Not before"),
+        ("tls_not_after", "Not after"), ("tls_days_left", "Days until expiry"),
+        ("tls_trusted", "Chain trusted"), ("tls_legacy", "Legacy protocols accepted"),
+        ("tls_san", "Subject alternative names"), ("tls_weaknesses", "TLS weaknesses"),
+    ]),
+    ("Headers", [
+        ("missing_headers", "Missing security headers"),
+    ]),
+]
+FIELD_KEYS = [key for _group, fields in TELEMETRY_FIELDS for key, _label in fields]
+FIELD_LABELS = {key: label for _group, fields in TELEMETRY_FIELDS for key, label in fields}
+INT_FIELDS = {"status_code", "score", "tls_days_left", "tls_key_bits"}
+
+# What each security header is for, the way the site report explained it.
+SECURITY_HEADERS = [
+    ("strict-transport-security", "HSTS", "Keeps repeat visitors on HTTPS."),
+    ("content-security-policy", "CSP", "Limits which scripts and resources the page may load."),
+    ("x-frame-options", "X-Frame-Options", "Stops other sites framing the page (clickjacking)."),
+    ("x-content-type-options", "X-Content-Type-Options", "Stops the browser guessing file types."),
+    ("referrer-policy", "Referrer-Policy", "Limits what the Referer header gives away."),
+    ("permissions-policy", "Permissions-Policy", "Turns off browser features the page does not use."),
+    ("cross-origin-opener-policy", "COOP", "Isolates the page from windows it opens."),
+    ("cross-origin-resource-policy", "CORP", "Limits who may embed what the site serves."),
+]
+
+
+def _joined(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v) for v in value if v not in (None, ""))
+    return str(value)
+
+
+def flatten(rec: dict) -> dict:
+    """A telemetry record as the named fields.  -> {field: text}"""
+    from app.core import external_probe
+
+    rec = rec or {}
+    tls = rec.get("tls") or {}
+    dns = rec.get("dns") or {}
+    who = rec.get("whois") or {}
+    score = rec.get("score") or {}
+    legacy = [k.replace("_", ".") for k, v in (tls.get("supported") or {}).items() if v]
+    out = {
+        "category": external_probe.CATEGORY_NAMES.get(rec.get("category"), rec.get("category") or ""),
+        "status_code": rec.get("status") or "",
+        "probe_url": f"https://{rec['host']}/" if rec.get("host") else "",
+        "final_url": rec.get("final_url") if rec.get("status") else "",
+        "redirect_target": (rec.get("redirects") or [""])[-1],
+        "title": rec.get("title"), "server": rec.get("server"),
+        "powered_by": rec.get("powered_by"),
+        "waf_block": rec.get("waf_block") if rec.get("status") else None,
+        "http_to_https": rec.get("http_to_https"),
+        "grade": score.get("grade") if score.get("grade") != "N/A" else "",
+        "score": score.get("score") if score.get("grade") not in (None, "N/A") else "",
+        "ip": rec.get("ip"), "ips": rec.get("ips"), "ipv6": dns.get("ipv6"),
+        "ptr": dns.get("ptr"), "isp": rec.get("isp"), "asn": who.get("asn"),
+        "netblock": who.get("netblock"),
+        "open_ports": [str(p) for p in rec.get("ports") or []],
+        "nameservers": dns.get("nameservers"), "cname": dns.get("cname"),
+        "mx": dns.get("mx"), "registrar": who.get("registrar"),
+        "domain_created": who.get("domain_created"),
+        "domain_expires": who.get("domain_expires"),
+        "tls_version": tls.get("negotiated_version"),
+        "tls_cipher": tls.get("negotiated_cipher"), "tls_key_type": tls.get("key_type"),
+        "tls_key_bits": tls.get("key_bits"), "tls_signature": tls.get("signature_algorithm"),
+        "tls_subject": tls.get("subject"), "tls_issuer": tls.get("issuer"),
+        "tls_not_before": (tls.get("not_before") or "")[:19].replace("T", " "),
+        "tls_not_after": (tls.get("not_after") or "")[:19].replace("T", " "),
+        "tls_days_left": tls.get("days_left") if tls.get("not_after") else "",
+        "tls_trusted": tls.get("trusted") if tls else None,
+        "tls_legacy": legacy if tls else "",
+        "tls_san": tls.get("san"), "tls_weaknesses": tls.get("weaknesses"),
+        "missing_headers": rec.get("missing_headers"),
+    }
+    return {key: _joined(out.get(key)) for key in FIELD_KEYS}
+
+
+def manual_of(asset: ExternalAsset) -> dict:
+    try:
+        value = json.loads(asset.manual_telemetry or "{}") or {}
+    except ValueError:
+        return {}
+    return {k: str(v) for k, v in value.items() if k in FIELD_KEYS and v not in (None, "")}
+
+
+def fields_of(asset: ExternalAsset) -> list:
+    """-> [(group, [{key, label, value, scan, manual}])] for the page and API."""
+    scanned = flatten(telemetry_of(asset)) if asset.telemetry else {k: "" for k in FIELD_KEYS}
+    by_hand = manual_of(asset)
+    out = []
+    for group, fields in TELEMETRY_FIELDS:
+        rows = []
+        for key, label in fields:
+            rows.append({"key": key, "label": label,
+                         "value": by_hand.get(key, scanned.get(key, "")),
+                         "scan": scanned.get(key, ""), "manual": key in by_hand})
+        out.append((group, rows))
+    return out
+
+
+def field_values(asset: ExternalAsset) -> dict:
+    return {row["key"]: row["value"] for _g, rows in fields_of(asset) for row in rows}
+
+
+def set_manual(asset: ExternalAsset, values: dict, replace: bool = False) -> None:
+    """Fill in or clear telemetry fields by hand.  An empty value clears one.
+
+    replace sets the whole hand filled set, as a form that shows every field
+    sends it; otherwise only the fields named change, as the API does.
+    """
+    current = {} if replace else manual_of(asset)
+    for key, value in (values or {}).items():
+        if key not in FIELD_KEYS:
+            raise ValueError(f"There is no telemetry field called {str(key)[:60]}.")
+        text = "" if value is None else str(value).strip()
+        if len(text) > 2000:
+            raise ValueError(f"{FIELD_LABELS[key]} is too long.")
+        if text and key in INT_FIELDS:
+            try:
+                int(text)
+            except ValueError:
+                raise ValueError(f"{FIELD_LABELS[key]} is a whole number.")
+        if text:
+            current[key] = text
+        else:
+            current.pop(key, None)
+    asset.manual_telemetry = json.dumps(current) if current else ""
+    sync_columns(asset)
+
+
+def sync_columns(asset: ExternalAsset) -> None:
+    """Copy what the list filters on out of the fields, hand filled or not."""
+    from app.core import external_probe
+
+    values = field_values(asset)
+    reverse = {v: k for k, v in external_probe.CATEGORY_NAMES.items()}
+
+    def number(key):
+        try:
+            return int(values.get(key) or "")
+        except ValueError:
+            return None
+
+    asset.ip = (values.get("ip") or "")[:64]
+    asset.category = reverse.get(values.get("category"), values.get("category") or "")[:16]
+    asset.status_code = number("status_code") or 0
+    asset.grade = (values.get("grade") or "")[:4]
+    asset.score = number("score") or 0
+    asset.tls_days_left = number("tls_days_left")
+
+
 # ------------------------------------------------------------------ views
 
 def due_status(asset: ExternalAsset, max_age_days: int, now=None) -> str:
+    if asset.status == "obsolete":
+        return "obsolete"
     if asset.no_scan:
         return "no-scan"
     if not asset.last_dast_at:
@@ -423,6 +945,14 @@ def asset_dict(asset: ExternalAsset, links: list = None, counts: dict = None,
         "id": asset.id, "host": asset.host, "kind": asset.kind,
         "parent_domain": asset.parent_domain, "application": asset.application,
         "tags": asset.tag_list(), "notes": asset.notes or "",
+        "comments": asset.notes or "",
+        "executive_owner": asset.executive_owner or "",
+        "technical_owner": asset.technical_owner or "",
+        "status": asset.status or "active",
+        "environment": asset.environment or "prod",
+        "external_auth_needed": bool(asset.external_auth_needed),
+        "whitelist_needed": bool(asset.whitelist_needed),
+        "change_frequency_days": asset.change_frequency_days,
         "no_scan": bool(asset.no_scan), "no_scan_reason": asset.no_scan_reason or "",
         "scan_blocked": bool(blocked_reason), "scan_blocked_reason": blocked_reason,
         "added_at": _iso(asset.added_at), "added_by": asset.added_by,
@@ -440,6 +970,9 @@ def asset_dict(asset: ExternalAsset, links: list = None, counts: dict = None,
             "screenshot_url": (f"{base_url}/external/{asset.id}/screenshot.png"
                                if asset.screenshot == "ok" else ""),
         },
+        "fields": {row["key"]: {"value": row["value"], "scan": row["scan"],
+                                "manual": row["manual"]}
+                   for _g, rows in fields_of(asset) for row in rows},
         "last_dast": {
             "scanned_at": _iso(asset.last_dast_at),
             "severity": asset.last_dast_severity or "",
@@ -449,6 +982,8 @@ def asset_dict(asset: ExternalAsset, links: list = None, counts: dict = None,
         },
         "repositories": [{"full_name": l["full_name"], "score": l["score"],
                           "linked": l["linked"], "reasons": l["reasons"],
+                          "picked": l["source"] == "manual",
+                          "branches": l.get("branches") or [],
                           "open_findings": counts.get(l["full_name"], {})}
                          for l in links],
         "combined_risk": combined_risk(asset, {l["full_name"]: counts.get(l["full_name"], {})
@@ -549,13 +1084,9 @@ def save_telemetry(asset_id: int, rec: dict) -> None:
         asset.telemetry_at = utcnow()
         asset.telemetry_status = "idle"
         asset.telemetry_error = ""
-        asset.ip = (rec.get("ip") or "")[:64]
-        asset.category = rec.get("category") or ""
-        asset.status_code = int(rec.get("status") or 0)
-        score = rec.get("score") or {}
-        asset.grade = (score.get("grade") or "")[:4]
-        asset.score = int(score.get("score") or 0)
-        asset.tls_days_left = (rec.get("tls") or {}).get("days_left")
+        sync_columns(asset)
+        if not asset.category:
+            asset.category = rec.get("category") or ""
         if rec.get("shot"):
             asset.screenshot = rec["shot"][:16]
             if rec["shot"] != "ok":
@@ -572,6 +1103,7 @@ def refresh_stale() -> int:
             return 0
         cutoff = utcnow() - timedelta(days=days)
         ids = [a.id for a in db.query(ExternalAsset.id).filter(
+            ExternalAsset.status != "obsolete").filter(
             (ExternalAsset.telemetry_at.is_(None)) | (ExternalAsset.telemetry_at < cutoff))]
     return start_telemetry(ids)
 
@@ -674,9 +1206,16 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
         who = actor_user(db, scan.recorded_by if scan else "")
         if who is _NOBODY:
             return {"repos": [], "routes": []}
-        links = [l for l in Mapper(db, who).links(asset) if l["linked"]][:MAX_WHITEBOX_REPOS]
-        plan = [(l["repo"].id, l["full_name"], l["repo"].connection or "",
-                 l["repo"].default_branch or "") for l in links]
+        links = [l for l in Mapper(db, who).links(asset) if l["linked"]]
+        # Picked first: somebody said which code is behind the site, and on
+        # which branches.  Each branch is its own checkout, so the cap is on
+        # checkouts rather than repositories.
+        links.sort(key=lambda l: l["source"] != "manual")
+        plan = []
+        for l in links:
+            for branch in (l.get("branches") or [l["repo"].default_branch or ""]):
+                plan.append((l["repo"].id, l["full_name"], l["repo"].connection or "", branch))
+        plan = plan[:MAX_WHITEBOX_REPOS]
     out = {"repos": [], "routes": []}
     for repo_id, name, connection, branch in plan:
         if scan_id in _stopping:
@@ -1242,9 +1781,18 @@ def triage(scan_id: int, actor: str = "") -> None:
             scan.ai_status = "failed"
             scan.ai_summary = json.dumps({"error": problem})
             return
+        findings = findings_of(scan)
+        if not findings:
+            # Nothing to read, so nothing is sent and nothing is billed.  Saying
+            # the model failed here sent people looking at their AI settings.
+            scan.ai_status = "done"
+            scan.ai_summary = json.dumps({
+                "summary": "The scan found nothing, so there was nothing for the "
+                           "model to read.  No request was sent.",
+                "priorities": [], "model": "", "error": "", "at": utcnow().isoformat()})
+            return
         scan.ai_status = "running"
         asset = db.get(ExternalAsset, scan.asset_id)
-        findings = findings_of(scan)
         who = actor_user(db, actor or scan.recorded_by)
         sast = []
         if who is not _NOBODY:
@@ -1252,7 +1800,7 @@ def triage(scan_id: int, actor: str = "") -> None:
             if links:
                 sast = _sast_lines(sast_findings(db, [l["full_name"] for l in links], 60, who))
         host = asset.host
-    answers, verdicts, summaries, priorities = [], {}, [], []
+    answers, verdicts, summaries, priorities, unreadable = [], {}, [], [], 0
     chunk = 120
     for start in range(0, max(1, len(findings)), chunk):
         part = findings[start:start + chunk]
@@ -1274,6 +1822,10 @@ def triage(scan_id: int, actor: str = "") -> None:
         try:
             got = _json_answer(answer["text"])
         except ValueError:
+            unreadable += 1
+            log.warning("dast triage of scan %s: answer was not JSON (%d chars, finish %r) "
+                        "starts %r", scan_id, len(answer["text"] or ""),
+                        answer.get("finish"), (answer["text"] or "")[:200])
             continue
         summaries.append(str(got.get("summary") or ""))
         priorities += [str(p) for p in got.get("priorities") or []][:5]
@@ -1297,8 +1849,13 @@ def triage(scan_id: int, actor: str = "") -> None:
         scan.ai_summary = json.dumps({
             "summary": " ".join(summaries)[:4000], "priorities": priorities[:8],
             "model": next((a.get("model") for a in answers if a.get("model")), ""),
-            "error": "" if ok else next((a["error"] for a in answers if a.get("error")),
-                                        "The model gave no usable answer."),
+            "error": "" if ok else next(
+                (a["error"] for a in answers if a.get("error")),
+                ("The model answered, but not with the JSON it was asked for"
+                 + (", and the answer was cut off at its length limit" if any(
+                     a.get("cut_off") for a in answers) else "")
+                 + ".  Try again, or raise the longest answer on the AI page.")
+                if unreadable else "The model gave no usable answer."),
             "at": utcnow().isoformat()})
         scan.ai_calls = (scan.ai_calls or 0) + spent["calls"]
         scan.ai_input_tokens = (scan.ai_input_tokens or 0) + spent["in"]

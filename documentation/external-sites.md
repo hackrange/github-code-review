@@ -37,6 +37,27 @@ A whole address is fine; the host is taken from it.  **Import known hosts**
 adds every company domain from Settings and every host in a repository's web
 addresses.
 
+Each site also carries:
+
+| Field | What it holds |
+|---|---|
+| Executive owner, Technical owner | Email addresses only, comma separated |
+| Comments | Anything else |
+| Status | Active or Obsolete.  An obsolete site keeps its history, gets no Scan button and is left out of the nightly telemetry |
+| Environment | Prod, Dev, Stage or Clone |
+| External auth needed | Signing in goes through something outside the site |
+| Whitelist needed | The scanner's address has to be let through a firewall first |
+| Change frequency | How often the site changes, in days |
+| Repositories | Organizations, repositories and branches, picked from a searchable list |
+
+The repository picker lists every repository you can see, with the branches
+the scans found on it.  Above the list it recommends repositories for the
+hosts being added, from the Web Applications tab and the Repositories page:
+an application that lists the host recommends every repository in it, and
+another environment of a listed host (qaorders for prodorders) counts too.
+When an application has owners, **Use these** fills in the application and
+both owners.
+
 ### No scan
 
 Tick **No scan** for a host the company does not own or may not test, a SaaS
@@ -57,8 +78,31 @@ the front page's status, redirects, headers and cookies, a firewall block
 page check, and a screenshot from a headless Chromium.  The site gets a web
 hygiene grade from A to F from its headers and TLS.
 
+Also from DNS and whois, without touching the site: nameservers, the CNAME
+chain, IPv6 addresses, mail servers, reverse DNS, the ASN and netblock, and
+the domain's registrar, creation and expiry dates.
+
+Every one of those fields can be filled in or corrected by hand, under
+**Telemetry by hand** in Edit, or as `telemetry_fields` through the API.  A
+value filled in by hand wins over the scan's until it is cleared, and the
+page shows what the scan saw beside it.  The site page lays it out like the
+standalone site report: the screenshot first, then the summary, the hygiene
+score, each telemetry group, the security headers and every response header.
+
 A host that resolves to a private address is not probed unless
 `external.allow_private` is on, and every redirect is checked the same way.
+
+## Running a scan
+
+1. Open **External sites** and press **Scan** on a site's row, or open the
+   site and press **Run a scan**.
+2. Pick where it runs (this server, or a nextgen-dast server) and a profile.
+3. For standard and up, tick that you are allowed to scan the site.
+4. Press **Start**.  The scan's page refreshes until it ends.
+
+To scan several, tick them in the list and press **Scan the ticked sites**.
+They run one after another.  **Delete the ticked sites** removes them and
+their scan history.
 
 ## Dynamic scans
 

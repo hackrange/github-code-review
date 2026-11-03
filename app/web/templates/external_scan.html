@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Scan of {{ asset.host }} &middot; Git Code Review{% endblock %}
-{% block head %}{% if busy %}<meta http-equiv="refresh" content="15">{% endif %}{% endblock %}
+{% block head %}{% if busy %}<meta name="gcr-refresh" content="15">{% endif %}{% endblock %}
 {% block content %}
 {% set here = base ~ '/external/' ~ asset.id ~ '/scans/' ~ scan.id %}
 <div class="page-head">
@@ -106,4 +106,5 @@
   {% else %}<div class="empty">No findings yet.</div>{% endif %}
 </div>
 {% if view.note %}<div class="card"><div class="card-head">Note</div><div class="card-body small" style="white-space:pre-wrap">{{ view.note }}</div></div>{% endif %}
+<script src="{{ base }}/static/external.js?v={{ asset_v('external.js') }}"></script>
 {% endblock %}

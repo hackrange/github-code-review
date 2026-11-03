@@ -6,6 +6,22 @@ moved.
 
 ## 2026-11-03
 
+**External sites: owners, environments, repositories and the full telemetry.**
+A site now has executive and technical owners (email only), comments, Active
+or Obsolete, Prod, Dev, Stage or Clone, whether external auth or a whitelist
+is needed, and how often it changes.  Repositories and branches are picked
+from a searchable list that recommends the ones the Web Applications tab ties
+to the host, and can fill in the owners from it.  Telemetry adds nameservers,
+CNAMEs, IPv6, mail servers, reverse DNS, ASN, netblock and domain registration,
+and every field can be filled in by hand.  The site page opens with a large
+screenshot, the way the site report did.  The list has a Scan button per site
+and scans or deletes the ticked sites.  A scan that found nothing no longer
+reports that the model failed when asked to triage it.
+
+**Settings in tabs.**  The Settings page is five tabs instead of one long
+scroll.
+
+
 **External sites and dynamic scanning.**  Off until Settings turns it on, and
 for administrators only.  List the company's domains and subdomains, and each
 one gets its outside view: DNS, network owner, open ports, TLS, headers, a

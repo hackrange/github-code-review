@@ -1,0 +1,56 @@
+{# The details a person fills in about a site, shared by Add sites and Edit.
+   `a` is the site being edited, or none when adding. #}
+{% macro detail_fields(a, environments, statuses, picks_json='[]') %}
+<div class="ext-fields">
+<div class="form-grid">
+  <label>Executive owner
+    <input type="text" name="executive_owner" maxlength="500" inputmode="email"
+           pattern="^\s*[^@\s,;<>]+@[^@\s,;<>]+\.[A-Za-z]{2,}(\s*[,;\s]\s*[^@\s,;<>]+@[^@\s,;<>]+\.[A-Za-z]{2,})*\s*$"
+           title="Email addresses only, comma separated"
+           value="{{ a.executive_owner if a else '' }}" placeholder="exec@example.com">
+    <span class="faint small">Email only.  More than one, comma separated.</span></label>
+  <label>Technical owner
+    <input type="text" name="technical_owner" maxlength="500" inputmode="email"
+           pattern="^\s*[^@\s,;<>]+@[^@\s,;<>]+\.[A-Za-z]{2,}(\s*[,;\s]\s*[^@\s,;<>]+@[^@\s,;<>]+\.[A-Za-z]{2,})*\s*$"
+           title="Email addresses only, comma separated"
+           value="{{ a.technical_owner if a else '' }}" placeholder="team@example.com">
+    <span class="faint small">Email only.</span></label>
+  <label>Environment
+    <select name="environment">
+      {% for key, label in environments.items() %}
+      <option value="{{ key }}" {{ 'selected' if (a.environment if a else 'prod') == key }}>{{ label }}</option>
+      {% endfor %}
+    </select></label>
+  <label>Status
+    <select name="status">
+      {% for key, label in statuses.items() %}
+      <option value="{{ key }}" {{ 'selected' if (a.status if a else 'active') == key }}>{{ label }}</option>
+      {% endfor %}
+    </select></label>
+  <label>Change frequency, in days
+    <input type="number" name="change_frequency_days" min="1" max="3650"
+           value="{{ a.change_frequency_days if a and a.change_frequency_days else '' }}"
+           placeholder="30"></label>
+</div>
+<label class="check"><input type="checkbox" name="external_auth_needed" value="1"
+  {{ 'checked' if a and a.external_auth_needed }}>
+  <span>External auth needed.  Signing in goes through something outside the site, such as SSO.</span></label>
+<label class="check"><input type="checkbox" name="whitelist_needed" value="1"
+  {{ 'checked' if a and a.whitelist_needed }}>
+  <span>Whitelist needed.  The scanner's address has to be let through a firewall first.</span></label>
+<label>Comments
+  <textarea name="comments" rows="3" maxlength="4000">{{ a.notes if a else '' }}</textarea></label>
+
+<div class="repo-picker" data-picker data-picked="{{ picks_json }}" data-asset="{{ a.id if a else '' }}">
+  <div class="label-line"><strong>Repositories</strong>
+    <span class="faint small">Pick the organizations, repositories and branches behind the
+      site.  A repository with no branch ticked uses its default branch.</span></div>
+  <input type="search" data-picker-search placeholder="Search organization, repository or branch"
+         aria-label="Search repositories">
+  <div class="picker-suggest" data-picker-suggest></div>
+  <div class="small" data-picker-summary>Loading the repositories...</div>
+  <div class="picker-list" data-picker-list></div>
+  <div data-picker-hidden></div>
+</div>
+</div>
+{% endmacro %}

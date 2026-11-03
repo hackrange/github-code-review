@@ -159,6 +159,114 @@ def resolve(host: str) -> list:
     return out
 
 
+# ------------------------------------------------------------------ DNS
+
+def dig(name: str, rtype: str) -> list:
+    """Answers for one record type, from dig.  Empty when dig is missing or
+    nothing answers.  Asked of DNS servers, so nothing is sent to the site."""
+    if not shutil.which("dig") or not HOST_RE.fullmatch(name or ""):
+        return []
+    try:
+        proc = subprocess.run(["dig", "+short", "+time=3", "+tries=1", name, rtype],
+                              capture_output=True, text=True, timeout=12)
+    except Exception:  # noqa: BLE001
+        return []
+    return parse_dig(proc.stdout or "")
+
+
+def parse_dig(text: str) -> list:
+    out = []
+    for line in (text or "").splitlines():
+        line = line.strip().rstrip(".")
+        if line and not line.startswith(";") and line not in out:
+            out.append(line[:255])
+    return out[:20]
+
+
+def dns_records(host: str, ips: list) -> dict:
+    """Nameservers, the CNAME chain, IPv6, mail servers and reverse DNS."""
+    out = {"cname": [], "ipv6": [], "nameservers": [], "mx": [], "ptr": []}
+    name = host
+    for _ in range(6):
+        answers = [a.lower() for a in dig(name, "CNAME") if HOST_RE.fullmatch(a.lower())]
+        if not answers:
+            break
+        name = answers[0]
+        out["cname"].append(name)
+    out["ipv6"] = [a for a in dig(host, "AAAA") if ":" in a]
+    # The nameservers of the zone the host is in: the host, then each parent.
+    labels = host.split(".")
+    for i in range(len(labels) - 1):
+        found = [n.lower() for n in dig(".".join(labels[i:]), "NS") if "." in n]
+        if found:
+            out["nameservers"] = sorted(found)
+            break
+    out["mx"] = [m.split()[-1].lower() for m in dig(host, "MX") if m.split()]
+    for ip in ips[:4]:
+        try:
+            ptr = socket.gethostbyaddr(ip)[0].lower()
+        except (OSError, UnicodeError):
+            continue
+        if ptr and ptr not in out["ptr"]:
+            out["ptr"].append(ptr)
+    return out
+
+
+_WHOIS_IP = {
+    "asn": [re.compile(p, re.I | re.M) for p in (
+        r"^\s*OriginAS\s*:\s*(AS?\d+.*)$", r"^\s*origin\s*:\s*(AS\d+)\s*$")],
+    "netblock": [re.compile(p, re.I | re.M) for p in (
+        r"^\s*CIDR\s*:\s*(.+)$", r"^\s*inetnum\s*:\s*(.+)$", r"^\s*NetRange\s*:\s*(.+)$")],
+}
+_WHOIS_DOMAIN = {
+    "registrar": [re.compile(r"^\s*Registrar\s*:\s*(.+)$", re.I | re.M),
+                  re.compile(r"^\s*Sponsoring Registrar\s*:\s*(.+)$", re.I | re.M)],
+    "domain_expires": [re.compile(p, re.I | re.M) for p in (
+        r"^\s*Registry Expiry Date\s*:\s*(.+)$",
+        r"^\s*Registrar Registration Expiration Date\s*:\s*(.+)$",
+        r"^\s*Expir(?:y|ation) Date\s*:\s*(.+)$", r"^\s*paid-till\s*:\s*(.+)$")],
+    "domain_created": [re.compile(p, re.I | re.M) for p in (
+        r"^\s*Creation Date\s*:\s*(.+)$", r"^\s*created\s*:\s*(.+)$")],
+}
+_WHOIS_CACHE: dict = {}
+
+
+def _whois(target: str) -> str:
+    if not target or not shutil.which("whois"):
+        return ""
+    if target in _WHOIS_CACHE:
+        return _WHOIS_CACHE[target]
+    try:
+        text = subprocess.run(["whois", target], capture_output=True, text=True,
+                              timeout=25, errors="replace").stdout or ""
+    except Exception:  # noqa: BLE001
+        text = ""
+    _WHOIS_CACHE[target] = text
+    return text
+
+
+def _first(text: str, patterns) -> str:
+    for pattern in patterns:
+        m = pattern.search(text or "")
+        if m and m.group(1).strip():
+            return m.group(1).strip()[:200]
+    return ""
+
+
+def parse_registration(ip_text: str, domain_text: str) -> dict:
+    out = {key: _first(ip_text, pats) for key, pats in _WHOIS_IP.items()}
+    out.update({key: _first(domain_text, pats) for key, pats in _WHOIS_DOMAIN.items()})
+    return out
+
+
+def registration(host: str, ip: str) -> dict:
+    """Who holds the address block and the domain, from whois."""
+    from app.core.diagram import registrable
+
+    return parse_registration(_whois(ip) if ip else "",
+                              _whois(registrable(host) or host))
+
+
 # ------------------------------------------------------------------ ports
 
 def _knock(ip: str, port: int) -> bool:
@@ -745,10 +853,14 @@ def probe(host: str, shot_path: Path = None, screenshots: bool = True,
            "probed_at": dt.datetime.now(dt.timezone.utc).isoformat()}
     ips = resolve(host)
     if not ips:
+        rec["dns"] = dns_records(host, [])
         rec["category"] = "noresolve"
         rec["score"] = compute_score(rec)
         return rec
     rec["ips"], rec["ip"] = ips[:8], ips[0]
+    # DNS and whois ask DNS servers and registries, never the site.
+    rec["dns"] = dns_records(host, ips)
+    rec["whois"] = registration(host, ips[0])
     if not allow_private and not all(is_public(ip) for ip in ips):
         rec["category"] = "private"
         rec["score"] = compute_score(rec)

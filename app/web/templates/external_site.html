@@ -1,13 +1,18 @@
 {% extends "base.html" %}
+{% from "_external_fields.html" import detail_fields %}
 {% block title %}{{ asset.host }} &middot; Git Code Review{% endblock %}
-{% block head %}{% if busy %}<meta http-equiv="refresh" content="15">{% endif %}{% endblock %}
+{% block head %}{% if busy %}<meta name="gcr-refresh" content="15">{% endif %}{% endblock %}
 {% block content %}
+{% set tele_headers = tele.headers or {} %}
 <div class="page-head">
   <div><h1 class="mono">{{ asset.host }}</h1>
     <div class="faint small">{{ asset.kind }}{% if asset.kind == 'subdomain' %} of {{ asset.parent_domain }}{% endif %}
       {%- if asset.application %} &middot; {{ asset.application }}{% endif %}
       &middot; added {{ asset.added_at | dt('%Y-%m-%d') }}{% if asset.added_by %} by {{ asset.added_by }}{% endif %}</div>
-    <div style="margin-top:.3rem">{% for t in tags %}<a class="badge" href="{{ base }}/external?tag={{ t | urlencode }}">{{ t }}</a> {% endfor %}
+    <div style="margin-top:.3rem">
+      <span class="badge {{ 'high' if asset.environment == 'prod' else 'info' }}">{{ environments.get(asset.environment, asset.environment) }}</span>
+      <span class="badge {{ 'waived' if asset.status == 'obsolete' else 'ok' }}">{{ statuses.get(asset.status, asset.status) }}</span>
+      {% for t in tags %}<a class="badge" href="{{ base }}/external?tag={{ t | urlencode }}">{{ t }}</a> {% endfor %}
       {% if blocked %}<span class="badge waived">no scan</span> <span class="small faint">{{ blocked }}</span>{% endif %}</div>
   </div>
   <div class="page-actions">
@@ -21,77 +26,108 @@
   </div>
 </div>
 
+{% if asset.telemetry_status == 'running' %}<div class="notice info"><div>Reading telemetry.  This page refreshes until it is done.</div></div>{% endif %}
+{% if asset.telemetry_status == 'failed' %}<div class="notice bad"><div>The last telemetry read failed: {{ asset.telemetry_error }}</div></div>{% endif %}
+
+{# The front page first, large, the way the site report opened each host. #}
+<div class="card">
+  <div class="card-head">Screenshot
+    <span class="faint small" style="font-weight:400">{{ tele.final_url or ('https://' ~ asset.host ~ '/') }}{% if asset.telemetry_at %}, {{ asset.telemetry_at | dt('%Y-%m-%d %H:%M') }}{% endif %}</span></div>
+  <div class="card-body">
+    {% if asset.screenshot == 'ok' %}
+    <a href="{{ base }}/external/{{ asset.id }}/screenshot.png" target="_blank" rel="noopener"><img class="shot-hero" alt="Screenshot of {{ asset.host }}" src="{{ base }}/external/{{ asset.id }}/screenshot.png?v={{ asset.telemetry_at.timestamp() | int if asset.telemetry_at else 0 }}"></a>
+    {% else %}
+    <div class="shot-hero-none">{{ {'waf':'A firewall block page answered, so the screenshot is left out.','blank':'The page rendered blank.','nobrowser':'No headless browser on this server.','blocked':'The browser brought back no image.'}.get(asset.screenshot, 'No screenshot yet.  Refresh telemetry to take one.') }}
+      {% if tele.shot_detail %}<div class="small faint">{{ tele.shot_detail }}</div>{% endif %}</div>
+    {% endif %}
+  </div>
+</div>
+
 <div class="stats">
   <div class="stat"><div class="n">{% if asset.grade and asset.grade != 'N/A' %}<span class="grade {{ asset.grade }}">{{ asset.grade }}</span>{% else %}&ndash;{% endif %}</div><div class="l">Web hygiene{% if asset.score %} ({{ asset.score }}){% endif %}</div></div>
   <div class="stat {{ 'bad' if asset.last_dast_severity in ('critical','high') else '' }}"><div class="n">{{ asset.last_dast_severity or '&ndash;' | safe }}</div><div class="l">Last dynamic scan</div></div>
   <div class="stat {{ 'bad' if risk.level in ('critical','high') else ('warn' if risk.level == 'medium' else '') }}"><div class="n">{{ risk.level }}</div><div class="l">Combined risk</div></div>
   <div class="stat"><div class="n">{{ links | selectattr('linked') | list | length }}</div><div class="l">Repositories behind it</div></div>
-  <div class="stat {{ 'warn' if due in ('never','due') else '' }}"><div class="n" style="font-size:1.1rem">{{ {'never':'never scanned','due':'overdue','current':'current','no-scan':'no scan'}[due] }}</div><div class="l">Scan status</div></div>
+  <div class="stat {{ 'warn' if due in ('never','due') else '' }}"><div class="n" style="font-size:1.1rem">{{ {'never':'never scanned','due':'overdue','current':'current','no-scan':'no scan','obsolete':'obsolete'}[due] }}</div><div class="l">Scan status</div></div>
 </div>
 <div class="small faint" style="margin:-.4rem 0 1rem">Combined risk: {{ risk.reasons | join('; ') }}.</div>
-
-{% if asset.telemetry_status == 'running' %}<div class="notice info"><div>Reading telemetry.  This page refreshes until it is done.</div></div>{% endif %}
 
 <div class="ext-grid">
   <div>
     <div class="card">
-      <div class="card-head">Screenshot</div>
-      <div class="card-body">
-        {% if asset.screenshot == 'ok' %}
-        <a href="{{ base }}/external/{{ asset.id }}/screenshot.png" target="_blank" rel="noopener"><img class="shot-full" alt="Screenshot of {{ asset.host }}" src="{{ base }}/external/{{ asset.id }}/screenshot.png?v={{ asset.telemetry_at.timestamp() | int if asset.telemetry_at else 0 }}"></a>
-        <div class="small faint" style="margin-top:.3rem">{{ tele.final_url }}</div>
-        {% else %}
-        <div class="empty">{{ {'waf':'A firewall block page answered, so it is not shown.','blank':'The page rendered blank.','nobrowser':'No headless browser on this server.','blocked':'The browser brought back no image.'}.get(asset.screenshot, 'No screenshot yet.') }}
-          {% if tele.shot_detail %}<div class="small faint">{{ tele.shot_detail }}</div>{% endif %}</div>
-        {% endif %}
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-head">Telemetry{% if asset.telemetry_at %} <span class="faint small" style="font-weight:400">read {{ asset.telemetry_at | dt('%Y-%m-%d %H:%M') }}{% if tele.passive %}, passively{% endif %}</span>{% endif %}</div>
-      <div class="card-body">
-        {% if asset.telemetry_status == 'failed' %}<div class="notice bad"><div>{{ asset.telemetry_error }}</div></div>{% endif %}
-        {% if tele %}
-        <table><tbody>
-          <tr><th>Status</th><td>{{ categories.get(asset.category, asset.category) }}{% if asset.status_code %} <span class="faint">HTTP {{ asset.status_code }}</span>{% endif %}
-            {% if tele.waf_block %} <span class="badge info">firewall block page</span>{% endif %}</td></tr>
-          {% if tele.title %}<tr><th>Page title</th><td>{{ tele.title }}</td></tr>{% endif %}
-          <tr><th>Addresses</th><td class="mono small">{{ (tele.ips or []) | join(', ') or 'none' }}</td></tr>
-          {% if tele.isp %}<tr><th>Network owner</th><td>{{ tele.isp }}</td></tr>{% endif %}
-          <tr><th>Open ports</th><td class="small">{% for p in tele.ports or [] %}<span class="badge" title="{{ port_names.get(p, '') }}">{{ p }}{% if port_names.get(p) %} {{ port_names[p] }}{% endif %}</span> {% else %}<span class="faint">none found</span>{% endfor %}
-            {% if tele.passive %}<div class="faint">Only 443 and 80 were tried, since this host is not to be scanned.</div>{% endif %}</td></tr>
-          {% if tele.redirects %}<tr><th>Redirects</th><td class="small mono">{% for r in tele.redirects %}<div>{{ r }}</div>{% endfor %}</td></tr>{% endif %}
-          {% if tele.server or tele.powered_by %}<tr><th>Server</th><td class="mono small">{{ tele.server }}{% if tele.powered_by %} / {{ tele.powered_by }}{% endif %}</td></tr>{% endif %}
-          {% if tele.http_to_https is not none %}<tr><th>HTTP to HTTPS</th><td>{{ 'redirects' if tele.http_to_https else 'does not redirect' }}</td></tr>{% endif %}
-          {% if tele.missing_headers %}<tr><th>Missing headers</th><td class="small">{% for h in tele.missing_headers %}<span class="badge low">{{ h }}</span> {% endfor %}</td></tr>{% endif %}
-          {% set tls = tele.tls or {} %}
-          {% if tls %}
-          <tr><th>TLS</th><td class="small">{{ tls.negotiated_version or 'handshake failed' }}{% if tls.negotiated_cipher %}, {{ tls.negotiated_cipher }}{% endif %}
-            {% if tls.subject %}<div class="mono faint">{{ tls.subject }}</div>{% endif %}
-            {% if tls.issuer %}<div class="faint">issued by {{ tls.issuer }}</div>{% endif %}
-            {% if tls.not_after %}<div>expires {{ tls.not_after[:10] }}{% if tls.days_left is not none %} ({{ tls.days_left }} days){% endif %}</div>{% endif %}
-            {% if tls.key_type %}<div class="faint">{{ tls.key_type }} {{ tls.key_bits }} bit, {{ tls.signature_algorithm }}</div>{% endif %}
-            {% for w in tls.weaknesses or [] %}<div><span class="badge medium">{{ w }}</span></div>{% endfor %}
-            {% if tls.error %}<div class="faint">{{ tls.error }}</div>{% endif %}</td></tr>
-          {% endif %}
-          {% if tele.score and tele.score.notes %}<tr><th>Grade notes</th><td class="small">{{ tele.score.notes | join('; ') }}</td></tr>{% endif %}
-        </tbody></table>
-        {% else %}<div class="empty">Not read yet.</div>{% endif %}
-      </div>
-    </div>
-
-    <div class="card">
       <div class="card-head">About</div>
-      <div class="card-body">
-        <table><tbody>
-          <tr><th>Application</th><td>{{ asset.application or '' }}{% if not asset.application %}<span class="faint">nobody has said</span>{% endif %}</td></tr>
-          <tr><th>Scanning</th><td>{% if blocked %}<strong>Not to be scanned.</strong> {{ blocked }}{% else %}Allowed{% endif %}</td></tr>
-          {% if asset.notes %}<tr><th>Notes</th><td class="small" style="white-space:pre-wrap">{{ asset.notes }}</td></tr>{% endif %}
-        </tbody></table>
-        <form method="post" action="{{ base }}/external/{{ asset.id }}/delete" data-confirm="Remove {{ asset.host }} and every scan recorded against it?" style="margin-top:.6rem">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button class="btn sm danger" type="submit">Remove this site</button></form>
+      <div class="card-body"><table><tbody>
+        <tr><th>Application</th><td>{{ asset.application or '' }}{% if not asset.application %}<span class="faint">nobody has said</span>{% endif %}</td></tr>
+        <tr><th>Executive owner</th><td>{% for o in (asset.executive_owner or '').split(', ') if o %}<div><a href="mailto:{{ o }}">{{ o }}</a></div>{% else %}<span class="faint">nobody has said</span>{% endfor %}</td></tr>
+        <tr><th>Technical owner</th><td>{% for o in (asset.technical_owner or '').split(', ') if o %}<div><a href="mailto:{{ o }}">{{ o }}</a></div>{% else %}<span class="faint">nobody has said</span>{% endfor %}</td></tr>
+        <tr><th>Environment</th><td>{{ environments.get(asset.environment, asset.environment) }}</td></tr>
+        <tr><th>Status</th><td>{{ statuses.get(asset.status, asset.status) }}</td></tr>
+        <tr><th>External auth needed</th><td>{{ 'Yes' if asset.external_auth_needed else 'No' }}</td></tr>
+        <tr><th>Whitelist needed</th><td>{{ 'Yes' if asset.whitelist_needed else 'No' }}</td></tr>
+        <tr><th>Change frequency</th><td>{{ ('every %d days' % asset.change_frequency_days) if asset.change_frequency_days else '' }}{% if not asset.change_frequency_days %}<span class="faint">nobody has said</span>{% endif %}</td></tr>
+        <tr><th>Scanning</th><td>{% if blocked %}<strong>Not to be scanned.</strong> {{ blocked }}{% else %}Allowed{% endif %}</td></tr>
+        {% if asset.notes %}<tr><th>Comments</th><td class="small" style="white-space:pre-wrap">{{ asset.notes }}</td></tr>{% endif %}
+      </tbody></table>
+      <form method="post" action="{{ base }}/external/{{ asset.id }}/delete" data-confirm="Remove {{ asset.host }} and every scan recorded against it?" style="margin-top:.6rem">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn sm danger" type="submit">Remove this site</button></form>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">Web hygiene score</div>
+      <div class="card-body">
+        {% if asset.grade and asset.grade != 'N/A' %}
+        <div class="score-line"><span class="grade big {{ asset.grade }}">{{ asset.grade }}</span>
+          <span><strong>{{ asset.score }}</strong> <span class="faint">of 100</span></span></div>
+        {% set notes = (tele.score or {}).notes or [] %}
+        {% if notes %}<ul class="small">{% for n in notes %}<li>{{ n }}</li>{% endfor %}</ul>
+        {% else %}<div class="small faint">Nothing taken off.</div>{% endif %}
+        {% else %}<div class="small faint">Not graded: nothing answered on the web ports.</div>{% endif %}
+      </div>
+    </div>
+
+    {% for group, rows in fields %}
+    <div class="card">
+      <div class="card-head">{{ group }}
+        {% if loop.first %}<span class="faint small" style="font-weight:400">from the scan unless marked by hand.  Edit fills in or corrects any of them.</span>{% endif %}</div>
+      <div class="card-body"><table class="kv-table"><tbody>
+        {% for f in rows %}
+        <tr><th>{{ f.label }}</th>
+          <td class="small {{ 'mono' if f.key in ('ip','ips','ipv6','ptr','nameservers','cname','mx','open_ports','netblock','asn','final_url','probe_url','redirect_target','tls_san') }}" style="word-break:break-word">
+            {% if f.key == 'open_ports' and f.value and not f.manual %}
+              {% for p in f.value.split(', ') %}<span class="badge" title="{{ port_names.get(p | int, '') }}">{{ p }}{% if port_names.get(p | int) %} {{ port_names[p | int] }}{% endif %}</span> {% endfor %}
+            {% elif f.value %}{{ f.value }}{% else %}<span class="faint">&ndash;</span>{% endif %}
+            {% if f.manual %} <span class="badge pending" title="Filled in by hand">by hand</span>
+              {% if f.scan and f.scan != f.value %}<div class="faint">the scan saw: {{ f.scan }}</div>{% endif %}{% endif %}
+          </td></tr>
+        {% endfor %}
+      </tbody></table></div>
+    </div>
+    {% endfor %}
+
+    <div class="card">
+      <div class="card-head">Security headers</div>
+      {% if tele_headers %}
+      <div class="table-scroll"><table class="kv-table"><tbody>
+        {% for name, label, why in security_headers %}
+        <tr><th>{{ label }}</th>
+          <td class="small">{% if name in tele_headers %}<span class="badge ok">present</span> <span class="mono faint" style="word-break:break-all">{{ tele_headers[name][:200] }}</span>
+            {% else %}<span class="badge medium">missing</span> <span class="faint">{{ why }}</span>{% endif %}</td></tr>
+        {% endfor %}
+      </tbody></table></div>
+      {% else %}<div class="card-body faint small">No HTTP response, so no headers were read.</div>{% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-head">HTTP response headers</div>
+      {% if tele_headers %}
+      <div class="table-scroll"><table class="kv-table"><tbody>
+        {% for name, value in tele_headers | dictsort %}
+        <tr><th class="mono small">{{ name }}</th><td class="mono small" style="word-break:break-all">{{ value[:500] }}</td></tr>
+        {% endfor %}
+      </tbody></table></div>
+      {% else %}<div class="card-body faint small">No HTTP response, so no headers were read.</div>{% endif %}
     </div>
   </div>
 
@@ -143,7 +179,7 @@
 
     <div class="card">
       <div class="card-head">Repositories behind it
-        <span class="faint small" style="font-weight:400">worked out from web addresses, the code, application names and host names.  Linked at {{ 60 }} and over.</span></div>
+        <span class="faint small" style="font-weight:400">picked in Edit, or worked out from the Web Applications tab, web addresses, the code and names.  Linked at 60 and over.</span></div>
       {% if links %}
       <div class="table-scroll"><table>
         <thead><tr><th>Repository</th><th>Why</th><th>Open findings</th><th></th></tr></thead>
@@ -151,8 +187,9 @@
         {% for l in links %}
           <tr>
             <td class="small"><a href="{{ base }}/repositories/{{ l.id }}">{{ l.full_name }}</a>
-              <div>{% if l.linked %}<span class="badge ok">linked</span>{% else %}<span class="badge pending">suggested</span>{% endif %}
-                <span class="faint">{{ l.score }}</span></div></td>
+              <div>{% if l.source == 'manual' %}<span class="badge ok">picked</span>{% elif l.linked %}<span class="badge ok">linked</span>{% else %}<span class="badge pending">suggested</span>{% endif %}
+                <span class="faint">{{ l.score }}</span></div>
+              {% if l.branches %}<div class="faint mono">{{ l.branches | join(', ') }}</div>{% endif %}</td>
             <td class="small">{{ l.reasons | join('; ') }}</td>
             <td class="nowrap">{% set c = counts.get(l.full_name, {}) %}
               {%- for level in ['critical','high','medium','low'] %}{% if c.get(level) %}<a class="badge {{ level }}" href="{{ base }}/findings?repo={{ l.full_name | urlencode }}&state=open&severity={{ level }}">{{ c[level] }}</a> {% endif %}{% endfor %}
@@ -168,32 +205,39 @@
           </tr>
         {% endfor %}
         </tbody></table></div>
-      {% else %}<div class="empty">Nothing found.  Link one by name below, or give the
+      {% else %}<div class="empty">Nothing found.  Pick repositories in Edit, or give a
         repository this host in its web addresses.</div>{% endif %}
-      <div class="card-body">
-        <form method="post" action="{{ base }}/external/{{ asset.id }}/repos" class="filters" style="margin:0">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <div class="field" style="min-width:280px"><label for="repository">Link a repository</label>
-            <input type="text" id="repository" name="repository" placeholder="org/name" required></div>
-          <button class="btn" name="action" value="link" type="submit">Link</button>
-        </form>
-      </div>
     </div>
   </div>
 </div>
 
 <div class="modal-backdrop" id="edit-modal" hidden>
-  <div class="modal"><form method="post" action="{{ base }}/external/{{ asset.id }}/edit">
+  <div class="modal wide"><form method="post" action="{{ base }}/external/{{ asset.id }}/edit">
     <div class="modal-head">Edit {{ asset.host }} <button type="button" class="modal-close" data-close-modal>&times;</button></div>
     <div class="modal-body">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="with_picks" value="1">
+      <input type="hidden" name="with_fields" value="1">
       <label>Application <input type="text" name="application" maxlength="200" value="{{ asset.application }}"></label>
       <label>Tags <input type="text" name="tags" maxlength="1000" value="{{ tags | join(', ') }}">
         <span class="faint small">Comma separated.  A tag that matches a repository's application name links them.</span></label>
+      {{ detail_fields(asset, environments, statuses, picks_json) }}
       <label class="check"><input type="checkbox" name="no_scan" value="1" {{ 'checked' if asset.no_scan }}>
         <span>No scan.  We are not allowed to scan this host{% if asset.kind == 'domain' %} or anything under it{% endif %}.</span></label>
       <label>Why not <input type="text" name="no_scan_reason" maxlength="300" value="{{ asset.no_scan_reason }}" placeholder="Vendor hosted SaaS"></label>
-      <label>Notes <textarea name="notes" rows="4" maxlength="4000">{{ asset.notes }}</textarea></label>
+      <details class="hand-fields">
+        <summary><strong>Telemetry by hand</strong> <span class="faint small">for a site the scan cannot reach, or to correct it.  A value here wins over the scan's until it is cleared.</span></summary>
+        {% for group, rows in fields %}
+        <div class="small" style="margin:.6rem 0 .2rem"><strong>{{ group }}</strong></div>
+        <div class="form-grid">
+          {% for f in rows %}
+          <label>{{ f.label }}
+            <input type="text" name="f:{{ f.key }}" maxlength="2000" value="{{ f.value if f.manual else '' }}"
+                   placeholder="{{ f.scan[:120] if f.scan else '' }}"></label>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </details>
     </div>
     <div class="modal-foot"><button class="btn primary" type="submit">Save</button>
       <button class="btn" type="button" data-close-modal>Cancel</button></div>
@@ -206,6 +250,8 @@
     <div class="modal-head">Scan {{ asset.host }} <button type="button" class="modal-close" data-close-modal>&times;</button></div>
     <div class="modal-body">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% if asset.whitelist_needed %}<div class="notice warn"><div>This site needs the scanner's address let through a firewall first.</div></div>{% endif %}
+      {% if asset.external_auth_needed %}<div class="notice warn"><div>Signing in to this site goes through something outside it.  A scan here only sees what is public.</div></div>{% endif %}
       <label>Run it on
         <select name="server">
           <option value="builtin">This server</option>
@@ -218,7 +264,7 @@
         <span class="faint small">Engines on this server:
           {% for tool, path in engines.items() %}<span class="badge {{ 'ok' if path else 'waived' }}" title="{{ path or 'not installed' }}">{{ engine_names[tool] }}</span> {% endfor %}
           A missing engine is skipped and the scan says so.  The repositories
-          linked to the site are read first for routes to add to the scan.</span></label>
+          behind the site are read first, on the branches picked, for routes to add to the scan.</span></label>
       <label class="check"><input type="checkbox" name="confirm" value="1">
         <span>I am allowed to scan {{ asset.host }} with attack payloads.  Needed for standard and up, and for a DAST server.</span></label>
       <label class="check"><input type="checkbox" name="ai" value="1" {{ 'disabled' if not ai_ready }}>
@@ -253,4 +299,5 @@
       <button class="btn" type="button" data-close-modal>Cancel</button></div>
   </form></div>
 </div>
+<script src="{{ base }}/static/external.js?v={{ asset_v('external.js') }}"></script>
 {% endblock %}

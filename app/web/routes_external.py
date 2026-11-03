@@ -89,12 +89,52 @@ def _checked(form, name: str) -> bool:
     return str(form.get(name) or "").lower() in ("1", "on", "true", "yes")
 
 
+DETAIL_FIELDS = ("executive_owner", "technical_owner", "comments", "status",
+                 "environment", "external_auth_needed", "whitelist_needed",
+                 "change_frequency_days")
+
+
+def _detail_form(form) -> dict:
+    """The site details as a form sends them.  A tick box left unticked is
+    not sent at all, so it is read as no rather than as not mentioned."""
+    out = {key: form.get(key) for key in DETAIL_FIELDS}
+    for key in ("external_auth_needed", "whitelist_needed"):
+        out[key] = _checked(form, key)
+    return out
+
+
+@router.get("/external/repo-choices")
+def repo_choices(user: User = Depends(current_user)):
+    """Every repository the person may see, with its branches, for the picker."""
+    with session_scope() as db:
+        _guard(db, user)
+        return JSONResponse(external.repo_choices(db, user),
+                            headers={"Cache-Control": "private, no-store"})
+
+
+@router.get("/external/repo-recommendations")
+def repo_recommendations(hosts: str = "", application: str = "", tags: str = "",
+                         asset: int = 0, user: User = Depends(current_user)):
+    """The repositories likely behind some hosts, or behind one site."""
+    with session_scope() as db:
+        _guard(db, user)
+        site = _asset(db, asset) if asset else None
+        names = [h for h in hosts.replace(",", "\n").splitlines() if h.strip()][:50]
+        found = external.recommend(
+            db, user, names,
+            clean_text(application, "Application", limit=200, required=False),
+            [t for t in tags.split(",") if t.strip()][:30], asset=site)
+        if site is None:
+            db.expunge_all()
+        return JSONResponse(found, headers={"Cache-Control": "private, no-store"})
+
+
 # ------------------------------------------------------------------ list
 
 @router.get("/external")
 def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
               grade: str = "", dast: str = "", risk: str = "", scope: str = "",
-              user: User = Depends(current_user)):
+              env: str = "", status: str = "", user: User = Depends(current_user)):
     """Every external site, newest problems first."""
     with session_scope() as db:
         _guard(db, user)
@@ -123,7 +163,12 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                 "blocked": external.is_blocked(a.host, blocked, a.no_scan),
                 "tele": external.telemetry_of(a),
             }
+            if env and (a.environment or "prod") != env:
+                continue
+            if status and (a.status or "active") != status:
+                continue
             if q and q not in " ".join([a.host, a.application or "", a.ip or "",
+                                        a.executive_owner or "", a.technical_owner or "",
                                         " ".join(row["tags"]),
                                         " ".join(l["full_name"] for l in linked)]).lower():
                 continue
@@ -153,7 +198,9 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
             "sites": len(assets), "shown": len(rows),
             "domains": sum(1 for a in assets if a.kind == "domain"),
             "live": sum(1 for a in assets if a.category in ("live", "redir", "gated")),
-            "never": sum(1 for a in assets if not a.last_dast_at and not a.no_scan),
+            "never": sum(1 for a in assets if not a.last_dast_at and not a.no_scan
+                         and a.status != "obsolete"),
+            "obsolete": sum(1 for a in assets if a.status == "obsolete"),
             "due": sum(1 for a in assets if external.due_status(a, opts["max_age_days"]) == "due"),
             "dast_bad": sum(1 for a in assets if a.last_dast_severity in ("critical", "high")),
             "no_scan": sum(1 for a in assets if external.is_blocked(a.host, blocked, a.no_scan)),
@@ -161,9 +208,14 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
         }
         servers = db.query(DastServer).order_by(DastServer.name).all()
         context = _shared(db, user)
+        from app.core import dast_engines
+
         context.update(active_page="external", rows=rows, totals=totals,
+                       profiles=dast_engines.PROFILES,
                        q=q, tag=tag, app=app, grade=grade, dast=dast, risk=risk,
                        scope=scope, all_tags=all_tags, apps=apps, opts=opts,
+                       env=env, status=status, environments=external.ENVIRONMENTS,
+                       statuses=external.STATUSES,
                        servers=servers,
                        running=sum(1 for a in assets if a.telemetry_status == "running"),
                        flash=clean_notice(request.query_params.get("msg", ""), limit=300),
@@ -182,24 +234,33 @@ def export_csv(request: Request, user: User = Depends(current_user)):
         out = io.StringIO()
         writer = csv.writer(out)
         writer.writerow(["host", "kind", "parent_domain", "application", "tags",
-                         "no_scan", "no_scan_reason", "ip", "status", "http_status",
-                         "grade", "score", "tls_days_left", "open_ports",
+                         "environment", "status", "executive_owner", "technical_owner",
+                         "external_auth_needed", "whitelist_needed",
+                         "change_frequency_days", "no_scan", "no_scan_reason",
                          "telemetry_at", "last_dast_at", "last_dast_severity",
-                         "last_dast_server", "last_dast_url", "repositories", "notes"])
+                         "last_dast_server", "last_dast_url", "repositories", "comments"]
+                        + external.FIELD_KEYS)
         for a in db.query(ExternalAsset).order_by(ExternalAsset.host):
-            tele = external.telemetry_of(a)
+            values = external.field_values(a)
+            repos = []
+            for l in mapper.links(a):
+                if l["linked"]:
+                    repos += [f"{l['full_name']}@{b}" for b in l.get("branches") or []] \
+                        or [l["full_name"]]
             writer.writerow([_quote_formula(str(c)) for c in [
                 a.host, a.kind, a.parent_domain, a.application, "; ".join(a.tag_list()),
-                "yes" if a.no_scan else "", a.no_scan_reason or "", a.ip or "",
-                a.category or "", a.status_code or "", a.grade or "", a.score or "",
-                "" if a.tls_days_left is None else a.tls_days_left,
-                " ".join(str(p) for p in tele.get("ports") or []),
+                external.ENVIRONMENTS.get(a.environment, a.environment or ""),
+                external.STATUSES.get(a.status, a.status or ""),
+                a.executive_owner or "", a.technical_owner or "",
+                "yes" if a.external_auth_needed else "no",
+                "yes" if a.whitelist_needed else "no",
+                a.change_frequency_days or "",
+                "yes" if a.no_scan else "", a.no_scan_reason or "",
                 a.telemetry_at.strftime("%Y-%m-%d %H:%M") if a.telemetry_at else "",
                 a.last_dast_at.strftime("%Y-%m-%d") if a.last_dast_at else "",
                 a.last_dast_severity or "", a.last_dast_server or "",
-                a.last_dast_url or "",
-                " ".join(l["full_name"] for l in mapper.links(a) if l["linked"]),
-                (a.notes or "").replace("\n", " ")]])
+                a.last_dast_url or "", " ".join(repos),
+                (a.notes or "").replace("\n", " ")] + [values.get(k, "") for k in external.FIELD_KEYS]])
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
     return Response(content=out.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition":
@@ -222,7 +283,14 @@ async def add(request: Request, user: User = Depends(current_user)):
         tags = [t for t in str(form.get("tags") or "").replace(";", ",").split(",")]
         no_scan = _checked(form, "no_scan")
         reason = clean_text(form.get("no_scan_reason"), "Reason", limit=300, required=False)
-        got = external.add_assets(db, rows, user.username, no_scan, reason, tags)
+        try:
+            details = external.clean_details(_detail_form(form))
+            picks = external.parse_picks(form.getlist("pick"))
+            got = external.add_assets(db, rows, user.username, no_scan, reason, tags,
+                                      details=details, picks=picks, user=user)
+        except ValueError as exc:
+            db.rollback()
+            return redirect(_back("/external", str(exc), "error"))
         record(db, "external.added", actor=user.username,
                target=f"{len(got['added'])} sites",
                detail=", ".join(got["added"][:20])[:500], source_ip=client_ip(request))
@@ -283,6 +351,85 @@ async def refresh_many(request: Request, user: User = Depends(current_user)):
     return redirect(_back("/external", f"Reading telemetry for {queued} site{'s' if queued != 1 else ''}."))
 
 
+def _ticked(form) -> list:
+    ids = []
+    for raw in form.getlist("id"):
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    return list(dict.fromkeys(ids))[:500]
+
+
+@router.post("/external/delete-many")
+async def delete_many(request: Request, user: User = Depends(current_user)):
+    """Remove the ticked sites and their scan history.  One with a scan
+    running is left alone and said so."""
+    await check_csrf(request)
+    form = await request.form()
+    removed, kept = [], []
+    with session_scope() as db:
+        _guard(db, user)
+        ids = _ticked(form)
+        if not ids:
+            return redirect(_back("/external", "Tick the sites to remove first.", "error"))
+        busy = {s.asset_id for s in db.query(ExternalDastScan).filter(
+            ExternalDastScan.asset_id.in_(ids),
+            ExternalDastScan.status.in_(("queued", "running")))}
+        for asset in db.query(ExternalAsset).filter(ExternalAsset.id.in_(ids)).all():
+            if asset.id in busy:
+                kept.append(asset.host)
+                continue
+            removed.append((asset.id, asset.host))
+            db.delete(asset)
+        record(db, "external.deleted", actor=user.username,
+               target=f"{len(removed)} sites",
+               detail=", ".join(h for _i, h in removed)[:500], source_ip=client_ip(request))
+    for asset_id, _host in removed:
+        external.shot_path(asset_id).unlink(missing_ok=True)
+    message = f"Removed {len(removed)} site{'s' if len(removed) != 1 else ''}."
+    if kept:
+        message += f"  Left {', '.join(kept[:5])}: a scan is running."
+    return redirect(_back("/external", message, "error" if kept and not removed else "ok"))
+
+
+@router.post("/external/scan-many")
+async def scan_many(request: Request, user: User = Depends(current_user)):
+    """Start the same scan on every ticked site.  They queue and run one at a
+    time.  Sites marked no scan, or already scanning, are skipped and named."""
+    await check_csrf(request)
+    from app.core import dast_engines
+
+    form = await request.form()
+    profile = str(form.get("profile") or "baseline")
+    with session_scope() as db:
+        _guard(db, user)
+        ids = _ticked(form)[:50]
+        if not ids:
+            return redirect(_back("/external", "Tick the sites to scan first.", "error"))
+        if profile not in dast_engines.PROFILES:
+            return redirect(_back("/external", "Pick a scan profile.", "error"))
+        if profile in dast_engines.ACTIVE_PROFILES and not _checked(form, "confirm"):
+            return redirect(_back("/external", "Tick the box to confirm you are allowed to "
+                                               "send attack payloads to these sites.", "error"))
+    started, skipped = 0, []
+    for asset_id in ids:
+        scan_id, problem = external.start_scan(asset_id, profile, user.username,
+                                               ai_triage=_checked(form, "ai"))
+        if scan_id:
+            started += 1
+        else:
+            skipped.append(problem)
+    with session_scope() as db:
+        record(db, "external.scan_started", actor=user.username,
+               target=f"{started} sites", detail=f"{profile}, {len(skipped)} skipped",
+               source_ip=client_ip(request))
+    message = f"Started a {profile} scan of {started} site{'s' if started != 1 else ''}.  They run one at a time."
+    if skipped:
+        message += "  Skipped: " + "; ".join(skipped[:3])
+    return redirect(_back("/external", message, "ok" if started else "error"))
+
+
 # ------------------------------------------------------------------ one site
 
 @router.get("/external/{asset_id}")
@@ -314,6 +461,9 @@ def detail_page(asset_id: int, request: Request, user: User = Depends(current_us
             risk=external.combined_risk(asset, linked),
             due=external.due_status(asset, opts["max_age_days"]),
             blocked=external.blocked(db, asset), scans=scans,
+            fields=external.fields_of(asset), security_headers=external.SECURITY_HEADERS,
+            picks_json=json.dumps(external.picks_of(db, asset)),
+            environments=external.ENVIRONMENTS, statuses=external.STATUSES,
             scan_views=[external.scan_dict(s) for s in scans],
             servers=db.query(DastServer).order_by(DastServer.name).all(),
             profiles=dast_engines.PROFILES, active=dast_engines.ACTIVE_PROFILES,
@@ -351,7 +501,17 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
         before = asset.no_scan
         asset.application = clean_text(form.get("application"), "Application",
                                        limit=200, required=False)
-        asset.notes = clean_text(form.get("notes"), "Notes", limit=4000, required=False)
+        try:
+            external.apply_details(asset, external.clean_details(_detail_form(form)))
+            if form.get("with_picks"):
+                external.set_picks(db, asset, external.parse_picks(form.getlist("pick")),
+                                   user.username, user)
+            if form.get("with_fields"):
+                external.set_manual(asset, {key: form.get(f"f:{key}") or ""
+                                            for key in external.FIELD_KEYS}, replace=True)
+        except ValueError as exc:
+            db.rollback()
+            return redirect(_back(here, str(exc), "error"))
         asset.no_scan = _checked(form, "no_scan")
         asset.no_scan_reason = clean_text(form.get("no_scan_reason"), "Reason",
                                           limit=300, required=False) if asset.no_scan else ""
@@ -708,6 +868,40 @@ def _view(db, asset, me, request: Request):
                                public_base(request))
 
 
+def _api_details(body: dict) -> dict:
+    """The site details from a JSON body, each checked for its type."""
+    out = {}
+    for key in ("executive_owner", "technical_owner", "comments", "notes",
+                "status", "environment"):
+        if body.get(key) is not None:
+            if not isinstance(body[key], str):
+                raise HTTPException(status_code=400, detail=f"{key} has to be a string.")
+            out[key] = body[key]
+    for key in ("external_auth_needed", "whitelist_needed"):
+        if body.get(key) is not None:
+            if not isinstance(body[key], bool):
+                raise HTTPException(status_code=400, detail=f"{key} has to be true or false.")
+            out[key] = body[key]
+    if "change_frequency_days" in body:
+        value = body["change_frequency_days"]
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
+            raise HTTPException(status_code=400,
+                                detail="change_frequency_days has to be a whole number.")
+        out["change_frequency_days"] = value
+    return out
+
+
+def _api_fields(body: dict) -> dict:
+    value = body.get("telemetry_fields")
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=400, detail="telemetry_fields has to be an object.")
+    for key, item in value.items():
+        if item is not None and not isinstance(item, (str, int)):
+            raise HTTPException(status_code=400,
+                                detail=f"telemetry_fields.{key} has to be text, a number or null.")
+    return value
+
+
 def _paging(request: Request) -> tuple:
     try:
         limit = int(request.query_params.get("limit", 100))
@@ -750,6 +944,10 @@ def api_list(request: Request, caller=Depends(_api_caller())):
                 ExternalAssetTag.tag == params["tag"][:100]))
         if params.get("severity"):
             query = query.filter(ExternalAsset.last_dast_severity == params["severity"][:16])
+        if params.get("environment"):
+            query = query.filter(ExternalAsset.environment == params["environment"].lower()[:16])
+        if params.get("status"):
+            query = query.filter(ExternalAsset.status == params["status"].lower()[:16])
         total = query.count()
         rows = query.order_by(ExternalAsset.host).offset(offset).limit(limit).all()
         return {"total": total, "limit": limit, "offset": offset,
@@ -772,14 +970,19 @@ async def api_add(request: Request, caller=Depends(_api_caller())):
     with session_scope() as db:
         me = _api_me(db, caller)
         existed = db.query(ExternalAsset).filter(ExternalAsset.host == host).one_or_none()
-        got = external.add_assets(db, [{
-            "host": host, "application": _str_field(body, "application", 200) or "",
-            "tags": tags, "no_scan": bool(body.get("no_scan")),
-            "no_scan_reason": _str_field(body, "no_scan_reason", 300) or ""}],
-            me.username)
-        asset = db.query(ExternalAsset).filter(ExternalAsset.host == host).one()
-        if body.get("notes") is not None:
-            asset.notes = _str_field(body, "notes", 4000) or ""
+        try:
+            details = external.clean_details(_api_details(body))
+            picks = external.picks_from_names(db, body.get("repositories") or [])
+            got = external.add_assets(db, [{
+                "host": host, "application": _str_field(body, "application", 200) or "",
+                "tags": tags, "no_scan": bool(body.get("no_scan")),
+                "no_scan_reason": _str_field(body, "no_scan_reason", 300) or ""}],
+                me.username, details=details, picks=picks, user=me)
+            asset = db.query(ExternalAsset).filter(ExternalAsset.host == host).one()
+            if body.get("telemetry_fields") is not None and not existed:
+                external.set_manual(asset, _api_fields(body))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         record(db, "external.added", actor=me.username, target=host,
                detail=f"api token {caller.token.prefix}", source_ip=client_ip(request))
         out = _view(db, asset, me, request)
@@ -802,10 +1005,20 @@ async def api_patch(asset_id: int, request: Request, caller=Depends(_api_caller(
     with session_scope() as db:
         me = _api_me(db, caller)
         asset = _asset(db, asset_id)
-        for field, limit in (("application", 200), ("notes", 4000)):
-            value = _str_field(body, field, limit)
-            if value is not None:
-                setattr(asset, field, value)
+        value = _str_field(body, "application", 200)
+        if value is not None:
+            asset.application = value
+        try:
+            external.apply_details(asset, external.clean_details(_api_details(body),
+                                                                 partial=True))
+            if "repositories" in body:
+                external.set_picks(db, asset,
+                                   external.picks_from_names(db, body["repositories"] or []),
+                                   me.username, me)
+            if body.get("telemetry_fields") is not None:
+                external.set_manual(asset, _api_fields(body))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
         if "tags" in body:
             if not isinstance(body["tags"], list) or not all(isinstance(t, str) for t in body["tags"]):
                 raise HTTPException(status_code=400, detail="tags has to be a list of strings.")

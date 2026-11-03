@@ -2264,6 +2264,21 @@ class ExternalAsset(Base):
     no_scan = Column(Boolean, default=False, nullable=False)
     no_scan_reason = Column(String(300), default="")
 
+    # Who answers for the site, as addresses, comma separated.
+    executive_owner = Column(String(500), default="")
+    technical_owner = Column(String(500), default="")
+    # active or obsolete.  An obsolete site is kept for its history and left
+    # out of the nightly telemetry.
+    status = Column(String(16), default="active", nullable=False)
+    # prod, dev, stage or clone.
+    environment = Column(String(16), default="prod", nullable=False)
+    # Whether a scan needs to sign in through something outside the site, and
+    # whether the scanner's address has to be let through a firewall first.
+    external_auth_needed = Column(Boolean, default=False, nullable=False)
+    whitelist_needed = Column(Boolean, default=False, nullable=False)
+    # How often the site changes, in days, as somebody who knows it said.
+    change_frequency_days = Column(Integer)
+
     # The last telemetry pass.  The whole record is kept as JSON, and the few
     # fields the list filters on are copied out.
     telemetry = Column(LONG_JSON, default="")
@@ -2279,6 +2294,10 @@ class ExternalAsset(Base):
     tls_days_left = Column(Integer)
     # ok, blank, waf, blocked, nobrowser, or empty when never tried.
     screenshot = Column(String(16), default="")
+    # Telemetry fields somebody filled in by hand, as JSON {field: value}.
+    # A value here wins over what the scan saw until it is cleared, so a
+    # site the scanner cannot reach can still be described.
+    manual_telemetry = Column(LONG_JSON, default="")
 
     # The newest dynamic scan that finished, copied from external_dast_scans.
     last_dast_at = Column(DateTime(timezone=True))
@@ -2339,8 +2358,13 @@ class ExternalAssetRepo(Base):
                       nullable=False, index=True)
     repository_id = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"),
                            nullable=False, index=True)
-    # manual, or hidden when somebody said a found link is wrong.
+    # manual, code when a scan found the host in the code, or hidden when
+    # somebody said a found link is wrong.
     source = Column(String(16), default="manual", nullable=False)
+    # The branches somebody picked, as a JSON list.  Empty means the default
+    # branch.  A list on the row rather than a row per branch, so the one
+    # link per site and repository the table already enforces still holds.
+    branches = Column(Text, default="")
     added_by = Column(String(120), default="")
     added_at = Column(DateTime(timezone=True), default=utcnow)
 
