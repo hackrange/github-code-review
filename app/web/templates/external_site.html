@@ -167,10 +167,11 @@
     </div>
 
     <div class="card">
-      <div class="card-head">Dynamic scans</div>
+      <div class="card-head">Dynamic scans
+        {% if scan_total %}<span class="faint small" style="font-weight:400">{{ scan_total }} in all, newest first</span>{% endif %}</div>
       {% if scan_views %}
       <div class="table-scroll"><table>
-        <thead><tr><th>When</th><th>Server</th><th>Result</th><th>Findings</th><th>AI</th></tr></thead>
+        <thead><tr><th>When</th><th>Server</th><th>Result</th><th>Findings</th><th>AI</th><th></th></tr></thead>
         <tbody>
         {% for s in scan_views %}
           <tr>
@@ -185,9 +186,33 @@
             <td class="nowrap">{% for level in ['critical','high','medium','low'] %}{% if s.counts[level] %}<span class="badge {{ level }}">{{ s.counts[level] }}</span> {% endif %}{% endfor %}
               {% if s.counts.info %}<span class="badge info">{{ s.counts.info }}</span>{% endif %}</td>
             <td class="small">{% if s.ai.status %}{{ s.ai.status }}{% if s.ai.input_tokens %}<div class="faint">{{ (s.ai.input_tokens + s.ai.output_tokens) | thousands }} tokens{% if s.ai.cost %}, {{ s.ai.cost }}{% endif %}</div>{% endif %}{% endif %}</td>
+            <td class="nowrap">
+              {% set back = '/external/' ~ asset.id ~ ('?scans=' ~ scan_page if scan_page > 1 else '') %}
+              {% if s.status in ('queued', 'running') %}
+              <form method="post" action="{{ base }}/external/{{ asset.id }}/scans/{{ s.id }}/stop" style="display:inline"
+                    data-confirm="Stop this scan?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="back" value="{{ back }}">
+                <button class="btn sm danger" type="submit">Stop</button></form>
+              {% else %}
+              <form method="post" action="{{ base }}/external/{{ asset.id }}/scans/{{ s.id }}/delete" style="display:inline"
+                    data-confirm="Delete this scan and its findings?  It cannot be undone.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="back" value="{{ back }}">
+                <button class="btn sm" type="submit" title="Delete this scan">Delete</button></form>
+              {% endif %}</td>
           </tr>
         {% endfor %}
         </tbody></table></div>
+      {% if scan_pages > 1 %}
+      <div class="card-body" style="display:flex;gap:.4rem;align-items:center">
+        {% if scan_page > 1 %}<a class="btn sm" href="{{ base }}/external/{{ asset.id }}{{ '?scans=%d' % (scan_page - 1) if scan_page > 2 else '' }}">Newer</a>
+        {% else %}<span class="btn sm" aria-disabled="true" style="opacity:.45">Newer</span>{% endif %}
+        <span class="faint small">Page {{ scan_page }} of {{ scan_pages }}</span>
+        {% if scan_page < scan_pages %}<a class="btn sm" href="{{ base }}/external/{{ asset.id }}?scans={{ scan_page + 1 }}">Older</a>
+        {% else %}<span class="btn sm" aria-disabled="true" style="opacity:.45">Older</span>{% endif %}
+      </div>
+      {% endif %}
       {% else %}<div class="empty">No dynamic scan recorded yet.</div>{% endif %}
     </div>
 

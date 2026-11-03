@@ -435,8 +435,24 @@ async def scan_many(request: Request, user: User = Depends(current_user)):
 
 # ------------------------------------------------------------------ one site
 
+SCANS_PER_PAGE = 5
+
+
+def _safe_back(raw, asset_id: int, fallback: str) -> str:
+    """Where a button on one of our pages asked to go back to: the list, or
+    this site's page, with at most a page number of its scans.  Anything else
+    is ignored, so the field cannot send anybody off the site."""
+    import re as _re
+
+    text = str(raw or "")
+    if text == "/external" or _re.fullmatch(rf"/external/{int(asset_id)}(\?scans=\d{{1,5}})?", text):
+        return text
+    return fallback
+
+
 @router.get("/external/{asset_id}")
-def detail_page(asset_id: int, request: Request, user: User = Depends(current_user)):
+def detail_page(asset_id: int, request: Request, scans: int = 1,
+                user: User = Depends(current_user)):
     from app.core import ai, dast_engines
 
     with session_scope() as db:
@@ -446,29 +462,36 @@ def detail_page(asset_id: int, request: Request, user: User = Depends(current_us
         links = external.Mapper(db, user).links(asset)
         names = [l["full_name"] for l in links]
         counts = external.sast_counts(db, names, user)
-        scans = (db.query(ExternalDastScan)
-                 .filter(ExternalDastScan.asset_id == asset.id)
-                 .order_by(ExternalDastScan.id.desc()).limit(100).all())
+        # Newest first, a page at a time.  Started, then finished, time
+        # order and id order agree, so the id is the cheap way to sort.
+        scan_query = db.query(ExternalDastScan).filter(ExternalDastScan.asset_id == asset.id)
+        scan_total = scan_query.count()
+        scan_pages = max(1, -(-scan_total // SCANS_PER_PAGE))
+        scan_page = min(max(1, scans), scan_pages)
+        page_scans = (scan_query.order_by(ExternalDastScan.id.desc())
+                      .offset((scan_page - 1) * SCANS_PER_PAGE).limit(SCANS_PER_PAGE).all())
+        running = external.running_scans(db, [asset.id])
         linked = {l["full_name"]: counts.get(l["full_name"], {}) for l in links if l["linked"]}
         try:
             review = json.loads(asset.ai_review or "{}") if asset.ai_review else {}
         except ValueError:
             review = {}
+        active_scan = running.get(asset.id)
         busy = (asset.telemetry_status == "running" or asset.ai_status == "running"
-                or any(s.status in ("queued", "running") or s.ai_status == "running"
-                       for s in scans))
-        active_scan = next((s for s in scans if s.status in ("queued", "running")), None)
+                or active_scan is not None
+                or any(s.ai_status == "running" for s in page_scans))
         context = _shared(db, user)
         context.update(
             active_page="external", asset=asset, tele=external.telemetry_of(asset),
             tags=asset.tag_list(), links=links, counts=counts,
             risk=external.combined_risk(asset, linked),
             due=external.due_status(asset, opts["max_age_days"]),
-            blocked=external.blocked(db, asset), scans=scans, active_scan=active_scan,
+            blocked=external.blocked(db, asset), scans=page_scans, active_scan=active_scan,
+            scan_page=scan_page, scan_pages=scan_pages, scan_total=scan_total,
             fields=external.fields_of(asset), security_headers=external.SECURITY_HEADERS,
             picks_json=json.dumps(external.picks_of(db, asset)),
             environments=external.ENVIRONMENTS, statuses=external.STATUSES,
-            scan_views=[external.scan_dict(s) for s in scans],
+            scan_views=[external.scan_dict(s) for s in page_scans],
             servers=db.query(DastServer).order_by(DastServer.name).all(),
             profiles=dast_engines.PROFILES, active=dast_engines.ACTIVE_PROFILES,
             plans=dast_engines.PLANS, engines=dast_engines.installed(),
@@ -704,23 +727,24 @@ async def scan_action(asset_id: int, scan_id: int, action: str, request: Request
         scan = _scan(db, asset_id, scan_id)
         host = asset.host
         if action == "delete":
+            form = await request.form()
+            back = _safe_back(form.get("back"), asset_id, f"/external/{asset_id}")
             if scan.status in ("queued", "running"):
-                return redirect(_back(here, "Stop it first.", "error"))
+                return redirect(_back(back if back != f"/external/{asset_id}" else here,
+                                      "Stop it first.", "error"))
             db.delete(scan)
             db.flush()
             external.copy_newest(db, asset)
             record(db, "external.scan_deleted", actor=user.username, target=host,
                    detail=f"scan {scan_id}", source_ip=client_ip(request))
-            return redirect(_back(f"/external/{asset_id}", "Removed that scan."))
+            return redirect(_back(back, "Removed that scan."))
     if action == "stop":
         ok = external.stop_scan(scan_id)
         message, kind = ("Stopping the scan of " + host + ".", "ok") if ok \
             else ("It is not running.", "error")
         form = await request.form()
         # Back to where the Stop was pressed, and only to a page of ours.
-        back = str(form.get("back") or "")
-        if back in ("/external", f"/external/{asset_id}"):
-            here = back
+        here = _safe_back(form.get("back"), asset_id, here)
     elif action == "triage":
         problem = external.start_triage(scan_id, user.username)
         message, kind = (problem, "error") if problem else ("Asking the model.  This page "
