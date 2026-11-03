@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Scan of {{ asset.host }} &middot; Git Code Review{% endblock %}
-{% block head %}{% if busy %}<meta name="gcr-refresh" content="15">{% endif %}{% endblock %}
+{% block head %}{% if busy %}<meta name="gcr-refresh" content="8">{% endif %}{% endblock %}
 {% block content %}
 {% set here = base ~ '/external/' ~ asset.id ~ '/scans/' ~ scan.id %}
 <div class="page-head">
@@ -34,19 +34,22 @@
   </div>
 </div>
 
+<div data-live="scan-status">
 {% if scan.status in ('queued','running') %}
-<div class="notice info"><div>{{ scan.status | capitalize }}{% if scan.step %}: {{ scan.step }}{% endif %}.  This page refreshes while it runs.</div></div>
+<div class="notice info"><div>{{ scan.status | capitalize }}{% if scan.step %}: {{ scan.step }}{% endif %}.  This updates as it runs.</div></div>
 {% elif scan.status == 'failed' %}
 <div class="notice bad"><div>{{ scan.error or 'It failed.' }}</div></div>
 {% endif %}
+</div>
 
-<div class="stats">
+<div class="stats" data-live="scan-stats">
   <div class="stat {{ 'bad' if view.severity in ('critical','high') else ('ok' if scan.status == 'done' and view.severity in ('', 'none') else '') }}"><div class="n" style="{{ 'font-size:1.1rem' if view.severity in ('', 'none') }}">{% if scan.status != 'done' %}&ndash;{% elif view.severity in ('', 'none') %}no findings{% else %}{{ view.severity }}{% endif %}</div><div class="l">Worst found</div></div>
   {% for level in ['critical','high','medium','low','info'] %}
   <a class="stat {{ 'bad' if level in ('critical','high') and view.counts[level] else '' }}" href="{{ here }}?sev={{ level }}"><div class="n">{{ view.counts[level] }}</div><div class="l">{{ level }}</div></a>
   {% endfor %}
 </div>
 
+<div data-live="scan-engines">
 {% if view.engines %}
 <div class="card">
   <div class="card-head">What ran</div>
@@ -63,6 +66,7 @@
 </div>
 {% endif %}
 
+</div>
 {% set ai = view.ai %}
 {% if ai.status %}
 <div class="card">

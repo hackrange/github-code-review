@@ -226,18 +226,66 @@
   Array.prototype.forEach.call(pickers, setup);
 })();
 
-/* Pages that are waiting on something reload themselves, but never while a
- * dialog is open: that would throw away whatever somebody was typing. */
+/* Pages that are waiting on something keep themselves up to date without
+ * reloading.  Every few seconds the page is fetched again in the background
+ * and only the parts marked data-live are swapped for their new versions, so
+ * the rest of the page, what is ticked and where it is scrolled to, stay put.
+ *
+ * When the new copy says nothing is running any more, the page reloads once,
+ * so the finished results, the screenshot and the buttons all come in.  It
+ * never touches the page while a dialog is open. */
 (function () {
   "use strict";
   var meta = document.querySelector('meta[name="gcr-refresh"]');
   if (!meta) { return; }
   var seconds = Math.max(5, parseInt(meta.content, 10) || 15);
-  setInterval(function () {
-    var open = Array.prototype.some.call(
+  var busy = false;
+
+  function dialogOpen() {
+    return Array.prototype.some.call(
       document.querySelectorAll(".modal-backdrop"), function (n) { return !n.hidden; });
-    if (!open && !document.hidden) { window.location.reload(); }
-  }, seconds * 1000);
+  }
+
+  function swap(fresh) {
+    document.querySelectorAll("[data-live]").forEach(function (old) {
+      var key = old.getAttribute("data-live");
+      var next = fresh.querySelector('[data-live="' + CSS.escape(key) + '"]');
+      if (!next || next.innerHTML === old.innerHTML) { return; }
+      old.innerHTML = next.innerHTML;
+      old.className = next.className;
+      /* What came in was not there when the page set up its confirmations. */
+      old.querySelectorAll("form[data-confirm]").forEach(function (f) { f.setAttribute("data-swapped", "1"); });
+    });
+  }
+
+  function tick() {
+    if (busy || document.hidden || dialogOpen()) { return; }
+    busy = true;
+    fetch(window.location.pathname + window.location.search,
+          {credentials: "same-origin", headers: {"X-Requested-With": "live"}})
+      .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.text(); })
+      .then(function (html) {
+        var fresh = new DOMParser().parseFromString(html, "text/html");
+        if (!fresh.querySelector('meta[name="gcr-refresh"]')) {
+          window.location.reload();
+          return;
+        }
+        swap(fresh);
+      })
+      .catch(function () { /* try again next time */ })
+      .then(function () { busy = false; });
+  }
+
+  /* The confirmation a swapped in Stop or Delete button needs. */
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    if (form.getAttribute && form.getAttribute("data-swapped") === "1" &&
+        !window.confirm(form.getAttribute("data-confirm"))) {
+      event.preventDefault();
+    }
+  }, true);
+
+  setInterval(tick, seconds * 1000);
 })();
 
 /* The list: tick all, a count of what is ticked, actions that need a tick,

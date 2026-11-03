@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_external_fields.html" import detail_fields %}
 {% block title %}External sites &middot; Git Code Review{% endblock %}
-{% block head %}{% if running or scanning %}<meta name="gcr-refresh" content="15">{% endif %}{% endblock %}
+{% block head %}{% if running or scanning %}<meta name="gcr-refresh" content="10">{% endif %}{% endblock %}
 {% block content %}
 <div class="page-head">
   <div><h1>External sites</h1>
@@ -30,7 +30,7 @@
 </div>
 
 {% set here = base ~ '/external' %}
-<div class="stats">
+<div class="stats" data-live="list-stats">
   <div class="stat"><div class="n">{{ totals.sites }}</div><div class="l">Sites</div></div>
   <div class="stat"><div class="n">{{ totals.live }}</div><div class="l">Answering</div></div>
   <a class="stat warn" href="{{ here }}?dast=never"><div class="n">{{ totals.never }}</div><div class="l">Never scanned</div></a>
@@ -39,8 +39,10 @@
   <a class="stat" href="{{ here }}?scope=mapped"><div class="n">{{ totals.mapped }}</div><div class="l">Mapped to code</div></a>
   <a class="stat" href="{{ here }}?scope=no-scan"><div class="n">{{ totals.no_scan }}</div><div class="l">No scan</div></a>
 </div>
-{% if running %}<div class="notice info"><div>Reading telemetry for {{ running }} site{{ '' if running == 1 else 's' }}.  This page refreshes until they finish.</div></div>{% endif %}
-{% if scanning %}<div class="notice info"><div>Scanning {{ scanning }} site{{ '' if scanning == 1 else 's' }} now.  {{ max_concurrent }} engine scan{{ '' if max_concurrent == 1 else 's' }} run at a time, set in Settings; the rest wait their turn.  This page refreshes until they finish.</div></div>{% endif %}
+<div data-live="list-notices">
+{% if running %}<div class="notice info"><div>Reading telemetry for {{ running }} site{{ '' if running == 1 else 's' }}.  The list updates as they finish.</div></div>{% endif %}
+{% if scanning %}<div class="notice info"><div>Scanning {{ scanning }} site{{ '' if scanning == 1 else 's' }} now.  {{ max_concurrent }} engine scan{{ '' if max_concurrent == 1 else 's' }} run at a time, set in Settings; the rest wait their turn.  The list updates as they run.</div></div>{% endif %}
+</div>
 
 <form method="get" action="{{ here }}" class="filters">
   <div class="field" style="min-width:240px"><label for="q">Search</label>
@@ -103,7 +105,7 @@
               {% if a.external_auth_needed %}<span class="badge info" title="External auth needed">ext auth</span>{% endif %}
               {% if a.whitelist_needed %}<span class="badge pending" title="Whitelist needed">whitelist</span>{% endif %}</div>
             {% if a.executive_owner or a.technical_owner %}<div class="small faint">{{ a.executive_owner }}{% if a.executive_owner and a.technical_owner %}; {% endif %}{{ a.technical_owner }}</div>{% endif %}</td>
-          <td class="small">
+          <td class="small" data-live="tele-{{ a.id }}">
             {% if a.telemetry_status == 'running' %}<span class="badge pending">reading</span>
             {% elif not a.telemetry_at %}<span class="faint">not read yet</span>
             {% else %}
@@ -117,7 +119,7 @@
               <div class="faint">read {{ a.telemetry_at | dt('%Y-%m-%d') }}</div>
             {% endif %}
             {% if a.telemetry_status == 'failed' %}<div class="faint" title="{{ a.telemetry_error }}">last read failed</div>{% endif %}</td>
-          <td class="small">
+          <td class="small" data-live="scan-{{ a.id }}">
             {% if r.scan %}
               <div style="margin-bottom:.35rem"><a class="badge pending" href="{{ base }}/external/{{ a.id }}/scans/{{ r.scan.id }}">{{ 'queued' if r.scan.status == 'queued' else 'scanning' }}{% if r.scan.profile %}, {{ r.scan.profile }}{% endif %}</a>
                 {% if r.scan.step %}<div class="faint">{{ r.scan.step }}</div>{% endif %}

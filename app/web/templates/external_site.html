@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_external_fields.html" import detail_fields %}
 {% block title %}{{ asset.host }} &middot; Git Code Review{% endblock %}
-{% block head %}{% if busy %}<meta name="gcr-refresh" content="15">{% endif %}{% endblock %}
+{% block head %}{% if busy %}<meta name="gcr-refresh" content="8">{% endif %}{% endblock %}
 {% block content %}
 {% set tele_headers = tele.headers or {} %}
 <div class="page-head">
@@ -27,10 +27,11 @@
   </div>
 </div>
 
+<div data-live="site-notices">
 {% if active_scan %}
 <div class="notice info"><div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
   <span><strong>{{ 'Queued' if active_scan.status == 'queued' else 'Scanning' }}</strong>{% if active_scan.profile %}, {{ active_scan.profile }} profile{% endif %}
-    on {{ active_scan.server_name }}{% if active_scan.step %}: {{ active_scan.step }}{% endif %}.  This page refreshes until it ends.</span>
+    on {{ active_scan.server_name }}{% if active_scan.step %}: {{ active_scan.step }}{% endif %}.  This updates as it runs.</span>
   <a class="btn sm" href="{{ base }}/external/{{ asset.id }}/scans/{{ active_scan.id }}">Watch it</a>
   {% if active_scan.source != 'recorded' %}
   <form method="post" action="{{ base }}/external/{{ asset.id }}/scans/{{ active_scan.id }}/stop" style="display:inline"
@@ -40,8 +41,9 @@
     <button class="btn sm danger" type="submit">Stop</button></form>{% endif %}
 </div></div>
 {% endif %}
-{% if asset.telemetry_status == 'running' %}<div class="notice info"><div>Reading telemetry.  This page refreshes until it is done.</div></div>{% endif %}
+{% if asset.telemetry_status == 'running' %}<div class="notice info"><div>Reading telemetry.  The page shows it when it is done.</div></div>{% endif %}
 {% if asset.telemetry_status == 'failed' %}<div class="notice bad"><div>The last telemetry read failed: {{ asset.telemetry_error }}</div></div>{% endif %}
+</div>
 
 {# The front page first, large, the way the site report opened each host. #}
 <div class="card">
@@ -60,7 +62,7 @@
   </div>
 </div>
 
-<div class="stats">
+<div class="stats" data-live="site-stats">
   <div class="stat"><div class="n">{% if asset.grade and asset.grade != 'N/A' %}<span class="grade {{ asset.grade }}">{{ asset.grade }}</span>{% else %}&ndash;{% endif %}</div><div class="l">Web hygiene{% if asset.score %} ({{ asset.score }}){% endif %}</div></div>
   <div class="stat {{ 'bad' if asset.last_dast_severity in ('critical','high') else ('ok' if asset.last_dast_at and asset.last_dast_severity in ('', 'none') else '') }}"><div class="n" style="{{ 'font-size:1.1rem' if not asset.last_dast_at or asset.last_dast_severity in ('', 'none') }}">{% if not asset.last_dast_at %}never{% elif asset.last_dast_severity in ('', 'none') %}no findings{% else %}{{ asset.last_dast_severity }}{% endif %}</div><div class="l">Last dynamic scan{% if asset.last_dast_at %}, {{ asset.last_dast_at | dt('%Y-%m-%d') }}{% endif %}</div></div>
   <div class="stat {{ 'bad' if risk.level in ('critical','high') else ('warn' if risk.level == 'medium' else '') }}"><div class="n">{{ risk.level }}</div><div class="l">Combined risk</div></div>
@@ -156,7 +158,7 @@
   </div>
 
   <div>
-    <div class="card">
+    <div class="card" data-live="site-ai">
       <div class="card-head">AI risk read
         {% if asset.ai_input_tokens or asset.ai_output_tokens %}<span class="faint small" style="font-weight:400">{{ asset.ai_input_tokens | thousands }} in, {{ asset.ai_output_tokens | thousands }} out{% if asset.ai_cost %}, {{ asset.ai_cost }}{% endif %} so far, counted on the <a href="{{ base }}/ai?tab=cost">AI cost page</a></span>{% endif %}</div>
       <div class="card-body">
@@ -176,7 +178,7 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" data-live="site-scans">
       <div class="card-head">Dynamic scans
         {% if scan_total %}<span class="faint small" style="font-weight:400">{{ scan_total }} in all, newest first</span>{% endif %}</div>
       {% if scan_views %}
