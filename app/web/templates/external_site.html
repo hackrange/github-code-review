@@ -49,7 +49,10 @@
     <span class="faint small" style="font-weight:400">{{ tele.final_url or ('https://' ~ asset.host ~ '/') }}{% if asset.telemetry_at %}, {{ asset.telemetry_at | dt('%Y-%m-%d %H:%M') }}{% endif %}</span></div>
   <div class="card-body">
     {% if asset.screenshot == 'ok' %}
-    <a href="{{ base }}/external/{{ asset.id }}/screenshot.png" target="_blank" rel="noopener"><img class="shot-hero" alt="Screenshot of {{ asset.host }}" src="{{ base }}/external/{{ asset.id }}/screenshot.png?v={{ asset.telemetry_at.timestamp() | int if asset.telemetry_at else 0 }}"></a>
+    {% set shot_src = base ~ '/external/' ~ asset.id ~ '/screenshot.png?v=' ~ (asset.telemetry_at.timestamp() | int if asset.telemetry_at else 0) %}
+    <button type="button" class="shot-thumb-btn" data-modal="shot-modal" title="Show it larger">
+      <img class="shot-small" alt="Screenshot of {{ asset.host }}, click to enlarge" src="{{ shot_src }}">
+      <span class="small faint">Click to enlarge</span></button>
     {% else %}
     <div class="shot-hero-none">{{ {'waf':'A firewall block page answered, so the screenshot is left out.','blank':'The page rendered blank.','nobrowser':'No headless browser on this server.','blocked':'The browser brought back no image.'}.get(asset.screenshot, 'No screenshot yet.  Refresh telemetry to take one.') }}
       {% if tele.shot_detail %}<div class="small faint">{{ tele.shot_detail }}</div>{% endif %}</div>
@@ -250,6 +253,21 @@
     </div>
   </div>
 </div>
+
+{% if asset.screenshot == 'ok' %}
+<div class="modal-backdrop" id="shot-modal" hidden>
+  <div class="modal shot-modal">
+    <div class="modal-head">{{ tele.final_url or asset.host }}
+      <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button></div>
+    <div class="modal-body shot-modal-body">
+      <img class="shot-large" alt="Screenshot of {{ asset.host }}" src="{{ shot_src }}" loading="lazy">
+    </div>
+    <div class="modal-foot">
+      <a class="btn" href="{{ shot_src }}" target="_blank" rel="noopener">Open full size</a>
+      <button type="button" class="btn" data-close-modal>Close</button></div>
+  </div>
+</div>
+{% endif %}
 
 <div class="modal-backdrop" id="edit-modal" hidden>
   <div class="modal wide"><form method="post" action="{{ base }}/external/{{ asset.id }}/edit">

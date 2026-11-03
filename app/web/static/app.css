@@ -1137,3 +1137,12 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .ext-fields label.check { display: flex; gap: .5rem; align-items: flex-start; margin: .5rem 0; }
 .ext-fields > label:not(.check) { display: block; margin: .5rem 0; }
 .modal-body > label.check { display: flex; gap: .5rem; align-items: flex-start; margin: .5rem 0; }
+/* The site's screenshot: small on the page, large on a click. */
+.shot-thumb-btn { background: none; border: 0; padding: 0; cursor: zoom-in;
+  display: inline-flex; flex-direction: column; gap: .3rem; align-items: flex-start; }
+.shot-small { width: 360px; max-width: 100%; height: auto; display: block;
+  border: 1px solid var(--border); border-radius: 6px; }
+.shot-thumb-btn:hover .shot-small, .shot-thumb-btn:focus-visible .shot-small { border-color: var(--border-strong); }
+.modal.shot-modal { max-width: min(1320px, 95vw); }
+.shot-modal-body { overflow: auto; padding: .5rem; }
+.shot-large { width: 100%; height: auto; display: block; border-radius: 4px; }
