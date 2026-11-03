@@ -140,13 +140,12 @@
             {% if r.next_run %}<div class="faint" title="Next scheduled scan">next scheduled: {{ r.next_run | dt('%Y-%m-%d %H:%M') }}</div>{% endif %}
             {% if not r.blocked and a.status != 'obsolete' and not r.scan %}
               <div style="margin-top:.3rem"><a class="btn sm" href="{{ base }}/external/{{ a.id }}#scan">Scan</a></div>{% endif %}</td>
-          <td class="small">
-            {% for l in r.links %}<div><a href="{{ base }}/repositories/{{ l.id }}">{{ l.full_name }}</a></div>{% endfor %}
-            {% if r.links %}<div style="margin-top:.2rem">
-              {%- for level in ['critical','high','medium','low'] %}{% if r.sast[level] %}<a class="badge {{ level }}" href="{{ base }}/findings?state=open&severity={{ level }}">{{ r.sast[level] }}</a> {% endif %}{% endfor %}
+          <td class="small nowrap">
+            {% if r.links %}<a href="{{ base }}/external/{{ a.id }}#code" title="{{ r.links | map(attribute='full_name') | join(', ') }}">{{ r.links | length }} repo{{ '' if r.links | length == 1 else 's' }}</a>
+              <div class="code-bubbles">
+              {%- for level in ['critical','high','medium','low'] %}{% if r.sast[level] %}<a class="badge {{ level }}" href="{{ base }}/external/{{ a.id }}#code" title="{{ r.sast[level] }} open {{ level }}">{{ r.sast[level] }}</a>{% endif %}{% endfor %}
               {%- if not (r.sast.critical or r.sast.high or r.sast.medium or r.sast.low) %}<span class="faint">no open findings</span>{% endif %}</div>
-            {% else %}<span class="faint">none mapped</span>{% endif %}
-            {% if r.suggested %}<div class="faint">{{ r.suggested }} suggested</div>{% endif %}</td>
+            {% else %}<span class="faint">none</span>{% endif %}</td>
           <td><span class="badge {{ r.risk.level }}">{{ r.risk.level }}</span>
             <div class="small faint">{{ r.risk.reasons | join('; ') }}</div></td>
         </tr>

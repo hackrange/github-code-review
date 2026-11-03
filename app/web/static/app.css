@@ -1149,3 +1149,12 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .profile-help { margin: .4rem 0; padding: .4rem .6rem; background: var(--bg-sunk);
   border-radius: 4px; color: var(--text-soft); }
 .profile-help div { margin: .15rem 0; }
+/* Code behind a site: counts on the list, the detail folded away. */
+.code-bubbles { display: flex; gap: .2rem; margin-top: .15rem; flex-wrap: wrap; }
+details.code-behind > summary { cursor: pointer; list-style: none; display: flex;
+  justify-content: flex-start; align-items: center; gap: .4rem; }
+details.code-behind > summary::-webkit-details-marker { display: none; }
+details.code-behind > summary::before { content: "\25B8"; color: var(--text-faint); margin-right: .2rem; }
+details.code-behind[open] > summary::before { content: "\25BE"; }
+.code-summary { font-weight: 400; font-size: .9rem; display: flex; gap: .25rem; align-items: center;
+  margin-left: auto; }

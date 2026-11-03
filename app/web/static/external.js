@@ -311,3 +311,14 @@
     apply();
   });
 })();
+
+/* #code opens the Code behind it section, from the list or the counter. */
+(function () {
+  "use strict";
+  function open() {
+    var section = document.getElementById("code");
+    if (section && window.location.hash === "#code") { section.open = true; section.scrollIntoView(); }
+  }
+  window.addEventListener("hashchange", open);
+  window.addEventListener("load", open);
+})();

@@ -64,7 +64,7 @@
   <div class="stat"><div class="n">{% if asset.grade and asset.grade != 'N/A' %}<span class="grade {{ asset.grade }}">{{ asset.grade }}</span>{% else %}&ndash;{% endif %}</div><div class="l">Web hygiene{% if asset.score %} ({{ asset.score }}){% endif %}</div></div>
   <div class="stat {{ 'bad' if asset.last_dast_severity in ('critical','high') else ('ok' if asset.last_dast_at and asset.last_dast_severity in ('', 'none') else '') }}"><div class="n" style="{{ 'font-size:1.1rem' if not asset.last_dast_at or asset.last_dast_severity in ('', 'none') }}">{% if not asset.last_dast_at %}never{% elif asset.last_dast_severity in ('', 'none') %}no findings{% else %}{{ asset.last_dast_severity }}{% endif %}</div><div class="l">Last dynamic scan{% if asset.last_dast_at %}, {{ asset.last_dast_at | dt('%Y-%m-%d') }}{% endif %}</div></div>
   <div class="stat {{ 'bad' if risk.level in ('critical','high') else ('warn' if risk.level == 'medium' else '') }}"><div class="n">{{ risk.level }}</div><div class="l">Combined risk</div></div>
-  <div class="stat"><div class="n">{{ links | selectattr('linked') | list | length }}</div><div class="l">Repositories behind it</div></div>
+  <a class="stat" href="#code"><div class="n">{{ links | selectattr('linked') | list | length }}</div><div class="l">Repositories behind it</div></a>
   <div class="stat {{ 'warn' if due in ('never','due') else '' }}"><div class="n" style="font-size:1.1rem">{{ {'never':'never scanned','due':'overdue','current':'current','no-scan':'no scan','obsolete':'obsolete'}[due] }}</div><div class="l">Scan status</div></div>
 </div>
 <div class="small faint" style="margin:-.4rem 0 1rem">Combined risk: {{ risk.reasons | join('; ') }}.</div>
@@ -258,9 +258,16 @@
       {% if not blocked %}<div class="card-body"><button class="btn sm" type="button" data-modal="schedule-modal">Add a schedule</button></div>{% endif %}
     </div>
 
-    <div class="card">
-      <div class="card-head">Repositories behind it
-        <span class="faint small" style="font-weight:400">picked in Edit, or worked out from the Web Applications tab, web addresses, the code and names.  Linked at 60 and over.</span></div>
+    {% set linked = links | selectattr('linked') | list %}
+    {% set code = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0} %}
+    {% for l in linked %}{% for level in code %}{% set _ = code.update({level: code[level] + counts.get(l.full_name, {}).get(level, 0)}) %}{% endfor %}{% endfor %}
+    <details class="card code-behind" id="code">
+      <summary class="card-head">Code behind it
+        <span class="code-summary">{{ linked | length }} repositor{{ 'y' if linked | length == 1 else 'ies' }}
+          {%- for level in ['critical','high','medium','low'] %}{% if code[level] %} <span class="badge {{ level }}" title="{{ code[level] }} open {{ level }}">{{ code[level] }}</span>{% endif %}{% endfor %}
+          {%- if not (code.critical or code.high or code.medium or code.low) %} <span class="faint small">no open findings</span>{% endif %}
+          {%- if links | length > linked | length %} <span class="faint small">, {{ links | length - linked | length }} suggested</span>{% endif %}</span></summary>
+      <div class="faint small" style="padding:.4rem 1rem 0">Picked in Edit, or worked out from the Web Applications tab, web addresses, the code and names.  Linked at 60 and over.</div>
       {% if links %}
       <div class="table-scroll"><table>
         <thead><tr><th>Repository</th><th>Why</th><th>Open findings</th><th></th></tr></thead>
@@ -288,7 +295,7 @@
         </tbody></table></div>
       {% else %}<div class="empty">Nothing found.  Pick repositories in Edit, or give a
         repository this host in its web addresses.</div>{% endif %}
-    </div>
+    </details>
   </div>
 </div>
 
