@@ -549,6 +549,37 @@ def _external_endpoints() -> list:
              + _RECORD_BODY,
              body_example={"host": "shop.example.com", "server": "nextgen-dast",
                            "severity": "medium", "create": True}, example=_SCAN),
+        _ext("ext-schedules", "GET", "/external/assets/{asset_id}/schedules", "A site's schedules",
+             "Every scheduled scan of the site, with its next and last run, and the time "
+             "zone the times are read in.", [asset_id],
+             example={"time_zone": "America/Chicago", "schedules": [{
+                 "id": 3, "frequency": "weekly", "when": "Every Saturday at 02:00",
+                 "profile": "quick", "authenticated": False, "ai_triage": True, "enabled": True,
+                 "next_run_at": "2026-11-07T08:00:00+00:00", "last_run_at": None,
+                 "last_result": ""}]}),
+        _ext("ext-schedule-add", "POST", "/external/assets/{asset_id}/schedules", "Schedule a scan",
+             "Scan the site once, or every day, week or month.  Times are read in the "
+             "time zone set in Settings.  A run that finds the site already being scanned, "
+             "or no longer allowed to be, is skipped and says so.", [asset_id],
+             body=[_f("frequency", "string", True, "once, daily, weekly or monthly."),
+                   _f("time_of_day", "string", True, "HH:MM."),
+                   _f("run_on", "string", False, "once: the date, YYYY-MM-DD."),
+                   _f("weekday", "integer", False, "weekly: 0 is Monday."),
+                   _f("day_of_month", "integer", False, "monthly: 1 to 31; past the end "
+                                                        "of a short month it runs on its last day."),
+                   _f("profile", "string", False, "The site's default when left out."),
+                   _f("authenticated", "boolean", False, "Sign in with the site's scan sign in."),
+                   _f("ai", "boolean", False, "Triage each scan with the model."),
+                   _f("confirm", "boolean", False, "Needed for standard and up, and for a "
+                                                   "signed in scan past baseline.")],
+             body_example={"frequency": "weekly", "weekday": 5, "time_of_day": "02:00",
+                           "profile": "quick", "ai": True},
+             example={"id": 3, "when": "Every Saturday at 02:00",
+                      "next_run_at": "2026-11-07T08:00:00+00:00"}),
+        _ext("ext-schedule-delete", "DELETE", "/external/assets/{asset_id}/schedules/{schedule_id}",
+             "Remove a schedule", "Stops the schedule.  Scans it already ran are kept.",
+             [asset_id, _p("schedule_id", "The schedule's id.", where="path", kind="integer",
+                           example=3)], example={}),
         _ext("ext-start", "POST", "/external/assets/{asset_id}/dast", "Start a scan",
              "Starts a scan on this server or on a nextgen-dast server.  409 for a "
              "site that may not be scanned or already has one running.  Standard "

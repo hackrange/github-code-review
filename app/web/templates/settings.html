@@ -676,6 +676,13 @@
   <label class="check"><input type="checkbox" name="external.allow_private" value="1" {{ 'checked' if values['external.allow_private'] }}>
     <span>Let telemetry and scans reach private, loopback and link local
       addresses.  Leave off unless the sites really are internal.</span></label>
+  <label>Scans at once
+    <input type="number" name="external.max_concurrent" min="1" max="6"
+           value="{{ values['external.max_concurrent'] }}">
+    <span class="faint small">Engine scans this server runs at the same time, 1 to 6.  The rest
+      queue.  Each runs its own engines and wapiti and nuclei use real memory, so raise it with the
+      container's memory limit in mind.  A site is never scanned twice at once.</span>
+  </label>
   <label class="wide">Environments
     <input type="text" name="external.environments" maxlength="1200"
            value="{{ values['external.environments'] | join(', ') }}" placeholder="Prod, Dev, Stage, Clone">

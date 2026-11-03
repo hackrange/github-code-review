@@ -293,3 +293,21 @@
     apply();
   });
 })();
+
+/* The schedule dialog: only the fields for how often it runs. */
+(function () {
+  "use strict";
+  document.querySelectorAll("[data-sched-frequency]").forEach(function (picker) {
+    var form = picker.closest("form");
+    function apply() {
+      form.querySelectorAll("[data-sched-for]").forEach(function (field) {
+        field.hidden = field.getAttribute("data-sched-for") !== picker.value;
+      });
+    }
+    picker.addEventListener("change", apply);
+    document.addEventListener("click", function (event) {
+      if (event.target.closest && event.target.closest("[data-modal]")) { setTimeout(apply, 0); }
+    });
+    apply();
+  });
+})();

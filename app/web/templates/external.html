@@ -40,7 +40,7 @@
   <a class="stat" href="{{ here }}?scope=no-scan"><div class="n">{{ totals.no_scan }}</div><div class="l">No scan</div></a>
 </div>
 {% if running %}<div class="notice info"><div>Reading telemetry for {{ running }} site{{ '' if running == 1 else 's' }}.  This page refreshes until they finish.</div></div>{% endif %}
-{% if scanning %}<div class="notice info"><div>Scanning {{ scanning }} site{{ '' if scanning == 1 else 's' }} now.  Engine scans run one at a time; the rest wait their turn.  This page refreshes until they finish.</div></div>{% endif %}
+{% if scanning %}<div class="notice info"><div>Scanning {{ scanning }} site{{ '' if scanning == 1 else 's' }} now.  {{ max_concurrent }} engine scan{{ '' if max_concurrent == 1 else 's' }} run at a time, set in Settings; the rest wait their turn.  This page refreshes until they finish.</div></div>{% endif %}
 
 <form method="get" action="{{ here }}" class="filters">
   <div class="field" style="min-width:240px"><label for="q">Search</label>
@@ -137,6 +137,7 @@
             {% elif a.status == 'obsolete' %}<span class="faint">obsolete</span>
             {% elif r.blocked %}<span class="faint">not to be scanned</span>
             {% else %}<span class="badge pending">never scanned</span>{% endif %}
+            {% if r.next_run %}<div class="faint" title="Next scheduled scan">next scheduled: {{ r.next_run | dt('%Y-%m-%d %H:%M') }}</div>{% endif %}
             {% if not r.blocked and a.status != 'obsolete' and not r.scan %}
               <div style="margin-top:.3rem"><a class="btn sm" href="{{ base }}/external/{{ a.id }}#scan">Scan</a></div>{% endif %}</td>
           <td class="small">

@@ -284,6 +284,11 @@ def start() -> None:
     _scheduler.add_job(external.poll_remote, IntervalTrigger(minutes=3),
                        id="external-poll", replace_existing=True,
                        misfire_grace_time=120, coalesce=True, max_instances=1)
+    from app.core import external_schedule
+
+    _scheduler.add_job(external_schedule.run_due, IntervalTrigger(minutes=1),
+                       id="external-schedules", replace_existing=True,
+                       misfire_grace_time=50, coalesce=True, max_instances=1)
     _scheduler.add_job(external.refresh_stale,
                        CronTrigger(hour=3, minute=30, timezone=_zone()),
                        id="external-refresh", replace_existing=True,

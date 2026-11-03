@@ -19,6 +19,7 @@ Settings, External sites:
 | `external.screenshots` | Take a screenshot of each site when its telemetry is read. |
 | `external.refresh_days` | Read every site's telemetry again after this many days, at 03:30.  0 only reads it when asked. |
 | `external.whitebox` | Before an engine scan, read the default branch of the mapped repositories for routes and for the host name. |
+| `external.max_concurrent` | How many engine scans this server runs at once, 1 to 6, default 1.  The rest queue.  Read on every scan, so a change needs no restart.  A site is never scanned twice at once. |
 | `external.environments` | The environments a site can be in, comma separated.  The first is the default for a new site.  A site in one that is taken off the list keeps it until somebody picks another. |
 | `external.user_agent` | The browser every request says it is.  Empty uses a current desktop Chrome. |
 | `external.allow_private` | Let telemetry and scans reach private, loopback and link local addresses.  Leave it off unless the sites really are internal. |
@@ -148,6 +149,21 @@ link to the result and, optionally, the findings.
 The newest finished scan becomes the site's last scan.  Every finished scan
 is also recorded as a DAST test on the Web Applications tab for the web
 applications behind the site.
+
+## Scheduled scans
+
+A site's page has **Scheduled scans**: once at a date and time, or every day,
+every week on a day, or every month on a day, at a time.  Times are read in
+the time zone set in Settings, and move with it.  Day 29, 30 or 31 runs on the
+last day of a shorter month.  Each schedule has its own profile (the site's
+default unless changed), sign in and AI triage, and one that sends payloads
+needs the same confirmation as a scan started by hand.
+
+The scheduler looks every minute.  A run that finds the site already being
+scanned, marked no scan or obsolete is skipped, and the schedule says why.  A
+once schedule turns itself off after it runs.  Through the API:
+`GET` and `POST /api/v1/external/assets/{id}/schedules`, and `DELETE` with the
+schedule's id.
 
 ## Signing in for a scan
 

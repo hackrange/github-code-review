@@ -1190,7 +1190,45 @@ def refresh_stale() -> int:
 
 # ------------------------------------------------------------------ scans
 
-_slots = threading.Semaphore(1)
+class _Slots:
+    """How many engine scans run at once on this server.  The limit is read
+    from Settings each time a scan waits, so a change takes effect on the
+    next scan without a restart."""
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._busy = 0
+
+    def limit(self) -> int:
+        try:
+            from app.core import settings_store
+
+            with session_scope() as db:
+                value = int(settings_store.get(db, "external.max_concurrent") or 1)
+        except Exception:  # noqa: BLE001 - a bad value is one at a time
+            value = 1
+        return max(1, min(value, MAX_CONCURRENT))
+
+    def __enter__(self):
+        with self._cond:
+            while self._busy >= self.limit():
+                self._cond.wait(timeout=5)
+            self._busy += 1
+        return self
+
+    def __exit__(self, *exc):
+        with self._cond:
+            self._busy -= 1
+            self._cond.notify_all()
+        return False
+
+    @property
+    def busy(self) -> int:
+        return self._busy
+
+
+MAX_CONCURRENT = 6
+_slots = _Slots()
 _stopping: set = set()
 
 

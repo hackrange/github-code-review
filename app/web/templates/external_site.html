@@ -228,6 +228,37 @@
     </div>
 
     <div class="card">
+      <div class="card-head">Scheduled scans
+        <span class="faint small" style="font-weight:400">times are {{ zone_name }}, set in Settings</span></div>
+      {% if schedules %}
+      <div class="table-scroll"><table>
+        <thead><tr><th>When</th><th>Scan</th><th>Next</th><th>Last</th><th></th></tr></thead>
+        <tbody>
+        {% for x in schedules %}
+          <tr>
+            <td class="small">{{ x.when }}{% if not x.enabled %} <span class="badge waived">{{ 'done' if x.frequency == 'once' and x.last_run_at else 'paused' }}</span>{% endif %}</td>
+            <td class="small"><span class="badge info">{{ x.profile or site_profile }}</span>
+              {% if x.authenticated %}<span class="badge ok">signed in</span>{% endif %}
+              {% if x.ai_triage %}<span class="badge ai">AI triage</span>{% endif %}</td>
+            <td class="small nowrap">{{ x.next_run_at[:16] | replace('T', ' ') if x.next_run_at else '' }}{% if x.next_run_at %} UTC{% endif %}</td>
+            <td class="small">{% if x.last_run_at %}{{ x.last_run_at[:16] | replace('T', ' ') }}
+              <div class="faint">{% if x.last_scan_id %}<a href="{{ base }}/external/{{ asset.id }}/scans/{{ x.last_scan_id }}">{{ x.last_result }}</a>{% else %}{{ x.last_result }}{% endif %}</div>{% else %}<span class="faint">not yet</span>{% endif %}</td>
+            <td class="nowrap">
+              <form method="post" action="{{ base }}/external/{{ asset.id }}/schedules/{{ x.id }}/{{ 'pause' if x.enabled else 'resume' }}" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                {% if x.enabled or x.frequency != 'once' %}<button class="btn sm" type="submit">{{ 'Pause' if x.enabled else 'Resume' }}</button>{% endif %}</form>
+              <form method="post" action="{{ base }}/external/{{ asset.id }}/schedules/{{ x.id }}/delete" style="display:inline"
+                    data-confirm="Remove this schedule?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm" type="submit">Remove</button></form></td>
+          </tr>
+        {% endfor %}
+        </tbody></table></div>
+      {% else %}<div class="empty">No scheduled scans.</div>{% endif %}
+      {% if not blocked %}<div class="card-body"><button class="btn sm" type="button" data-modal="schedule-modal">Add a schedule</button></div>{% endif %}
+    </div>
+
+    <div class="card">
       <div class="card-head">Repositories behind it
         <span class="faint small" style="font-weight:400">picked in Edit, or worked out from the Web Applications tab, web addresses, the code and names.  Linked at 60 and over.</span></div>
       {% if links %}
@@ -374,6 +405,44 @@
           The tokens are counted on the AI cost page.</span></label>
     </div>
     <div class="modal-foot"><button class="btn primary" type="submit">Start</button>
+      <button class="btn" type="button" data-close-modal>Cancel</button></div>
+  </form></div>
+</div>
+{% endif %}
+
+{% if not blocked %}
+<div class="modal-backdrop" id="schedule-modal" hidden>
+  <div class="modal"><form method="post" action="{{ base }}/external/{{ asset.id }}/schedules">
+    <div class="modal-head">Schedule a scan of {{ asset.host }} <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>How often
+        <select name="frequency" data-sched-frequency>
+          {% for key, label in frequencies.items() %}<option value="{{ key }}" {{ 'selected' if key == 'weekly' }}>{{ label }}</option>{% endfor %}
+        </select></label>
+      <div class="form-grid">
+        <label data-sched-for="once">Date <input type="date" name="run_on" min="{{ today }}" value="{{ today }}"></label>
+        <label data-sched-for="weekly">Day
+          <select name="weekday">{% for d in weekdays %}<option value="{{ loop.index0 }}" {{ 'selected' if loop.index0 == 5 }}>{{ d }}</option>{% endfor %}</select></label>
+        <label data-sched-for="monthly">Day of the month
+          <input type="number" name="day_of_month" min="1" max="31" value="1">
+          <span class="faint small">29 to 31 run on the last day of a shorter month.</span></label>
+        <label>Time <input type="time" name="time_of_day" value="02:00" required>
+          <span class="faint small">{{ zone_name }}</span></label>
+      </div>
+      <label>Profile
+        <select name="profile">
+          {% for name, what in profiles.items() %}<option value="{{ name }}" {{ 'selected' if name == site_profile }}>{{ name }}{{ ' (this site\'s default)' if name == site_profile }}</option>{% endfor %}
+        </select></label>
+      {% if auth %}<label class="check"><input type="checkbox" name="authenticated" value="1" checked>
+        <span>Sign in, with the {{ auth.kind_name | lower }}.</span></label>{% endif %}
+      <label class="check"><input type="checkbox" name="ai" value="1" {{ 'disabled' if not ai_ready }}>
+        <span>Have the model triage each scan's findings.  Counted on the AI cost page.</span></label>
+      <label class="check"><input type="checkbox" name="confirm" value="1">
+        <span>I am allowed to scan {{ asset.host }} this way every time this runs.  Needed for standard and up, and for a signed in scan past baseline.</span></label>
+      <div class="faint small">A run that finds the site already being scanned, or no longer allowed to be, is skipped and says so.</div>
+    </div>
+    <div class="modal-foot"><button class="btn primary" type="submit">Schedule</button>
       <button class="btn" type="button" data-close-modal>Cancel</button></div>
   </form></div>
 </div>

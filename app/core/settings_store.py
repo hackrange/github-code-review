@@ -338,6 +338,11 @@ DEFAULTS = {
                                 "Before an engine scan, read the default branch of "
                                 "the repositories mapped to the site for routes to "
                                 "add to the scan and for the site's name in the code."),
+    "external.max_concurrent": (1, False,
+                                "How many scans run at once on this server, 1 to 6. "
+                                "Each runs its own engines, and wapiti and nuclei use "
+                                "real memory, so raise it with the container's memory "
+                                "limit in mind. A site is never scanned twice at once."),
     "external.environments":   (["Prod", "Dev", "Stage", "Clone"], False,
                                 "The environments a site can be in. The first is the "
                                 "default for a new site. A site keeps one that is "
@@ -502,7 +507,8 @@ SECTIONS = [
     ("Web testing", ["dast.max_age_days"]),
     ("External sites", ["external.enabled", "external.screenshots",
                         "external.refresh_days", "external.whitebox",
-                        "external.environments", "external.user_agent",
+                        "external.max_concurrent", "external.environments",
+                        "external.user_agent",
                         "external.allow_private"]),
     ("Limits", ["github.parallel_repos", "scan.max_concurrent",
                 "secrets.history_window_days",

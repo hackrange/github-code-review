@@ -1838,6 +1838,15 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
             raise HTTPException(status_code=400,
                                 detail=f"{zone} is not a time zone this machine knows.")
         put("ui.timezone", zone)
+        if "ui.timezone" in moved:
+            # Scheduled scans are read in this zone, so their next runs move.
+            db.flush()
+            from app.core import external_schedule
+
+            try:
+                external_schedule.refresh_all()
+            except Exception:  # noqa: BLE001 - the next minute fixes it
+                log.warning("could not move the scan schedules", exc_info=True)
 
         # Muting is asked for, not set.  Ticking a box raises a request that
         # somebody else has to agree to; unticking takes effect at once,
@@ -1899,6 +1908,8 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
                 "The user agent for scans has to be one line starting Mozilla/5.0 (, "
                 "the way a real browser's does."))
         put("external.user_agent", agent)
+        put("external.max_concurrent", clean_int(form.get("external.max_concurrent", 1) or 1,
+                                                 "Scans at once", low=1, high=6))
         from app.core import external as _external
 
         try:

@@ -2459,3 +2459,39 @@ class ExternalDastScan(Base):
     note = Column(Text, default="")
     recorded_by = Column(String(120), default="")
     recorded_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class ExternalScanSchedule(Base):
+    """A dynamic scan of one site that starts on its own.
+
+    once at a date and time, or daily, weekly or monthly at a time, read in
+    the time zone set in Settings.  next_run_at is kept in UTC so the minute
+    job only compares two times.  A run that finds the site already being
+    scanned, or no longer allowed to be, is skipped and says why.
+    """
+
+    __tablename__ = "external_scan_schedules"
+
+    id = Column(Integer, primary_key=True)
+    asset_id = Column(Integer, ForeignKey("external_assets.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    # once, daily, weekly or monthly.
+    frequency = Column(String(16), nullable=False, default="weekly")
+    # once: the local date and time to run.
+    run_on = Column(String(16), default="")
+    # HH:MM, local time.
+    time_of_day = Column(String(5), default="02:00")
+    # weekly: 0 is Monday.
+    weekday = Column(Integer, default=0)
+    # monthly: 1 to 31; past the end of a short month it runs on its last day.
+    day_of_month = Column(Integer, default=1)
+    profile = Column(String(16), default="")
+    authenticated = Column(Boolean, default=False, nullable=False)
+    ai_triage = Column(Boolean, default=False, nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)
+    next_run_at = Column(DateTime(timezone=True), index=True)
+    last_run_at = Column(DateTime(timezone=True))
+    last_result = Column(String(300), default="")
+    last_scan_id = Column(Integer)
+    created_by = Column(String(120), default="")
+    created_at = Column(DateTime(timezone=True), default=utcnow)

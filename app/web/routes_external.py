@@ -25,8 +25,11 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.core import external, rbac
 from app.core import external_auth as external_auth_mod
+from app.core import external_schedule
+from app.core.models import ExternalScanSchedule
 from app.core.audit import record
 from app.core.db import session_scope
+from app.core.models import utcnow as m_utcnow
 from app.core.models import (
     DastServer, ExternalAsset, ExternalAssetRepo, ExternalAssetTag,
     ExternalDastScan, User,
@@ -149,6 +152,12 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
         blocked = external.blocked_hosts(db)
         every_link = {a.id: mapper.links(a) for a in assets}
         scanning = external.running_scans(db)
+        from app.core.models import ExternalScanSchedule
+        from sqlalchemy import func as _f
+
+        next_runs = dict(db.query(ExternalScanSchedule.asset_id, _f.min(ExternalScanSchedule.next_run_at))
+                         .filter(ExternalScanSchedule.enabled.is_(True))
+                         .group_by(ExternalScanSchedule.asset_id).all())
         names = {l["full_name"] for links in every_link.values() for l in links if l["linked"]}
         counts = external.sast_counts(db, names, user)
         rows = []
@@ -166,6 +175,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                 "blocked": external.is_blocked(a.host, blocked, a.no_scan),
                 "tele": external.telemetry_of(a),
                 "scan": scanning.get(a.id),
+                "next_run": next_runs.get(a.id),
             }
             if env and (a.environment or "") != env:
                 continue
@@ -222,7 +232,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                        statuses=external.STATUSES,
                        servers=servers,
                        running=sum(1 for a in assets if a.telemetry_status == "running"),
-                       scanning=len(scanning),
+                       scanning=len(scanning), max_concurrent=external._slots.limit(),
                        flash=clean_notice(request.query_params.get("msg", ""), limit=300),
                        flash_kind=notice_class(request.query_params.get("kind", "")))
         return page(request, "external.html", **context)
@@ -503,6 +513,10 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             fields=external.fields_of(asset), security_headers=external.SECURITY_HEADERS,
             auth=external_auth_mod.describe(asset), auth_kinds=external_auth_mod.KINDS,
             site_profile=external.profile_for(asset),
+            schedules=[external_schedule.as_dict(x) for x in db.query(ExternalScanSchedule)
+                       .filter_by(asset_id=asset.id).order_by(ExternalScanSchedule.id)],
+            frequencies=external_schedule.FREQUENCIES, weekdays=external_schedule.WEEKDAYS,
+            zone_name=str(external_schedule.zone()),
             picks_json=json.dumps(external.picks_of(db, asset)),
             environments=external.environments(db), statuses=external.STATUSES,
             scan_views=[external.scan_dict(s) for s in page_scans],
@@ -832,6 +846,70 @@ async def scan_action(asset_id: int, scan_id: int, action: str, request: Request
         record(db, f"external.scan_{action}", actor=user.username, target=host,
                detail=f"scan {scan_id}", source_ip=client_ip(request))
     return redirect(_back(here, message, kind))
+
+
+@router.post("/external/{asset_id}/schedules")
+async def add_schedule(asset_id: int, request: Request, user: User = Depends(current_user)):
+    """Scan this site on a schedule."""
+    await check_csrf(request)
+    from app.core import dast_engines
+
+    form = await request.form()
+    here = f"/external/{asset_id}"
+    with session_scope() as db:
+        _guard(db, user)
+        asset = _asset(db, asset_id)
+        if external.blocked(db, asset):
+            return redirect(_back(here, "This site may not be scanned, so it cannot have a schedule.", "error"))
+        profile = str(form.get("profile") or "") or external.profile_for(asset)
+        signs_in = _checked(form, "authenticated")
+        if (profile in dast_engines.ACTIVE_PROFILES or (signs_in and profile != "baseline")) \
+                and not _checked(form, "confirm"):
+            return redirect(_back(here, "Tick the box to confirm you are allowed to scan this "
+                                        "site this way, every time the schedule runs.", "error"))
+        try:
+            sched = external_schedule.create(db, asset, {
+                "frequency": form.get("frequency"), "time_of_day": form.get("time_of_day"),
+                "run_on": form.get("run_on"), "weekday": form.get("weekday"),
+                "day_of_month": form.get("day_of_month"), "profile": profile,
+                "authenticated": signs_in, "ai_triage": _checked(form, "ai")}, user.username)
+        except ValueError as exc:
+            db.rollback()
+            return redirect(_back(here, str(exc), "error"))
+        record(db, "external.schedule_added", actor=user.username, target=asset.host,
+               detail=f"{external_schedule.describe(sched)}, {profile}"[:300],
+               source_ip=client_ip(request))
+        when = sched.next_run_at
+    return redirect(_back(here, f"Scheduled.  The first run is {when:%Y-%m-%d %H:%M} UTC."))
+
+
+@router.post("/external/{asset_id}/schedules/{schedule_id}/{action}")
+async def schedule_action(asset_id: int, schedule_id: int, action: str, request: Request,
+                          user: User = Depends(current_user)):
+    await check_csrf(request)
+    here = f"/external/{asset_id}"
+    with session_scope() as db:
+        _guard(db, user)
+        asset = _asset(db, asset_id)
+        sched = (db.query(ExternalScanSchedule)
+                 .filter_by(id=schedule_id, asset_id=asset_id).one_or_none())
+        if sched is None:
+            raise HTTPException(status_code=404, detail="No such schedule.")
+        if action == "delete":
+            db.delete(sched)
+            message = "Removed the schedule."
+        elif action in ("pause", "resume"):
+            sched.enabled = action == "resume"
+            sched.next_run_at = external_schedule.next_run(sched, m_utcnow()) if sched.enabled else None
+            if sched.enabled and sched.next_run_at is None:
+                sched.enabled = False
+                return redirect(_back(here, "Its time has passed, so it cannot be resumed.", "error"))
+            message = "Resumed the schedule." if sched.enabled else "Paused the schedule."
+        else:
+            raise HTTPException(status_code=404, detail=NOT_FOUND)
+        record(db, f"external.schedule_{action}", actor=user.username, target=asset.host,
+               detail=f"schedule {schedule_id}", source_ip=client_ip(request))
+    return redirect(_back(here, message))
 
 
 @router.post("/external/{asset_id}/ai")
@@ -1219,6 +1297,64 @@ def api_report(asset_id: int, scan_id: int, request: Request, caller=Depends(_ap
                source_ip=client_ip(request))
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@api.get("/assets/{asset_id}/schedules")
+def api_schedules(asset_id: int, caller=Depends(_api_caller())):
+    with session_scope() as db:
+        _api_me(db, caller)
+        _asset(db, asset_id)
+        return {"schedules": [external_schedule.as_dict(x) for x in db.query(ExternalScanSchedule)
+                              .filter_by(asset_id=asset_id).order_by(ExternalScanSchedule.id)],
+                "time_zone": str(external_schedule.zone())}
+
+
+@api.post("/assets/{asset_id}/schedules")
+async def api_add_schedule(asset_id: int, request: Request, caller=Depends(_api_caller())):
+    from app.core import dast_engines
+
+    body = await _body(request)
+    for key in ("frequency", "time_of_day", "run_on", "profile"):
+        if body.get(key) is not None and not isinstance(body[key], str):
+            raise HTTPException(status_code=400, detail=f"{key} has to be a string.")
+    with session_scope() as db:
+        me = _api_me(db, caller)
+        asset = _asset(db, asset_id)
+        if external.blocked(db, asset):
+            raise HTTPException(status_code=409, detail="This site may not be scanned.")
+        profile = body.get("profile") or external.profile_for(asset)
+        if (profile in dast_engines.ACTIVE_PROFILES or (body.get("authenticated") is True
+                                                        and profile != "baseline")) \
+                and body.get("confirm") is not True:
+            raise HTTPException(status_code=400, detail=(
+                "This schedule sends attack payloads or acts as a signed in user.  Send "
+                "confirm true to say you are allowed to scan the site this way."))
+        try:
+            sched = external_schedule.create(db, asset, dict(body, profile=profile,
+                                                             ai_triage=body.get("ai")), me.username)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        record(db, "external.schedule_added", actor=me.username, target=asset.host,
+               detail=f"{external_schedule.describe(sched)}, api token {caller.token.prefix}"[:300],
+               source_ip=client_ip(request))
+        return JSONResponse(status_code=201, content=external_schedule.as_dict(sched))
+
+
+@api.delete("/assets/{asset_id}/schedules/{schedule_id}")
+def api_delete_schedule(asset_id: int, schedule_id: int, request: Request,
+                        caller=Depends(_api_caller())):
+    with session_scope() as db:
+        me = _api_me(db, caller)
+        asset = _asset(db, asset_id)
+        sched = (db.query(ExternalScanSchedule)
+                 .filter_by(id=schedule_id, asset_id=asset_id).one_or_none())
+        if sched is None:
+            raise HTTPException(status_code=404, detail="No such schedule.")
+        db.delete(sched)
+        record(db, "external.schedule_delete", actor=me.username, target=asset.host,
+               detail=f"schedule {schedule_id}, api token {caller.token.prefix}",
+               source_ip=client_ip(request))
+    return Response(status_code=204)
 
 
 @api.post("/assets/{asset_id}/scans")

@@ -6,6 +6,11 @@ moved.
 
 ## 2026-11-03
 
+**Scheduled scans, and how many run at once.**  A site can be scanned on a
+schedule: once, or every day, week or month at a time, in the time zone set in
+Settings.  Settings also says how many scans run at the same time, 1 to 6; a
+site is still never scanned twice at once.
+
 **Environments are yours to name.**  The environments an external site can be
 in are a list in Settings, under Web and external sites, instead of a fixed
 Prod, Dev, Stage and Clone.  The first is the default for a new site, and a
