@@ -333,6 +333,93 @@ def set_proxy(asset, value) -> None:
     asset.proxy = store._encrypt(text)
 
 
+BULK_FIELDS = ("application", "executive_owner", "technical_owner", "environment",
+               "status", "external_auth_needed", "whitelist_needed",
+               "change_frequency_days", "default_profile")
+
+
+def bulk_update(db, assets: list, changes: dict, actor: str, user=None) -> list:
+    """Apply the same changes to many sites, all or nothing.
+
+    changes holds only what is to change:
+        details      {field: value} for BULK_FIELDS, checked like Edit
+        tags         (add | remove | replace, [tags])
+        comments     (replace | append, text)
+        no_scan      (bool, reason)
+        proxy        a proxy address, or "" to remove it
+        auth         (kind, {values}) as Edit takes it; kind "" removes it
+        repositories (add | replace | clear, [(repository id, branch)])
+
+    Every site is checked before any is written; the first one that will not
+    take a change raises ValueError naming it, and the caller rolls back.
+    -> the hosts changed
+    """
+    from app.core import external_auth
+
+    envs = environments(db)
+    details = dict(changes.get("details") or {})
+    application = details.pop("application", None)
+    cleaned = clean_details(details, partial=True, envs=envs) if details else {}
+    tags = changes.get("tags")
+    if tags and tags[0] not in ("add", "remove", "replace"):
+        raise ValueError("Tags are added, removed or replaced.")
+    comments = changes.get("comments")
+    if comments and comments[0] not in ("replace", "append"):
+        raise ValueError("Comments are replaced or added to.")
+    repos = changes.get("repositories")
+    if repos and repos[0] not in ("add", "replace", "clear"):
+        raise ValueError("Repositories are added, replaced or cleared.")
+    changed = []
+    for asset in assets:
+        try:
+            if application is not None:
+                asset.application = str(application)[:200].strip()
+            for key, value in cleaned.items():
+                setattr(asset, key, value)
+            if tags:
+                mode, values = tags
+                have = asset.tag_list()
+                wanted = clean_tags(values)
+                if mode == "add":
+                    set_tags(asset, have + wanted)
+                elif mode == "remove":
+                    drop = {t.casefold() for t in wanted}
+                    set_tags(asset, [t for t in have if t.casefold() not in drop])
+                else:
+                    set_tags(asset, wanted)
+            if comments:
+                mode, text = comments
+                text = str(text or "").strip()
+                if mode == "append" and asset.notes and text:
+                    text = (asset.notes.rstrip() + "\n" + text)
+                asset.notes = text[:4000] if (mode == "replace" or text) else asset.notes
+            if changes.get("no_scan") is not None:
+                flag, reason = changes["no_scan"]
+                asset.no_scan = bool(flag)
+                asset.no_scan_reason = (str(reason or "")[:300] if flag else "")
+            if "proxy" in changes:
+                set_proxy(asset, changes["proxy"] or "")
+            if changes.get("auth") is not None:
+                kind, values = changes["auth"]
+                external_auth.save(asset, kind, values, actor, asset.parent_domain)
+            if repos:
+                mode, picks = repos
+                if mode == "add":
+                    current = [tuple(p.split("|", 1)) for p in picks_of(db, asset)]
+                    merged = [(int(r), b) for r, b in current]
+                    merged += [p for p in picks if p not in merged]
+                    set_picks(db, asset, merged, actor, user)
+                elif mode == "replace":
+                    set_picks(db, asset, picks, actor, user)
+                else:
+                    set_picks(db, asset, [], actor, user)
+        except ValueError as exc:
+            raise ValueError(f"{asset.host}: {exc}")
+        changed.append(asset.host)
+    db.flush()
+    return changed
+
+
 def profile_for(asset: ExternalAsset) -> str:
     """The profile a scan of this site starts with when nobody picks one."""
     from app.core import dast_engines

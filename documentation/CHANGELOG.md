@@ -6,6 +6,11 @@ moved.
 
 ## 2026-11-03
 
+**Edit many external sites at once.**  Tick sites in the list and change any
+of what Edit offers on all of them together: owners, environment, status,
+scanning, flags, comments, tags, proxy, sign in and repositories.  Only the
+fields ticked to change are touched, and it is all or nothing.
+
 **A proxy per site, and the block page shown.**  A site that only lets in some
 networks can be given its own web proxy, so its pages, screenshot, sign in and
 engines go out through an address it allows.  A site that blocks this server

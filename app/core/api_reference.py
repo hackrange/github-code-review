@@ -513,6 +513,22 @@ def _external_endpoints() -> list:
                    _f("no_scan_reason", "string", False, "Why not.")] + _DETAILS,
              body_example={"no_scan": True, "no_scan_reason": "Vendor hosted"},
              example=_ASSET),
+        _ext("ext-bulk", "PATCH", "/external/assets", "Change many sites",
+             "The same changes on every site in ids, all or nothing: if any site will not "
+             "take a change, nothing is changed and the message names it.  Takes the same "
+             "fields as changing one site.  tags_mode is add, remove or replace; "
+             "comments_mode is replace or append; repositories_mode is add, replace or clear.",
+             body=[_f("ids", "array", True, "The sites to change, up to 500.")] + _DETAILS + [
+                 _f("tags", "array", False, "Tags, as tags_mode says."),
+                 _f("tags_mode", "string", False, "add, remove or replace."),
+                 _f("comments_mode", "string", False, "replace or append."),
+                 _f("repositories_mode", "string", False, "add, replace or clear."),
+                 _f("no_scan", "boolean", False, "Never scan them."),
+                 _f("no_scan_reason", "string", False, "Why not.")],
+             body_example={"ids": [12, 14, 15], "environment": "dev",
+                           "technical_owner": "team@example.com",
+                           "tags": ["ecommerce"], "tags_mode": "add", "whitelist_needed": True},
+             example={"changed": 3, "hosts": ["a.example.com", "b.example.com", "c.example.com"]}),
         _ext("ext-delete", "DELETE", "/external/assets/{asset_id}", "Remove a site",
              "Removes the site and its scan history.  409 while a scan runs.",
              [asset_id], example={}),

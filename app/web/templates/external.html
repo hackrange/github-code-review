@@ -160,6 +160,7 @@
   </div>
   <div class="card-body" style="display:flex;gap:.4rem;flex-wrap:wrap">
     <button class="btn sm" type="submit" form="pick" formaction="{{ here }}/refresh" data-needs-tick>Refresh telemetry</button>
+    <button class="btn sm" type="button" data-modal="bulk-edit-modal" data-needs-tick>Edit the ticked sites</button>
     <button class="btn sm" type="button" data-modal="scan-many-modal" data-needs-tick>Scan the ticked sites</button>
     <button class="btn sm danger" type="submit" form="pick" formaction="{{ here }}/delete-many" data-needs-tick
             data-ext-confirm="Remove the ticked sites and every scan recorded against them?">Delete the ticked sites</button>
@@ -171,6 +172,61 @@
   <div class="empty">No sites yet.  Add some, or import the company domains from
     Settings and the web addresses already on repositories.</div>
   {% endif %}
+</div>
+
+{% macro bulk(name, label) %}
+<div class="bulk-row" data-bulk-field="{{ name }}">
+  <label class="check bulk-apply"><input type="checkbox" name="apply_{{ name }}" value="1"><span>Change</span></label>
+  <div class="bulk-body"><div class="bulk-label">{{ label }}</div>{{ caller() }}</div>
+</div>
+{% endmacro %}
+<div class="modal-backdrop" id="bulk-edit-modal" hidden>
+  <div class="modal wide"><form method="post" action="{{ here }}/bulk-edit" data-bulk-form>
+    <div class="modal-head">Edit the ticked sites <span class="faint small" data-bulk-count></span>
+      <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="faint small" style="margin-bottom:.6rem">Only what has Change ticked is changed; everything
+        else stays as each site has it.  Typing in a field ticks it.  It is all or nothing: if any site
+        will not take a change, nothing is changed and the message says which.</div>
+      {% call bulk("application", "Application") %}<input type="text" name="application" maxlength="200">{% endcall %}
+      {% call bulk("executive_owner", "Executive owner") %}<input type="text" name="executive_owner" maxlength="500" placeholder="exec@example.com, email only">{% endcall %}
+      {% call bulk("technical_owner", "Technical owner") %}<input type="text" name="technical_owner" maxlength="500" placeholder="team@example.com, email only">{% endcall %}
+      {% call bulk("environment", "Environment") %}<select name="environment">{% for k, l in environments.items() %}<option value="{{ k }}">{{ l }}</option>{% endfor %}</select>{% endcall %}
+      {% call bulk("status", "Status") %}<select name="status">{% for k, l in statuses.items() %}<option value="{{ k }}">{{ l }}</option>{% endfor %}</select>{% endcall %}
+      {% call bulk("external_auth_needed", "External auth needed") %}<select name="external_auth_needed"><option value="yes">Yes</option><option value="no">No</option></select>{% endcall %}
+      {% call bulk("whitelist_needed", "Whitelist needed") %}<select name="whitelist_needed"><option value="yes">Yes</option><option value="no">No</option></select>{% endcall %}
+      {% call bulk("change_frequency_days", "Change frequency, in days") %}<input type="number" name="change_frequency_days" min="1" max="3650" placeholder="empty clears it">{% endcall %}
+      {% call bulk("default_profile", "Default scan profile") %}<select name="default_profile"><option value="">quick (the product default)</option>{% for name in profiles %}<option value="{{ name }}">{{ name }}</option>{% endfor %}</select>{% endcall %}
+      {% call bulk("no_scan", "No scan") %}<select name="no_scan"><option value="yes">Yes, never scan these</option><option value="no">No, they may be scanned</option></select>
+        <input type="text" name="no_scan_reason" maxlength="300" placeholder="Why not, for Yes" style="margin-top:.3rem">{% endcall %}
+      {% call bulk("tags", "Tags") %}<div class="bulk-mode"><select name="tags_mode"><option value="add">Add these</option><option value="remove">Remove these</option><option value="replace">Replace all tags with these</option></select>
+        <input type="text" name="tags" maxlength="1000" placeholder="comma separated"></div>{% endcall %}
+      {% call bulk("comments", "Comments") %}<div class="bulk-mode"><select name="comments_mode"><option value="replace">Replace with</option><option value="append">Add a line</option></select>
+        <textarea name="comments" rows="2" maxlength="4000"></textarea></div>{% endcall %}
+      {% call bulk("proxy", "Proxy") %}<div class="bulk-mode"><select name="proxy_mode"><option value="set">Set to</option><option value="clear">Remove it</option></select>
+        <input type="password" name="proxy" maxlength="500" autocomplete="off" placeholder="http://user:password@host:port"></div>{% endcall %}
+      {% call bulk("auth", "Scan sign in") %}<select name="auth_kind" data-auth-kind>{% for k, label in auth_kinds.items() %}<option value="{{ k }}">{{ label }}{{ ', remove it' if not k }}</option>{% endfor %}</select>
+        <div data-auth-for="header" class="form-grid"><input type="text" name="auth_header_name" value="Authorization" maxlength="100">
+          <input type="password" name="auth_header_value" maxlength="8000" autocomplete="off" placeholder="Bearer ..."></div>
+        <div data-auth-for="cookie"><input type="password" name="auth_cookie" maxlength="8000" autocomplete="off" placeholder="session=...; other=..."></div>
+        <div data-auth-for="form" class="form-grid"><input type="url" name="auth_login_url" maxlength="1000" placeholder="https://site/login">
+          <input type="text" name="auth_username" maxlength="300" autocomplete="off" placeholder="user name">
+          <input type="password" name="auth_password" maxlength="1000" autocomplete="new-password" placeholder="password">
+          <input type="text" name="auth_username_field" maxlength="100" placeholder="user name field, found on the page">
+          <input type="text" name="auth_password_field" maxlength="100" placeholder="password field, found on the page"></div>
+        <div class="faint small">A form login page has to be on each site's own domain.</div>{% endcall %}
+      {% call bulk("repositories", "Repositories") %}<select name="repositories_mode"><option value="add">Add these to what each site has</option><option value="replace">Replace what each site has picked</option><option value="clear">Clear what was picked</option></select>
+        <div class="repo-picker" data-picker data-picked="[]">
+          <input type="search" data-picker-search placeholder="Search organization, repository or branch" aria-label="Search repositories">
+          <div class="small" data-picker-summary>Loading the repositories...</div>
+          <div class="picker-list" data-picker-list></div>
+          <div data-picker-hidden></div>
+        </div>{% endcall %}
+    </div>
+    <div class="modal-foot"><button class="btn primary" type="submit">Change the ticked sites</button>
+      <button class="btn" type="button" data-close-modal>Cancel</button></div>
+  </form></div>
 </div>
 
 <div class="modal-backdrop" id="scan-many-modal" hidden>

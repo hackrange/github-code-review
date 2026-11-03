@@ -370,3 +370,43 @@
   window.addEventListener("hashchange", open);
   window.addEventListener("load", open);
 })();
+
+/* Bulk edit: a field that is touched is a field to change, and the ticked
+ * sites in the list go with the form. */
+(function () {
+  "use strict";
+  var form = document.querySelector("[data-bulk-form]");
+  if (!form) { return; }
+  form.querySelectorAll("[data-bulk-field]").forEach(function (row) {
+    var apply = row.querySelector('input[name^="apply_"]');
+    function mark(event) {
+      if (event.target !== apply) { apply.checked = true; apply.defaultChecked = true; }
+    }
+    row.addEventListener("input", mark);
+    row.addEventListener("change", mark);
+  });
+  var count = form.querySelector("[data-bulk-count]");
+  function ticked() {
+    return Array.prototype.filter.call(
+      document.querySelectorAll('input[name="id"][form="pick"]'), function (b) { return b.checked; });
+  }
+  document.addEventListener("click", function (event) {
+    if (event.target.closest && event.target.closest('[data-modal="bulk-edit-modal"]') && count) {
+      setTimeout(function () {
+        var n = ticked().length;
+        count.textContent = "(" + n + " site" + (n === 1 ? "" : "s") + ")";
+        form.querySelectorAll('input[name^="apply_"]').forEach(function (b) { b.defaultChecked = false; b.checked = false; });
+      }, 0);
+    }
+  });
+  form.addEventListener("submit", function (event) {
+    form.querySelectorAll('input[name="id"][type="hidden"]').forEach(function (n) { n.remove(); });
+    var picks = ticked();
+    if (!picks.length) { event.preventDefault(); return; }
+    picks.forEach(function (box) {
+      var hidden = document.createElement("input");
+      hidden.type = "hidden"; hidden.name = "id"; hidden.value = box.value;
+      form.appendChild(hidden);
+    });
+  });
+})();

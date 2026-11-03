@@ -227,6 +227,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
 
         context.update(active_page="external", rows=rows, totals=totals,
                        profiles=dast_engines.PROFILES, default_profile=dast_engines.DEFAULT_PROFILE,
+                       auth_kinds=external_auth_mod.KINDS,
                        q=q, tag=tag, app=app, grade=grade, dast=dast, risk=risk,
                        scope=scope, all_tags=all_tags, apps=apps, opts=opts,
                        env=env, status=status, environments=envs,
@@ -376,6 +377,69 @@ def _ticked(form) -> list:
         except (TypeError, ValueError):
             continue
     return list(dict.fromkeys(ids))[:500]
+
+
+def _bulk_changes(form) -> dict:
+    """What the bulk edit dialog asks to change: only the ticked fields."""
+    def on(name):
+        return _checked(form, f"apply_{name}")
+
+    changes, details = {}, {}
+    for key in external.BULK_FIELDS:
+        if on(key):
+            value = form.get(key)
+            if key in ("external_auth_needed", "whitelist_needed"):
+                value = str(value or "").lower() in ("1", "yes", "true", "on")
+            details[key] = value if value is not None else ""
+    if details:
+        changes["details"] = details
+    if on("tags"):
+        changes["tags"] = (str(form.get("tags_mode") or "add"),
+                           str(form.get("tags") or "").replace(";", ",").split(","))
+    if on("comments"):
+        changes["comments"] = (str(form.get("comments_mode") or "replace"),
+                               clean_text(form.get("comments"), "Comments", limit=4000, required=False))
+    if on("no_scan"):
+        changes["no_scan"] = (str(form.get("no_scan") or "").lower() in ("1", "yes"),
+                              clean_text(form.get("no_scan_reason"), "Reason", limit=300, required=False))
+    if on("proxy"):
+        changes["proxy"] = "" if form.get("proxy_mode") == "clear" else str(form.get("proxy") or "")
+        if changes["proxy"] == "" and form.get("proxy_mode") != "clear":
+            raise ValueError("Give the proxy address, or choose to remove it.")
+    if on("auth"):
+        changes["auth"] = (str(form.get("auth_kind") or ""), {
+            key: form.get(f"auth_{key}") or "" for key in (
+                "header_name", "header_value", "cookie", "login_url", "username",
+                "password", "username_field", "password_field")})
+    if on("repositories"):
+        changes["repositories"] = (str(form.get("repositories_mode") or "add"),
+                                   external.parse_picks(form.getlist("pick")))
+    return changes
+
+
+@router.post("/external/bulk-edit")
+async def bulk_edit(request: Request, user: User = Depends(current_user)):
+    """Change the same things on every ticked site, all or nothing."""
+    await check_csrf(request)
+    form = await request.form()
+    with session_scope() as db:
+        _guard(db, user)
+        ids = _ticked(form)
+        if not ids:
+            return redirect(_back("/external", "Tick the sites to change first.", "error"))
+        try:
+            changes = _bulk_changes(form)
+            if not changes:
+                return redirect(_back("/external", "Tick Change beside what to change.", "error"))
+            assets = db.query(ExternalAsset).filter(ExternalAsset.id.in_(ids)).all()
+            changed = external.bulk_update(db, assets, changes, user.username, user)
+        except ValueError as exc:
+            db.rollback()
+            return redirect(_back("/external", f"Nothing was changed.  {exc}", "error"))
+        record(db, "external.bulk_edit", actor=user.username, target=f"{len(changed)} sites",
+               detail=(", ".join(sorted(changes)) + ": " + ", ".join(changed))[:500],
+               source_ip=client_ip(request))
+    return redirect(_back("/external", f"Changed {len(changed)} site{'s' if len(changed) != 1 else ''}."))
 
 
 @router.post("/external/delete-many")
@@ -1256,6 +1320,73 @@ async def api_patch(asset_id: int, request: Request, caller=Depends(_api_caller(
                detail=f"api token {caller.token.prefix}", source_ip=client_ip(request))
         db.flush()
         return _view(db, asset, me, request)
+
+
+@api.patch("/assets")
+async def api_bulk_patch(request: Request, caller=Depends(_api_caller())):
+    """Change the same things on many sites, all or nothing."""
+    body = await _body(request)
+    ids = body.get("ids")
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, int) for i in ids) or len(ids) > 500:
+        raise HTTPException(status_code=400, detail="ids is a list of up to 500 site ids.")
+    with session_scope() as db:
+        me = _api_me(db, caller)
+        assets = db.query(ExternalAsset).filter(ExternalAsset.id.in_(ids)).all()
+        missing = set(ids) - {a.id for a in assets}
+        if missing:
+            raise HTTPException(status_code=404, detail=f"No such sites: {sorted(missing)[:10]}")
+        changes, details = {}, {}
+        try:
+            for key in external.BULK_FIELDS:
+                if key in body:
+                    details[key] = body[key]
+            src = _api_details({k: v for k, v in body.items() if k in external.BULK_FIELDS})
+            details.update(src)
+            if "application" in body:
+                if not isinstance(body["application"], str):
+                    raise ValueError("application has to be a string.")
+                details["application"] = body["application"]
+            if details:
+                changes["details"] = details
+            for key, modes in (("tags", ("add", "remove", "replace")),
+                               ("comments", ("replace", "append")),
+                               ("repositories", ("add", "replace", "clear"))):
+                if key in body:
+                    mode = body.get(f"{key}_mode") or modes[0]
+                    if mode not in modes:
+                        raise ValueError(f"{key}_mode is one of {', '.join(modes)}.")
+                    value = body[key]
+                    if key == "repositories":
+                        value = external.picks_from_names(db, value or [])
+                    elif key == "tags" and (not isinstance(value, list)
+                                            or not all(isinstance(t, str) for t in value)):
+                        raise ValueError("tags has to be a list of strings.")
+                    elif key == "comments" and not isinstance(value, str):
+                        raise ValueError("comments has to be a string.")
+                    changes[key] = (mode, value)
+            if "no_scan" in body:
+                if not isinstance(body["no_scan"], bool):
+                    raise ValueError("no_scan has to be true or false.")
+                changes["no_scan"] = (body["no_scan"], str(body.get("no_scan_reason") or ""))
+            if "proxy" in body:
+                if body["proxy"] is not None and not isinstance(body["proxy"], str):
+                    raise ValueError("proxy has to be a string, or null to remove it.")
+                changes["proxy"] = body["proxy"] or ""
+            if "scan_auth" in body:
+                auth = body["scan_auth"] or {}
+                if not isinstance(auth, dict) or not all(isinstance(v, str) for v in auth.values()):
+                    raise ValueError("scan_auth has to be an object of strings, or null.")
+                changes["auth"] = (auth.get("kind", ""), auth)
+            if not changes:
+                raise ValueError("Name at least one thing to change.")
+            changed = external.bulk_update(db, assets, changes, me.username, me)
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(status_code=400, detail=f"Nothing was changed.  {exc}")
+        record(db, "external.bulk_edit", actor=me.username, target=f"{len(changed)} sites",
+               detail=(", ".join(sorted(changes)) + f", api token {caller.token.prefix}")[:500],
+               source_ip=client_ip(request))
+        return {"changed": len(changed), "hosts": changed}
 
 
 @api.delete("/assets/{asset_id}")

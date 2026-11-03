@@ -1158,3 +1158,11 @@ details.code-behind > summary::before { content: "\25B8"; color: var(--text-fain
 details.code-behind[open] > summary::before { content: "\25BE"; }
 .code-summary { font-weight: 400; font-size: .9rem; display: flex; gap: .25rem; align-items: center;
   margin-left: auto; }
+/* Bulk edit: a Change box beside each field. */
+.bulk-row { display: grid; grid-template-columns: 6.5rem 1fr; gap: .6rem; align-items: start;
+  padding: .45rem 0; border-bottom: 1px dashed var(--border); }
+.bulk-row .bulk-apply { margin: .2rem 0 0; }
+.bulk-label { font-weight: 600; font-size: .9rem; margin-bottom: .2rem; }
+.bulk-body input[type=text], .bulk-body input[type=password], .bulk-body input[type=url],
+.bulk-body input[type=number], .bulk-body select, .bulk-body textarea { width: 100%; }
+.bulk-mode { display: grid; grid-template-columns: 12rem 1fr; gap: .4rem; }

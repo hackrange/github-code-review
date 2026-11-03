@@ -110,6 +110,18 @@ score, each telemetry group, the security headers and every response header.
 A host that resolves to a private address is not probed unless
 `external.allow_private` is on, and every redirect is checked the same way.
 
+## Changing many sites at once
+
+Tick sites in the list and press **Edit the ticked sites**.  Every field Edit
+has is there with a **Change** box beside it, and only the ticked ones are
+changed; typing in a field ticks it.  Tags can be added, removed or replaced,
+comments replaced or added to, repositories added, replaced or cleared, and
+the proxy and the scan sign in set or removed.  It is all or nothing: the
+changes are checked for every ticked site first, and if one will not take
+them, nothing is changed and the message names it.  Telemetry filled in by
+hand stays per site.  The API does the same with `PATCH
+/api/v1/external/assets` and a list of `ids`.
+
 ## Running a scan
 
 1. Open **External sites** and press **Scan** on a site's row, or open the
