@@ -6,6 +6,11 @@ moved.
 
 ## 2026-11-03
 
+**A proxy per site, and the block page shown.**  A site that only lets in some
+networks can be given its own web proxy, so its pages, screenshot, sign in and
+engines go out through an address it allows.  A site that blocks this server
+now shows the block page it served as its screenshot, instead of a blank card.
+
 **Screenshots through bot checks, and pages that really are blank.**  A site
 behind Imperva showed "a flat white page" and seventy open ports.  The
 screenshot browser was stopped by Imperva's bot check, and the ports were

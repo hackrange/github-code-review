@@ -93,8 +93,9 @@
         <tr>
           <td><input type="checkbox" name="id" value="{{ a.id }}" form="pick" aria-label="Pick {{ a.host }}">
             <a href="{{ base }}/external/{{ a.id }}" style="display:block;margin-top:.3rem">
-            {%- if a.screenshot in ('ok', 'blank') %}<img class="shot-thumb" loading="lazy" alt="Screenshot of {{ a.host }}" src="{{ base }}/external/{{ a.id }}/screenshot.png?v={{ a.telemetry_at.timestamp() | int if a.telemetry_at else 0 }}" {% if a.screenshot == 'blank' %}title="The page is blank"{% endif %}>
-              {%- if a.screenshot == 'blank' %}<div class="faint small" style="text-align:center">blank page</div>{% endif %}
+            {%- if a.screenshot in ('ok', 'blank') or r.has_shot %}<img class="shot-thumb" loading="lazy" alt="Screenshot of {{ a.host }}" src="{{ base }}/external/{{ a.id }}/screenshot.png?v={{ a.telemetry_at.timestamp() | int if a.telemetry_at else 0 }}" {% if a.screenshot == 'blank' %}title="The page is blank"{% endif %}>
+              {%- if a.screenshot == 'blank' %}<div class="faint small" style="text-align:center">blank page</div>
+              {%- elif a.screenshot == 'waf' %}<div class="small" style="text-align:center;color:var(--bad)">firewall block page</div>{% endif %}
             {%- else %}<div class="shot-none">{{ {'waf':'firewall block page','botcheck':'bot check','blank':'blank page','nobrowser':'no browser','blocked':'no image'}.get(a.screenshot, 'no screenshot') }}</div>{% endif %}</a></td>
           <td><a href="{{ base }}/external/{{ a.id }}"><strong class="mono">{{ a.host }}</strong></a>
             <div class="small faint">{{ a.kind }}{% if a.kind == 'subdomain' %} of {{ a.parent_domain }}{% endif %}</div>

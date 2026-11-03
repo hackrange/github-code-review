@@ -81,6 +81,7 @@ def main() -> int:
     ap.add_argument("--user-agent", required=True)
     ap.add_argument("--timeout", type=int, default=45)
     ap.add_argument("--allow-private", action="store_true")
+    ap.add_argument("--proxy", default="")
     args = ap.parse_args()
     out = {"ok": False, "title": "", "url": args.url, "status": 0, "bot_check": "",
            "bot_check_seen": "", "engine": "", "error": ""}
@@ -96,7 +97,13 @@ def main() -> int:
              or os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY"))
     launch = {"args": ["--disable-blink-features=AutomationControlled", "--no-sandbox",
                        "--disable-dev-shm-usage", "--disable-gpu"]}
-    if proxy:
+    if args.proxy:
+        # The site's own proxy, which may carry a user name and password.
+        site = urlparse(args.proxy)
+        launch["proxy"] = {"server": f"{site.scheme}://{site.hostname}:{site.port or 80}"}
+        if site.username:
+            launch["proxy"].update(username=site.username, password=site.password or "")
+    elif proxy:
         launch["proxy"] = {"server": proxy}
     try:
         with sync_playwright() as p:

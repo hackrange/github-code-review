@@ -462,6 +462,9 @@ _DETAILS = [
     _f("change_frequency_days", "integer", False, "How often the site changes, in days."),
     _f("default_profile", "string", False, "The scan profile used when none is given: "
                                            "baseline, quick, standard, thorough or premium."),
+    _f("proxy", "string", False, "A web proxy for the site's pages, screenshot, sign in "
+                                 "and engines: http://host:port or http://user:password@"
+                                 "host:port.  null removes it.  Returned without the password."),
     _f("scan_auth", "object", False, "How a scan signs in: kind header (header_name, "
                                      "header_value), cookie (cookie) or form (login_url, "
                                      "username, password).  null removes it.  Never returned."),

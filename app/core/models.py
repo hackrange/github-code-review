@@ -2271,6 +2271,10 @@ class ExternalAsset(Base):
     auth_data = Column(Text, default="")
     auth_set_by = Column(String(120), default="")
     auth_set_at = Column(DateTime(timezone=True))
+    # A web proxy this site's pages, screenshots, sign in and engines go
+    # through, for a site that only lets in some networks.  Encrypted, since
+    # it can carry a password.  Empty for none.
+    proxy = Column(Text, default="")
 
     # Who answers for the site, as addresses, comma separated.
     executive_owner = Column(String(500), default="")

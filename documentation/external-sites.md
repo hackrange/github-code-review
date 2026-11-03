@@ -175,6 +175,22 @@ once schedule turns itself off after it runs.  Through the API:
 `GET` and `POST /api/v1/external/assets/{id}/schedules`, and `DELETE` with the
 schedule's id.
 
+## A proxy per site
+
+Some sites only let in certain networks, and turn this server away with a
+firewall block page.  A site can have its own web proxy, set under **Proxy**
+in Edit or as `proxy` through the API: `http://host:port`, or
+`http://user:password@host:port`.  It is saved encrypted and shown without its
+password.  The site's page requests, its screenshot, the form login and the
+engines (nuclei, ffuf, nikto, wapiti, sqlmap and dalfox) go through it.  DNS,
+the port check and the TLS reads, including testssl, go direct: a web proxy
+cannot carry them.  A scan sent to a nextgen-dast server runs from that
+server, so the proxy does not apply there.
+
+When a site does turn this server away, its screenshot is kept and shown as
+the firewall block page this server was given, so it is plain at a glance
+that the site is blocking the scanner rather than broken.
+
 ## Signing in for a scan
 
 Set under **Scan sign in** in a site's Edit, or as `scan_auth` through the API.

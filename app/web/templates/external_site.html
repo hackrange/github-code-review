@@ -54,11 +54,11 @@
   <div class="card-head">Screenshot
     <span class="faint small" style="font-weight:400">{{ tele.final_url or ('https://' ~ asset.host ~ '/') }}{% if asset.telemetry_at %}, {{ asset.telemetry_at | dt('%Y-%m-%d %H:%M') }}{% endif %}</span></div>
   <div class="card-body">
-    {% if asset.screenshot in ('ok', 'blank') %}
+    {% if asset.screenshot in ('ok', 'blank') or (asset.screenshot == 'waf' and has_shot) %}
     {% set shot_src = base ~ '/external/' ~ asset.id ~ '/screenshot.png?v=' ~ (asset.telemetry_at.timestamp() | int if asset.telemetry_at else 0) %}
     <button type="button" class="shot-thumb-btn" data-modal="shot-modal" title="Show it larger">
       <img class="shot-small" alt="Screenshot of {{ asset.host }}, click to enlarge" src="{{ shot_src }}">
-      <span class="small faint">{% if asset.screenshot == 'blank' %}The page is blank: it loaded and shows nothing.  {% endif %}Click to enlarge</span></button>
+      <span class="small faint">{% if asset.screenshot == 'blank' %}The page is blank: it loaded and shows nothing.  {% elif asset.screenshot == 'waf' %}<strong>Firewall block page:</strong> this is what the site shows this server{% if proxy_label %} through its proxy{% endif %}.  {% endif %}Click to enlarge</span></button>
     {% else %}
     <div class="shot-hero-none">{{ {'waf':'A firewall block page answered, so the screenshot is left out.','botcheck':'A bot check answered instead of the page, and stopped the screenshot browser.','blank':'The page rendered blank.','nobrowser':'No headless browser on this server.','blocked':'The browser brought back no image.'}.get(asset.screenshot, 'No screenshot yet.  Refresh telemetry to take one.') }}
       {% if tele.shot_detail %}<div class="small faint">{{ tele.shot_detail }}</div>{% endif %}</div>
@@ -90,6 +90,9 @@
         <tr><th>Default scan</th><td>{{ site_profile }}{% if not asset.default_profile %} <span class="faint small">(the product default)</span>{% endif %}</td></tr>
         <tr><th>Change frequency</th><td>{{ ('every %d days' % asset.change_frequency_days) if asset.change_frequency_days else '' }}{% if not asset.change_frequency_days %}<span class="faint">nobody has said</span>{% endif %}</td></tr>
         <tr><th>Scanning</th><td>{% if blocked %}<strong>Not to be scanned.</strong> {{ blocked }}{% else %}Allowed{% endif %}</td></tr>
+        <tr><th>Proxy</th><td>{% if proxy_label %}<span class="mono">{{ proxy_label }}</span>
+            <div class="faint small">Pages, screenshots, sign in and engines go through it.  DNS, ports and TLS are read directly.</div>
+          {% else %}<span class="faint">none, direct from this server</span>{% endif %}</td></tr>
         <tr><th>Scan sign in</th><td>{% if auth %}{{ auth.kind_name }}
             {%- if auth.header_name %}, {{ auth.header_name }}{% endif %}
             {%- if auth.cookie_names %}, {{ auth.cookie_names | join(', ') }}{% endif %}
@@ -305,7 +308,7 @@
   </div>
 </div>
 
-{% if asset.screenshot in ('ok', 'blank') %}
+{% if asset.screenshot in ('ok', 'blank') or (asset.screenshot == 'waf' and has_shot) %}
 <div class="modal-backdrop" id="shot-modal" hidden>
   <div class="modal shot-modal">
     <div class="modal-head">{{ tele.final_url or asset.host }}
@@ -334,6 +337,15 @@
       <label class="check"><input type="checkbox" name="no_scan" value="1" {{ 'checked' if asset.no_scan }}>
         <span>No scan.  We are not allowed to scan this host{% if asset.kind == 'domain' %} or anything under it{% endif %}.</span></label>
       <label>Why not <input type="text" name="no_scan_reason" maxlength="300" value="{{ asset.no_scan_reason }}" placeholder="Vendor hosted SaaS"></label>
+      <details class="hand-fields" {{ 'open' if proxy_label }}>
+        <summary><strong>Proxy</strong> <span class="faint small">for a site that only lets in some networks.  Saved encrypted.</span></summary>
+        <input type="hidden" name="with_proxy" value="1">
+        <label>Proxy address <input type="password" name="proxy" maxlength="500" autocomplete="off"
+               placeholder="{{ proxy_label ~ ' (saved, leave empty to keep)' if proxy_label else 'http://proxy.example.com:8080' }}">
+          <span class="faint small">http://host:port, or http://user:password@host:port.  The site's pages, screenshot,
+            sign in and engines go through it; DNS, ports and TLS are read directly.</span></label>
+        {% if proxy_label %}<label class="check"><input type="checkbox" name="proxy_clear" value="1"><span>Remove the proxy</span></label>{% endif %}
+      </details>
       <details class="hand-fields" {{ 'open' if auth }}>
         <summary><strong>Scan sign in</strong> <span class="faint small">so the engines see what a signed in user sees.  Saved encrypted; a secret left empty keeps the saved one.</span></summary>
         <input type="hidden" name="with_auth" value="1">

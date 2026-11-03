@@ -274,8 +274,19 @@ def links_in(url: str, body: str) -> list:
     return sorted(keep, key=lambda u: "?" not in u)[:100]
 
 
+def proxy_args(tool: str, proxy: str) -> list:
+    """Send an engine through the site's proxy.  testssl talks TLS straight to
+    the host and is left alone, the same as the telemetry's TLS read."""
+    if not proxy:
+        return []
+    return {"nuclei": ["-proxy", proxy], "ffuf": ["-x", proxy],
+            "nikto": ["-useproxy", proxy], "wapiti": ["-p", proxy],
+            "sqlmap": ["--proxy", proxy], "dalfox": ["--proxy", proxy]}.get(tool, [])
+
+
 def run_engine(tool: str, url: str, host: str, profile: str, workdir: Path,
-               scan_id: int, paths: list = None, auth_args: list = None) -> dict:
+               scan_id: int, paths: list = None, auth_args: list = None,
+               proxy: str = "") -> dict:
     """Run one engine and read its report.
 
     -> {tool, status, seconds, findings, detail, paths}
@@ -294,7 +305,7 @@ def run_engine(tool: str, url: str, host: str, profile: str, workdir: Path,
     engine_dir.mkdir(parents=True, exist_ok=True)
     try:
         argv, report = command(tool, url, host, profile, engine_dir, paths)
-        argv = list(argv) + list(auth_args or [])
+        argv = list(argv) + list(auth_args or []) + proxy_args(tool, proxy)
     except Exception as exc:  # noqa: BLE001
         out.update(status="failed", detail=f"{type(exc).__name__}: {exc}"[:300])
         return out

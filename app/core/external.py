@@ -280,6 +280,59 @@ def clean_details(data: dict, partial: bool = False, envs: dict = None,
     return out
 
 
+PROXY_RE = re.compile(r"^https?://([^:@/\s]+(:[^@/\s]*)?@)?[A-Za-z0-9.-]+(:\d{1,5})?/?$")
+
+
+def proxy_of(asset) -> str:
+    """The site's proxy, decrypted, or empty."""
+    from app.core import settings_store as store
+
+    if not getattr(asset, "proxy", ""):
+        return ""
+    try:
+        return store._decrypt(asset.proxy) or ""
+    except Exception:  # noqa: BLE001 - a key change makes it unreadable
+        return ""
+
+
+def proxy_shown_url(url: str) -> str:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url or "")
+    user = f"{parsed.username}:****@" if parsed.username else ""
+    return f"{parsed.scheme}://{user}{parsed.hostname}:{parsed.port or 80}" if url else ""
+
+
+def proxy_shown(asset) -> str:
+    """The proxy as the page and the API may show it: never its password."""
+    from urllib.parse import urlparse
+
+    url = proxy_of(asset)
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    user = f"{parsed.username}:****@" if parsed.username else ""
+    return f"{parsed.scheme}://{user}{parsed.hostname}:{parsed.port or 80}"
+
+
+def set_proxy(asset, value) -> None:
+    """Set the site's proxy, or clear it with an empty value.  Raises ValueError."""
+    from urllib.parse import urlparse
+
+    from app.core import settings_store as store
+
+    text = str(value or "").strip()
+    if not text:
+        asset.proxy = ""
+        return
+    if len(text) > 500 or not PROXY_RE.fullmatch(text):
+        raise ValueError("The proxy is http://host:port, or http://user:password@host:port.")
+    port = urlparse(text).port
+    if port is not None and not 0 < port < 65536:
+        raise ValueError("The proxy's port is 1 to 65535.")
+    asset.proxy = store._encrypt(text)
+
+
 def profile_for(asset: ExternalAsset) -> str:
     """The profile a scan of this site starts with when nobody picks one."""
     from app.core import dast_engines
@@ -1037,6 +1090,7 @@ def asset_dict(asset: ExternalAsset, links: list = None, counts: dict = None,
         "change_frequency_days": asset.change_frequency_days,
         "default_profile": profile_for(asset),
         "scan_auth": _auth_view(asset),
+        "proxy": proxy_shown(asset) or None,
         "no_scan": bool(asset.no_scan), "no_scan_reason": asset.no_scan_reason or "",
         "scan_blocked": bool(blocked_reason), "scan_blocked_reason": blocked_reason,
         "added_at": _iso(asset.added_at), "added_by": asset.added_by,
@@ -1052,7 +1106,7 @@ def asset_dict(asset: ExternalAsset, links: list = None, counts: dict = None,
             "waf_block": bool(tele.get("waf_block")),
             "screenshot": asset.screenshot,
             "screenshot_url": (f"{base_url}/external/{asset.id}/screenshot.png"
-                               if asset.screenshot in ("ok", "blank") else ""),
+                               if asset.screenshot in ("ok", "blank", "waf") else ""),
         },
         "fields": {row["key"]: {"value": row["value"], "scan": row["scan"],
                                 "manual": row["manual"]}
@@ -1152,8 +1206,13 @@ def _telemetry(asset_id: int) -> None:
                 return
             host, opts, why = asset.host, options(db), blocked(db, asset)
         path = shot_path(asset_id)
-        rec = external_probe.probe(host, shot_path=path, screenshots=opts["screenshots"],
-                                   allow_private=opts["allow_private"], passive=bool(why))
+        with session_scope() as db:
+            proxy = proxy_of(db.get(ExternalAsset, asset_id))
+        with external_probe.via_proxy(proxy):
+            rec = external_probe.probe(host, shot_path=path, screenshots=opts["screenshots"],
+                                       allow_private=opts["allow_private"], passive=bool(why))
+        if proxy:
+            rec["proxied"] = True
         save_telemetry(asset_id, rec)
     except Exception as exc:  # noqa: BLE001 - never leave a row saying running
         log.exception("telemetry for %s failed", asset_id)
@@ -1180,7 +1239,7 @@ def save_telemetry(asset_id: int, rec: dict) -> None:
             asset.category = rec.get("category") or ""
         if rec.get("shot"):
             asset.screenshot = rec["shot"][:16]
-            if rec["shot"] not in ("ok", "blank"):
+            if rec["shot"] not in ("ok", "blank", "waf") or not shot_path(asset_id).exists():
                 shot_path(asset_id).unlink(missing_ok=True)
 
 
@@ -1419,10 +1478,19 @@ def _builtin(scan_id: int) -> None:
         opts = options(db)
         why = blocked(db, asset)
         auth = external_auth.load(asset) if scan.authenticated else {}
+        proxy = proxy_of(asset)
     if why:
         _update(scan_id, status="failed", error=f"may not be scanned: {why}"[:500])
         return
     _update(scan_id, status="running", step="baseline checks", started_at=utcnow())
+    from app.core import external_probe as _probe
+
+    with _probe.via_proxy(proxy):
+        _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy)
+
+
+def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
+    from app.core import dast_engines, external_auth, external_dast
     engines = []
     base = external_dast.scan(host, allow_private=opts["allow_private"])
     findings = [dict(f, tool="baseline") for f in base["findings"]]
@@ -1460,6 +1528,14 @@ def _builtin(scan_id: int) -> None:
                         "seconds": 0})
     elif auth:
         secrets = external_auth.secrets_of(auth)
+    if proxy:
+        from urllib.parse import urlparse as _up
+
+        if _up(proxy).password and len(_up(proxy).password) >= 4:
+            secrets = sorted(set(secrets) | {_up(proxy).password}, key=len, reverse=True)
+        engines.append({"tool": "proxy", "name": "Proxy", "status": "ok", "seconds": 0,
+                        "detail": f"pages, the screenshot, sign in and engines went through "
+                                  f"{proxy_shown_url(proxy)}; DNS, ports and TLS were read directly"})
     _update(scan_id, engines=json.dumps(engines))
     if url and plan:
         workdir = app_settings.work_dir / "dast" / str(scan_id)
@@ -1482,7 +1558,8 @@ def _builtin(scan_id: int) -> None:
                 args = external_auth.engine_args(tool, session) \
                     if tool in external_auth.SIGNS_IN else []
                 result = dast_engines.run_engine(tool, url, host, profile, workdir,
-                                                 scan_id, paths=extra, auth_args=args)
+                                                 scan_id, paths=extra, auth_args=args,
+                                                 proxy=proxy)
                 if session:
                     result["signed_in"] = bool(args)
                 if tool == "ffuf":

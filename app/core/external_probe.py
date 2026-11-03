@@ -30,6 +30,7 @@ import tempfile
 import threading
 import time
 import zlib
+from urllib.parse import urlparse
 from pathlib import Path
 
 log = logging.getLogger("gcr.external")
@@ -48,6 +49,33 @@ UA_RE = re.compile(r"^Mozilla/5\.0 \([\x20-\x7e]{5,380}$")
 
 def user_agent() -> str:
     return _UA["value"]
+
+
+# The proxy a site's requests go through, for the thread doing its telemetry
+# or its scan.  Page fetches, the screenshot and the form login go through it.
+# DNS, the port check and the TLS read do not: a web proxy cannot carry them,
+# and they reach the CDN in front either way.
+_LOCAL = threading.local()
+
+
+class via_proxy:
+    """with via_proxy(url): ... sends this thread's web requests through url."""
+
+    def __init__(self, url: str):
+        self.url = url or ""
+
+    def __enter__(self):
+        self.before = getattr(_LOCAL, "proxy", "")
+        _LOCAL.proxy = self.url
+        return self
+
+    def __exit__(self, *exc):
+        _LOCAL.proxy = self.before
+        return False
+
+
+def current_proxy() -> str:
+    return getattr(_LOCAL, "proxy", "")
 
 
 def set_user_agent(value: str) -> None:
@@ -463,8 +491,9 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
     sent.setdefault("User-Agent", user_agent())
     sent.setdefault("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
     try:
+        proxy = current_proxy()
         with httpx.Client(verify=False, timeout=timeout, follow_redirects=False,
-                          trust_env=True) as client:
+                          trust_env=not proxy, proxy=proxy or None) as client:
             for _hop in range(6):
                 host = urlparse(current).hostname or ""
                 if not allow_private and not _host_is_public(host):
@@ -844,6 +873,12 @@ def _png_flat_color(path: Path, max_rows: int = 320) -> str | None:
 
 
 def _proxy_flags() -> list:
+    site = current_proxy()
+    if site:
+        # Chromium takes no password on its command line, so a proxy that
+        # needs one only works through the Playwright capture.
+        parsed = urlparse(site)
+        return [f"--proxy-server={parsed.scheme}://{parsed.hostname}:{parsed.port or 80}"]
     proxy = (os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
              or os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY"))
     if not proxy:
@@ -951,6 +986,8 @@ def playwright_shot(urls: list, out_path: Path, allow_private: bool = False,
                     "--timeout", str(timeout)]
             if allow_private:
                 argv.append("--allow-private")
+            if current_proxy():
+                argv += ["--proxy", current_proxy()]
             with SHOT_GATE:
                 try:
                     proc = subprocess.run(argv, capture_output=True, text=True,
@@ -1075,38 +1112,43 @@ def probe(host: str, shot_path: Path = None, screenshots: bool = True,
 
     if rec["category"] in WEB_CATEGORIES and screenshots and shot_path is not None:
         browser = find_browser()
-        if rec["waf_block"]:
-            rec["shot"], rec["shot_detail"] = "waf", "a firewall block page answered"
+        # A real browser engine first: it gets through most bot checks and
+        # reads the page as a visitor sees it.  The plain headless capture
+        # is what is left when Playwright is not there or brought nothing.
+        seen = playwright_shot(screenshot_urls(host, rec), shot_path, allow_private)
+        if seen["status"] in ("ok", "blank"):
+            rec["shot"], rec["shot_detail"] = seen["status"], seen["detail"]
+        elif browser:
+            rec["shot"], rec["shot_detail"] = take_screenshot(
+                browser, screenshot_urls(host, rec), shot_path)
         else:
-            # A real browser engine first: it gets through most bot checks and
-            # reads the page as a visitor sees it.  The plain headless capture
-            # is what is left when Playwright is not there or brought nothing.
-            seen = playwright_shot(screenshot_urls(host, rec), shot_path, allow_private)
-            if seen["status"] in ("ok", "blank"):
-                rec["shot"], rec["shot_detail"] = seen["status"], seen["detail"]
-            elif browser:
-                rec["shot"], rec["shot_detail"] = take_screenshot(
-                    browser, screenshot_urls(host, rec), shot_path)
+            rec["shot"], rec["shot_detail"] = ("blank" if seen["status"] == "blank" else "nobrowser",
+                                               seen["detail"])
+        rec["rendered_title"] = seen.get("title", "")
+        rec["rendered_url"] = seen.get("url", "")
+        # Redirects a browser follows that a plain request does not: after a
+        # bot check, a meta refresh or a script.
+        if rec["rendered_url"] and rec["rendered_url"].rstrip("/") != (rec["final_url"] or "").rstrip("/"):
+            if rec["rendered_url"] not in rec["redirects"]:
+                rec["redirects"] = list(rec["redirects"]) + [rec["rendered_url"]]
+        # The browser loaded the page and no check is left on it: whatever
+        # check the first answer was, the browser got past it.
+        if seen["status"] in ("ok", "blank") and not seen.get("bot_check") \
+                and not rec["waf_block"] and (rec["bot_check"] or seen.get("bot_check_seen")):
+            rec["bot_check_passed"] = rec["bot_check"] or seen["bot_check_seen"]
+        if rec["waf_block"]:
+            # What this server is shown is the picture worth having: it
+            # says at a glance that the site turns the scanner away.
+            if rec["shot"] in ("ok", "blank"):
+                rec["shot"], rec["shot_detail"] = "waf", (
+                    "a firewall block page answered; this is what this server is shown")
             else:
-                rec["shot"], rec["shot_detail"] = ("blank" if seen["status"] == "blank" else "nobrowser",
-                                                   seen["detail"])
-            rec["rendered_title"] = seen.get("title", "")
-            rec["rendered_url"] = seen.get("url", "")
-            # Redirects a browser follows that a plain request does not: after a
-            # bot check, a meta refresh or a script.
-            if rec["rendered_url"] and rec["rendered_url"].rstrip("/") != (rec["final_url"] or "").rstrip("/"):
-                if rec["rendered_url"] not in rec["redirects"]:
-                    rec["redirects"] = list(rec["redirects"]) + [rec["rendered_url"]]
-            # The browser loaded the page and no check is left on it: whatever
-            # check the first answer was, the browser got past it.
-            if seen["status"] in ("ok", "blank") and not seen.get("bot_check") \
-                    and (rec["bot_check"] or seen.get("bot_check_seen")):
-                rec["bot_check_passed"] = rec["bot_check"] or seen["bot_check_seen"]
-            if rec["shot"] in ("blank", "blocked") and rec["bot_check"] \
-                    and not rec.get("bot_check_passed"):
-                rec["shot"] = "botcheck"
-                rec["shot_detail"] = (f"{rec['bot_check']}'s bot check answered instead of the "
-                                      "page, and stopped the browser")
+                rec["shot"], rec["shot_detail"] = "waf", "a firewall block page answered"
+        elif rec["shot"] in ("blank", "blocked") and rec["bot_check"] \
+                and not rec.get("bot_check_passed"):
+            rec["shot"] = "botcheck"
+            rec["shot_detail"] = (f"{rec['bot_check']}'s bot check answered instead of the "
+                                  "page, and stopped the browser")
     rec["score"] = compute_score(rec)
     rec["seconds"] = round(time.monotonic() - started, 1)
     return rec

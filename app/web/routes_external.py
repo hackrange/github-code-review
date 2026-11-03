@@ -176,6 +176,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                 "tele": external.telemetry_of(a),
                 "scan": scanning.get(a.id),
                 "next_run": next_runs.get(a.id),
+                "has_shot": a.screenshot == "waf" and external.shot_path(a.id).is_file(),
             }
             if env and (a.environment or "") != env:
                 continue
@@ -512,7 +513,8 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             scan_page=scan_page, scan_pages=scan_pages, scan_total=scan_total,
             fields=external.fields_of(asset), security_headers=external.SECURITY_HEADERS,
             auth=external_auth_mod.describe(asset), auth_kinds=external_auth_mod.KINDS,
-            site_profile=external.profile_for(asset),
+            site_profile=external.profile_for(asset), proxy_label=external.proxy_shown(asset),
+            has_shot=external.shot_path(asset.id).is_file(),
             schedules=[external_schedule.as_dict(x) for x in db.query(ExternalScanSchedule)
                        .filter_by(asset_id=asset.id).order_by(ExternalScanSchedule.id)],
             frequencies=external_schedule.FREQUENCIES, weekdays=external_schedule.WEEKDAYS,
@@ -565,6 +567,16 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
             if form.get("with_fields"):
                 external.set_manual(asset, {key: form.get(f"f:{key}") or ""
                                             for key in external.FIELD_KEYS}, replace=True)
+            if form.get("with_proxy"):
+                before_proxy = external.proxy_shown(asset)
+                if _checked(form, "proxy_clear"):
+                    external.set_proxy(asset, "")
+                elif form.get("proxy"):
+                    external.set_proxy(asset, form.get("proxy"))
+                if external.proxy_shown(asset) != before_proxy or form.get("proxy"):
+                    record(db, "external.proxy_set", actor=user.username, target=asset.host,
+                           detail=(external.proxy_shown(asset) or "removed")[:200],
+                           source_ip=client_ip(request))
             if form.get("with_auth"):
                 from app.core import external_auth
 
@@ -740,7 +752,7 @@ def _report(db, asset, scan, user):
     organization = settings_store.get(db, "report.organization_name", "") or ""
     context = dast_report.build(db, asset, scan, user, organization)
     shot = external.shot_path(asset.id)
-    if asset.screenshot in ("ok", "blank") and shot.is_file() and shot.stat().st_size < 4_000_000:
+    if asset.screenshot in ("ok", "blank", "waf") and shot.is_file() and shot.stat().st_size < 4_000_000:
         context["screenshot"] = "data:image/png;base64," + base64.b64encode(
             shot.read_bytes()).decode()
     logo = (settings_store.get(db, "report.logo", "") or "").strip()
@@ -1207,6 +1219,13 @@ async def api_patch(asset_id: int, request: Request, caller=Depends(_api_caller(
                                    me.username, me)
             if body.get("telemetry_fields") is not None:
                 external.set_manual(asset, _api_fields(body))
+            if "proxy" in body:
+                if body["proxy"] is not None and not isinstance(body["proxy"], str):
+                    raise ValueError("proxy has to be a string, or null to remove it.")
+                external.set_proxy(asset, body["proxy"] or "")
+                record(db, "external.proxy_set", actor=me.username, target=asset.host,
+                       detail=f"{external.proxy_shown(asset) or 'removed'}, api token "
+                              f"{caller.token.prefix}"[:200], source_ip=client_ip(request))
             if "scan_auth" in body:
                 from app.core import external_auth
 

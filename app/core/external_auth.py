@@ -236,7 +236,9 @@ def login(data: dict, allow_private: bool = False) -> dict:
     headers = {"User-Agent": external_probe.user_agent(),
                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
     try:
-        with httpx.Client(verify=False, timeout=20, follow_redirects=False) as client:
+        proxy = external_probe.current_proxy()
+        with httpx.Client(verify=False, timeout=20, follow_redirects=False,
+                          proxy=proxy or None, trust_env=not proxy) as client:
             def go(method, target, **kw):
                 for _hop in range(6):
                     host = urlparse(target).hostname or ""
