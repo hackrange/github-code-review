@@ -1166,3 +1166,8 @@ details.code-behind[open] > summary::before { content: "\25BE"; }
 .bulk-body input[type=text], .bulk-body input[type=password], .bulk-body input[type=url],
 .bulk-body input[type=number], .bulk-body select, .bulk-body textarea { width: 100%; }
 .bulk-mode { display: grid; grid-template-columns: 12rem 1fr; gap: .4rem; }
+/* A finding taken out of the counts by a decision. */
+tr.decided-out > td { opacity: .55; }
+tr.decided-out > td.decision-cell { opacity: 1; }
+.decide-buttons { display: flex; flex-wrap: wrap; gap: .25rem; }
+.btn.xs { padding: .12rem .45rem; font-size: .75rem; line-height: 1.3; }

@@ -832,6 +832,61 @@ def _report(db, asset, scan, user):
     return pdf, dast_report.filename(asset, scan)
 
 
+KEY_RE = __import__("re").compile(r"^[0-9a-f]{32}$")
+
+
+def _decision_from(data: dict) -> dict:
+    persist = data.get("persist")
+    if isinstance(persist, str):
+        persist = persist.lower() in ("1", "on", "true", "yes")
+    return {"kind": str(data.get("kind") or ""), "reason": str(data.get("reason") or ""),
+            "severity": str(data.get("severity") or ""), "expires": str(data.get("expires") or ""),
+            "persist": True if persist is None else bool(persist)}
+
+
+@router.post("/external/{asset_id}/scans/{scan_id}/findings/{key}/{action}")
+async def finding_decision(asset_id: int, scan_id: int, key: str, action: str,
+                           request: Request, user: User = Depends(current_user)):
+    """Call a finding a false positive, give it another severity, or make an
+    exception for it, or take that back."""
+    await check_csrf(request)
+    from app.core import external_decisions
+
+    form = await request.form()
+    if key == "form":
+        # The dialog is shared by every finding, so it sends the key itself.
+        key = str(form.get("key") or "")
+    if not KEY_RE.fullmatch(key) or action not in ("decide", "undo"):
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
+    here = f"/external/{asset_id}/scans/{scan_id}"
+    with session_scope() as db:
+        _guard(db, user)
+        asset = _asset(db, asset_id)
+        scan = _scan(db, asset_id, scan_id)
+        if action == "undo":
+            if not external_decisions.undo(db, asset, key, scan.id):
+                return redirect(_back(here, "There was no decision on it.", "error"))
+            record(db, "external.finding_undecided", actor=user.username, target=asset.host,
+                   detail=f"finding {key[:12]}", source_ip=client_ip(request))
+            return redirect(_back(here, "Taken back.  It counts as found again."))
+        d = _decision_from(form)
+        if form.get("with_persist"):
+            d["persist"] = _checked(form, "persist")
+        try:
+            row = external_decisions.decide(db, asset, scan, key, d["kind"], d["reason"],
+                                            user.username, d["severity"], d["expires"], persist=d["persist"])
+        except ValueError as exc:
+            db.rollback()
+            return redirect(_back(here, str(exc), "error"))
+        record(db, "external.finding_decided", actor=user.username, target=asset.host,
+               detail=f"{row.kind}{' ' + row.severity if row.severity else ''}: {row.title}"[:300],
+               source_ip=client_ip(request))
+        word = external_decisions.KINDS[row.kind].lower()
+        where = (f"on {asset.host} in every scan, new ones too" if not row.only_scan_id
+                 else "in this scan only")
+    return redirect(_back(here, f"Recorded: {word}, {where}."))
+
+
 @router.get("/external/{asset_id}/scans/{scan_id}/report.pdf")
 def scan_report(asset_id: int, scan_id: int, request: Request,
                 user: User = Depends(current_user)):
@@ -867,15 +922,29 @@ def scan_page(asset_id: int, scan_id: int, request: Request, sev: str = "",
         _guard(db, user)
         asset = _asset(db, asset_id)
         scan = _scan(db, asset_id, scan_id)
+        from app.core import external_decisions
+
         view = external.scan_dict(scan, findings=True)
+        # Decisions made since the scan, applied as the page is drawn.
+        view["findings"] = external_decisions.apply(view["findings"],
+                                                    external_decisions.for_asset(db, asset.id),
+                                                    scan_id=scan.id)
         findings = view["findings"]
+        decided = sum(1 for f in findings if f.get("decision"))
         if sev:
             findings = [f for f in findings if f.get("severity") == sev]
-        if verdict:
+        if verdict and verdict != "decided":
             findings = [f for f in findings if f.get("ai_verdict", "") == verdict]
         context = _shared(db, user)
+        if verdict == "decided":
+            findings = [f for f in findings if f.get("decision")]
         context.update(active_page="external", asset=asset, scan=scan, view=view,
-                       findings=findings, sev=sev, verdict=verdict,
+                       findings=findings, sev=sev, verdict=verdict, decided=decided,
+                       decision_kinds=external_decisions.KINDS,
+                       severities=external_decisions.SEVERITIES,
+                       today=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                       max_day=(datetime.now(timezone.utc) + __import__("datetime").timedelta(
+                           days=external_decisions.MAX_EXCEPTION_DAYS)).strftime("%Y-%m-%d"),
                        ai_ready=not ai.missing(ai.config(db)),
                        busy=scan.status in ("queued", "running") or scan.ai_status == "running",
                        flash=clean_notice(request.query_params.get("msg", ""), limit=300),
@@ -1504,6 +1573,51 @@ def api_delete_schedule(asset_id: int, schedule_id: int, request: Request,
         record(db, "external.schedule_delete", actor=me.username, target=asset.host,
                detail=f"schedule {schedule_id}, api token {caller.token.prefix}",
                source_ip=client_ip(request))
+    return Response(status_code=204)
+
+
+@api.post("/assets/{asset_id}/scans/{scan_id}/findings/{key}/decision")
+async def api_decide(asset_id: int, scan_id: int, key: str, request: Request,
+                     caller=Depends(_api_caller())):
+    from app.core import external_decisions
+
+    if not KEY_RE.fullmatch(key):
+        raise HTTPException(status_code=404, detail="No such finding.")
+    body = await _body(request)
+    for field in ("kind", "reason", "severity", "expires"):
+        if body.get(field) is not None and not isinstance(body[field], str):
+            raise HTTPException(status_code=400, detail=f"{field} has to be a string.")
+    with session_scope() as db:
+        me = _api_me(db, caller)
+        asset = _asset(db, asset_id)
+        scan = _scan(db, asset_id, scan_id)
+        d = _decision_from(body)
+        try:
+            row = external_decisions.decide(db, asset, scan, key, d["kind"], d["reason"],
+                                            me.username, d["severity"], d["expires"], persist=d["persist"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        record(db, "external.finding_decided", actor=me.username, target=asset.host,
+               detail=f"{row.kind}: {row.title}, api token {caller.token.prefix}"[:300],
+               source_ip=client_ip(request))
+        return JSONResponse(status_code=201, content=external.scan_dict(db.get(ExternalDastScan, scan_id)))
+
+
+@api.delete("/assets/{asset_id}/scans/{scan_id}/findings/{key}/decision")
+def api_undecide(asset_id: int, scan_id: int, key: str, request: Request,
+                 caller=Depends(_api_caller())):
+    from app.core import external_decisions
+
+    if not KEY_RE.fullmatch(key):
+        raise HTTPException(status_code=404, detail="No such finding.")
+    with session_scope() as db:
+        me = _api_me(db, caller)
+        asset = _asset(db, asset_id)
+        _scan(db, asset_id, scan_id)
+        if not external_decisions.undo(db, asset, key, scan_id):
+            raise HTTPException(status_code=404, detail="There is no decision on it.")
+        record(db, "external.finding_undecided", actor=me.username, target=asset.host,
+               detail=f"finding {key[:12]}, api token {caller.token.prefix}", source_ip=client_ip(request))
     return Response(status_code=204)
 
 

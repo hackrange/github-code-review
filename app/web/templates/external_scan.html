@@ -89,14 +89,17 @@
 
 <div class="card">
   <div class="card-head">{{ findings | length }} finding{{ '' if findings | length == 1 else 's' }}
+    {% if decided %}<a class="small" href="{{ here }}?verdict=decided" style="font-weight:400;margin-left:.5rem">{{ decided }} decided</a>{% endif %}
     {% if sev or verdict %}<a class="small" href="{{ here }}" style="font-weight:400;margin-left:.5rem">show all</a>{% endif %}</div>
   {% if findings %}
   <div class="table-scroll"><table>
-    <thead><tr><th>Severity</th><th>Finding</th><th>Where</th><th>Found by</th></tr></thead>
+    <thead><tr><th>Severity</th><th>Finding</th><th>Where</th><th>Found by</th><th>Decision</th></tr></thead>
     <tbody>
     {% for f in findings %}
-      <tr>
+      {% set d = f.decision %}
+      <tr class="{{ 'decided-out' if d and d.kind in ('false_positive', 'exception') }}">
         <td><span class="badge {{ f.severity }}">{{ f.severity }}</span>
+          {% if d and d.kind == 'severity' %}<div class="faint small" title="What the scan found">found as {{ f.severity_found }}</div>{% endif %}
           {% if f.ai_verdict %}<div><span class="badge {{ {'likely_real':'high','likely_false_positive':'waived','needs_review':'pending'}[f.ai_verdict] }}" title="{{ f.ai_why }}">{{ f.ai_verdict | replace('_', ' ') }}</span></div>{% endif %}</td>
         <td><strong>{{ f.title }}</strong>{% if f.cwe %} <span class="faint small mono">{{ f.cwe }}</span>{% endif %}
           {% if f.evidence %}<div class="small mono faint" style="white-space:pre-wrap;word-break:break-word">{{ f.evidence }}</div>{% endif %}
@@ -105,6 +108,28 @@
           {% if f.reference %}<div class="small faint">{{ f.reference }}</div>{% endif %}</td>
         <td class="small mono" style="word-break:break-all">{{ f.url }}</td>
         <td class="small">{{ (f.tools or [f.tool or f.check]) | join(', ') }}{% if f.validation %}<div class="faint">{{ f.validation }}</div>{% endif %}</td>
+        <td class="small decision-cell">
+          {% if d %}
+            <span class="badge {{ {'false_positive':'waived','severity':'info','exception':'pending'}[d.kind] }}">{{ d.kind_name | lower }}</span>
+            <span class="faint">{{ 'all scans' if d.persist else 'this scan only' }}</span>
+            {% if d.kind == 'exception' %}<div class="faint">until {{ d.expires[:10] }}</div>{% endif %}
+            <div class="faint" title="{{ d.reason }}">{{ d.by }}: {{ d.reason[:90] }}{{ '...' if d.reason | length > 90 }}</div>
+            <form method="post" action="{{ here }}/findings/{{ f.key }}/undo" style="display:inline"
+                  data-confirm="{{ ('Remove the exception?' if d.kind == 'exception' else 'Revert to what the scan found?') ~ ('  This takes it back on every scan of the site.' if d.persist else '  This takes it back on this scan only.') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn xs" type="submit">{{ 'Remove exception' if d.kind == 'exception' else 'Revert to original' }}</button></form>
+            <button class="btn xs" type="button" data-modal="decide-modal" data-key="{{ f.key }}" data-kind="{{ d.kind }}"
+                    data-severity="{{ d.severity or f.severity }}" data-reason="{{ d.reason }}" data-expires="{{ (d.expires or '')[:10] }}"
+                    data-persist="{{ '1' if d.persist else '' }}" data-finding_title="{{ f.title }}">Change</button>
+          {% elif scan.status == 'done' %}
+            <div class="decide-buttons">
+              <button class="btn xs" type="button" data-modal="decide-modal" data-key="{{ f.key }}" data-kind="false_positive" data-finding_title="{{ f.title }}" title="Not a real problem: left out of the counts and the report">False positive</button>
+              <button class="btn xs" type="button" data-modal="decide-modal" data-key="{{ f.key }}" data-kind="severity" data-severity="{{ f.severity }}" data-finding_title="{{ f.title }}" title="Give it another severity, used everywhere from now on">Change sev</button>
+              <button class="btn xs" type="button" data-modal="decide-modal" data-key="{{ f.key }}" data-kind="exception" data-finding_title="{{ f.title }}" title="Accept the risk until a date: left out of the counts until then">Exception</button>
+            </div>
+          {% endif %}
+          {% if f.decision_expired %}<div class="faint">an exception on it ended</div>{% endif %}
+        </td>
       </tr>
     {% endfor %}
     </tbody></table></div>
@@ -116,6 +141,37 @@
       payloads.</div>{% endif %}</div>
   {% else %}<div class="empty">No findings yet.</div>{% endif %}
 </div>
+<div class="modal-backdrop" id="decide-modal" hidden>
+  <div class="modal"><form method="post" action="{{ here }}/findings/form/decide">
+    <div class="modal-head">Decide on this finding <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="key" value="">
+      <div class="small" style="margin-bottom:.5rem"><input type="text" name="finding_title" value="" readonly
+        style="border:0;background:none;font-weight:600;width:100%;padding:0"></div>
+      <label>Decision
+        <select name="kind" data-decide-kind>
+          {% for k, label in decision_kinds.items() %}<option value="{{ k }}">{{ label }}</option>{% endfor %}
+        </select></label>
+      <label data-decide-for="severity">New severity
+        <select name="severity">{% for sv in severities %}<option value="{{ sv }}">{{ sv }}</option>{% endfor %}</select></label>
+      <label data-decide-for="exception">Accepted until
+        <input type="date" name="expires" min="{{ today }}" max="{{ max_day }}">
+        <span class="faint small">At most a year.  It counts again after this date.</span></label>
+      <input type="hidden" name="with_persist" value="1">
+      <label class="check"><input type="checkbox" name="persist" value="1" checked>
+        <span>Keep for new scans: apply it to every scan of this site, and to new scans that find it again.
+          Untick to apply it to this scan only.</span></label>
+      <label>Why <textarea name="reason" rows="3" maxlength="4000" required minlength="10"
+        placeholder="What makes it a false positive, or why this severity, or why the risk is accepted"></textarea></label>
+      <div class="faint small">A false positive is left out of the counts and the report; an exception is left out
+        of the counts until it ends.  It can be changed or reverted from any scan.</div>
+    </div>
+    <div class="modal-foot"><button class="btn primary" type="submit">Record it</button>
+      <button class="btn" type="button" data-close-modal>Cancel</button></div>
+  </form></div>
+</div>
+
 {% if view.note %}<div class="card"><div class="card-head">Note</div><div class="card-body small" style="white-space:pre-wrap">{{ view.note }}</div></div>{% endif %}
 <script src="{{ base }}/static/external.js?v={{ asset_v('external.js') }}"></script>
 {% endblock %}

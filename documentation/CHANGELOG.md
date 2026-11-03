@@ -6,6 +6,15 @@ moved.
 
 ## 2026-11-03
 
+**Decide on external scan findings.**  Each finding on a scan has small
+**False positive**, **Change sev** and **Exception** buttons.  A false positive
+leaves the counts and the PDF report entirely.  A new severity is what counts
+and what the report shows.  An exception is not counted until the date it
+ends, at most a year out.  Each needs a reason.  **Revert to original** and
+**Remove exception** on the same line take it back.  A decision is kept for
+new scans that find the same thing unless **Keep for new scans** is unticked,
+and any scan can change it or decide differently for itself.
+
 **Edit many external sites at once.**  Tick sites in the list and change any
 of what Edit offers on all of them together: owners, environment, status,
 scanning, flags, comments, tags, proxy, sign in and repositories.  Only the

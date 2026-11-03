@@ -265,6 +265,32 @@ When the AI triage ran, a likely false positive costs nothing and a finding
 it wants checked costs half.  Without it every finding counts in full, and the
 report says they are unconfirmed.
 
+## Deciding on findings
+
+Each finding on a scan's page has three small buttons:
+
+- **False positive.**  It leaves the scan's counts, its worst severity, the
+  site's last scan and the PDF report entirely.
+- **Change sev.**  The new severity is what counts and what the report shows.
+  The scan page still says what it was found as.
+- **Exception.**  Accepted until a date, at most 365 days out.  It is not
+  counted until then, and counts again the night after it ends.
+
+Every decision needs a reason of at least 10 characters, and records who made
+it.  **Revert to original** or **Remove exception** on the finding's line takes
+it back, and **Change** reopens it.
+
+**Keep for new scans** is ticked by default.  The decision then holds on every
+scan of the site that finds the same thing, new ones too.  A finding is the
+same when its title and its address without the query match.  Untick it and
+the decision holds on this scan only.  A scan's own decision wins over the
+site's on that scan, and reverting it lets the site's show again.
+
+The API does the same with
+`POST /api/v1/external/assets/{id}/scans/{scan}/findings/{key}/decision`, with
+kind, reason, severity, expires and persist, and `DELETE` on the same address
+to revert.
+
 ## Repositories behind a site
 
 Worked out on every read, best first:

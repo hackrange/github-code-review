@@ -410,3 +410,23 @@
     });
   });
 })();
+
+/* The decide dialog: only the fields for the decision picked. */
+(function () {
+  "use strict";
+  var picker = document.querySelector("[data-decide-kind]");
+  if (!picker) { return; }
+  var form = picker.closest("form");
+  function apply() {
+    form.querySelectorAll("[data-decide-for]").forEach(function (field) {
+      var on = field.getAttribute("data-decide-for") === picker.value;
+      field.hidden = !on;
+      field.querySelectorAll("input, select").forEach(function (i) { i.required = on && i.type === "date"; });
+    });
+  }
+  picker.addEventListener("change", apply);
+  document.addEventListener("click", function (event) {
+    if (event.target.closest && event.target.closest('[data-modal="decide-modal"]')) { setTimeout(apply, 0); }
+  });
+  apply();
+})();

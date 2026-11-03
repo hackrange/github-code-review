@@ -2499,3 +2499,38 @@ class ExternalScanSchedule(Base):
     last_scan_id = Column(Integer)
     created_by = Column(String(120), default="")
     created_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class ExternalFindingDecision(Base):
+    """What a person decided about a dynamic scan finding on one site.
+
+    Keyed by the site and the finding's key, a hash of its title and address,
+    so the decision follows the finding into every later scan that finds it
+    again.  false_positive and exception take it out of the counts; severity
+    counts it at the severity given.  An exception stops counting when it
+    expires, and the finding counts again.
+    """
+
+    __tablename__ = "external_finding_decisions"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "finding_key", "only_scan_id", name="uq_external_decision"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    asset_id = Column(Integer, ForeignKey("external_assets.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    finding_key = Column(String(32), nullable=False)
+    title = Column(String(300), default="")
+    url = Column(String(1000), default="")
+    # false_positive, severity or exception.
+    kind = Column(String(16), nullable=False)
+    severity = Column(String(16), default="")
+    reason = Column(Text, default="")
+    expires_at = Column(DateTime(timezone=True))
+    decided_by = Column(String(120), default="")
+    decided_at = Column(DateTime(timezone=True), default=utcnow)
+    scan_id = Column(Integer)
+    # 0 for a decision kept for every scan of the site, new ones included.
+    # A scan's id for one that applies to that scan only, which wins over the
+    # site's decision on that scan.
+    only_scan_id = Column(Integer, default=0, nullable=False)

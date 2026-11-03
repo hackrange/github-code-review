@@ -1331,10 +1331,18 @@ def save_telemetry(asset_id: int, rec: dict) -> None:
 
 
 def refresh_stale() -> int:
-    """The scheduled pass: hosts whose telemetry is older than the setting."""
+    """The scheduled pass: hosts whose telemetry is older than the setting,
+    and sites whose finding exceptions have ended."""
     with session_scope() as db:
         if not enabled(db):
             return 0
+    from app.core import external_decisions
+
+    try:
+        external_decisions.recount_expired()
+    except Exception:  # noqa: BLE001 - the next night tries again
+        log.warning("could not recount expired exceptions", exc_info=True)
+    with session_scope() as db:
         days = options(db)["refresh_days"]
         if not days:
             return 0
@@ -1758,13 +1766,17 @@ def merge(findings: list) -> list:
 def finish(scan_id: int, findings: list, status: str = "done", error: str = "",
            engines: list = None, result_url: str = None, when=None) -> None:
     """Store a scan's findings and copy its result onto the site."""
-    from app.core import external_dast
+    from app.core import external_dast, external_decisions
 
-    roll = external_dast.rollup(findings)
     with session_scope() as db:
         scan = db.get(ExternalDastScan, scan_id)
         if scan is None:
             return
+        # What people already decided about these findings on this site
+        # carries into the new scan.
+        findings = external_decisions.apply(findings, external_decisions.for_asset(db, scan.asset_id),
+                                            scan_id=scan.id)
+        roll = external_dast.rollup([f for f in findings if external_decisions.counted(f)])
         scan.findings = json.dumps(findings, default=str)
         scan.status = status
         scan.error = (error or "")[:500]
@@ -1871,6 +1883,10 @@ def record_scan(db, asset: ExternalAsset, data: dict, actor: str) -> ExternalDas
         **{s: roll[s] for s in SEVERITIES})
     db.add(scan)
     db.flush()
+    if cleaned:
+        from app.core import external_decisions
+
+        external_decisions.recount(db, asset.id)
     touch_asset(db, scan)
     return scan
 
@@ -2136,7 +2152,15 @@ def triage(scan_id: int, actor: str = "") -> None:
             scan.ai_status = "failed"
             scan.ai_summary = json.dumps({"error": problem})
             return
-        findings = findings_of(scan)
+        # A finding somebody already called a false positive is not sent, but
+        # it is kept: what is saved back below is the whole list.
+        from app.core.external_decisions import finding_key
+
+        all_findings = findings_of(scan)
+        for f in all_findings:
+            f["key"] = f.get("key") or finding_key(f)
+        findings = [f for f in all_findings
+                    if (f.get("decision") or {}).get("kind") != "false_positive"]
         if not findings:
             # Nothing to read, so nothing is sent and nothing is billed.  Saying
             # the model failed here sent people looking at their AI settings.
@@ -2163,7 +2187,7 @@ def triage(scan_id: int, actor: str = "") -> None:
             break
         prompt = json.dumps({
             "site": host,
-            "dast_findings": [{"id": f.get("id"), "tool": f.get("tool"),
+            "dast_findings": [{"id": f.get("id") or f["key"], "tool": f.get("tool"),
                                "severity": f.get("severity"), "title": _clean(f.get("title")),
                                "url": _clean(f.get("url"))[:300],
                                "evidence": _clean(f.get("evidence"))[:300],
@@ -2189,8 +2213,8 @@ def triage(scan_id: int, actor: str = "") -> None:
                 verdicts[str(v["id"])] = v
     spent = _spent(cfg, answers)
     ok = any(a["ok"] for a in answers) and (summaries or verdicts)
-    for f in findings:
-        v = verdicts.get(str(f.get("id")))
+    for f in all_findings:
+        v = verdicts.get(str(f.get("id") or f["key"])) or verdicts.get(f["key"])
         if v:
             verdict = str(v.get("verdict") or "")
             f["ai_verdict"] = verdict if verdict in (
@@ -2199,7 +2223,7 @@ def triage(scan_id: int, actor: str = "") -> None:
             f["ai_sast"] = str(v.get("sast") or "")[:40]
     with session_scope() as db:
         scan = db.get(ExternalDastScan, scan_id)
-        scan.findings = json.dumps(findings, default=str)
+        scan.findings = json.dumps(all_findings, default=str)
         scan.ai_status = "done" if ok else "failed"
         scan.ai_summary = json.dumps({
             "summary": " ".join(summaries)[:4000], "priorities": priorities[:8],

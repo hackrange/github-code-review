@@ -552,6 +552,39 @@ def _external_endpoints() -> list:
              "Top 10 grades, scope, every finding with how to see it again, and the "
              "code behind the site.  404 for a scan run on a DAST server or recorded.",
              [asset_id, scan_id], example={"content_type": "application/pdf"}),
+        _ext("ext-decide", "POST",
+             "/external/assets/{asset_id}/scans/{scan_id}/findings/{key}/decision",
+             "Decide on a finding",
+             "Marks one finding as a false positive, gives it a new severity, or makes an "
+             "exception until a date.  A false positive leaves the counts and the PDF; a new "
+             "severity is what counts; an exception is not counted until it ends.  With "
+             "persist, the default, it holds on every scan of the site that finds the same "
+             "thing, new ones too.  With persist false it holds on this scan only, and wins "
+             "there over the site's.  Answers with the scan, counted again.",
+             [asset_id, scan_id, _p("key", "The finding's key, as the scan lists it.",
+                                     where="path", example="9f2c41d0b7a3e5f18c6d2a4b0e7f3c91")],
+             body=[_f("kind", "string", True, "false_positive, severity or exception."),
+                   _f("reason", "string", True, "Why, in at least 10 characters."),
+                   _f("severity", "string", False, "For severity: critical, high, medium, "
+                                                    "low or info, not what it was found as."),
+                   _f("expires", "string", False, "For exception: the day it ends, "
+                                                   "YYYY-MM-DD, at most 365 days out."),
+                   _f("persist", "boolean", False, "False for this scan only.  Default true.")],
+             body_example={"kind": "severity", "severity": "medium",
+                           "reason": "Needs a signed in session first."},
+             example=dict(_SCAN, findings=[{"title": "Reflected XSS in q", "severity": "medium",
+                                            "severity_found": "high",
+                                            "key": "9f2c41d0b7a3e5f18c6d2a4b0e7f3c91",
+                                            "decision": {"kind": "severity", "severity": "medium",
+                                                         "persist": True}}])),
+        _ext("ext-undecide", "DELETE",
+             "/external/assets/{asset_id}/scans/{scan_id}/findings/{key}/decision",
+             "Revert a finding to original",
+             "Takes back the decision that holds on this scan: its own if it has one, which "
+             "lets the site's show again, or else the site's.  Answers 204.  404 when there is none.",
+             [asset_id, scan_id, _p("key", "The finding's key, as the scan lists it.",
+                                     where="path", example="9f2c41d0b7a3e5f18c6d2a4b0e7f3c91")],
+             example={}),
         _ext("ext-record", "POST", "/external/assets/{asset_id}/scans", "Record a scan",
              "Records a scan run elsewhere: its severity, result address, when it "
              "ran and which server ran it.  Becomes the site's last scan when it "

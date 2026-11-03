@@ -108,7 +108,10 @@ def owasp_of(f: dict) -> str:
 
 
 def weight_of(f: dict, triaged: bool) -> float:
-    """How much of its severity's points a finding costs."""
+    """How much of its severity's points a finding costs.  A person's decision
+    comes first: a false positive or an exception costs nothing."""
+    if (f.get("decision") or {}).get("kind") in ("false_positive", "exception"):
+        return 0.0
     verdict = f.get("ai_verdict") or ""
     if triaged:
         if verdict == "likely_false_positive":
@@ -236,7 +239,14 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
     """Everything the template needs for one scan."""
     from app.core import dast_engines, external
 
+    from app.core import external_decisions
+
     view = external.scan_dict(scan, findings=True)
+    # Decisions as they stand today.  A false positive is not in the report
+    # at all; a changed severity is the severity.
+    view["findings"] = [f for f in external_decisions.apply(
+        view.get("findings") or [], external_decisions.for_asset(db, asset.id), scan_id=scan.id)
+        if (f.get("decision") or {}).get("kind") != "false_positive"]
     triaged = view["ai"]["status"] == "done" and any(
         f.get("ai_verdict") for f in view.get("findings") or [])
     findings = []
@@ -255,7 +265,10 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
                         if cwe else "")
         findings.append(f)
     overall = score(findings, triaged)
-    by_sev = {s: sum(1 for f in findings if f.get("severity") == s) for s in SEVERITIES}
+    from app.core.external_decisions import counted as _counted
+
+    by_sev = {s: sum(1 for f in findings if f.get("severity") == s and _counted(f))
+              for s in SEVERITIES}
     categories = []
     for key, name in OWASP_TOP10:
         in_cat = [f for f in findings if f["owasp"] == key]
