@@ -6,6 +6,11 @@ moved.
 
 ## 2026-11-03
 
+**A PDF report on a dynamic scan.**  A scan this server ran downloads as a
+report laid out like nextgen-dast's: a graded cover, an executive summary with
+OWASP Top 10 grades, scope and method, every finding with a command to see it
+again and how to fix it, and the code behind the site.
+
 **External sites: owners, environments, repositories and the full telemetry.**
 A site now has executive and technical owners (email only), comments, Active
 or Obsolete, Prod, Dev, Stage or Clone, whether external auth or a whitelist

@@ -521,6 +521,12 @@ def _external_endpoints() -> list:
              example=dict(_SCAN, findings=[{"title": "Git repository metadata is served",
                                             "severity": "high",
                                             "url": "https://shop.example.com/.git/HEAD"}])),
+        _ext("ext-report", "GET", "/external/assets/{asset_id}/scans/{scan_id}/report.pdf",
+             "Scan report (PDF)",
+             "The PDF report on a finished scan this server ran: the grade, the OWASP "
+             "Top 10 grades, scope, every finding with how to see it again, and the "
+             "code behind the site.  404 for a scan run on a DAST server or recorded.",
+             [asset_id, scan_id], example={"content_type": "application/pdf"}),
         _ext("ext-record", "POST", "/external/assets/{asset_id}/scans", "Record a scan",
              "Records a scan run elsewhere: its severity, result address, when it "
              "ran and which server ran it.  Becomes the site's last scan when it "

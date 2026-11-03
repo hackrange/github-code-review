@@ -21,6 +21,7 @@
       <button class="btn" type="submit" {{ 'disabled' if not ai_ready or scan.ai_status == 'running' }}
               title="{{ 'Have the model sort these findings against the code findings behind the site' if ai_ready else 'Set up a model on the AI analysis page first' }}">AI triage</button></form>
     {% endif %}
+    {% if scan.source == 'builtin' and scan.status == 'done' %}<a class="btn primary" href="{{ here }}/report.pdf">PDF report</a>{% endif %}
     <a class="btn" href="{{ here }}.json">JSON</a>
     {% if view.result_url and view.result_url.startswith('http') %}<a class="btn" rel="noopener noreferrer" target="_blank" href="{{ view.result_url }}">Open on the server</a>{% endif %}
     {% if scan.status not in ('queued','running') %}

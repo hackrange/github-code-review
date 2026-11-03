@@ -182,7 +182,8 @@
               {% if s.status in ('queued','running') %}<span class="badge pending">{{ s.status }}</span><div class="faint">{{ s.step }}</div>
               {% elif s.status == 'failed' %}<span class="badge critical">failed</span><div class="faint">{{ s.error }}</div>
               {% elif s.severity in ('', 'none') %}<span class="badge ok">no findings</span>{% else %}<span class="badge {{ s.severity }}">worst: {{ s.severity }}</span>{% endif %}
-              {% if s.result_url %}<div><a rel="noopener noreferrer" {% if s.result_url.startswith('http') %}target="_blank" href="{{ s.result_url }}"{% else %}href="{{ base }}{{ s.result_url }}"{% endif %}>result</a></div>{% endif %}</td>
+              {% if s.result_url %}<div><a rel="noopener noreferrer" {% if s.result_url.startswith('http') %}target="_blank" href="{{ s.result_url }}"{% else %}href="{{ base }}{{ s.result_url }}"{% endif %}>result</a>
+                {%- if s.source == 'builtin' and s.status == 'done' %} &middot; <a href="{{ base }}/external/{{ asset.id }}/scans/{{ s.id }}/report.pdf">PDF</a>{% endif %}</div>{% endif %}</td>
             <td class="nowrap">{% for level in ['critical','high','medium','low'] %}{% if s.counts[level] %}<span class="badge {{ level }}">{{ s.counts[level] }}</span> {% endif %}{% endfor %}
               {% if s.counts.info %}<span class="badge info">{{ s.counts.info }}</span>{% endif %}</td>
             <td class="small">{% if s.ai.status %}{{ s.ai.status }}{% if s.ai.input_tokens %}<div class="faint">{{ (s.ai.input_tokens + s.ai.output_tokens) | thousands }} tokens{% if s.ai.cost %}, {{ s.ai.cost }}{% endif %}</div>{% endif %}{% endif %}</td>

@@ -142,6 +142,28 @@ The newest finished scan becomes the site's last scan.  Every finished scan
 is also recorded as a DAST test on the Web Applications tab for the web
 applications behind the site.
 
+## The PDF report
+
+A finished scan this server ran has a **PDF report** button on its page, and a
+PDF link in the site's scan list.  The API serves the same file at
+`GET /api/v1/external/assets/{id}/scans/{scan}/report.pdf`.  A scan run on a
+nextgen-dast server keeps that server's own report, and a recorded scan has
+no report here.
+
+It follows nextgen-dast's penetration test report: a cover with the grade,
+document control, an executive summary with the top issues and the OWASP Top
+10 grades, scope and method with the screenshot and what did not run, every
+finding with its evidence, a command to see it again and how to fix it, the
+scan underneath, and a disclaimer.  It is typeset in the same style as the
+security assessment, with the logo, organization and footer from Settings.
+
+The grade is nextgen-dast's: each finding costs points by severity (critical
+25, high 12, medium 5, low 2), later findings in the same OWASP category cost
+less, and no one category takes more than 25 points off the overall score.
+When the AI triage ran, a likely false positive costs nothing and a finding
+it wants checked costs half.  Without it every finding counts in full, and the
+report says they are unconfirmed.
+
 ## Repositories behind a site
 
 Worked out on every read, best first:

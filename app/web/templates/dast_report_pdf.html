@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+{# The report on one dynamic scan run here.
+
+   Laid out like nextgen-dast's penetration test report, typeset like this
+   product's security assessment.  The fixed sentences follow the report
+   style: US English, about a tenth grade reading level, no em dashes, two
+   spaces between sentences.
+
+   Everything below is escaped.  Findings come from the scanned site and the
+   engines, and nothing from either is ever marked safe. #}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+{% if organization_name %}<meta name="author" content="{{ organization_name }}">{% endif %}
+<meta name="description" content="Dynamic scan of {{ asset.host }}">
+<style>
+  @page {
+    size: A4;
+    margin: 20mm 18mm 22mm 18mm;
+    @bottom-left {
+      content: "{{ footer_text }}";
+      font-family: "DejaVu Sans", sans-serif; font-size: 7.5pt; color: #8a8a8a;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: "DejaVu Sans", sans-serif; font-size: 7.5pt; color: #8a8a8a;
+    }
+  }
+  @page :first { @bottom-left { content: ""; } @bottom-right { content: ""; } }
+
+  :root { --ink: #1a1a1a; --soft: #5a5a5a; --faint: #8a8a8a; --rule: #dcdcdc;
+          --sunk: #f4f4f4; --navy: #1f3a5f; }
+  * { box-sizing: border-box; }
+  body { font-family: "DejaVu Sans", sans-serif; font-size: 9.5pt;
+         line-height: 1.55; color: var(--ink); margin: 0; }
+  h1 { font-size: 24pt; line-height: 1.15; margin: 0 0 .35rem; font-weight: 700; }
+  h2 { font-size: 13pt; margin: 7mm 0 .5rem; font-weight: 700; color: var(--navy);
+       padding-bottom: .3rem; border-bottom: 1.5pt solid var(--navy); break-after: avoid; }
+  h3 { font-size: 10.5pt; margin: 5mm 0 .35rem; font-weight: 700; color: var(--navy);
+       break-after: avoid; }
+  p  { margin: 0 0 .6rem; }
+  ul, ol { margin: 0 0 .6rem; padding-left: 5mm; }
+  li { margin-bottom: .25rem; }
+  a { color: var(--navy); }
+  .soft { color: var(--soft); }
+  .faint { color: var(--faint); font-size: 8pt; }
+  .new-page { break-before: page; }
+
+  .cover { height: 235mm; display: flex; flex-direction: column; }
+  .cover-mid { flex: 1 1 auto; padding-top: 30mm; }
+  .logo { max-height: 22mm; max-width: 70mm; }
+  .wordmark { font-size: 12pt; font-weight: 700; letter-spacing: .02em; }
+  .kicker { font-size: 8.5pt; text-transform: uppercase; letter-spacing: .12em;
+            color: var(--faint); margin-bottom: .8rem; }
+  .cover-scope { font-size: 11pt; color: var(--soft); margin-top: .5rem; }
+  .grade-box { margin-top: 10mm; display: flex; align-items: center; gap: 6mm; }
+  .grade-big { font-size: 40pt; font-weight: 700; width: 26mm; height: 26mm; line-height: 26mm;
+               text-align: center; border-radius: 3mm; color: #fff; }
+  .g-A { background: #2e7d32; } .g-B { background: #558b2f; } .g-C { background: #f9a825; color: #000; }
+  .g-D { background: #e36c0a; } .g-F { background: #c00000; }
+  .cover-meta { font-size: 9pt; padding-top: 5mm; border-top: .8pt solid var(--rule); }
+  .cover-meta div { margin-bottom: .28rem; }
+  .cover-meta .k { display: inline-block; width: 38mm; color: var(--faint); }
+  .shot { width: 100%; border: .5pt solid #c8c8c8; margin: 2mm 0 4mm; }
+
+  table { border-collapse: collapse; width: 100%; margin: 2mm 0 4mm; }
+  th, td { border: .5pt solid #c8c8c8; padding: 1.4mm 2mm; text-align: left;
+           vertical-align: top; font-size: 8.5pt; }
+  thead th { background: var(--navy); color: #fff; font-weight: 700; }
+  tr { break-inside: avoid; }
+  td.k { background: #e7ecf3; font-weight: 700; width: 36mm; }
+  td.c, th.c { text-align: center; }
+
+  .badge { display: inline-block; padding: .3mm 2mm; border-radius: 1mm;
+           font-weight: 700; font-size: 8pt; }
+  .r-critical { background: #c00000; color: #fff; }
+  .r-high     { background: #e36c0a; color: #fff; }
+  .r-medium   { background: #ffc000; color: #000; }
+  .r-low      { background: #70ad47; color: #fff; }
+  .r-info     { background: #5b9bd5; color: #fff; }
+  .g-cell { font-weight: 700; text-align: center; color: #fff; }
+
+  table.heat td, table.heat th { text-align: center; vertical-align: middle; font-size: 8pt; }
+  table.heat td.name { text-align: left; }
+  table.heat { break-inside: avoid; }
+
+  .finding { margin-bottom: 6mm; }
+  .finding table { margin-bottom: 3mm; }
+  pre { font-family: "DejaVu Sans Mono", monospace; font-size: 7.5pt; background: var(--sunk);
+        border: .5pt solid var(--rule); padding: 2mm; white-space: pre-wrap; word-break: break-all;
+        margin: 0; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 8pt; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <div>
+    {% if logo %}<img class="logo" src="{{ logo }}" alt="">
+    {% elif organization_name %}<div class="wordmark">{{ organization_name }}</div>{% endif %}
+  </div>
+  <div class="cover-mid">
+    <div class="kicker">Dynamic Application Security Test</div>
+    <h1>{{ asset.host }}</h1>
+    <div class="cover-scope">{{ asset.application or 'Web application' }}{% if environment %}, {{ environment }}{% endif %}</div>
+    <div class="grade-box">
+      <div class="grade-big g-{{ overall.grade }}">{{ overall.grade }}</div>
+      <div><div style="font-size:14pt;font-weight:700">{{ overall.score }} out of 100</div>
+        <div class="soft">{{ by_sev.critical }} critical, {{ by_sev.high }} high, {{ by_sev.medium }} medium,
+          {{ by_sev.low }} low, {{ by_sev.info }} informational</div></div>
+    </div>
+  </div>
+  <div class="cover-meta">
+    {% if organization_name %}<div><span class="k">Prepared by</span>{{ organization_name }}</div>{% endif %}
+    <div><span class="k">Report date</span>{{ issued_at }}</div>
+    {% if finished %}<div><span class="k">Scan date</span>{{ finished.strftime('%B %d, %Y').replace(' 0', ' ') }}</div>{% endif %}
+    <div><span class="k">Profile</span>{{ profile or 'dynamic' }}</div>
+    {% if footer_text %}<div><span class="k">Classification</span>{{ footer_text }}</div>{% endif %}
+  </div>
+</div>
+
+<h2 class="new-page" style="margin-top:0">1.  Document control</h2>
+<table>
+  <tr><td class="k">Target</td><td>{{ asset.host }}</td></tr>
+  {% if asset.application %}<tr><td class="k">Application</td><td>{{ asset.application }}</td></tr>{% endif %}
+  <tr><td class="k">Environment</td><td>{{ environment }}</td></tr>
+  {% if asset.executive_owner %}<tr><td class="k">Executive owner</td><td>{{ asset.executive_owner }}</td></tr>{% endif %}
+  {% if asset.technical_owner %}<tr><td class="k">Technical owner</td><td>{{ asset.technical_owner }}</td></tr>{% endif %}
+  <tr><td class="k">Scan</td><td>Number {{ scan.id }}, the {{ profile or 'dynamic' }} profile, run by {{ view.server }}{% if scan.recorded_by %} for {{ scan.recorded_by }}{% endif %}</td></tr>
+  {% if started %}<tr><td class="k">Started</td><td>{{ started.strftime('%Y-%m-%d %H:%M') }} UTC</td></tr>{% endif %}
+  {% if finished %}<tr><td class="k">Finished</td><td>{{ finished.strftime('%Y-%m-%d %H:%M') }} UTC{% if duration is not none %}, {{ duration // 60 }} minute{{ '' if duration // 60 == 1 else 's' }} {{ duration % 60 }} second{{ '' if duration % 60 == 1 else 's' }}{% endif %}</td></tr>{% endif %}
+  <tr><td class="k">Report date</td><td>{{ issued_at }}</td></tr>
+</table>
+
+<h2>2.  Executive summary</h2>
+{% for paragraph in narrative %}<p>{{ paragraph | sentence_spaced }}</p>{% endfor %}
+{% if ai_summary and ai_summary.summary %}
+<h3>2.1  What the AI review found</h3>
+<p>{{ ai_summary.summary | sentence_spaced }}</p>
+{% if ai_summary.priorities %}<ol>{% for p in ai_summary.priorities %}<li>{{ p | sentence_spaced }}</li>{% endfor %}</ol>{% endif %}
+<p class="faint">Written by {{ ai_summary.model or 'a language model' }} from the findings in section 4.  Check it against them.</p>
+{% endif %}
+
+{% if top %}
+<h3>2.2  Top issues</h3>
+<ol>{% for f in top %}<li><strong>{{ f.title }}</strong> <span class="badge r-{{ f.severity }}">{{ f.severity | upper }}</span> <span class="soft">{{ f.ref }}</span></li>{% endfor %}</ol>
+{% endif %}
+
+<h3>2.3  OWASP Top 10 grades</h3>
+<table class="heat">
+  <thead><tr><th style="text-align:left">Category</th><th class="c">Grade</th>
+    {% for s in ['critical','high','medium','low','info'] %}<th class="c">{{ s | capitalize }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for c in categories %}
+    <tr><td class="name">{{ c.key }}  {{ c.name }}</td>
+      <td class="g-cell g-{{ c.grade }}">{{ c.grade }}</td>
+      {% for s in ['critical','high','medium','low','info'] %}
+      {% set n = c.cells[s] %}
+      <td {% if n %}class="r-{{ s }}"{% endif %}>{{ n or '' }}</td>
+      {% endfor %}</tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="faint">Each category is graded on its own findings.  The overall grade caps any one category at 25 points.</p>
+
+<h2 class="new-page">3.  Scope and method</h2>
+<h3>3.1  In scope</h3>
+<table>
+  <tr><td class="k">Host</td><td>{{ asset.host }}</td></tr>
+  {% if fields.ips %}<tr><td class="k">Addresses</td><td class="mono">{{ fields.ips }}</td></tr>{% endif %}
+  {% if fields.final_url %}<tr><td class="k">Front page</td><td class="mono">{{ fields.final_url }}</td></tr>{% endif %}
+  {% if fields.open_ports %}<tr><td class="k">Open ports</td><td>{{ fields.open_ports }}</td></tr>{% endif %}
+  {% if fields.server %}<tr><td class="k">Server</td><td>{{ fields.server }}</td></tr>{% endif %}
+  {% if fields.tls_version %}<tr><td class="k">TLS</td><td>{{ fields.tls_version }}{% if fields.tls_issuer %}, certificate from {{ fields.tls_issuer }}{% endif %}{% if fields.tls_days_left %}, {{ fields.tls_days_left }} days left{% endif %}</td></tr>{% endif %}
+  {% if fields.isp %}<tr><td class="k">Hosted by</td><td>{{ fields.isp }}</td></tr>{% endif %}
+  {% if fields.grade %}<tr><td class="k">Web hygiene grade</td><td>{{ fields.grade }}{% if fields.score %} ({{ fields.score }} out of 100){% endif %}</td></tr>{% endif %}
+</table>
+{% if screenshot %}<img class="shot" src="{{ screenshot }}" alt="The front page of {{ asset.host }}">{% endif %}
+
+<h3>3.2  Method and tools</h3>
+<p>{{ profile_text | sentence_spaced }}</p>
+<table>
+  <thead><tr><th>Step</th><th>Result</th><th class="c">Time</th></tr></thead>
+  <tbody>
+  {% for e in engines %}
+    <tr><td>{{ e.name or e.tool }}</td><td>{{ e.status }}{% if e.detail %}: {{ e.detail }}{% endif %}</td>
+      <td class="c">{{ (e.seconds or 0) // 60 }}m {{ (e.seconds or 0) % 60 }}s</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% if links %}
+<h3>3.3  The code behind the site</h3>
+<p>These repositories are mapped to the site.  The scan read their routes before it started, and their
+  open findings from static analysis are shown beside the dynamic results.</p>
+<table>
+  <thead><tr><th>Repository</th><th>Why it is mapped</th><th>Open code findings</th></tr></thead>
+  <tbody>
+  {% for l in links %}{% set c = sast.get(l.full_name, {}) %}
+    <tr><td>{{ l.full_name }}{% if l.branches %}<div class="faint">{{ l.branches | join(', ') }}</div>{% endif %}</td>
+      <td>{{ l.reasons | join('; ') }}</td>
+      <td>{% for s in ['critical','high','medium','low'] %}{% if c.get(s) %}<span class="badge r-{{ s }}">{{ c[s] }} {{ s }}</span> {% endif %}{% endfor %}{% if not c %}none{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h3>3.{{ 4 if links else 3 }}  Limitations</h3>
+<ul>{% for l in limitations %}<li>{{ l | sentence_spaced }}</li>{% endfor %}</ul>
+
+<h2 class="new-page">4.  Findings</h2>
+{% if not findings %}
+<p>The scan found nothing to report.</p>
+{% endif %}
+{% for f in findings %}
+<div class="finding">
+  <h3>{{ f.ref }}  {{ f.title }}</h3>
+  <table>
+    <tr><td class="k">Severity</td><td><span class="badge r-{{ f.severity }}">{{ f.severity | upper }}</span>
+      {% if triaged and f.counted == 0 %} <span class="soft">Not counted: the AI review judged it a likely false positive.</span>
+      {% elif triaged and f.counted < 1 %} <span class="soft">Counted at half: the AI review wants a person to check it.</span>{% endif %}</td></tr>
+    <tr><td class="k">OWASP Top 10</td><td>{{ f.owasp }}  {{ f.owasp_name }}</td></tr>
+    {% if f.cwe %}<tr><td class="k">CWE</td><td>{{ f.cwe }}</td></tr>{% endif %}
+    {% if f.url %}<tr><td class="k">Location</td><td class="mono">{{ f.url }}</td></tr>{% endif %}
+    <tr><td class="k">Found by</td><td>{{ (f.tools or [f.tool or f.check]) | join(', ') }}</td></tr>
+    {% if f.ai_verdict %}<tr><td class="k">AI review</td><td>{{ f.ai_verdict | replace('_', ' ') }}{% if f.ai_why %}.  {{ f.ai_why | sentence_spaced }}{% endif %}{% if f.ai_sast %}  Matches code finding {{ f.ai_sast }}.{% endif %}</td></tr>{% endif %}
+  </table>
+  {% if f.evidence %}<div class="label"><strong>Evidence</strong></div><pre>{{ f.evidence }}</pre>{% endif %}
+  {% if f.repro.command %}
+  <div style="margin-top:2mm"><strong>To see it again</strong></div>
+  <pre>{{ f.repro.command }}</pre>
+  <p class="faint">{{ f.repro.hint | sentence_spaced }}</p>
+  {% endif %}
+  {% if f.remediation %}<div style="margin-top:2mm"><strong>How to fix it</strong></div><p>{{ f.remediation | sentence_spaced }}</p>{% endif %}
+  <p class="faint">References: {{ f.owasp_url }}{% if f.cwe_url %}, {{ f.cwe_url }}{% endif %}{% if f.reference %}, {{ f.reference }}{% endif %}</p>
+</div>
+{% endfor %}
+
+<h2 class="new-page">Appendix A.  The scan underneath</h2>
+<table>
+  <tr><td class="k">Scan number</td><td>{{ scan.id }}</td></tr>
+  <tr><td class="k">Run by</td><td>{{ view.server }}</td></tr>
+  <tr><td class="k">Profile</td><td>{{ profile }}</td></tr>
+  <tr><td class="k">Findings</td><td>{{ findings | length }}, {{ overall.counted }} counted toward the grade</td></tr>
+  {% if view.ai.calls %}<tr><td class="k">AI review</td><td>{{ view.ai.calls }} request{{ '' if view.ai.calls == 1 else 's' }}, {{ view.ai.input_tokens }} tokens in and {{ view.ai.output_tokens }} out{% if view.ai.cost %}, {{ view.ai.cost }}{% endif %}</td></tr>{% endif %}
+</table>
+{% for e in skipped %}{% if loop.first %}<p>These steps did not finish, so the report does not cover what they would have checked:</p><ul>{% endif %}
+  <li>{{ e.name or e.tool }}: {{ e.detail or e.status }}</li>{% if loop.last %}</ul>{% endif %}{% endfor %}
+
+<h2>Disclaimer</h2>
+<p>{{ "This report describes what an automated dynamic scan found on the date it ran.  It is not a full penetration test, and it does not prove that other issues are absent.  Findings can be wrong in both directions: a scanner can report something that is not there, and it can miss something that is.  The commands under each finding are given so the result can be checked by hand.  Run them only against systems you are allowed to test." | sentence_spaced }}</p>
+
+</body>
+</html>

@@ -680,6 +680,51 @@ async def record_scan(asset_id: int, request: Request, user: User = Depends(curr
     return redirect(_back(here, "Recorded the scan."))
 
 
+def _report(db, asset, scan, user):
+    """-> (pdf bytes, file name) for a scan this server ran."""
+    import base64
+
+    from app.core import dast_report, settings_store
+    from app.web.render import render_partial
+
+    if not dast_report.available(scan):
+        raise HTTPException(status_code=404, detail=(
+            "Reports are made for finished scans this server ran.  A DAST "
+            "server's scan has its own report on that server."))
+    organization = settings_store.get(db, "report.organization_name", "") or ""
+    context = dast_report.build(db, asset, scan, user, organization)
+    shot = external.shot_path(asset.id)
+    if asset.screenshot == "ok" and shot.is_file() and shot.stat().st_size < 4_000_000:
+        context["screenshot"] = "data:image/png;base64," + base64.b64encode(
+            shot.read_bytes()).decode()
+    logo = (settings_store.get(db, "report.logo", "") or "").strip()
+    context.update(title=f"Dynamic Scan Report: {asset.host}", logo=logo,
+                   footer_text=settings_store.get(db, "report.footer", "") or "",
+                   issued_at=datetime.now(timezone.utc).strftime("%B %d, %Y").replace(" 0", " "))
+    html = render_partial("dast_report_pdf.html", **context)
+    try:
+        pdf = dast_report.render_pdf(html, logo, organization)
+    except ImportError:
+        raise HTTPException(status_code=503, detail=(
+            "Reports need the typesetting libraries, which are not installed on this server."))
+    return pdf, dast_report.filename(asset, scan)
+
+
+@router.get("/external/{asset_id}/scans/{scan_id}/report.pdf")
+def scan_report(asset_id: int, scan_id: int, request: Request,
+                user: User = Depends(current_user)):
+    """The PDF report on one scan this server ran, typeset now."""
+    with session_scope() as db:
+        _guard(db, user)
+        asset = _asset(db, asset_id)
+        scan = _scan(db, asset_id, scan_id)
+        pdf, name = _report(db, asset, scan, user)
+        record(db, "external.report", actor=user.username, target=asset.host,
+               detail=f"scan {scan_id}", source_ip=client_ip(request))
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 # Before the page below, or "5.json" is read as a scan id and refused.
 @router.get("/external/{asset_id}/scans/{scan_id}.json")
 def scan_json(asset_id: int, scan_id: int, user: User = Depends(current_user)):
@@ -1112,6 +1157,21 @@ def api_scan(asset_id: int, scan_id: int, caller=Depends(_api_caller())):
         _api_me(db, caller)
         _asset(db, asset_id)
         return external.scan_dict(_scan(db, asset_id, scan_id), findings=True)
+
+
+@api.get("/assets/{asset_id}/scans/{scan_id}/report.pdf")
+def api_report(asset_id: int, scan_id: int, request: Request, caller=Depends(_api_caller())):
+    """The PDF report on a finished scan this server ran."""
+    with session_scope() as db:
+        me = _api_me(db, caller)
+        asset = _asset(db, asset_id)
+        scan = _scan(db, asset_id, scan_id)
+        pdf, name = _report(db, asset, scan, me)
+        record(db, "external.report", actor=me.username, target=asset.host,
+               detail=f"scan {scan_id}, api token {caller.token.prefix}",
+               source_ip=client_ip(request))
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @api.post("/assets/{asset_id}/scans")
