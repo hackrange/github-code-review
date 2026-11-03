@@ -455,7 +455,8 @@ _DETAILS = [
     _f("technical_owner", "string", False, "Email addresses, comma separated."),
     _f("comments", "string", False, "Anything else about the site."),
     _f("status", "string", False, "active or obsolete."),
-    _f("environment", "string", False, "prod, dev, stage or clone."),
+    _f("environment", "string", False, "One of the environments listed in Settings, "
+                                       "which start as Prod, Dev, Stage and Clone."),
     _f("external_auth_needed", "boolean", False, "Signing in goes through something outside the site."),
     _f("whitelist_needed", "boolean", False, "The scanner has to be let through a firewall."),
     _f("change_frequency_days", "integer", False, "How often the site changes, in days."),

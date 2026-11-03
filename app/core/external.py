@@ -50,7 +50,52 @@ SCAN_SOURCES = {"builtin": "Built in", "remote": "DAST server", "recorded": "Rec
 SERVER_KINDS = {"nextgen-dast": "nextgen-dast (started and read from here)",
                 "other": "Other (scans are recorded by hand or through the API)"}
 BUILTIN_SERVER = "Git Code Review"
+# The starting list.  The real one is the external.environments setting; see
+# environments().  A site stores the name in lower case, so renaming Prod to
+# PROD keeps every site in it, and these four match what sites always held.
 ENVIRONMENTS = {"prod": "Prod", "dev": "Dev", "stage": "Stage", "clone": "Clone"}
+ENV_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()/&+-]{0,39}$")
+
+
+def env_key(name) -> str:
+    return re.sub(r"\s+", " ", str(name or "")).strip().casefold()[:40]
+
+
+def clean_environments(raw) -> list:
+    """The Settings list, checked.  Comma or line separated.  Raises ValueError."""
+    if isinstance(raw, str):
+        raw = raw.replace("\r", "\n").replace("\n", ",").split(",")
+    out, seen = [], set()
+    for item in raw or []:
+        name = re.sub(r"\s+", " ", str(item or "")).strip()
+        if not name:
+            continue
+        if not ENV_NAME.fullmatch(name):
+            raise ValueError(f"Environment {name[:60]!r} has to be up to 40 letters, numbers, "
+                             "spaces or . _ ( ) / & + - and start with a letter or number.")
+        if env_key(name) not in seen:
+            seen.add(env_key(name))
+            out.append(name)
+    if not out:
+        raise ValueError("Keep at least one environment.")
+    if len(out) > 40:
+        raise ValueError("At most 40 environments.")
+    return out
+
+
+def environments(db) -> dict:
+    """{key: name} from Settings, in its order.  The first is the default."""
+    from app.core import settings_store
+
+    try:
+        names = clean_environments(settings_store.get(db, "external.environments") or [])
+    except ValueError:
+        names = list(ENVIRONMENTS.values())
+    return {env_key(n): n for n in names}
+
+
+def default_environment(db) -> str:
+    return next(iter(environments(db)))
 STATUSES = {"active": "Active", "obsolete": "Obsolete"}
 MAX_PICKS = 200
 MAX_BRANCHES = 300
@@ -168,7 +213,8 @@ def clean_owners(value, what: str) -> str:
     return text
 
 
-def clean_details(data: dict, partial: bool = False) -> dict:
+def clean_details(data: dict, partial: bool = False, envs: dict = None,
+                  keep_env: str = "") -> dict:
     """The fields a person fills in about a site, checked.
 
     data holds strings as a form sends them, or JSON values from the API.
@@ -197,9 +243,13 @@ def clean_details(data: dict, partial: bool = False) -> dict:
             raise ValueError("Status is Active or Obsolete.")
         out["status"] = value
     if present("environment") or not partial:
-        value = str(data.get("environment") or "prod").strip().lower()
-        if value not in ENVIRONMENTS:
-            raise ValueError("Environment is Prod, Dev, Stage or Clone.")
+        envs = envs or ENVIRONMENTS
+        value = env_key(data.get("environment")) or next(iter(envs))
+        # A site may keep an environment that was taken off the list since.
+        if value not in envs and value != env_key(keep_env):
+            names = list(envs.values())
+            raise ValueError("Environment is " + (", ".join(names[:-1]) + " or " + names[-1]
+                                                  if len(names) > 1 else names[0]) + ".")
         out["environment"] = value
     for key in ("external_auth_needed", "whitelist_needed"):
         if present(key) or not partial:
@@ -457,6 +507,7 @@ def add_assets(db, rows: list, actor: str, no_scan: bool = False,
                                   no_scan_reason=(row.get("no_scan_reason")
                                                   or no_scan_reason or "")[:300])
             db.add(asset)
+            asset.environment = default_environment(db)
             apply_details(asset, details or {})
             db.flush()
             if picks:
@@ -969,7 +1020,7 @@ def asset_dict(asset: ExternalAsset, links: list = None, counts: dict = None,
         "executive_owner": asset.executive_owner or "",
         "technical_owner": asset.technical_owner or "",
         "status": asset.status or "active",
-        "environment": asset.environment or "prod",
+        "environment": asset.environment or "",
         "external_auth_needed": bool(asset.external_auth_needed),
         "whitelist_needed": bool(asset.whitelist_needed),
         "change_frequency_days": asset.change_frequency_days,

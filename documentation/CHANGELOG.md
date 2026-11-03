@@ -6,6 +6,11 @@ moved.
 
 ## 2026-11-03
 
+**Environments are yours to name.**  The environments an external site can be
+in are a list in Settings, under Web and external sites, instead of a fixed
+Prod, Dev, Stage and Clone.  The first is the default for a new site, and a
+site in one that is taken off the list keeps it until somebody picks another.
+
 **Signed in scans.**  A site can carry a header, a session cookie or a form
 login, saved encrypted, and its scans sign in with it: nuclei, ffuf, dalfox,
 sqlmap, nikto and wapiti all act as that user, and nothing secret is kept in

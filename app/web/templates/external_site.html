@@ -10,7 +10,7 @@
       {%- if asset.application %} &middot; {{ asset.application }}{% endif %}
       &middot; added {{ asset.added_at | dt('%Y-%m-%d') }}{% if asset.added_by %} by {{ asset.added_by }}{% endif %}</div>
     <div style="margin-top:.3rem">
-      <span class="badge {{ 'high' if asset.environment == 'prod' else 'info' }}">{{ environments.get(asset.environment, asset.environment) }}</span>
+      <span class="badge {{ 'high' if (asset.environment or '').startswith('prod') else 'info' }}">{{ environments.get(asset.environment, asset.environment) }}</span>
       <span class="badge {{ 'waived' if asset.status == 'obsolete' else 'ok' }}">{{ statuses.get(asset.status, asset.status) }}</span>
       {% for t in tags %}<a class="badge" href="{{ base }}/external?tag={{ t | urlencode }}">{{ t }}</a> {% endfor %}
       {% if blocked %}<span class="badge waived">no scan</span> <span class="small faint">{{ blocked }}</span>{% endif %}</div>
@@ -77,7 +77,7 @@
         <tr><th>Application</th><td>{{ asset.application or '' }}{% if not asset.application %}<span class="faint">nobody has said</span>{% endif %}</td></tr>
         <tr><th>Executive owner</th><td>{% for o in (asset.executive_owner or '').split(', ') if o %}<div><a href="mailto:{{ o }}">{{ o }}</a></div>{% else %}<span class="faint">nobody has said</span>{% endfor %}</td></tr>
         <tr><th>Technical owner</th><td>{% for o in (asset.technical_owner or '').split(', ') if o %}<div><a href="mailto:{{ o }}">{{ o }}</a></div>{% else %}<span class="faint">nobody has said</span>{% endfor %}</td></tr>
-        <tr><th>Environment</th><td>{{ environments.get(asset.environment, asset.environment) }}</td></tr>
+        <tr><th>Environment</th><td>{{ environments.get(asset.environment, asset.environment) }}{% if asset.environment not in environments %} <span class="faint small">(no longer in the list in Settings)</span>{% endif %}</td></tr>
         <tr><th>Status</th><td>{{ statuses.get(asset.status, asset.status) }}</td></tr>
         <tr><th>External auth needed</th><td>{{ 'Yes' if asset.external_auth_needed else 'No' }}</td></tr>
         <tr><th>Whitelist needed</th><td>{{ 'Yes' if asset.whitelist_needed else 'No' }}</td></tr>

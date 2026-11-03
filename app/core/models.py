@@ -2278,8 +2278,9 @@ class ExternalAsset(Base):
     # active or obsolete.  An obsolete site is kept for its history and left
     # out of the nightly telemetry.
     status = Column(String(16), default="active", nullable=False)
-    # prod, dev, stage or clone.
-    environment = Column(String(16), default="prod", nullable=False)
+    # One of the environments listed in Settings, by its name in lower case.
+    # The list starts as Prod, Dev, Stage and Clone.
+    environment = Column(String(40), default="prod", nullable=False)
     # Whether a scan needs to sign in through something outside the site, and
     # whether the scanner's address has to be let through a firewall first.
     external_auth_needed = Column(Boolean, default=False, nullable=False)

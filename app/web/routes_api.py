@@ -1899,6 +1899,13 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
                 "The user agent for scans has to be one line starting Mozilla/5.0 (, "
                 "the way a real browser's does."))
         put("external.user_agent", agent)
+        from app.core import external as _external
+
+        try:
+            put("external.environments", _external.clean_environments(
+                text("external.environments") or "Prod, Dev, Stage, Clone"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Environments: {exc}")
         put("external.refresh_days", clean_int(form.get("external.refresh_days", 7) or 0,
                                                "Read telemetry again after",
                                                low=0, high=365))

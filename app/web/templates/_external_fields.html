@@ -17,10 +17,15 @@
     <span class="faint small">Email only.</span></label>
   <label>Environment
     <select name="environment">
+      {% set current = a.environment if a else (environments | list | first) %}
       {% for key, label in environments.items() %}
-      <option value="{{ key }}" {{ 'selected' if (a.environment if a else 'prod') == key }}>{{ label }}</option>
+      <option value="{{ key }}" {{ 'selected' if current == key }}>{{ label }}</option>
       {% endfor %}
-    </select></label>
+      {% if a and a.environment and a.environment not in environments %}
+      <option value="{{ a.environment }}" selected>{{ a.environment }} (no longer in the list)</option>
+      {% endif %}
+    </select>
+    <span class="faint small">The list is in Settings, under Web and external sites.</span></label>
   <label>Status
     <select name="status">
       {% for key, label in statuses.items() %}

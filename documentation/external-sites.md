@@ -19,6 +19,8 @@ Settings, External sites:
 | `external.screenshots` | Take a screenshot of each site when its telemetry is read. |
 | `external.refresh_days` | Read every site's telemetry again after this many days, at 03:30.  0 only reads it when asked. |
 | `external.whitebox` | Before an engine scan, read the default branch of the mapped repositories for routes and for the host name. |
+| `external.environments` | The environments a site can be in, comma separated.  The first is the default for a new site.  A site in one that is taken off the list keeps it until somebody picks another. |
+| `external.user_agent` | The browser every request says it is.  Empty uses a current desktop Chrome. |
 | `external.allow_private` | Let telemetry and scans reach private, loopback and link local addresses.  Leave it off unless the sites really are internal. |
 
 The age at which a scan counts as overdue is the same `dast.max_age_days` the
@@ -44,7 +46,7 @@ Each site also carries:
 | Executive owner, Technical owner | Email addresses only, comma separated |
 | Comments | Anything else |
 | Status | Active or Obsolete.  An obsolete site keeps its history, gets no Scan button and is left out of the nightly telemetry |
-| Environment | Prod, Dev, Stage or Clone |
+| Environment | One of the environments listed in Settings, which start as Prod, Dev, Stage and Clone |
 | External auth needed | Signing in goes through something outside the site |
 | Whitelist needed | The scanner's address has to be let through a firewall first |
 | Change frequency | How often the site changes, in days |

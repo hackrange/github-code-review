@@ -328,7 +328,7 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
         "profile": profile, "profile_text": dast_engines.PROFILES.get(profile, ""),
         "limitations": limitations, "links": links, "sast": counts,
         "tele": tele, "fields": fields,
-        "environment": external.ENVIRONMENTS.get(asset.environment, asset.environment or ""),
+        "environment": external.environments(db).get(asset.environment, asset.environment or ""),
         "started": started, "finished": finished,
         "duration": int((finished - started).total_seconds()) if started and finished else None,
         "organization_name": organization,

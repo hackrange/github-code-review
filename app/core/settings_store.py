@@ -338,6 +338,10 @@ DEFAULTS = {
                                 "Before an engine scan, read the default branch of "
                                 "the repositories mapped to the site for routes to "
                                 "add to the scan and for the site's name in the code."),
+    "external.environments":   (["Prod", "Dev", "Stage", "Clone"], False,
+                                "The environments a site can be in. The first is the "
+                                "default for a new site. A site keeps one that is "
+                                "taken off the list until somebody picks another."),
     "external.user_agent":     ("", False,
                                 "The browser every scan and telemetry read says it is. "
                                 "Empty uses a current desktop Chrome. It has to start "
@@ -498,7 +502,8 @@ SECTIONS = [
     ("Web testing", ["dast.max_age_days"]),
     ("External sites", ["external.enabled", "external.screenshots",
                         "external.refresh_days", "external.whitebox",
-                        "external.user_agent", "external.allow_private"]),
+                        "external.environments", "external.user_agent",
+                        "external.allow_private"]),
     ("Limits", ["github.parallel_repos", "scan.max_concurrent",
                 "secrets.history_window_days",
                 "scan.timeout_per_repo", "scan.max_hours",

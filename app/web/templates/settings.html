@@ -676,6 +676,12 @@
   <label class="check"><input type="checkbox" name="external.allow_private" value="1" {{ 'checked' if values['external.allow_private'] }}>
     <span>Let telemetry and scans reach private, loopback and link local
       addresses.  Leave off unless the sites really are internal.</span></label>
+  <label class="wide">Environments
+    <input type="text" name="external.environments" maxlength="1200"
+           value="{{ values['external.environments'] | join(', ') }}" placeholder="Prod, Dev, Stage, Clone">
+    <span class="faint small">The environments a site can be in, comma separated.  The first is the
+      default for a new site.  A site in one you take off keeps it until somebody picks another.</span>
+  </label>
   <label class="wide">User agent for scans
     <input type="text" name="external.user_agent" maxlength="400" class="mono"
            value="{{ values['external.user_agent'] }}" placeholder="{{ default_user_agent }}">

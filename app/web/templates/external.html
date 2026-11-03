@@ -98,7 +98,7 @@
             {% if a.application %}<div class="small">{{ a.application }}</div>{% endif %}
             <div style="margin-top:.2rem">{% for t in r.tags %}<a class="badge" href="{{ here }}?tag={{ t | urlencode }}">{{ t }}</a> {% endfor %}</div>
             {% if r.blocked %}<span class="badge waived" title="{{ a.no_scan_reason or 'under a domain marked no scan' }}">no scan</span>{% endif %}
-            <div style="margin-top:.2rem"><span class="badge {{ 'high' if a.environment == 'prod' else 'info' }}">{{ environments.get(a.environment, a.environment) }}</span>
+            <div style="margin-top:.2rem"><span class="badge {{ 'high' if (a.environment or '').startswith('prod') else 'info' }}" {% if a.environment not in environments %}title="No longer in the environments list"{% endif %}>{{ environments.get(a.environment, a.environment) }}</span>
               {% if a.status == 'obsolete' %}<span class="badge waived">obsolete</span>{% endif %}
               {% if a.external_auth_needed %}<span class="badge info" title="External auth needed">ext auth</span>{% endif %}
               {% if a.whitelist_needed %}<span class="badge pending" title="Whitelist needed">whitelist</span>{% endif %}</div>

@@ -144,6 +144,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
         app = clean_text(app, "Application", limit=200, required=False)
         opts = external.options(db)
         mapper = external.Mapper(db, user)
+        envs = external.environments(db)
         assets = db.query(ExternalAsset).order_by(ExternalAsset.host).all()
         blocked = external.blocked_hosts(db)
         every_link = {a.id: mapper.links(a) for a in assets}
@@ -166,7 +167,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                 "tele": external.telemetry_of(a),
                 "scan": scanning.get(a.id),
             }
-            if env and (a.environment or "prod") != env:
+            if env and (a.environment or "") != env:
                 continue
             if status and (a.status or "active") != status:
                 continue
@@ -217,7 +218,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                        profiles=dast_engines.PROFILES, default_profile=dast_engines.DEFAULT_PROFILE,
                        q=q, tag=tag, app=app, grade=grade, dast=dast, risk=risk,
                        scope=scope, all_tags=all_tags, apps=apps, opts=opts,
-                       env=env, status=status, environments=external.ENVIRONMENTS,
+                       env=env, status=status, environments=envs,
                        statuses=external.STATUSES,
                        servers=servers,
                        running=sum(1 for a in assets if a.telemetry_status == "running"),
@@ -235,6 +236,7 @@ def export_csv(request: Request, user: User = Depends(current_user)):
     with session_scope() as db:
         _guard(db, user)
         mapper = external.Mapper(db, user)
+        envs = external.environments(db)
         out = io.StringIO()
         writer = csv.writer(out)
         writer.writerow(["host", "kind", "parent_domain", "application", "tags",
@@ -253,7 +255,7 @@ def export_csv(request: Request, user: User = Depends(current_user)):
                         or [l["full_name"]]
             writer.writerow([_quote_formula(str(c)) for c in [
                 a.host, a.kind, a.parent_domain, a.application, "; ".join(a.tag_list()),
-                external.ENVIRONMENTS.get(a.environment, a.environment or ""),
+                envs.get(a.environment, a.environment or ""),
                 external.STATUSES.get(a.status, a.status or ""),
                 a.executive_owner or "", a.technical_owner or "",
                 "yes" if a.external_auth_needed else "no",
@@ -288,7 +290,7 @@ async def add(request: Request, user: User = Depends(current_user)):
         no_scan = _checked(form, "no_scan")
         reason = clean_text(form.get("no_scan_reason"), "Reason", limit=300, required=False)
         try:
-            details = external.clean_details(_detail_form(form))
+            details = external.clean_details(_detail_form(form), envs=external.environments(db))
             picks = external.parse_picks(form.getlist("pick"))
             got = external.add_assets(db, rows, user.username, no_scan, reason, tags,
                                       details=details, picks=picks, user=user)
@@ -502,7 +504,7 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             auth=external_auth_mod.describe(asset), auth_kinds=external_auth_mod.KINDS,
             site_profile=external.profile_for(asset),
             picks_json=json.dumps(external.picks_of(db, asset)),
-            environments=external.ENVIRONMENTS, statuses=external.STATUSES,
+            environments=external.environments(db), statuses=external.STATUSES,
             scan_views=[external.scan_dict(s) for s in page_scans],
             servers=db.query(DastServer).order_by(DastServer.name).all(),
             profiles=dast_engines.PROFILES, active=dast_engines.ACTIVE_PROFILES,
@@ -541,7 +543,8 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
         asset.application = clean_text(form.get("application"), "Application",
                                        limit=200, required=False)
         try:
-            external.apply_details(asset, external.clean_details(_detail_form(form)))
+            external.apply_details(asset, external.clean_details(
+                _detail_form(form), envs=external.environments(db), keep_env=asset.environment))
             if form.get("with_picks"):
                 external.set_picks(db, asset, external.parse_picks(form.getlist("pick")),
                                    user.username, user)
@@ -1053,7 +1056,7 @@ def api_list(request: Request, caller=Depends(_api_caller())):
         if params.get("severity"):
             query = query.filter(ExternalAsset.last_dast_severity == params["severity"][:16])
         if params.get("environment"):
-            query = query.filter(ExternalAsset.environment == params["environment"].lower()[:16])
+            query = query.filter(ExternalAsset.environment == external.env_key(params["environment"]))
         if params.get("status"):
             query = query.filter(ExternalAsset.status == params["status"].lower()[:16])
         total = query.count()
@@ -1079,7 +1082,7 @@ async def api_add(request: Request, caller=Depends(_api_caller())):
         me = _api_me(db, caller)
         existed = db.query(ExternalAsset).filter(ExternalAsset.host == host).one_or_none()
         try:
-            details = external.clean_details(_api_details(body))
+            details = external.clean_details(_api_details(body), envs=external.environments(db))
             picks = external.picks_from_names(db, body.get("repositories") or [])
             got = external.add_assets(db, [{
                 "host": host, "application": _str_field(body, "application", 200) or "",
@@ -1117,8 +1120,9 @@ async def api_patch(asset_id: int, request: Request, caller=Depends(_api_caller(
         if value is not None:
             asset.application = value
         try:
-            external.apply_details(asset, external.clean_details(_api_details(body),
-                                                                 partial=True))
+            external.apply_details(asset, external.clean_details(
+                _api_details(body), partial=True, envs=external.environments(db),
+                keep_env=asset.environment))
             if "repositories" in body:
                 external.set_picks(db, asset,
                                    external.picks_from_names(db, body["repositories"] or []),
