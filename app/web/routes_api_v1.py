@@ -1176,3 +1176,14 @@ def deploy_check(request: Request,
         "blocking": blocking,
         "other": other,
     })
+
+
+# External sites and their dynamic scans live in their own module, under this
+# router so they share its token handling and its place in the API reference.
+from app.web.routes_external import api as _external_api  # noqa: E402
+
+# Added route by route rather than with include_router, which in this FastAPI
+# wraps the whole router and hides its paths from router.routes.
+for _route in _external_api.routes:
+    router.add_api_route(_route.path, _route.endpoint, methods=list(_route.methods),
+                         name=_route.name)

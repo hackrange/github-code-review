@@ -28,10 +28,11 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /wheels
-COPY requirements.txt requirements-scanner.txt ./
-# Two sets, built separately, because they resolve separately.
+COPY requirements.txt requirements-scanner.txt requirements-dast.txt ./
+# Three sets, built separately, because they resolve separately.
 RUN python3 -m pip wheel --wheel-dir /wheels/app -r requirements.txt \
- && python3 -m pip wheel --wheel-dir /wheels/scanner -r requirements-scanner.txt
+ && python3 -m pip wheel --wheel-dir /wheels/scanner -r requirements-scanner.txt \
+ && python3 -m pip wheel --wheel-dir /wheels/dast -r requirements-dast.txt
 
 # ==============================================================================
 # Stage 2, the image that runs
@@ -78,6 +79,17 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
         libglib2.0-0t64 libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b \
         libfontconfig1 libcairo2 libgdk-pixbuf-2.0-0 \
         fonts-dejavu-core \
+        # External sites.  whois names who owns a site's network.  Nikto is
+        # perl, testssl.sh is bash over openssl and wants hexdump, dig and ps.
+        whois perl libnet-ssleay-perl libio-socket-ssl-perl libjson-perl \
+        libxml-writer-perl libtimedate-perl libtext-csv-perl libwww-perl \
+        libhtml-parser-perl \
+        bsdextrautils dnsutils procps \
+        # What headless Chromium loads to draw a page for a screenshot.
+        # Fonts too: with none, every page with text on it comes out blank.
+        libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 \
+        libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
+        libxrandr2 libgbm1 libasound2t64 libxshmfence1 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 # The clients the other two version control systems need are deliberately not
@@ -122,6 +134,23 @@ ARG GOSEC_SHA256_ARM64=c71244ec8d37488fd479d0d26990968fee03ece48b305d8224ac0c1eb
 # gosec reads types through go/packages, which shells out to `go list`.  With
 # no toolchain it exits zero having analysed nothing, so the compiler comes
 # with it or the engine is worse than absent.
+# The dynamic scanning engines for External sites, the same set nextgen-dast
+# drives.  Go binaries checked against their projects' published sums; the
+# two script engines are release tarballs checked against the sum of the
+# tarball itself.
+ARG NUCLEI_VERSION=3.11.1
+ARG NUCLEI_SHA256_AMD64=ea63d4ae232808cd7c6bc00d0142428e231fab59dae01042246097d195835ab6
+ARG NUCLEI_SHA256_ARM64=8044e3d9768ba0a744b2872c1a87e813006f013da97ca9f50f7661a4203bec07
+ARG DALFOX_VERSION=3.2.4
+ARG DALFOX_SHA256_AMD64=aaef3f3d26d2de6d4e61ef5295151d9de36e111981618136ac7ec54b578582b8
+ARG DALFOX_SHA256_ARM64=5c65627fd82b987eddf1296cf97b7862a401a364a05cf7262e59c9e5b5407d60
+ARG FFUF_VERSION=2.3.0
+ARG FFUF_SHA256_AMD64=b2a3c725fcb9da175159682f54d6e9149f2905b00d84d155e7efc5d599975ceb
+ARG FFUF_SHA256_ARM64=e2d712615d53da797ee929006e41f2df5a7960a5353133db9c150ddaa22ae4e8
+ARG TESTSSL_VERSION=3.2.4
+ARG TESTSSL_SHA256=98528f8a0ac07f1e226efaa8ead438247df8efcb8fee4e056a937ab82a305490
+ARG NIKTO_VERSION=2.6.1
+ARG NIKTO_SHA256=d1ca1acb05d81a5a6f374c0afdd76b33afa0089278631a20673c0210a71d992f
 ARG GO_VERSION=1.27.2
 ARG GO_SHA256_AMD64=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
 ARG GO_SHA256_ARM64=94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8
@@ -134,13 +163,15 @@ RUN set -eux; \
              gr_sum=$GRYPE_SHA256_AMD64; th_sum=$TRUFFLEHOG_SHA256_AMD64; \
              os_sum=$OSV_SHA256_AMD64; tv_sum=$TRIVY_SHA256_AMD64; \
              zz_sum=$ZIZMOR_SHA256_AMD64; gs_sum=$GOSEC_SHA256_AMD64; \
-             go_sum=$GO_SHA256_AMD64 ;; \
+             go_sum=$GO_SHA256_AMD64; nu_sum=$NUCLEI_SHA256_AMD64; \
+             df_arch=x86_64; df_sum=$DALFOX_SHA256_AMD64; ff_sum=$FFUF_SHA256_AMD64 ;; \
       arm64) gl_arch=arm64; go_arch=arm64; tv_arch=ARM64; zz_arch=aarch64; \
              gl_sum=$GITLEAKS_SHA256_ARM64; sy_sum=$SYFT_SHA256_ARM64; \
              gr_sum=$GRYPE_SHA256_ARM64; th_sum=$TRUFFLEHOG_SHA256_ARM64; \
              os_sum=$OSV_SHA256_ARM64; tv_sum=$TRIVY_SHA256_ARM64; \
              zz_sum=$ZIZMOR_SHA256_ARM64; gs_sum=$GOSEC_SHA256_ARM64; \
-             go_sum=$GO_SHA256_ARM64 ;; \
+             go_sum=$GO_SHA256_ARM64; nu_sum=$NUCLEI_SHA256_ARM64; \
+             df_arch=aarch64; df_sum=$DALFOX_SHA256_ARM64; ff_sum=$FFUF_SHA256_ARM64 ;; \
       *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
     esac; \
     dl=/tmp/tools; mkdir -p "$dl"; \
@@ -155,6 +186,11 @@ RUN set -eux; \
     fetch "$gh/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-${zz_arch}-unknown-linux-gnu.tar.gz" zizmor.tgz "$zz_sum"; \
     fetch "$gh/securego/gosec/releases/download/v${GOSEC_VERSION}/gosec_${GOSEC_VERSION}_linux_${go_arch}.tar.gz" gosec.tgz "$gs_sum"; \
     fetch "https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" go.tgz "$go_sum"; \
+    fetch "$gh/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_${go_arch}.zip" nuclei.zip "$nu_sum"; \
+    fetch "$gh/hahwul/dalfox/releases/download/v${DALFOX_VERSION}/dalfox-v${DALFOX_VERSION}-linux-${df_arch}.tar.gz" dalfox.tgz "$df_sum"; \
+    fetch "$gh/ffuf/ffuf/releases/download/v${FFUF_VERSION}/ffuf_${FFUF_VERSION}_linux_${go_arch}.tar.gz" ffuf.tgz "$ff_sum"; \
+    fetch "https://codeload.github.com/testssl/testssl.sh/tar.gz/refs/tags/v${TESTSSL_VERSION}" testssl.tgz "$TESTSSL_SHA256"; \
+    fetch "https://codeload.github.com/sullo/nikto/tar.gz/refs/tags/${NIKTO_VERSION}" nikto.tgz "$NIKTO_SHA256"; \
     tar -xzf "$dl/gitleaks.tgz" -C /usr/local/bin gitleaks; \
     tar -xzf "$dl/syft.tgz" -C /usr/local/bin syft; \
     tar -xzf "$dl/grype.tgz" -C /usr/local/bin grype; \
@@ -165,22 +201,44 @@ RUN set -eux; \
     tar -xzf "$dl/gosec.tgz" -C /usr/local/bin gosec; \
     tar -xzf "$dl/go.tgz" -C /usr/local; \
     ln -sf /usr/local/go/bin/go /usr/local/bin/go; \
+    python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extract('nuclei', '/usr/local/bin')" "$dl/nuclei.zip"; \
+    chmod 0755 /usr/local/bin/nuclei; \
+    tar -xzf "$dl/dalfox.tgz" -C /usr/local/bin --strip-components=1 \
+        "dalfox-v${DALFOX_VERSION}-linux-${df_arch}/dalfox"; \
+    tar -xzf "$dl/ffuf.tgz" -C /usr/local/bin ffuf; \
+    mkdir -p /opt/gcr/engines/testssl /opt/gcr/engines/nikto; \
+    tar -xzf "$dl/testssl.tgz" -C /opt/gcr/engines/testssl --strip-components=1; \
+    tar -xzf "$dl/nikto.tgz" -C /opt/gcr/engines/nikto --strip-components=1; \
+    ln -sf /opt/gcr/engines/testssl/testssl.sh /usr/local/bin/testssl.sh; \
+    printf '#!/bin/sh\nexec perl /opt/gcr/engines/nikto/program/nikto.pl "$@"\n' > /usr/local/bin/nikto; \
+    chmod 0755 /usr/local/bin/nikto; \
     rm -rf "$dl"; \
     gitleaks version; syft version; grype version; trivy --version; zizmor --version; \
     gosec --version; go version; \
+    nuclei -version; ffuf -V; dalfox --version; testssl.sh --version | head -3; \
     trufflehog --version || true
 
 # Python packages go in their own venv.  Ubuntu marks the system python as
 # externally managed, and arguing with that just breaks later apt upgrades.
 COPY --from=builder /wheels /wheels
-COPY requirements.txt requirements-scanner.txt /tmp/
+COPY requirements.txt requirements-scanner.txt requirements-dast.txt /tmp/
 RUN python3 -m venv /opt/gcr/venv \
     && /opt/gcr/venv/bin/pip install --no-index --find-links=/wheels/app \
            -r /tmp/requirements.txt \
     && python3 -m venv /opt/gcr/scanner-venv \
     && /opt/gcr/scanner-venv/bin/pip install --no-index --find-links=/wheels/scanner \
            -r /tmp/requirements-scanner.txt \
-    && rm -rf /wheels /tmp/requirements.txt /tmp/requirements-scanner.txt
+    && python3 -m venv /opt/gcr/dast-venv \
+    && /opt/gcr/dast-venv/bin/pip install --no-index --find-links=/wheels/dast \
+           -r /tmp/requirements-dast.txt \
+    && ln -sf /opt/gcr/dast-venv/bin/wapiti /usr/local/bin/wapiti \
+    && ln -sf /opt/gcr/dast-venv/bin/sqlmap /usr/local/bin/sqlmap \
+    && PLAYWRIGHT_BROWSERS_PATH=/opt/gcr/browsers \
+           /opt/gcr/dast-venv/bin/python -m playwright install chromium-headless-shell \
+    && chmod -R a+rX /opt/gcr/browsers \
+    && wapiti --version && sqlmap --version \
+    && rm -rf /wheels /tmp/requirements.txt /tmp/requirements-scanner.txt \
+              /tmp/requirements-dast.txt
 
 # It runs as a normal user.  Nothing here needs root, and this thing clones
 # code it did not write.
@@ -212,6 +270,8 @@ ENV GCR_DATA_DIR=/data \
     GCR_SCANNER_BIN=/opt/gcr/bin/ghscan \
     GCR_SCANNER_VENV=/opt/gcr/scanner-venv \
     GCR_PORT=8080 \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/gcr/browsers \
+    GCR_NUCLEI_TEMPLATES=/home/gcr/.cache/nuclei-templates \
     PATH="/opt/gcr/venv/bin:/opt/gcr/scanner-venv/bin:/opt/gcr/bin:${PATH}"
 
 USER gcr

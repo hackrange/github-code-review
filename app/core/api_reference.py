@@ -80,6 +80,10 @@ GROUPS = [
     ("Trends", "How your numbers have moved over time."),
     ("Report files", "The whole estate report files.  Administrators only."),
     ("Editors", "What the editor plugins use."),
+    ("External sites", "The company's domains and subdomains, their dynamic "
+                       "scans and the repositories behind them.  Needs the "
+                       "external scope on an administrator's token, and External "
+                       "sites switched on in Settings."),
 ]
 
 
@@ -382,6 +386,148 @@ def endpoints() -> list:
                              "only": "secrets,code"},
             "example": {"counts": {"credential": 0, "code": 0}, "findings": []},
         },
+    ] + _external_endpoints()
+
+
+def _ext(id_, method, path, summary, description, params=None, body=None,
+         body_example=None, example=None):
+    e = {"id": id_, "group": "External sites", "method": method, "path": path,
+         "scope": "external", "permission": "external.manage",
+         "summary": summary, "description": description,
+         "params": params or [], "example": example or {}}
+    if body is not None:
+        e["body"] = body
+        e["body_example"] = body_example
+    return e
+
+
+def _f(name, kind, required, description):
+    return {"name": name, "type": kind, "required": required, "description": description}
+
+
+_ASSET = {"id": 12, "host": "shop.example.com", "kind": "subdomain",
+          "parent_domain": "example.com", "application": "Storefront",
+          "tags": ["ecommerce"], "no_scan": False, "scan_blocked": False,
+          "telemetry": {"at": "2026-11-03T10:00:00+00:00", "grade": "B",
+                        "category": "live", "status_code": 200, "ip": "203.0.113.10",
+                        "open_ports": [80, 443], "tls_days_left": 61,
+                        "screenshot_url": "https://gcr.example.com/external/12/screenshot.png"},
+          "last_dast": {"scanned_at": "2026-11-01T02:00:00+00:00", "severity": "high",
+                        "result_url": "https://dast.example.com/assessment/88",
+                        "server": "nextgen-dast", "status": "current"},
+          "repositories": [{"full_name": "acme/storefront", "score": 95, "linked": True,
+                            "reasons": ["host named in its web addresses"],
+                            "open_findings": {"high": 2}}],
+          "combined_risk": {"level": "critical",
+                            "reasons": ["last dynamic scan: high",
+                                        "open high findings in the code behind it",
+                                        "the site and its code both have problems"]}}
+_SCAN = {"id": 40, "asset_id": 12, "server": "nextgen-dast", "source": "recorded",
+         "status": "done", "scanned_at": "2026-11-01T02:00:00+00:00",
+         "severity": "high", "counts": {"critical": 0, "high": 1, "medium": 3,
+                                        "low": 5, "info": 2},
+         "result_url": "https://dast.example.com/assessment/88"}
+_RECORD_BODY = [
+    _f("server", "string", True, "The DAST server that ran it, by name."),
+    _f("severity", "string", False, "The worst found: critical, high, medium, low, "
+                                    "info or none.  Worked out from counts or "
+                                    "findings when left out."),
+    _f("result_url", "string", False, "Where the result can be read."),
+    _f("scanned_at", "string", False, "When it ran, a date or ISO time.  Now when "
+                                      "left out.  Not in the future."),
+    _f("counts", "object", False, "Findings per severity."),
+    _f("findings", "array", False, "Each with title, severity, url, evidence, cwe "
+                                   "and remediation.  Up to 3000."),
+    _f("scan_id", "string", False, "The scan's id on the server."),
+    _f("note", "string", False, "Anything else."),
+]
+
+
+def _external_endpoints() -> list:
+    asset_id = _p("asset_id", "The site's id.", where="path", kind="integer", example=12)
+    scan_id = _p("scan_id", "The scan's id.", where="path", kind="integer", example=40)
+    return [
+        _ext("ext-list", "GET", "/external/assets", "List sites",
+             "Every site with its telemetry, last dynamic scan, the repositories "
+             "behind it and their open findings, and the combined risk.",
+             [_p("q", "Search the host and application."),
+              _p("host", "Exactly this host."), _p("application", "Exactly this application."),
+              _p("tag", "Only sites with this tag."),
+              _p("severity", "Only sites whose last scan was this bad.",
+                 choices=["critical", "high", "medium", "low", "info", "none"])] + PAGING,
+             example={"total": 1, "limit": 100, "offset": 0, "assets": [_ASSET]}),
+        _ext("ext-add", "POST", "/external/assets", "Add a site",
+             "Adds a domain or subdomain and reads its telemetry.  Answers 200 with "
+             "the existing site when it is already listed.",
+             body=[_f("host", "string", True, "The host name.  A whole address is fine."),
+                   _f("application", "string", False, "The application it serves."),
+                   _f("tags", "array", False, "Application tags."),
+                   _f("no_scan", "boolean", False, "True when it must never be scanned, "
+                                                   "a SaaS product for example."),
+                   _f("no_scan_reason", "string", False, "Why not."),
+                   _f("notes", "string", False, "Anything else."),
+                   _f("telemetry", "boolean", False, "False to skip the first read.")],
+             body_example={"host": "shop.example.com", "application": "Storefront",
+                           "tags": ["ecommerce"]}, example=_ASSET),
+        _ext("ext-get", "GET", "/external/assets/{asset_id}", "One site",
+             "The same as one row of the list.", [asset_id], example=_ASSET),
+        _ext("ext-patch", "PATCH", "/external/assets/{asset_id}", "Change a site",
+             "Change the application, tags, notes or no scan.  Fields left out "
+             "stay as they are.", [asset_id],
+             body=[_f("application", "string", False, "The application."),
+                   _f("tags", "array", False, "Replaces the tags."),
+                   _f("notes", "string", False, "Notes."),
+                   _f("no_scan", "boolean", False, "Never scan it."),
+                   _f("no_scan_reason", "string", False, "Why not.")],
+             body_example={"no_scan": True, "no_scan_reason": "Vendor hosted"},
+             example=_ASSET),
+        _ext("ext-delete", "DELETE", "/external/assets/{asset_id}", "Remove a site",
+             "Removes the site and its scan history.  409 while a scan runs.",
+             [asset_id], example={}),
+        _ext("ext-telemetry", "POST", "/external/assets/{asset_id}/telemetry",
+             "Read telemetry again",
+             "Queues a fresh read: DNS, ports, TLS, headers and a screenshot.  "
+             "Passive for a site marked no scan.", [asset_id],
+             example={"queued": True}),
+        _ext("ext-scans", "GET", "/external/assets/{asset_id}/scans", "A site's scans",
+             "Every dynamic scan of the site, newest first.", [asset_id] + PAGING,
+             example={"total": 1, "limit": 100, "offset": 0, "scans": [_SCAN]}),
+        _ext("ext-scan", "GET", "/external/assets/{asset_id}/scans/{scan_id}",
+             "One scan", "One scan with its findings, which engines ran, and "
+                         "the AI triage and what it cost.", [asset_id, scan_id],
+             example=dict(_SCAN, findings=[{"title": "Git repository metadata is served",
+                                            "severity": "high",
+                                            "url": "https://shop.example.com/.git/HEAD"}])),
+        _ext("ext-record", "POST", "/external/assets/{asset_id}/scans", "Record a scan",
+             "Records a scan run elsewhere: its severity, result address, when it "
+             "ran and which server ran it.  Becomes the site's last scan when it "
+             "is the newest.", [asset_id], body=_RECORD_BODY,
+             body_example={"server": "nextgen-dast", "severity": "high",
+                           "result_url": "https://dast.example.com/assessment/88",
+                           "scanned_at": "2026-11-01T02:00:00Z",
+                           "counts": {"high": 1, "medium": 3}}, example=_SCAN),
+        _ext("ext-record-host", "POST", "/external/scans", "Record a scan by host",
+             "The same, by host name, for a server that does not know the ids "
+             "here.  404 for a host that is not listed, unless create is true.",
+             body=[_f("host", "string", True, "The host that was scanned."),
+                   _f("create", "boolean", False, "Add the host when it is not listed.")]
+             + _RECORD_BODY,
+             body_example={"host": "shop.example.com", "server": "nextgen-dast",
+                           "severity": "medium", "create": True}, example=_SCAN),
+        _ext("ext-start", "POST", "/external/assets/{asset_id}/dast", "Start a scan",
+             "Starts a scan on this server or on a nextgen-dast server.  409 for a "
+             "site that may not be scanned or already has one running.  Standard "
+             "and up, and any DAST server, send attack payloads and need confirm.",
+             [asset_id],
+             body=[_f("profile", "string", False, "baseline, quick, standard, "
+                                                  "thorough or premium."),
+                   _f("server", "string", False, "builtin, or a nextgen-dast server's name."),
+                   _f("confirm", "boolean", False, "True to say you may scan it."),
+                   _f("ai", "boolean", False, "True to have the model triage the "
+                                              "findings when it ends.  Counted on "
+                                              "the AI cost page.")],
+             body_example={"profile": "quick", "ai": True},
+             example=dict(_SCAN, source="builtin", status="queued", severity="")),
     ]
 
 

@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}DAST servers &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>DAST servers</h1>
+    <div class="faint small">What runs dynamic scans of the external sites.
+      Every recorded scan keeps the name of the server that ran it.  A
+      nextgen-dast server can be started from a site's page and its results
+      read back here; any other server's scans are recorded by hand or through
+      the API with the <span class="mono">external</span> token scope.</div></div>
+  <div class="page-actions">
+    <button class="btn primary" type="button" data-modal="server-modal"
+            data-id="" data-name="" data-kind="nextgen-dast" data-base_url="" data-profile="quick" data-notes="">Add a server</button>
+    <a class="btn" href="{{ base }}/external">External sites</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">{{ builtin }} (this server)</div>
+  <div class="card-body small">
+    Runs the baseline checks itself and drives these engines for the larger profiles:
+    {% for tool, path in engines.items() %}<span class="badge {{ 'ok' if path else 'waived' }}" title="{{ path or 'not installed' }}">{{ engine_names[tool] }}{{ '' if path else ', not installed' }}</span> {% endfor %}
+    <div class="faint" style="margin-top:.3rem">{{ used.get(builtin, 0) }} scans recorded.</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">{{ servers | length }} other server{{ '' if servers | length == 1 else 's' }}</div>
+  {% if servers %}
+  <div class="table-scroll"><table>
+    <thead><tr><th>Name</th><th>Kind</th><th>Address</th><th>Scans</th><th></th></tr></thead>
+    <tbody>
+    {% for s in servers %}
+      <tr>
+        <td><strong>{{ s.name }}</strong>{% if s.notes %}<div class="small faint">{{ s.notes }}</div>{% endif %}</td>
+        <td class="small">{{ s.kind }}{% if s.kind == 'nextgen-dast' %}<div class="faint">{{ s.profile }} by default, token {{ 'set' if s.token else 'missing' }}</div>{% endif %}</td>
+        <td class="small mono">{{ s.base_url }}</td>
+        <td class="small">{{ used.get(s.name, 0) }}</td>
+        <td class="nowrap">
+          <button class="btn sm" type="button" data-modal="server-modal" data-id="{{ s.id }}" data-name="{{ s.name }}"
+                  data-kind="{{ s.kind }}" data-base_url="{{ s.base_url }}" data-profile="{{ s.profile }}" data-notes="{{ s.notes }}">Edit</button>
+          {% if s.kind == 'nextgen-dast' %}
+          <form method="post" action="{{ base }}/external-servers/{{ s.id }}/test" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn sm" type="submit">Test</button></form>{% endif %}
+          <form method="post" action="{{ base }}/external-servers/{{ s.id }}/delete" style="display:inline"
+                data-confirm="Remove {{ s.name }}?  Scans it ran keep its name.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn sm danger" type="submit">Remove</button></form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody></table></div>
+  {% else %}<div class="empty">None yet.</div>{% endif %}
+</div>
+
+<div class="modal-backdrop" id="server-modal" hidden>
+  <div class="modal"><form method="post" action="{{ base }}/external-servers">
+    <div class="modal-head">DAST server <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="id" value="">
+      <label>Name <input type="text" name="name" maxlength="120" required></label>
+      <label>Kind <select name="kind">{% for k, what in kinds.items() %}<option value="{{ k }}">{{ what }}</option>{% endfor %}</select></label>
+      <label>Address <input type="url" name="base_url" maxlength="500" placeholder="https://dast.example.com">
+        <span class="faint small">Where nextgen-dast is served.  Needed for nextgen-dast, optional otherwise.</span></label>
+      <label>API token <input type="password" name="token" maxlength="500" autocomplete="off" placeholder="leave empty to keep the one saved">
+        <span class="faint small">Stored encrypted.  nextgen-dast also checks the calling address against the token's allow list, so add this server's address there.</span></label>
+      <label>Default profile <select name="profile">{% for p in ['quick','standard','thorough','premium'] %}<option>{{ p }}</option>{% endfor %}</select></label>
+      <label>Notes <input type="text" name="notes" maxlength="2000"></label>
+    </div>
+    <div class="modal-foot"><button class="btn primary" type="submit">Save</button>
+      <button class="btn" type="button" data-close-modal>Cancel</button></div>
+  </form></div>
+</div>
+{% endblock %}

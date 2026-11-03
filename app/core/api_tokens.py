@@ -38,6 +38,11 @@ SCOPES = {
     # that leaks cannot be used to pull every report, and an editor token
     # cannot be used to run gate checks.
     "gate": "Pull requests: run the gate check before a merge",
+    # External sites and their dynamic scans.  Only an administrator's token
+    # can use it, since the pages are theirs alone, and the check is made on
+    # every call rather than when the token is made.
+    "external": ("External sites: list sites, record and start dynamic scans "
+                 "(administrators only)"),
 }
 
 PREFIX = "gcr_"
@@ -56,6 +61,11 @@ def create(session, user, name: str, scopes, days: int = DEFAULT_DAYS):
         raise ValueError("Give it a name, so somebody can tell later what it was for.")
 
     wanted = sorted({s.strip() for s in scopes if s.strip() in SCOPES})
+    if "external" in wanted:
+        from app.core import rbac
+
+        if not rbac.can(user, "external.manage"):
+            raise ValueError("Only an administrator's token can work with external sites.")
     if not wanted:
         raise ValueError("Pick at least one thing it may do.")
 

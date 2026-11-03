@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="{{ base }}/static/app.css?v={{ asset_v('app.css') }}">
 {# Drawn inline so there is no image to fetch and the policy stays tight. #}
 <link rel="icon" type="image/svg+xml" href="{{ base }}/static/icon.svg?v={{ asset_v('icon.svg') }}">
+{% block head %}{% endblock %}
 </head>
 <body>
 
@@ -147,6 +148,12 @@
             <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M7.6 1.5H14v6.4L8 14 2 8l5.6-6.5zm3.6 2a1.2 1.2 0 1 0 0 2.4 1.2 1.2 0 0 0 0-2.4z"/></svg>
             Tagging
           </a>
+          {% if can_see_external %}
+          <a href="{{ base }}/external" class="{{ 'active' if active_page == 'external' }}">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm4.9 6.2h-2.1a10.6 10.6 0 0 0-.8-3.9 5.5 5.5 0 0 1 2.9 3.9zM8 2.6c.5.6 1.2 2.1 1.3 4.6H6.7C6.8 4.7 7.5 3.2 8 2.6zM6 3.3a10.6 10.6 0 0 0-.8 3.9H3.1A5.5 5.5 0 0 1 6 3.3zM3.1 8.8h2.1c.1 1.5.4 2.8.8 3.9a5.5 5.5 0 0 1-2.9-3.9zM8 13.4c-.5-.6-1.2-2.1-1.3-4.6h2.6c-.1 2.5-.8 4-1.3 4.6zm2-.7c.4-1.1.7-2.4.8-3.9h2.1a5.5 5.5 0 0 1-2.9 3.9z"/></svg>
+            External sites
+          </a>
+          {% endif %}
           <a href="{{ base }}/blast-radius" class="{{ 'active' if active_page == 'blast-radius' }}">
             <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.2 9.9 5.4l4.6.5-3.4 3.1 1 4.5L8 11.2l-4.1 2.3 1-4.5L1.5 5.9l4.6-.5z"/></svg>
             Blast radius

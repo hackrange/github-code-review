@@ -67,7 +67,7 @@
       </label>
       <label class="wide">What it may do
         <div class="check-grid">
-          {% for scope, what in scopes.items() %}
+          {% for scope, what in scopes.items() if scope != 'external' or user.role.value == 'admin' %}
           <label class="check">
             <input type="checkbox" name="scope:{{ scope }}" value="1"
                    {{ 'checked' if scope == 'review' }}>

@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}External sites &middot; Git Code Review{% endblock %}
+{% block head %}{% if running %}<meta http-equiv="refresh" content="20">{% endif %}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>External sites</h1>
+    <div class="faint small">The company's domains and subdomains as the
+      internet sees them: what answers, how it looks, the last dynamic scan
+      and which server ran it, and the repositories behind each one.  The
+      combined risk reads the live site and its code together.  A host marked
+      no scan is never scanned from here, and neither is anything under a
+      domain marked that way.</div></div>
+  <div class="page-actions">
+    <button class="btn primary" type="button" data-modal="add-modal">Add sites</button>
+    <form method="post" action="{{ base }}/external/import" style="display:inline"
+          data-confirm="Add every company domain from Settings and every host in a repository's web addresses?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit" title="The company domains in Settings and every host in a repository's web addresses">Import known hosts</button>
+    </form>
+    <form method="post" action="{{ base }}/external/refresh" style="display:inline"
+          data-confirm="Read the telemetry of every site again?  It knocks on the common ports of each one.">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="all" value="1">
+      <button class="btn" type="submit">Refresh all</button>
+    </form>
+    <a class="btn" href="{{ base }}/external-servers">DAST servers</a>
+    <a class="btn" href="{{ base }}/external.csv">CSV</a>
+  </div>
+</div>
+
+{% set here = base ~ '/external' %}
+<div class="stats">
+  <div class="stat"><div class="n">{{ totals.sites }}</div><div class="l">Sites</div></div>
+  <div class="stat"><div class="n">{{ totals.live }}</div><div class="l">Answering</div></div>
+  <a class="stat warn" href="{{ here }}?dast=never"><div class="n">{{ totals.never }}</div><div class="l">Never scanned</div></a>
+  <a class="stat warn" href="{{ here }}?dast=due"><div class="n">{{ totals.due }}</div><div class="l">Scan overdue</div></a>
+  <a class="stat bad" href="{{ here }}?risk=high"><div class="n">{{ totals.dast_bad }}</div><div class="l">Critical or high on the last scan</div></a>
+  <a class="stat" href="{{ here }}?scope=mapped"><div class="n">{{ totals.mapped }}</div><div class="l">Mapped to code</div></a>
+  <a class="stat" href="{{ here }}?scope=no-scan"><div class="n">{{ totals.no_scan }}</div><div class="l">No scan</div></a>
+</div>
+{% if running %}<div class="notice info"><div>Reading telemetry for {{ running }} site{{ '' if running == 1 else 's' }}.  This page refreshes until they finish.</div></div>{% endif %}
+
+<form method="get" action="{{ here }}" class="filters">
+  <div class="field" style="min-width:240px"><label for="q">Search</label>
+    <input type="text" id="q" name="q" value="{{ q }}" autocomplete="off" placeholder="host, application, tag, address or repository"></div>
+  <div class="field"><label for="tag">Tag</label>
+    <select id="tag" name="tag"><option value="">Any</option>
+      {% for t in all_tags %}<option {{ 'selected' if t == tag }}>{{ t }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="app">Application</label>
+    <select id="app" name="app"><option value="">Any</option>
+      {% for a in apps %}<option {{ 'selected' if a == app }}>{{ a }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="risk">Combined risk</label>
+    <select id="risk" name="risk"><option value="">Any</option>
+      {% for r in ['critical','high','medium','low','info','unknown'] %}<option {{ 'selected' if r == risk }}>{{ r }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="dast">Dynamic scan</label>
+    <select id="dast" name="dast"><option value="">Any</option>
+      {% for v, l in [('never','Never scanned'),('due','Overdue'),('current','Current'),('no-scan','No scan')] %}<option value="{{ v }}" {{ 'selected' if v == dast }}>{{ l }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="grade">Grade</label>
+    <select id="grade" name="grade"><option value="">Any</option>
+      {% for g in ['A','B','C','D','F','N/A'] %}<option {{ 'selected' if g == grade }}>{{ g }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="scope">Show</label>
+    <select id="scope" name="scope"><option value="">Every site</option>
+      {% for v, l in [('mapped','Mapped to a repository'),('unmapped','Not mapped'),('no-scan','No scan')] %}<option value="{{ v }}" {{ 'selected' if v == scope }}>{{ l }}</option>{% endfor %}</select></div>
+  <button class="btn primary" type="submit">Search</button>
+  <a class="btn" href="{{ here }}">Clear</a>
+</form>
+
+<div class="card">
+  <div class="card-head">{{ totals.shown }} of {{ totals.sites }} site{{ '' if totals.sites == 1 else 's' }}
+    <span class="faint small" style="font-weight:400;margin-left:.5rem">highest combined risk first</span></div>
+  {% if rows %}
+  <form method="post" action="{{ here }}/refresh" id="pick">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  </form>
+  <div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th></th><th>Site</th><th>Telemetry</th><th>Last dynamic scan</th>
+        <th>Code behind it</th><th>Combined risk</th>
+      </tr></thead>
+      <tbody>
+      {% for r in rows %}{% set a = r.a %}
+        <tr>
+          <td><input type="checkbox" name="id" value="{{ a.id }}" form="pick" aria-label="Pick {{ a.host }}">
+            <a href="{{ base }}/external/{{ a.id }}" style="display:block;margin-top:.3rem">
+            {%- if a.screenshot == 'ok' %}<img class="shot-thumb" loading="lazy" alt="Screenshot of {{ a.host }}" src="{{ base }}/external/{{ a.id }}/screenshot.png?v={{ a.telemetry_at.timestamp() | int if a.telemetry_at else 0 }}">
+            {%- else %}<div class="shot-none">{{ {'waf':'firewall block page','blank':'blank page','nobrowser':'no browser','blocked':'no image'}.get(a.screenshot, 'no screenshot') }}</div>{% endif %}</a></td>
+          <td><a href="{{ base }}/external/{{ a.id }}"><strong class="mono">{{ a.host }}</strong></a>
+            <div class="small faint">{{ a.kind }}{% if a.kind == 'subdomain' %} of {{ a.parent_domain }}{% endif %}</div>
+            {% if a.application %}<div class="small">{{ a.application }}</div>{% endif %}
+            <div style="margin-top:.2rem">{% for t in r.tags %}<a class="badge" href="{{ here }}?tag={{ t | urlencode }}">{{ t }}</a> {% endfor %}</div>
+            {% if r.blocked %}<span class="badge waived" title="{{ a.no_scan_reason or 'under a domain marked no scan' }}">no scan</span>{% endif %}</td>
+          <td class="small">
+            {% if a.telemetry_status == 'running' %}<span class="badge pending">reading</span>
+            {% elif not a.telemetry_at %}<span class="faint">not read yet</span>
+            {% else %}
+              {% if a.grade and a.grade != 'N/A' %}<span class="grade {{ a.grade }}" title="Web hygiene score {{ a.score }}">{{ a.grade }}</span>{% endif %}
+              {{ {'live':'Live','redir':'Redirects','gated':'Sign in or blocked','err4':'Client error','err5':'Server error','none':'No web service','noresolve':'Does not resolve','private':'Private address'}.get(a.category, a.category) }}
+              {%- if a.status_code %} <span class="faint">HTTP {{ a.status_code }}</span>{% endif %}
+              {% if a.ip %}<div class="mono faint">{{ a.ip }}{% if r.tele.isp %} <span title="network owner">{{ r.tele.isp[:30] }}</span>{% endif %}</div>{% endif %}
+              {% if a.tls_days_left is not none %}<div class="{{ 'changed-week' if a.tls_days_left < 30 else 'faint' }}">certificate {{ 'expired' if a.tls_days_left < 0 else a.tls_days_left ~ ' days left' }}</div>{% endif %}
+              {% if r.tele.waf_block %}<div><span class="badge info">behind a firewall</span></div>{% endif %}
+              <div class="faint">read {{ a.telemetry_at | dt('%Y-%m-%d') }}</div>
+            {% endif %}
+            {% if a.telemetry_status == 'failed' %}<div class="faint" title="{{ a.telemetry_error }}">last read failed</div>{% endif %}</td>
+          <td class="small">
+            {% if a.last_dast_at %}
+              <span class="badge {{ a.last_dast_severity if a.last_dast_severity != 'none' else 'ok' }}">{{ a.last_dast_severity or 'none' }}</span>
+              {{ a.last_dast_at | dt('%Y-%m-%d') }}
+              <div class="faint">{{ a.last_dast_server }}</div>
+              {% if a.last_dast_url %}<div><a rel="noopener noreferrer" {% if a.last_dast_url.startswith('http') %}target="_blank" href="{{ a.last_dast_url }}"{% else %}href="{{ base }}{{ a.last_dast_url }}"{% endif %}>result</a></div>{% endif %}
+              {% if r.due == 'due' %}<span class="badge pending">overdue</span>{% endif %}
+            {% elif r.blocked %}<span class="faint">not to be scanned</span>
+            {% else %}<span class="badge pending">never scanned</span>{% endif %}</td>
+          <td class="small">
+            {% for l in r.links %}<div><a href="{{ base }}/repositories/{{ l.id }}">{{ l.full_name }}</a></div>{% endfor %}
+            {% if r.links %}<div style="margin-top:.2rem">
+              {%- for level in ['critical','high','medium','low'] %}{% if r.sast[level] %}<a class="badge {{ level }}" href="{{ base }}/findings?state=open&severity={{ level }}">{{ r.sast[level] }}</a> {% endif %}{% endfor %}
+              {%- if not (r.sast.critical or r.sast.high or r.sast.medium or r.sast.low) %}<span class="faint">no open findings</span>{% endif %}</div>
+            {% else %}<span class="faint">none mapped</span>{% endif %}
+            {% if r.suggested %}<div class="faint">{{ r.suggested }} suggested</div>{% endif %}</td>
+          <td><span class="badge {{ r.risk.level }}">{{ r.risk.level }}</span>
+            <div class="small faint">{{ r.risk.reasons | join('; ') }}</div></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-body"><button class="btn sm" type="submit" form="pick">Refresh the ticked sites</button></div>
+  {% elif totals.sites %}
+  <div class="empty">Nothing matches that.  <a href="{{ here }}">Show every site</a></div>
+  {% else %}
+  <div class="empty">No sites yet.  Add some, or import the company domains from
+    Settings and the web addresses already on repositories.</div>
+  {% endif %}
+</div>
+
+<div class="modal-backdrop" id="add-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ here }}/add">
+      <div class="modal-head">Add sites <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Hosts
+          <textarea name="hosts" rows="8" required placeholder="example.com&#10;shop.example.com, Storefront, ecommerce;public&#10;help.example.com, Help center, saas"></textarea>
+          <span class="faint small">One per line.  After the host, optionally an
+            application and tags separated by semicolons.  Whole addresses are
+            fine; the host is taken from them.</span></label>
+        <label>Application <input type="text" name="application" maxlength="200" placeholder="for lines that do not say">
+        </label>
+        <label>Tags <input type="text" name="tags" maxlength="500" placeholder="added to every host, comma separated"></label>
+        <label class="check"><input type="checkbox" name="no_scan" value="1">
+          <span>No scan.  We are not allowed to scan these, a SaaS product on our name for example.
+            No ports, no TLS probing and no dynamic scan, only one look at the front page.</span></label>
+        <label>Why not <input type="text" name="no_scan_reason" maxlength="300" placeholder="Vendor hosted, not ours to test"></label>
+        <label class="check"><input type="checkbox" name="probe" value="1" checked>
+          <span>Read their telemetry now</span></label>
+      </div>
+      <div class="modal-foot"><button class="btn primary" type="submit">Add</button>
+        <button class="btn" type="button" data-close-modal>Cancel</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}

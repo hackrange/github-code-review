@@ -4,6 +4,21 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-11-03
+
+**External sites and dynamic scanning.**  Off until Settings turns it on, and
+for administrators only.  List the company's domains and subdomains, and each
+one gets its outside view: DNS, network owner, open ports, TLS, headers, a
+hygiene grade and a screenshot.  Run a dynamic scan here with the same
+profiles as nextgen-dast, from read only checks up to wapiti, sqlmap and
+dalfox, start one on a nextgen-dast server, or record one run anywhere else
+by hand or through the API.  Each site is mapped to the repositories behind
+it, and a scan first reads their routes out of the code.  A combined risk
+reads the live site and its code together, and an AI triage and risk read
+are counted on the AI cost page.  A host marked no scan, or under a domain
+marked that way, is never scanned.  See
+[external-sites.md](external-sites.md).
+
 ## 2026-11-02
 
 **Pipeline sample code.**  A new tab on the IDE tokens page downloads a kit

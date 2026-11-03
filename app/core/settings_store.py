@@ -321,6 +321,29 @@ DEFAULTS = {
                                 "many days after its last one, even if nothing "
                                 "changed. 0 for no limit."),
 
+    # ---- external sites and dynamic scanning ----
+    "external.enabled":        (False, False,
+                                "Turn on External sites: the company's domains, "
+                                "what answers on them, dynamic scans and the "
+                                "repositories behind them. Administrators only. "
+                                "Off hides the menu entry and every page and API "
+                                "call that belongs to it."),
+    "external.screenshots":    (True, False,
+                                "Take a screenshot of each site when its telemetry "
+                                "is read. Needs the headless browser the image ships."),
+    "external.refresh_days":   (7, False,
+                                "Read every site's telemetry again after this many "
+                                "days. 0 only reads it when asked."),
+    "external.whitebox":       (True, False,
+                                "Before an engine scan, read the default branch of "
+                                "the repositories mapped to the site for routes to "
+                                "add to the scan and for the site's name in the code."),
+    "external.allow_private":  (False, False,
+                                "Let telemetry and scans reach hosts that resolve to "
+                                "private, loopback or link local addresses. Leave off "
+                                "unless the sites really are internal: on, a host name "
+                                "can point this server at its own network."),
+
     # ---- whose sites these are ----
     "web.company_domains":     ([], False,
                                 "The company's own domains. A host on one, or under "
@@ -468,6 +491,9 @@ SECTIONS = [
     ("Sensitivity labels", ["sensitivity.labels"]),
     ("Company domains", ["web.company_domains"]),
     ("Web testing", ["dast.max_age_days"]),
+    ("External sites", ["external.enabled", "external.screenshots",
+                        "external.refresh_days", "external.whitebox",
+                        "external.allow_private"]),
     ("Limits", ["github.parallel_repos", "scan.max_concurrent",
                 "secrets.history_window_days",
                 "scan.timeout_per_repo", "scan.max_hours",

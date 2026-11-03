@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Scan of {{ asset.host }} &middot; Git Code Review{% endblock %}
+{% block head %}{% if busy %}<meta http-equiv="refresh" content="15">{% endif %}{% endblock %}
+{% block content %}
+{% set here = base ~ '/external/' ~ asset.id ~ '/scans/' ~ scan.id %}
+<div class="page-head">
+  <div><h1>Dynamic scan of <span class="mono">{{ asset.host }}</span></h1>
+    <div class="faint small">{{ view.server }}{% if view.profile %}, {{ view.profile }} profile{% endif %}
+      &middot; {{ {'builtin':'run on this server','remote':'started from here on a DAST server','recorded':'recorded'}[view.source] }}
+      {% if view.recorded_by %}by {{ view.recorded_by }}{% endif %}
+      {% if scan.scanned_at %}&middot; {{ scan.scanned_at | dt('%Y-%m-%d %H:%M') }}{% endif %}</div></div>
+  <div class="page-actions">
+    {% if scan.status in ('queued','running') %}
+    <form method="post" action="{{ here }}/stop" style="display:inline" data-confirm="Stop this scan?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn danger" type="submit">Stop</button></form>
+    {% endif %}
+    {% if scan.status == 'done' %}
+    <form method="post" action="{{ here }}/triage" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit" {{ 'disabled' if not ai_ready or scan.ai_status == 'running' }}
+              title="{{ 'Have the model sort these findings against the code findings behind the site' if ai_ready else 'Set up a model on the AI analysis page first' }}">AI triage</button></form>
+    {% endif %}
+    <a class="btn" href="{{ here }}.json">JSON</a>
+    {% if view.result_url and view.result_url.startswith('http') %}<a class="btn" rel="noopener noreferrer" target="_blank" href="{{ view.result_url }}">Open on the server</a>{% endif %}
+    {% if scan.status not in ('queued','running') %}
+    <form method="post" action="{{ here }}/delete" style="display:inline" data-confirm="Remove this scan from the history?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit">Remove</button></form>
+    {% endif %}
+    <a class="btn" href="{{ base }}/external/{{ asset.id }}">Back to the site</a>
+  </div>
+</div>
+
+{% if scan.status in ('queued','running') %}
+<div class="notice info"><div>{{ scan.status | capitalize }}{% if scan.step %}: {{ scan.step }}{% endif %}.  This page refreshes while it runs.</div></div>
+{% elif scan.status == 'failed' %}
+<div class="notice bad"><div>{{ scan.error or 'It failed.' }}</div></div>
+{% endif %}
+
+<div class="stats">
+  <div class="stat {{ 'bad' if view.severity in ('critical','high') else '' }}"><div class="n">{{ view.severity or '&ndash;' | safe }}</div><div class="l">Worst</div></div>
+  {% for level in ['critical','high','medium','low','info'] %}
+  <a class="stat {{ 'bad' if level in ('critical','high') and view.counts[level] else '' }}" href="{{ here }}?sev={{ level }}"><div class="n">{{ view.counts[level] }}</div><div class="l">{{ level }}</div></a>
+  {% endfor %}
+</div>
+
+{% if view.engines %}
+<div class="card">
+  <div class="card-head">What ran</div>
+  <div class="table-scroll"><table class="engine-list">
+    <thead><tr><th>Engine</th><th>Result</th><th>Time</th></tr></thead>
+    <tbody>
+    {% for e in view.engines %}
+      <tr><td>{{ e.name }}</td>
+        <td class="small"><span class="badge {{ {'ok':'ok','skipped':'waived','failed':'critical','timeout':'pending','stopped':'pending'}.get(e.status, 'info') }}">{{ e.status }}</span> {{ e.detail }}
+          {% for r in e.repos or [] %}<div class="faint">{{ r.repository }}{% if r.branch %} ({{ r.branch }}){% endif %}: {{ r.routes }} routes{% if r.host_in_code %}, host named in {{ r.host_in_code | join(', ') }}{% endif %}{% if r.error %}, {{ r.error }}{% endif %}</div>{% endfor %}</td>
+        <td class="small nowrap">{{ e.seconds // 60 }}m {{ e.seconds % 60 }}s</td></tr>
+    {% endfor %}
+    </tbody></table></div>
+</div>
+{% endif %}
+
+{% set ai = view.ai %}
+{% if ai.status %}
+<div class="card">
+  <div class="card-head">AI triage
+    <span class="faint small" style="font-weight:400">{{ ai.calls }} call{{ '' if ai.calls == 1 else 's' }}, {{ ai.input_tokens | thousands }} tokens in, {{ ai.output_tokens | thousands }} out{% if ai.cost %}, {{ ai.cost }}{% endif %}.  Counted on the <a href="{{ base }}/ai?tab=cost">AI cost page</a> as dast-triage.</span></div>
+  <div class="card-body">
+    {% if ai.status == 'running' or ai.status == 'wanted' %}<div class="faint">{{ 'Waiting for the scan to finish.' if ai.status == 'wanted' else 'Asking the model.' }}</div>
+    {% elif ai.status == 'failed' %}<div class="notice bad"><div>{{ (ai.summary or {}).error or 'The model gave no usable answer.' }}</div></div>
+    {% else %}
+      <p>{{ ai.summary.summary }}</p>
+      {% if ai.summary.priorities %}<ol class="small">{% for p in ai.summary.priorities %}<li>{{ p }}</li>{% endfor %}</ol>{% endif %}
+      <div class="small faint">The model's verdicts are shown on each finding below.  They do not change any severity.
+        <a href="{{ here }}?verdict=likely_real">Likely real</a> &middot;
+        <a href="{{ here }}?verdict=likely_false_positive">Likely false positive</a> &middot;
+        <a href="{{ here }}?verdict=needs_review">Needs review</a></div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-head">{{ findings | length }} finding{{ '' if findings | length == 1 else 's' }}
+    {% if sev or verdict %}<a class="small" href="{{ here }}" style="font-weight:400;margin-left:.5rem">show all</a>{% endif %}</div>
+  {% if findings %}
+  <div class="table-scroll"><table>
+    <thead><tr><th>Severity</th><th>Finding</th><th>Where</th><th>Found by</th></tr></thead>
+    <tbody>
+    {% for f in findings %}
+      <tr>
+        <td><span class="badge {{ f.severity }}">{{ f.severity }}</span>
+          {% if f.ai_verdict %}<div><span class="badge {{ {'likely_real':'high','likely_false_positive':'waived','needs_review':'pending'}[f.ai_verdict] }}" title="{{ f.ai_why }}">{{ f.ai_verdict | replace('_', ' ') }}</span></div>{% endif %}</td>
+        <td><strong>{{ f.title }}</strong>{% if f.cwe %} <span class="faint small mono">{{ f.cwe }}</span>{% endif %}
+          {% if f.evidence %}<div class="small mono faint" style="white-space:pre-wrap;word-break:break-word">{{ f.evidence }}</div>{% endif %}
+          {% if f.remediation %}<details class="small"><summary>How to fix</summary>{{ f.remediation }}</details>{% endif %}
+          {% if f.ai_why %}<div class="small"><span class="badge ai">AI</span> {{ f.ai_why }}{% if f.ai_sast %} <span class="mono">{{ f.ai_sast }}</span>{% endif %}</div>{% endif %}
+          {% if f.reference %}<div class="small faint">{{ f.reference }}</div>{% endif %}</td>
+        <td class="small mono" style="word-break:break-all">{{ f.url }}</td>
+        <td class="small">{{ (f.tools or [f.tool or f.check]) | join(', ') }}{% if f.validation %}<div class="faint">{{ f.validation }}</div>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody></table></div>
+  {% elif scan.status == 'done' %}<div class="empty">Nothing found.</div>
+  {% else %}<div class="empty">No findings yet.</div>{% endif %}
+</div>
+{% if view.note %}<div class="card"><div class="card-head">Note</div><div class="card-body small" style="white-space:pre-wrap">{{ view.note }}</div></div>{% endif %}
+{% endblock %}

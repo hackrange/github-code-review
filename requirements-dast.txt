@@ -1,0 +1,18 @@
+# Git Code Review, the dynamic scanning engines that are python.
+#
+# Their own venv at /opt/gcr/dast-venv.  wapiti brings mitmproxy and
+# playwright with it, and neither has any business near the web app or
+# semgrep.  Only used when External sites is switched on in Settings.
+#
+#     Last reviewed: 3 November 2026
+
+# A crawler that attacks what it finds: SQL, command and XXE injection, XSS,
+# SSRF, open redirects and more.  The standard profile and up.
+wapiti3==3.3.2
+
+# SQL injection, confirmed rather than guessed.  The premium profile.
+sqlmap==1.10.11
+
+# wapiti needs it anyway, and its install command fetches the headless
+# Chromium the screenshots are taken with.
+playwright==1.64.1

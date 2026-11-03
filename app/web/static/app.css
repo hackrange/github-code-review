@@ -1089,3 +1089,22 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .api-scope-help { margin-top: .5rem; }
 .api-scope-help > summary { cursor: pointer; color: var(--info); }
 .api-scope-help > div { margin-top: .5rem; }
+
+/* External sites.  The screenshot is the site's face, so it leads the row. */
+.shot-thumb { width: 128px; height: 80px; object-fit: cover; object-position: top;
+  border: 1px solid var(--border); border-radius: 4px; background: var(--bg-sunk);
+  display: block; }
+.shot-none { width: 128px; height: 80px; border: 1px dashed var(--border);
+  border-radius: 4px; display: flex; align-items: center; justify-content: center;
+  text-align: center; font-size: .75rem; color: var(--text-faint); padding: .25rem; }
+.shot-full { max-width: 100%; border: 1px solid var(--border); border-radius: 6px;
+  display: block; }
+.grade { display: inline-block; min-width: 1.8em; text-align: center; font-weight: 700;
+  border-radius: 4px; padding: 0 .3em; border: 1px solid var(--border); }
+.grade.A { color: var(--ok); border-color: var(--ok); }
+.grade.B { color: var(--info); border-color: var(--info); }
+.grade.C, .grade.D { color: var(--warn); border-color: var(--warn); }
+.grade.F { color: var(--bad); border-color: var(--bad); }
+.ext-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 1rem; }
+@media (max-width: 1100px) { .ext-grid { grid-template-columns: 1fr; } }
+.engine-list td { vertical-align: top; }

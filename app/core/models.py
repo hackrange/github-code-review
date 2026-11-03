@@ -2227,3 +2227,196 @@ class FindingBranch(Base):
     state = Column(Enum(FindingState))
     name = Column(String(255))
     last_found_at = Column(DateTime(timezone=True))
+
+
+# ------------------------------------------------------------ external sites
+
+class ExternalAsset(Base):
+    """One domain or subdomain the company answers on, as seen from outside.
+
+    Everything else in this product reads code.  This is the other end of it:
+    the host name a customer types.  An administrator lists them, the
+    telemetry pass says what is listening and how it looks, and dynamic scans
+    are recorded against it, whichever server ran them.
+
+    The last scan is copied onto the row so the list can sort and filter by
+    it without reading the whole scan history for every host.
+    """
+
+    __tablename__ = "external_assets"
+
+    id = Column(Integer, primary_key=True)
+    host = Column(String(253), nullable=False, unique=True, index=True)
+    # The registered domain it sits under.  The same as host for a domain.
+    parent_domain = Column(String(253), default="", index=True)
+    # domain or subdomain.
+    kind = Column(String(16), default="subdomain", nullable=False)
+    application = Column(String(200), default="", index=True)
+    notes = Column(Text, default="")
+    added_by = Column(String(120), default="")
+    added_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    # Not ours to scan, usually a SaaS product on our name.  No port knocks,
+    # no TLS version probing and no dynamic scan of any kind, from here or
+    # sent to a DAST server.  A domain marked this way covers every host
+    # under it.  What is left is what any browser does: look up the name,
+    # load the front page once and read the certificate.
+    no_scan = Column(Boolean, default=False, nullable=False)
+    no_scan_reason = Column(String(300), default="")
+
+    # The last telemetry pass.  The whole record is kept as JSON, and the few
+    # fields the list filters on are copied out.
+    telemetry = Column(LONG_JSON, default="")
+    telemetry_at = Column(DateTime(timezone=True))
+    # idle, running, or failed.
+    telemetry_status = Column(String(16), default="idle", nullable=False)
+    telemetry_error = Column(String(500), default="")
+    ip = Column(String(64), default="")
+    category = Column(String(16), default="")
+    status_code = Column(Integer, default=0)
+    grade = Column(String(4), default="")
+    score = Column(Integer, default=0)
+    tls_days_left = Column(Integer)
+    # ok, blank, waf, blocked, nobrowser, or empty when never tried.
+    screenshot = Column(String(16), default="")
+
+    # The newest dynamic scan that finished, copied from external_dast_scans.
+    last_dast_at = Column(DateTime(timezone=True))
+    last_dast_severity = Column(String(16), default="")
+    last_dast_url = Column(String(1000), default="")
+    last_dast_server = Column(String(120), default="")
+
+    # The last AI read across the dynamic and static findings.
+    ai_status = Column(String(16), default="", nullable=False)
+    ai_review = Column(LONG_JSON, default="")
+    ai_at = Column(DateTime(timezone=True))
+    ai_error = Column(String(500), default="")
+    # What that read cost.  Every call is also in ai_usage, under
+    # external-risk, which is what the AI cost page adds up.
+    ai_input_tokens = Column(Integer, default=0)
+    ai_output_tokens = Column(Integer, default=0)
+    ai_cost = Column(String(32), default="")
+
+    tags = relationship("ExternalAssetTag", cascade="all, delete-orphan",
+                        lazy="selectin", order_by="ExternalAssetTag.tag")
+
+    def tag_list(self) -> list:
+        return [t.tag for t in self.tags]
+
+    def __repr__(self) -> str:
+        return f"<ExternalAsset {self.host}>"
+
+
+class ExternalAssetTag(Base):
+    """One application tag on one external site.  Matched without case."""
+
+    __tablename__ = "external_asset_tags"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "tag", name="uq_external_tag"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    asset_id = Column(Integer, ForeignKey("external_assets.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    tag = Column(String(100), nullable=False, index=True)
+
+
+class ExternalAssetRepo(Base):
+    """A repository somebody said is behind an external site.
+
+    Only the links a person made.  The ones found from a repository's web
+    addresses or its application name are worked out when they are read, so
+    they follow those fields instead of going stale beside them.
+    """
+
+    __tablename__ = "external_asset_repos"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "repository_id", name="uq_external_repo"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    asset_id = Column(Integer, ForeignKey("external_assets.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    repository_id = Column(Integer, ForeignKey("repositories.id", ondelete="CASCADE"),
+                           nullable=False, index=True)
+    # manual, or hidden when somebody said a found link is wrong.
+    source = Column(String(16), default="manual", nullable=False)
+    added_by = Column(String(120), default="")
+    added_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class DastServer(Base):
+    """Something that runs dynamic scans and reports them here.
+
+    A nextgen-dast server can be driven from this product: a scan is started
+    through its API and the result read back when it ends.  Anything else is
+    a name to record scans under, by hand or through the API.
+    """
+
+    __tablename__ = "dast_servers"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), nullable=False, unique=True)
+    # nextgen-dast or other.
+    kind = Column(String(32), default="other", nullable=False)
+    base_url = Column(String(500), default="")
+    # Encrypted the same way the settings secrets are.
+    token = Column(Text, default="")
+    # quick, standard, thorough or premium, for nextgen-dast.
+    profile = Column(String(16), default="quick")
+    notes = Column(Text, default="")
+    created_by = Column(String(120), default="")
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class ExternalDastScan(Base):
+    """One dynamic scan of one external site.
+
+    Three ways in: the basic scan built into this product, a scan started on
+    a DAST server and read back, or a scan somebody recorded by hand or by
+    the API.  Every one keeps the server it came from by name, so deleting a
+    server does not rewrite who found what.
+    """
+
+    __tablename__ = "external_dast_scans"
+
+    id = Column(Integer, primary_key=True)
+    asset_id = Column(Integer, ForeignKey("external_assets.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    server_id = Column(Integer, ForeignKey("dast_servers.id", ondelete="SET NULL"),
+                       nullable=True)
+    server_name = Column(String(120), default="", nullable=False)
+    # builtin, remote or recorded.
+    source = Column(String(16), default="recorded", nullable=False)
+    # queued, running, done or failed.
+    status = Column(String(16), default="done", nullable=False, index=True)
+    remote_id = Column(String(64), default="")
+    started_at = Column(DateTime(timezone=True))
+    scanned_at = Column(DateTime(timezone=True), index=True)
+    # The worst severity found: critical, high, medium, low, info, or none.
+    severity = Column(String(16), default="")
+    critical = Column(Integer, default=0)
+    high = Column(Integer, default=0)
+    medium = Column(Integer, default=0)
+    low = Column(Integer, default=0)
+    info = Column(Integer, default=0)
+    result_url = Column(String(1000), default="")
+    findings = Column(LONG_JSON, default="")
+    error = Column(String(500), default="")
+    # For a scan run here: baseline, quick, standard, thorough or premium,
+    # the step it is on, and what each engine did (JSON).
+    profile = Column(String(16), default="")
+    step = Column(String(120), default="")
+    engines = Column(LONG_JSON, default="")
+    # The AI triage of the findings, when asked for.  Every call is also in
+    # ai_usage under dast-triage, so the AI cost page counts it; these
+    # columns say what this one scan spent.
+    ai_status = Column(String(16), default="")
+    ai_summary = Column(LONG_JSON, default="")
+    ai_calls = Column(Integer, default=0)
+    ai_input_tokens = Column(Integer, default=0)
+    ai_output_tokens = Column(Integer, default=0)
+    ai_cost = Column(String(32), default="")
+    note = Column(Text, default="")
+    recorded_by = Column(String(120), default="")
+    recorded_at = Column(DateTime(timezone=True), default=utcnow)

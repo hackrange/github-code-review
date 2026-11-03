@@ -232,7 +232,18 @@ def _shared(db, user: User) -> dict:
         "can_see_schedules": rbac.can(user, "schedule.read"),
         "can_see_exclusions": rbac.can(user, "exclusion.read"),
         "can_see_report_files": rbac.can(user, "report.files"),
+        # External sites: administrators, and only while it is switched on.
+        "can_see_external": _external_on(db) and rbac.can(user, "external.manage"),
     }
+
+
+def _external_on(db) -> bool:
+    from app.core import external
+
+    try:
+        return external.enabled(db)
+    except Exception:  # noqa: BLE001 - the menu is not worth a 500
+        return False
 
 
 # A filtered export of a large estate is a big file.  This is generous and

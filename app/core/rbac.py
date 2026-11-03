@@ -95,6 +95,11 @@ PERMISSIONS = {
         "rule.mute.request", "rule.mute.approve",
         "audit.read",
         "utilization.read",
+        # External sites and dynamic scanning.  Administrators only, on
+        # purpose: it points scanners at the internet and sends attack
+        # payloads, and the list of every site the company runs is not
+        # something to scope by team.
+        "external.manage",
     },
     UserRole.DEVELOPER: {
         "findings.read", "findings.export",

@@ -272,6 +272,23 @@ def start() -> None:
                        id="dast-due", replace_existing=True,
                        misfire_grace_time=3600, coalesce=True, max_instances=1)
 
+    # External sites: dynamic scans on a DAST server are read back every few
+    # minutes, and telemetry older than the setting is read again nightly.
+    # Both do nothing while the module is switched off.
+    from app.core import external
+
+    try:
+        external.recover()
+    except Exception:  # noqa: BLE001 - a missing table on first boot
+        log.warning("could not tidy external scans cut short", exc_info=True)
+    _scheduler.add_job(external.poll_remote, IntervalTrigger(minutes=3),
+                       id="external-poll", replace_existing=True,
+                       misfire_grace_time=120, coalesce=True, max_instances=1)
+    _scheduler.add_job(external.refresh_stale,
+                       CronTrigger(hour=3, minute=30, timezone=_zone()),
+                       id="external-refresh", replace_existing=True,
+                       misfire_grace_time=3600, coalesce=True, max_instances=1)
+
     # CPU, memory, disk and network for the Utilization page.  The sample is
     # a few file reads, the breakdown asks the database how big it is, and
     # the rollup averages minutes into the wider tables.

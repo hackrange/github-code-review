@@ -43,6 +43,17 @@ def _cost(tokens: dict, rate: dict) -> Decimal:
     return total
 
 
+def cost_of(cfg: dict, out: dict):
+    """What one answer from ai.complete cost, or None when no prices are set."""
+    rate = prices(cfg)
+    if all(v is None for v in rate.values()):
+        return None
+    return _cost({"input": out.get("input_tokens") or 0,
+                  "output": out.get("output_tokens") or 0,
+                  "cache_read": out.get("cache_read_tokens") or 0,
+                  "cache_write": out.get("cache_write_tokens") or 0}, rate)
+
+
 def _blank() -> dict:
     return {"calls": 0, "failed": 0, "cut_off": 0,
             "input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
