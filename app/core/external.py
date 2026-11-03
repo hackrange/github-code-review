@@ -1171,8 +1171,18 @@ def stop_scan(scan_id: int) -> bool:
             scan.error = "stopped here; the server may still be running it"
             return True
     _stopping.add(scan_id)
+    _update(scan_id, step="stopping")
     dast_engines.stop(scan_id)
     return True
+
+
+def running_scans(db, asset_ids=None) -> dict:
+    """The scan queued or running on each site, at most one each.  -> {asset id: scan}"""
+    query = db.query(ExternalDastScan).filter(
+        ExternalDastScan.status.in_(("queued", "running")))
+    if asset_ids is not None:
+        query = query.filter(ExternalDastScan.asset_id.in_(list(asset_ids) or [0]))
+    return {s.asset_id: s for s in query.order_by(ExternalDastScan.id)}
 
 
 def _update(scan_id: int, **fields) -> None:
@@ -1187,6 +1197,11 @@ def _run_builtin(scan_id: int) -> None:
     try:
         _update(scan_id, step="waiting for a free slot")
         with _slots:
+            if scan_id in _stopping:
+                # Stopped while it waited its turn: it never sent a request.
+                _update(scan_id, status="failed", step="",
+                        error="stopped before it started", scanned_at=utcnow())
+                return
             _builtin(scan_id)
     except Exception as exc:  # noqa: BLE001 - never leave a row saying running
         log.exception("dynamic scan %s failed", scan_id)

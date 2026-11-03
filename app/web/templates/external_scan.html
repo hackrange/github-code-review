@@ -39,7 +39,7 @@
 {% endif %}
 
 <div class="stats">
-  <div class="stat {{ 'bad' if view.severity in ('critical','high') else '' }}"><div class="n">{{ view.severity or '&ndash;' | safe }}</div><div class="l">Worst</div></div>
+  <div class="stat {{ 'bad' if view.severity in ('critical','high') else ('ok' if scan.status == 'done' and view.severity in ('', 'none') else '') }}"><div class="n" style="{{ 'font-size:1.1rem' if view.severity in ('', 'none') }}">{% if scan.status != 'done' %}&ndash;{% elif view.severity in ('', 'none') %}no findings{% else %}{{ view.severity }}{% endif %}</div><div class="l">Worst found</div></div>
   {% for level in ['critical','high','medium','low','info'] %}
   <a class="stat {{ 'bad' if level in ('critical','high') and view.counts[level] else '' }}" href="{{ here }}?sev={{ level }}"><div class="n">{{ view.counts[level] }}</div><div class="l">{{ level }}</div></a>
   {% endfor %}
@@ -102,7 +102,11 @@
       </tr>
     {% endfor %}
     </tbody></table></div>
-  {% elif scan.status == 'done' %}<div class="empty">Nothing found.</div>
+  {% elif scan.status == 'done' %}<div class="empty">Nothing found.
+    {% if view.profile == 'baseline' %}<div class="small faint" style="margin-top:.4rem">A baseline scan only reads
+      headers, cookies, TLS, open ports and a list of files that should never be served.  The quick
+      profile and up also run testssl and nuclei, and standard and up crawl the site and try attack
+      payloads.</div>{% endif %}</div>
   {% else %}<div class="empty">No findings yet.</div>{% endif %}
 </div>
 {% if view.note %}<div class="card"><div class="card-head">Note</div><div class="card-body small" style="white-space:pre-wrap">{{ view.note }}</div></div>{% endif %}

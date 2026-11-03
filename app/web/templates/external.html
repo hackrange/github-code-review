@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_external_fields.html" import detail_fields %}
 {% block title %}External sites &middot; Git Code Review{% endblock %}
-{% block head %}{% if running %}<meta name="gcr-refresh" content="20">{% endif %}{% endblock %}
+{% block head %}{% if running or scanning %}<meta name="gcr-refresh" content="15">{% endif %}{% endblock %}
 {% block content %}
 <div class="page-head">
   <div><h1>External sites</h1>
@@ -40,6 +40,7 @@
   <a class="stat" href="{{ here }}?scope=no-scan"><div class="n">{{ totals.no_scan }}</div><div class="l">No scan</div></a>
 </div>
 {% if running %}<div class="notice info"><div>Reading telemetry for {{ running }} site{{ '' if running == 1 else 's' }}.  This page refreshes until they finish.</div></div>{% endif %}
+{% if scanning %}<div class="notice info"><div>Scanning {{ scanning }} site{{ '' if scanning == 1 else 's' }} now.  Engine scans run one at a time; the rest wait their turn.  This page refreshes until they finish.</div></div>{% endif %}
 
 <form method="get" action="{{ here }}" class="filters">
   <div class="field" style="min-width:240px"><label for="q">Search</label>
@@ -116,8 +117,18 @@
             {% endif %}
             {% if a.telemetry_status == 'failed' %}<div class="faint" title="{{ a.telemetry_error }}">last read failed</div>{% endif %}</td>
           <td class="small">
+            {% if r.scan %}
+              <div style="margin-bottom:.35rem"><a class="badge pending" href="{{ base }}/external/{{ a.id }}/scans/{{ r.scan.id }}">{{ 'queued' if r.scan.status == 'queued' else 'scanning' }}{% if r.scan.profile %}, {{ r.scan.profile }}{% endif %}</a>
+                {% if r.scan.step %}<div class="faint">{{ r.scan.step }}</div>{% endif %}
+                {% if r.scan.source != 'recorded' %}
+                <form method="post" action="{{ base }}/external/{{ a.id }}/scans/{{ r.scan.id }}/stop" style="display:inline"
+                      data-confirm="Stop the scan of {{ a.host }}?">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="back" value="/external">
+                  <button class="btn sm danger" type="submit">Stop</button></form>{% endif %}</div>
+            {% endif %}
             {% if a.last_dast_at %}
-              <span class="badge {{ a.last_dast_severity if a.last_dast_severity != 'none' else 'ok' }}">{{ a.last_dast_severity or 'none' }}</span>
+              {% if a.last_dast_severity in ('', 'none') %}<span class="badge ok">no findings</span>{% else %}<span class="badge {{ a.last_dast_severity }}">worst: {{ a.last_dast_severity }}</span>{% endif %}
               {{ a.last_dast_at | dt('%Y-%m-%d') }}
               <div class="faint">{{ a.last_dast_server }}</div>
               {% if a.last_dast_url %}<div><a rel="noopener noreferrer" {% if a.last_dast_url.startswith('http') %}target="_blank" href="{{ a.last_dast_url }}"{% else %}href="{{ base }}{{ a.last_dast_url }}"{% endif %}>result</a></div>{% endif %}
@@ -125,7 +136,7 @@
             {% elif a.status == 'obsolete' %}<span class="faint">obsolete</span>
             {% elif r.blocked %}<span class="faint">not to be scanned</span>
             {% else %}<span class="badge pending">never scanned</span>{% endif %}
-            {% if not r.blocked and a.status != 'obsolete' %}
+            {% if not r.blocked and a.status != 'obsolete' and not r.scan %}
               <div style="margin-top:.3rem"><a class="btn sm" href="{{ base }}/external/{{ a.id }}#scan">Scan</a></div>{% endif %}</td>
           <td class="small">
             {% for l in r.links %}<div><a href="{{ base }}/repositories/{{ l.id }}">{{ l.full_name }}</a></div>{% endfor %}

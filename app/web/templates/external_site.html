@@ -19,13 +19,27 @@
     <form method="post" action="{{ base }}/external/{{ asset.id }}/refresh" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn" type="submit" {{ 'disabled' if asset.telemetry_status == 'running' }}>Refresh telemetry</button></form>
-    {% if not blocked %}<button class="btn primary" type="button" data-modal="scan-modal">Run a scan</button>{% endif %}
+    {% if active_scan %}<button class="btn" type="button" disabled title="One scan at a time per site">Scanning...</button>
+    {% elif not blocked %}<button class="btn primary" type="button" data-modal="scan-modal">Run a scan</button>{% endif %}
     <button class="btn" type="button" data-modal="record-modal">Record a scan</button>
     <button class="btn" type="button" data-modal="edit-modal">Edit</button>
     <a class="btn" href="{{ base }}/external">All sites</a>
   </div>
 </div>
 
+{% if active_scan %}
+<div class="notice info"><div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
+  <span><strong>{{ 'Queued' if active_scan.status == 'queued' else 'Scanning' }}</strong>{% if active_scan.profile %}, {{ active_scan.profile }} profile{% endif %}
+    on {{ active_scan.server_name }}{% if active_scan.step %}: {{ active_scan.step }}{% endif %}.  This page refreshes until it ends.</span>
+  <a class="btn sm" href="{{ base }}/external/{{ asset.id }}/scans/{{ active_scan.id }}">Watch it</a>
+  {% if active_scan.source != 'recorded' %}
+  <form method="post" action="{{ base }}/external/{{ asset.id }}/scans/{{ active_scan.id }}/stop" style="display:inline"
+        data-confirm="Stop the scan of {{ asset.host }}?">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="back" value="/external/{{ asset.id }}">
+    <button class="btn sm danger" type="submit">Stop</button></form>{% endif %}
+</div></div>
+{% endif %}
 {% if asset.telemetry_status == 'running' %}<div class="notice info"><div>Reading telemetry.  This page refreshes until it is done.</div></div>{% endif %}
 {% if asset.telemetry_status == 'failed' %}<div class="notice bad"><div>The last telemetry read failed: {{ asset.telemetry_error }}</div></div>{% endif %}
 
@@ -45,7 +59,7 @@
 
 <div class="stats">
   <div class="stat"><div class="n">{% if asset.grade and asset.grade != 'N/A' %}<span class="grade {{ asset.grade }}">{{ asset.grade }}</span>{% else %}&ndash;{% endif %}</div><div class="l">Web hygiene{% if asset.score %} ({{ asset.score }}){% endif %}</div></div>
-  <div class="stat {{ 'bad' if asset.last_dast_severity in ('critical','high') else '' }}"><div class="n">{{ asset.last_dast_severity or '&ndash;' | safe }}</div><div class="l">Last dynamic scan</div></div>
+  <div class="stat {{ 'bad' if asset.last_dast_severity in ('critical','high') else ('ok' if asset.last_dast_at and asset.last_dast_severity in ('', 'none') else '') }}"><div class="n" style="{{ 'font-size:1.1rem' if not asset.last_dast_at or asset.last_dast_severity in ('', 'none') }}">{% if not asset.last_dast_at %}never{% elif asset.last_dast_severity in ('', 'none') %}no findings{% else %}{{ asset.last_dast_severity }}{% endif %}</div><div class="l">Last dynamic scan{% if asset.last_dast_at %}, {{ asset.last_dast_at | dt('%Y-%m-%d') }}{% endif %}</div></div>
   <div class="stat {{ 'bad' if risk.level in ('critical','high') else ('warn' if risk.level == 'medium' else '') }}"><div class="n">{{ risk.level }}</div><div class="l">Combined risk</div></div>
   <div class="stat"><div class="n">{{ links | selectattr('linked') | list | length }}</div><div class="l">Repositories behind it</div></div>
   <div class="stat {{ 'warn' if due in ('never','due') else '' }}"><div class="n" style="font-size:1.1rem">{{ {'never':'never scanned','due':'overdue','current':'current','no-scan':'no scan','obsolete':'obsolete'}[due] }}</div><div class="l">Scan status</div></div>
@@ -166,7 +180,7 @@
             <td class="small">
               {% if s.status in ('queued','running') %}<span class="badge pending">{{ s.status }}</span><div class="faint">{{ s.step }}</div>
               {% elif s.status == 'failed' %}<span class="badge critical">failed</span><div class="faint">{{ s.error }}</div>
-              {% else %}<span class="badge {{ s.severity if s.severity != 'none' else 'ok' }}">{{ s.severity or 'none' }}</span>{% endif %}
+              {% elif s.severity in ('', 'none') %}<span class="badge ok">no findings</span>{% else %}<span class="badge {{ s.severity }}">worst: {{ s.severity }}</span>{% endif %}
               {% if s.result_url %}<div><a rel="noopener noreferrer" {% if s.result_url.startswith('http') %}target="_blank" href="{{ s.result_url }}"{% else %}href="{{ base }}{{ s.result_url }}"{% endif %}>result</a></div>{% endif %}</td>
             <td class="nowrap">{% for level in ['critical','high','medium','low'] %}{% if s.counts[level] %}<span class="badge {{ level }}">{{ s.counts[level] }}</span> {% endif %}{% endfor %}
               {% if s.counts.info %}<span class="badge info">{{ s.counts.info }}</span>{% endif %}</td>

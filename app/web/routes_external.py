@@ -146,6 +146,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
         assets = db.query(ExternalAsset).order_by(ExternalAsset.host).all()
         blocked = external.blocked_hosts(db)
         every_link = {a.id: mapper.links(a) for a in assets}
+        scanning = external.running_scans(db)
         names = {l["full_name"] for links in every_link.values() for l in links if l["linked"]}
         counts = external.sast_counts(db, names, user)
         rows = []
@@ -162,6 +163,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                 "due": external.due_status(a, opts["max_age_days"]),
                 "blocked": external.is_blocked(a.host, blocked, a.no_scan),
                 "tele": external.telemetry_of(a),
+                "scan": scanning.get(a.id),
             }
             if env and (a.environment or "prod") != env:
                 continue
@@ -218,6 +220,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                        statuses=external.STATUSES,
                        servers=servers,
                        running=sum(1 for a in assets if a.telemetry_status == "running"),
+                       scanning=len(scanning),
                        flash=clean_notice(request.query_params.get("msg", ""), limit=300),
                        flash_kind=notice_class(request.query_params.get("kind", "")))
         return page(request, "external.html", **context)
@@ -454,13 +457,14 @@ def detail_page(asset_id: int, request: Request, user: User = Depends(current_us
         busy = (asset.telemetry_status == "running" or asset.ai_status == "running"
                 or any(s.status in ("queued", "running") or s.ai_status == "running"
                        for s in scans))
+        active_scan = next((s for s in scans if s.status in ("queued", "running")), None)
         context = _shared(db, user)
         context.update(
             active_page="external", asset=asset, tele=external.telemetry_of(asset),
             tags=asset.tag_list(), links=links, counts=counts,
             risk=external.combined_risk(asset, linked),
             due=external.due_status(asset, opts["max_age_days"]),
-            blocked=external.blocked(db, asset), scans=scans,
+            blocked=external.blocked(db, asset), scans=scans, active_scan=active_scan,
             fields=external.fields_of(asset), security_headers=external.SECURITY_HEADERS,
             picks_json=json.dumps(external.picks_of(db, asset)),
             environments=external.ENVIRONMENTS, statuses=external.STATUSES,
@@ -710,7 +714,13 @@ async def scan_action(asset_id: int, scan_id: int, action: str, request: Request
             return redirect(_back(f"/external/{asset_id}", "Removed that scan."))
     if action == "stop":
         ok = external.stop_scan(scan_id)
-        message, kind = ("Stopping it.", "ok") if ok else ("It is not running.", "error")
+        message, kind = ("Stopping the scan of " + host + ".", "ok") if ok \
+            else ("It is not running.", "error")
+        form = await request.form()
+        # Back to where the Stop was pressed, and only to a page of ours.
+        back = str(form.get("back") or "")
+        if back in ("/external", f"/external/{asset_id}"):
+            here = back
     elif action == "triage":
         problem = external.start_triage(scan_id, user.username)
         message, kind = (problem, "error") if problem else ("Asking the model.  This page "
