@@ -112,7 +112,8 @@
               {%- if a.status_code %} <span class="faint">HTTP {{ a.status_code }}</span>{% endif %}
               {% if a.ip %}<div class="mono faint">{{ a.ip }}{% if r.tele.isp %} <span title="network owner">{{ r.tele.isp[:30] }}</span>{% endif %}</div>{% endif %}
               {% if a.tls_days_left is not none %}<div class="{{ 'changed-week' if a.tls_days_left < 30 else 'faint' }}">certificate {{ 'expired' if a.tls_days_left < 0 else a.tls_days_left ~ ' days left' }}</div>{% endif %}
-              {% if r.tele.waf_block %}<div><span class="badge info">behind a firewall</span></div>{% endif %}
+              {% if r.tele.waf_block %}<div><span class="badge info">firewall block page</span></div>
+              {% elif r.tele.origin_down %}<div><span class="badge medium" title="The CDN answered, but could not reach the site behind it">site down behind its CDN</span></div>{% endif %}
               <div class="faint">read {{ a.telemetry_at | dt('%Y-%m-%d') }}</div>
             {% endif %}
             {% if a.telemetry_status == 'failed' %}<div class="faint" title="{{ a.telemetry_error }}">last read failed</div>{% endif %}</td>
@@ -173,10 +174,14 @@
     <div class="modal-body">
       <label>Profile
         <select name="profile" form="pick">
-          {% for name, what in profiles.items() %}<option value="{{ name }}">{{ name }}: {{ what }}</option>{% endfor %}
-        </select></label>
+          <option value="default" selected>each site's own default scan</option>
+          {% for name, what in profiles.items() %}<option value="{{ name }}">{{ name }} for every site</option>{% endfor %}
+        </select>
+        <div class="profile-help small">
+          {% for name, what in profiles.items() %}<div><strong>{{ name }}</strong>: {{ what }}</div>{% endfor %}
+        </div></label>
       <label class="check"><input type="checkbox" name="confirm" value="1" form="pick">
-        <span>I am allowed to scan these sites with attack payloads.  Needed for standard and up.</span></label>
+        <span>I am allowed to scan these sites this way.  Needed for standard and up, and for sites that sign in.</span></label>
       <label class="check"><input type="checkbox" name="ai" value="1" form="pick">
         <span>Have the model triage each scan's findings.  Counted on the AI cost page.</span></label>
       <div class="faint small">Sites marked no scan, or already scanning, are skipped.  Up to 50
@@ -201,7 +206,7 @@
         <label>Application <input type="text" name="application" maxlength="200" placeholder="for lines that do not say">
         </label>
         <label>Tags <input type="text" name="tags" maxlength="500" placeholder="added to every host, comma separated"></label>
-        {{ detail_fields(none, environments, statuses) }}
+        {{ detail_fields(none, environments, statuses, '[]', profiles) }}
         <label class="check"><input type="checkbox" name="no_scan" value="1">
           <span>No scan.  We are not allowed to scan these, a SaaS product on our name for example.
             No ports, no TLS probing and no dynamic scan, only one look at the front page.</span></label>

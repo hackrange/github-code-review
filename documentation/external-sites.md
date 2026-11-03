@@ -78,6 +78,11 @@ the front page's status, redirects, headers and cookies, a firewall block
 page check, and a screenshot from a headless Chromium.  The site gets a web
 hygiene grade from A to F from its headers and TLS.
 
+A firewall or bot wall that refused the scan is marked as a block page and
+its screenshot is left out.  A CDN answering for a site it cannot reach, such
+as a Cloudflare 502, is marked as the site being down instead, with its
+screenshot.
+
 Also from DNS and whois, without touching the site: nameservers, the CNAME
 chain, IPv6 addresses, mail servers, reverse DNS, the ASN and netblock, and
 the domain's registrar, creation and expiry dates.
@@ -141,6 +146,46 @@ link to the result and, optionally, the findings.
 The newest finished scan becomes the site's last scan.  Every finished scan
 is also recorded as a DAST test on the Web Applications tab for the web
 applications behind the site.
+
+## Signing in for a scan
+
+Set under **Scan sign in** in a site's Edit, or as `scan_auth` through the API.
+Three ways:
+
+| Kind | What it holds | Good for |
+|---|---|---|
+| Header | A header name and value, such as Authorization: Bearer and a token | APIs |
+| Session cookie | The Cookie a signed in browser sends | Single sign on |
+| Form login | The login page, a user name and a password | Ordinary login pages |
+
+The secrets are saved encrypted, are never shown again, and are taken out of
+every finding, engine message and error before anything is stored.  A form
+login is signed in once before the engines start, keeping hidden fields such
+as a CSRF token, and the session it gets is handed to every engine; wapiti is
+also given the form so it can sign in again.  The login page has to be on the
+site's own domain.
+
+nuclei, ffuf, dalfox, sqlmap, nikto and wapiti sign in.  The baseline checks
+and testssl stay signed out.  A scan says whether it signed in, on its page
+and in its report, and a signed in scan past baseline needs the confirmation.
+Use a test account: a signed in scan can change what that user can change.
+
+A nextgen-dast server's API takes a form login, or HTTP Basic, which is sent
+from an Authorization: Basic header.  A bearer token or a cookie has no field
+there, so such a scan is refused rather than run signed out.
+
+## The user agent
+
+Every request a scan, a screenshot or a telemetry read makes says it is the
+same browser: a current desktop Chrome, or whatever **User agent for scans**
+in Settings says.  It has to start Mozilla/5.0 like a real browser's, since a
+scanner's own name is what firewalls block first.
+
+## Default scan profile
+
+Each site can have its own default profile, set in Add or Edit.  The scan
+dialog starts with it, the API uses it when no profile is sent, and **Scan the
+ticked sites** can use each site's own.  Without one it is quick.
 
 ## The PDF report
 

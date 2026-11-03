@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.core import external, rbac
+from app.core import external_auth as external_auth_mod
 from app.core.audit import record
 from app.core.db import session_scope
 from app.core.models import (
@@ -91,7 +92,7 @@ def _checked(form, name: str) -> bool:
 
 DETAIL_FIELDS = ("executive_owner", "technical_owner", "comments", "status",
                  "environment", "external_auth_needed", "whitelist_needed",
-                 "change_frequency_days")
+                 "change_frequency_days", "default_profile")
 
 
 def _detail_form(form) -> dict:
@@ -213,7 +214,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
         from app.core import dast_engines
 
         context.update(active_page="external", rows=rows, totals=totals,
-                       profiles=dast_engines.PROFILES,
+                       profiles=dast_engines.PROFILES, default_profile=dast_engines.DEFAULT_PROFILE,
                        q=q, tag=tag, app=app, grade=grade, dast=dast, risk=risk,
                        scope=scope, all_tags=all_tags, apps=apps, opts=opts,
                        env=env, status=status, environments=external.ENVIRONMENTS,
@@ -404,20 +405,28 @@ async def scan_many(request: Request, user: User = Depends(current_user)):
     from app.core import dast_engines
 
     form = await request.form()
-    profile = str(form.get("profile") or "baseline")
+    profile = str(form.get("profile") or "default")
     with session_scope() as db:
         _guard(db, user)
         ids = _ticked(form)[:50]
+        each = {a.id: external.profile_for(a) for a in
+                db.query(ExternalAsset).filter(ExternalAsset.id.in_(ids or [0]))}
         if not ids:
             return redirect(_back("/external", "Tick the sites to scan first.", "error"))
-        if profile not in dast_engines.PROFILES:
+        if profile != "default" and profile not in dast_engines.PROFILES:
             return redirect(_back("/external", "Pick a scan profile.", "error"))
-        if profile in dast_engines.ACTIVE_PROFILES and not _checked(form, "confirm"):
+        chosen = {i: (each.get(i, dast_engines.DEFAULT_PROFILE) if profile == "default" else profile)
+                  for i in ids}
+        signs_in = db.query(ExternalAsset).filter(
+            ExternalAsset.id.in_([i for i, p in chosen.items() if p != "baseline"] or [0]),
+            ExternalAsset.auth_kind != "").count()
+        active = any(p in dast_engines.ACTIVE_PROFILES for p in chosen.values())
+        if (active or signs_in) and not _checked(form, "confirm"):
             return redirect(_back("/external", "Tick the box to confirm you are allowed to "
-                                               "send attack payloads to these sites.", "error"))
+                                               "scan these sites this way.", "error"))
     started, skipped = 0, []
     for asset_id in ids:
-        scan_id, problem = external.start_scan(asset_id, profile, user.username,
+        scan_id, problem = external.start_scan(asset_id, chosen[asset_id], user.username,
                                                ai_triage=_checked(form, "ai"))
         if scan_id:
             started += 1
@@ -427,7 +436,8 @@ async def scan_many(request: Request, user: User = Depends(current_user)):
         record(db, "external.scan_started", actor=user.username,
                target=f"{started} sites", detail=f"{profile}, {len(skipped)} skipped",
                source_ip=client_ip(request))
-    message = f"Started a {profile} scan of {started} site{'s' if started != 1 else ''}.  They run one at a time."
+    label = "each site's default" if profile == "default" else f"a {profile}"
+    message = f"Started {label} scan of {started} site{'s' if started != 1 else ''}.  They run one at a time."
     if skipped:
         message += "  Skipped: " + "; ".join(skipped[:3])
     return redirect(_back("/external", message, "ok" if started else "error"))
@@ -489,6 +499,8 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             blocked=external.blocked(db, asset), scans=page_scans, active_scan=active_scan,
             scan_page=scan_page, scan_pages=scan_pages, scan_total=scan_total,
             fields=external.fields_of(asset), security_headers=external.SECURITY_HEADERS,
+            auth=external_auth_mod.describe(asset), auth_kinds=external_auth_mod.KINDS,
+            site_profile=external.profile_for(asset),
             picks_json=json.dumps(external.picks_of(db, asset)),
             environments=external.ENVIRONMENTS, statuses=external.STATUSES,
             scan_views=[external.scan_dict(s) for s in page_scans],
@@ -536,6 +548,20 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
             if form.get("with_fields"):
                 external.set_manual(asset, {key: form.get(f"f:{key}") or ""
                                             for key in external.FIELD_KEYS}, replace=True)
+            if form.get("with_auth"):
+                from app.core import external_auth
+
+                before_kind = asset.auth_kind or ""
+                external_auth.save(asset, form.get("auth_kind") or "", {
+                    key: form.get(f"auth_{key}") or "" for key in (
+                        "header_name", "header_value", "cookie", "login_url",
+                        "username", "password", "username_field", "password_field")},
+                    user.username, asset.parent_domain)
+                if (asset.auth_kind or "") != before_kind or any(
+                        form.get(f"auth_{k}") for k in ("header_value", "cookie", "password")):
+                    record(db, "external.auth_set", actor=user.username, target=asset.host,
+                           detail=external_auth.KINDS.get(asset.auth_kind, "")[:100],
+                           source_ip=client_ip(request))
         except ValueError as exc:
             db.rollback()
             return redirect(_back(here, str(exc), "error"))
@@ -626,24 +652,27 @@ async def start_scan(asset_id: int, request: Request, user: User = Depends(curre
 
     form = await request.form()
     here = f"/external/{asset_id}"
-    profile = str(form.get("profile") or "baseline")
+    profile = str(form.get("profile") or "")
     server_id = None
     target = str(form.get("server") or "builtin")
     with session_scope() as db:
         _guard(db, user)
         asset = _asset(db, asset_id)
+        profile = profile or external.profile_for(asset)
         if target != "builtin":
             try:
                 server_id = int(target)
             except ValueError:
                 raise HTTPException(status_code=400, detail="Pick a server.")
-        if (server_id or profile in dast_engines.ACTIVE_PROFILES) and not _checked(form, "confirm"):
-            return redirect(_back(here, "Tick the box to confirm you are allowed to send "
-                                        "attack payloads to this site.", "error"))
+        sign_in = bool(asset.auth_kind) and _checked(form, "authenticated")
+        if (server_id or profile in dast_engines.ACTIVE_PROFILES
+                or (sign_in and profile != "baseline")) and not _checked(form, "confirm"):
+            return redirect(_back(here, "Tick the box to confirm you are allowed to scan this "
+                                        "site this way.  A signed in scan acts as that user.", "error"))
         host = asset.host
     scan_id, problem = external.start_scan(asset_id, profile, user.username,
                                            ai_triage=_checked(form, "ai"),
-                                           server_id=server_id)
+                                           server_id=server_id, authenticated=sign_in)
     with session_scope() as db:
         record(db, "external.scan_started" if scan_id else "external.scan_refused",
                actor=user.username, target=host,
@@ -951,7 +980,7 @@ def _api_details(body: dict) -> dict:
     """The site details from a JSON body, each checked for its type."""
     out = {}
     for key in ("executive_owner", "technical_owner", "comments", "notes",
-                "status", "environment"):
+                "status", "environment", "default_profile"):
         if body.get(key) is not None:
             if not isinstance(body[key], str):
                 raise HTTPException(status_code=400, detail=f"{key} has to be a string.")
@@ -1096,6 +1125,20 @@ async def api_patch(asset_id: int, request: Request, caller=Depends(_api_caller(
                                    me.username, me)
             if body.get("telemetry_fields") is not None:
                 external.set_manual(asset, _api_fields(body))
+            if "scan_auth" in body:
+                from app.core import external_auth
+
+                auth = body["scan_auth"]
+                if auth is not None and not isinstance(auth, dict):
+                    raise ValueError("scan_auth has to be an object, or null to remove it.")
+                auth = auth or {}
+                if not all(isinstance(v, str) for v in auth.values()):
+                    raise ValueError("Every scan_auth value has to be a string.")
+                external_auth.save(asset, auth.get("kind", ""), auth, me.username,
+                                   asset.parent_domain)
+                record(db, "external.auth_set", actor=me.username, target=asset.host,
+                       detail=f"{external_auth.KINDS.get(asset.auth_kind, '')}, api token "
+                              f"{caller.token.prefix}", source_ip=client_ip(request))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         if "tags" in body:
@@ -1232,27 +1275,32 @@ async def api_start(asset_id: int, request: Request, caller=Depends(_api_caller(
     from app.core import dast_engines
 
     body = await _body(request)
-    profile = body.get("profile") or "baseline"
+    profile = body.get("profile") or ""
     server = body.get("server")
     if not isinstance(profile, str) or (server is not None and not isinstance(server, str)):
         raise HTTPException(status_code=400, detail="profile and server are strings.")
     with session_scope() as db:
         me = _api_me(db, caller)
         asset = _asset(db, asset_id)
+        profile = profile or external.profile_for(asset)
         server_id = None
         if server and server != "builtin":
             row = db.query(DastServer).filter(DastServer.name == server).one_or_none()
             if row is None:
                 raise HTTPException(status_code=404, detail="No such server.")
             server_id = row.id
-        if (server_id or profile in dast_engines.ACTIVE_PROFILES) and body.get("confirm") is not True:
+        if body.get("authenticated") is not None and not isinstance(body["authenticated"], bool):
+            raise HTTPException(status_code=400, detail="authenticated has to be true or false.")
+        sign_in = bool(asset.auth_kind) if body.get("authenticated") is None else body["authenticated"]
+        if (server_id or profile in dast_engines.ACTIVE_PROFILES
+                or (sign_in and profile != "baseline")) and body.get("confirm") is not True:
             raise HTTPException(status_code=400, detail=(
-                "This sends attack payloads.  Send confirm true to say you are "
-                "allowed to scan the site."))
+                "This sends attack payloads or acts as a signed in user.  Send confirm "
+                "true to say you are allowed to scan the site this way."))
         host, username = asset.host, me.username
     scan_id, problem = external.start_scan(asset_id, profile, username,
                                            ai_triage=body.get("ai") is True,
-                                           server_id=server_id)
+                                           server_id=server_id, authenticated=sign_in)
     with session_scope() as db:
         record(db, "external.scan_started" if scan_id else "external.scan_refused",
                actor=username, target=host,

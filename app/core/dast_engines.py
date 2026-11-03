@@ -38,17 +38,19 @@ from pathlib import Path
 log = logging.getLogger("gcr.dast")
 
 PROFILES = {
-    "baseline": "Read only checks: headers, cookies, TLS, exposed files, open "
-                "ports.  A few dozen requests, about a minute.",
-    "quick": "Baseline, then testssl and nuclei for exposures, "
-             "misconfigurations, known CVEs and default logins.",
-    "standard": "Quick, then nikto and wapiti.  Sends attack payloads.  "
-                "Can take an hour or more.",
-    "thorough": "Standard, with ffuf content discovery first and a wider "
-                "nuclei pass.  Sends attack payloads.",
-    "premium": "Thorough, then sqlmap and dalfox.  The most invasive.  Can run "
-               "for hours.",
+    "baseline": "A light, read only check: headers, cookies, TLS, open ports and "
+                "files that should never be served.  About 20 requests, done in "
+                "seconds.  Runs none of the scanning engines.",
+    "quick": "Baseline, then testssl and nuclei for exposures, misconfigurations, "
+             "known CVEs and default logins.  Usually 10 to 30 minutes.",
+    "standard": "Quick, then nikto and wapiti, which crawl the site and try attack "
+                "payloads.  An hour or more.",
+    "thorough": "Standard, with ffuf content discovery first and a wider nuclei "
+                "pass.  Sends attack payloads.  Several hours on a large site.",
+    "premium": "Thorough, then sqlmap and dalfox.  The most invasive.  Can run for "
+               "many hours.",
 }
+DEFAULT_PROFILE = "quick"
 ACTIVE_PROFILES = {"standard", "thorough", "premium"}
 
 PLANS = {
@@ -78,8 +80,11 @@ WORDLIST = Path(__file__).resolve().parents[2] / "config" / "dast" / "web-conten
 TEMPLATES = Path(os.environ.get("GCR_NUCLEI_TEMPLATES",
                                 str(Path.home() / ".cache" / "nuclei-templates")))
 
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+def _ua() -> str:
+    """The one user agent every engine sends, from Settings."""
+    from app.core.external_probe import user_agent
+
+    return user_agent()
 
 
 def binary(tool: str) -> str:
@@ -176,7 +181,7 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
     if tool == "testssl":
         report = workdir / "testssl.json"
         return ([exe, "--jsonfile", str(report), "--quiet", "--color", "0",
-                 "--warnings", "off", "--sneaky", host], report)
+                 "--warnings", "off", "--user-agent", _ua(), host], report)
     if tool == "nuclei":
         tags = {"quick": "exposure,misconfig,cve,default-login",
                 "thorough": "exposure,misconfig,cve,default-login,token-spray,"
@@ -191,7 +196,7 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
                 "-disable-update-check", "-no-color", "-silent",
                 "-severity", "info,low,medium,high,critical", "-tags", tags,
                 "-rl", "50", "-c", "25", "-timeout", "10", "-retries", "1",
-                "-H", f"User-Agent: {UA}"]
+                "-H", f"User-Agent: {_ua()}"]
         templates = _nuclei_templates(workdir, -1)
         if templates:
             argv += ["-t", templates]
@@ -201,7 +206,7 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
         flags = "x6" if profile == "quick" else ("x6789ab" if profile in ("thorough", "premium") else "x69")
         return ([exe, "-h", url, "-output", str(report), "-Format", "json",
                  "-ask", "no", "-nointeractive", "-Tuning", flags,
-                 "-maxtime", "3000s", "-useragent", UA], report)
+                 "-maxtime", "3000s", "-useragent", _ua()], report)
     if tool == "wapiti":
         report = workdir / "wapiti.json"
         modules = ("sql,timesql,xss,permanentxss,ssrf,xxe,exec,file,csrf,"
@@ -211,7 +216,7 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
         argv = [exe, "-u", url, "-f", "json", "-o", str(report),
                 "--flush-session", "--verbose", "0", "--scope", "subdomain",
                 "-m", modules, "--max-attack-time", "1800",
-                "--max-scan-time", str(TIMEOUTS["wapiti"] - 300), "-A", UA,
+                "--max-scan-time", str(TIMEOUTS["wapiti"] - 300), "-A", _ua(),
                 "--store-session", str(workdir / "wapiti-session"),
                 "--store-config", str(workdir / "wapiti-config")]
         # Routes from the code and paths found by ffuf, as extra places to
@@ -221,7 +226,7 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
         return argv, report
     if tool == "sqlmap":
         out = workdir / "sqlmap"
-        return ([exe, "-u", url, "--batch", "--random-agent", "--crawl", "2",
+        return ([exe, "-u", url, "--batch", "-A", _ua(), "--crawl", "2",
                  "--forms", "--smart", "--level", "2", "--risk", "2",
                  "--output-dir", str(out), "--disable-coloring"], out)
     if tool == "dalfox":
@@ -233,13 +238,13 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
         targets.write_text("\n".join([url] + with_params[:200]) + "\n")
         return ([exe, "scan", str(targets), "-f", "json", "-o", str(report), "-S",
                  "--workers", "10", "--timeout", "10", "--scan-timeout", "1500",
-                 "--skip-mining-dom", "--user-agent", UA], report)
+                 "--skip-mining-dom", "--user-agent", _ua()], report)
     if tool == "ffuf":
         report = workdir / "ffuf.json"
         return ([exe, "-u", url.rstrip("/") + "/FUZZ", "-w", str(WORDLIST),
                  "-of", "json", "-o", str(report), "-mc", "200,301,302,401,403",
                  "-fs", "0", "-ac", "-t", "20", "-rate", "40", "-timeout", "10",
-                 "-maxtime", "240", "-s", "-H", f"User-Agent: {UA}"], report)
+                 "-maxtime", "240", "-s", "-H", f"User-Agent: {_ua()}"], report)
     raise ValueError(f"unknown engine {tool}")
 
 
@@ -270,7 +275,7 @@ def links_in(url: str, body: str) -> list:
 
 
 def run_engine(tool: str, url: str, host: str, profile: str, workdir: Path,
-               scan_id: int, paths: list = None) -> dict:
+               scan_id: int, paths: list = None, auth_args: list = None) -> dict:
     """Run one engine and read its report.
 
     -> {tool, status, seconds, findings, detail, paths}
@@ -289,6 +294,7 @@ def run_engine(tool: str, url: str, host: str, profile: str, workdir: Path,
     engine_dir.mkdir(parents=True, exist_ok=True)
     try:
         argv, report = command(tool, url, host, profile, engine_dir, paths)
+        argv = list(argv) + list(auth_args or [])
     except Exception as exc:  # noqa: BLE001
         out.update(status="failed", detail=f"{type(exc).__name__}: {exc}"[:300])
         return out

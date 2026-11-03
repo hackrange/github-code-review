@@ -282,9 +282,26 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
     for e in skipped:
         limitations.append(f"{e.get('name') or e.get('tool')} did not complete: "
                            f"{e.get('detail') or e.get('status')}.")
-    if asset.external_auth_needed:
-        limitations.append("Signing in to this site goes through an outside service, so the "
-                           "scan saw only what is public.")
+    if scan.authenticated:
+        kinds = {"header": "a header", "cookie": "a session cookie", "form": "a form login"}
+        signin = next((e for e in engines if e.get("tool") == "signin"), None)
+        limitations.append(f"The engines signed in with {kinds.get(scan.auth_kind, 'a sign in')}, "
+                           "so they saw what that user sees.  The baseline checks and testssl "
+                           "ran signed out.")
+        if signin and signin.get("status") != "ok":
+            limitations.append(f"Signing in did not work: {signin.get('detail')}.")
+        unsigned = [e.get("name") for e in engines
+                    if e.get("signed_in") is False and e.get("status") == "ok"
+                    and e.get("tool") not in ("baseline", "testssl")]
+        if unsigned:
+            limitations.append("These ran signed out: " + ", ".join(unsigned) + ".")
+    else:
+        limitations.append("The scan did not sign in, so it saw only the public parts of "
+                           "the site.")
+    if asset.external_auth_needed and not scan.authenticated:
+        limitations.append("Signing in to this site goes through an outside service.  A "
+                           "session cookie set in the site's sign in settings lets a scan "
+                           "get past it.")
     if asset.whitelist_needed:
         limitations.append("The site needs the scanner's address let through a firewall.  If "
                            "it was not, parts of the site were blocked from the scan.")

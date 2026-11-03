@@ -3575,6 +3575,7 @@ def settings_page(request: Request, msg: str = "", kind: str = "",
             # the same list, so a section cannot end up in one and not the
             # other.
             help_sections=help_sections(), settings_tabs=settings_tabs(),
+            default_user_agent=__import__("app.core.external_probe", fromlist=["x"]).DEFAULT_USER_AGENT,
             values=store.all_values(db),
             rulesets=store.RULESETS,
             muted_notes=store.MUTED_RULE_NOTES,

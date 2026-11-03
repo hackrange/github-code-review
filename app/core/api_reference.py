@@ -459,6 +459,11 @@ _DETAILS = [
     _f("external_auth_needed", "boolean", False, "Signing in goes through something outside the site."),
     _f("whitelist_needed", "boolean", False, "The scanner has to be let through a firewall."),
     _f("change_frequency_days", "integer", False, "How often the site changes, in days."),
+    _f("default_profile", "string", False, "The scan profile used when none is given: "
+                                           "baseline, quick, standard, thorough or premium."),
+    _f("scan_auth", "object", False, "How a scan signs in: kind header (header_name, "
+                                     "header_value), cookie (cookie) or form (login_url, "
+                                     "username, password).  null removes it.  Never returned."),
     _f("repositories", "array", False, "Objects with repository (org/name) and an optional "
                                        "branch.  Replaces what was picked before."),
     _f("telemetry_fields", "object", False, "Telemetry filled in by hand, by field name: "
@@ -549,7 +554,11 @@ def _external_endpoints() -> list:
              "and up, and any DAST server, send attack payloads and need confirm.",
              [asset_id],
              body=[_f("profile", "string", False, "baseline, quick, standard, "
-                                                  "thorough or premium."),
+                                                  "thorough or premium.  The site's default "
+                                                  "when left out."),
+                   _f("authenticated", "boolean", False, "Sign in with the site's scan "
+                                                         "sign in.  On by default when it "
+                                                         "has one."),
                    _f("server", "string", False, "builtin, or a nextgen-dast server's name."),
                    _f("confirm", "boolean", False, "True to say you may scan it."),
                    _f("ai", "boolean", False, "True to have the model triage the "

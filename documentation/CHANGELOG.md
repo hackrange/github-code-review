@@ -6,6 +6,25 @@ moved.
 
 ## 2026-11-03
 
+**Signed in scans.**  A site can carry a header, a session cookie or a form
+login, saved encrypted, and its scans sign in with it: nuclei, ffuf, dalfox,
+sqlmap, nikto and wapiti all act as that user, and nothing secret is kept in
+the findings.  A form login or HTTP Basic is passed on to nextgen-dast.
+
+**One browser user agent.**  Every scan, screenshot and telemetry read sends
+the same current Chrome user agent, which Settings can change.  sqlmap and
+testssl no longer pick their own.
+
+**A default scan per site, and quick by default.**  The scan dialog started on
+baseline, a seconds long check that runs no engines, which made real scans
+look like they finished early.  It now starts on quick, explains each
+profile, and uses the site's own default when it has one.
+
+**A site that is down is not a block.**  A Cloudflare 502 was reported as a
+firewall block page and its screenshot hidden.  It is now reported as the site
+being down behind its CDN, and ordinary pages that mention cookies are no
+longer taken for blocks.
+
 **A PDF report on a dynamic scan.**  A scan this server ran downloads as a
 report laid out like nextgen-dast's: a graded cover, an executive summary with
 OWASP Top 10 grades, scope and method, every finding with a command to see it

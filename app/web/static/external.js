@@ -274,3 +274,22 @@
     }
   });
 })();
+
+/* The sign in fields: only the ones for the kind picked. */
+(function () {
+  "use strict";
+  document.querySelectorAll("[data-auth-kind]").forEach(function (picker) {
+    var scope = picker.closest("details") || document;
+    function apply() {
+      scope.querySelectorAll("[data-auth-for]").forEach(function (block) {
+        block.hidden = block.getAttribute("data-auth-for") !== picker.value;
+      });
+    }
+    picker.addEventListener("change", apply);
+    /* The dialog puts every field back when it opens, without saying so. */
+    document.addEventListener("click", function (event) {
+      if (event.target.closest && event.target.closest("[data-modal]")) { setTimeout(apply, 0); }
+    });
+    apply();
+  });
+})();

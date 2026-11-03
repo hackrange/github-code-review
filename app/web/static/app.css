@@ -1146,3 +1146,6 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .modal.shot-modal { max-width: min(1320px, 95vw); }
 .shot-modal-body { overflow: auto; padding: .5rem; }
 .shot-large { width: 100%; height: auto; display: block; border-radius: 4px; }
+.profile-help { margin: .4rem 0; padding: .4rem .6rem; background: var(--bg-sunk);
+  border-radius: 4px; color: var(--text-soft); }
+.profile-help div { margin: .15rem 0; }

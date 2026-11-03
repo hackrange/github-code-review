@@ -71,8 +71,10 @@ def enabled(db) -> bool:
 
 
 def options(db) -> dict:
-    from app.core import settings_store as s
+    from app.core import external_probe, settings_store as s
 
+    # Every request a scan or a telemetry read makes uses this one.
+    external_probe.set_user_agent(s.get(db, "external.user_agent") or "")
     return {"screenshots": bool(s.get(db, "external.screenshots")),
             "allow_private": bool(s.get(db, "external.allow_private")),
             "refresh_days": int(s.get(db, "external.refresh_days") or 0),
@@ -205,6 +207,14 @@ def clean_details(data: dict, partial: bool = False) -> dict:
             if isinstance(value, str):
                 value = value.strip().lower() in ("1", "on", "true", "yes")
             out[key] = bool(value)
+    if present("default_profile") or not partial:
+        from app.core import dast_engines
+
+        value = str(data.get("default_profile") or "").strip().lower()
+        if value and value not in dast_engines.PROFILES:
+            raise ValueError("The default scan profile is baseline, quick, standard, "
+                             "thorough or premium.")
+        out["default_profile"] = value
     if present("change_frequency_days") or not partial:
         raw = data.get("change_frequency_days")
         if raw in (None, ""):
@@ -218,6 +228,14 @@ def clean_details(data: dict, partial: bool = False) -> dict:
                 raise ValueError("Change frequency is between 1 and 3650 days.")
             out["change_frequency_days"] = days
     return out
+
+
+def profile_for(asset: ExternalAsset) -> str:
+    """The profile a scan of this site starts with when nobody picks one."""
+    from app.core import dast_engines
+
+    value = (getattr(asset, "default_profile", "") or "").lower()
+    return value if value in dast_engines.PROFILES else dast_engines.DEFAULT_PROFILE
 
 
 def apply_details(asset: ExternalAsset, details: dict) -> None:
@@ -737,7 +755,8 @@ TELEMETRY_FIELDS = [
         ("probe_url", "Probe URL"), ("final_url", "Final URL"),
         ("redirect_target", "Redirect target"), ("title", "Page title"),
         ("server", "Server header"), ("powered_by", "X-Powered-By"),
-        ("waf_block", "Firewall block page"), ("http_to_https", "HTTP redirects to HTTPS"),
+        ("waf_block", "Firewall block page"), ("origin_down", "CDN could not reach the site"),
+        ("http_to_https", "HTTP redirects to HTTPS"),
         ("grade", "Grade"), ("score", "Score"),
     ]),
     ("Network", [
@@ -809,6 +828,7 @@ def flatten(rec: dict) -> dict:
         "title": rec.get("title"), "server": rec.get("server"),
         "powered_by": rec.get("powered_by"),
         "waf_block": rec.get("waf_block") if rec.get("status") else None,
+        "origin_down": rec.get("origin_down") if rec.get("status") else None,
         "http_to_https": rec.get("http_to_https"),
         "grade": score.get("grade") if score.get("grade") != "N/A" else "",
         "score": score.get("score") if score.get("grade") not in (None, "N/A") else "",
@@ -953,6 +973,8 @@ def asset_dict(asset: ExternalAsset, links: list = None, counts: dict = None,
         "external_auth_needed": bool(asset.external_auth_needed),
         "whitelist_needed": bool(asset.whitelist_needed),
         "change_frequency_days": asset.change_frequency_days,
+        "default_profile": profile_for(asset),
+        "scan_auth": _auth_view(asset),
         "no_scan": bool(asset.no_scan), "no_scan_reason": asset.no_scan_reason or "",
         "scan_blocked": bool(blocked_reason), "scan_blocked_reason": blocked_reason,
         "added_at": _iso(asset.added_at), "added_by": asset.added_by,
@@ -991,9 +1013,16 @@ def asset_dict(asset: ExternalAsset, links: list = None, counts: dict = None,
     }
 
 
+def _auth_view(asset) -> dict:
+    from app.core import external_auth
+
+    return external_auth.describe(asset) or None
+
+
 def scan_dict(scan: ExternalDastScan, findings: bool = False) -> dict:
     out = {"id": scan.id, "asset_id": scan.asset_id, "server": scan.server_name,
            "source": scan.source, "status": scan.status, "profile": scan.profile or "",
+           "authenticated": bool(scan.authenticated), "auth_kind": scan.auth_kind or "",
            "step": scan.step or "", "remote_id": scan.remote_id or "",
            "started_at": _iso(scan.started_at), "scanned_at": _iso(scan.scanned_at),
            "severity": scan.severity or "",
@@ -1115,9 +1144,12 @@ _stopping: set = set()
 
 
 def start_scan(asset_id: int, profile: str, actor: str, ai_triage: bool = False,
-               server_id: int = None) -> tuple:
-    """Start a dynamic scan here or on a server.  -> (scan id, problem)"""
-    from app.core import dast_engines
+               server_id: int = None, authenticated: bool = None) -> tuple:
+    """Start a dynamic scan here or on a server.  -> (scan id, problem)
+
+    authenticated None means sign in when the site has a sign in set.
+    """
+    from app.core import dast_engines, external_auth
 
     with session_scope() as db:
         if not enabled(db):
@@ -1141,12 +1173,22 @@ def start_scan(asset_id: int, profile: str, actor: str, ai_triage: bool = False,
                 profile = server.profile or "quick"
         elif profile not in dast_engines.PROFILES:
             return None, "Pick a scan profile."
+        auth = external_auth.load(asset)
+        sign_in = bool(auth) if authenticated is None else bool(authenticated)
+        if sign_in and not auth:
+            return None, f"{asset.host} has no sign in set.  Add one in Edit first."
+        if sign_in and server:
+            try:
+                external_auth.for_nextgen(auth)
+            except ValueError as exc:
+                return None, str(exc)
         scan = ExternalDastScan(
             asset_id=asset_id, server_id=server.id if server else None,
             server_name=(server.name if server else BUILTIN_SERVER)[:120],
             source="remote" if server else "builtin", status="queued",
             profile=profile, started_at=utcnow(), recorded_by=(actor or "")[:120],
-            ai_status="wanted" if ai_triage else "")
+            ai_status="wanted" if ai_triage else "",
+            authenticated=sign_in, auth_kind=auth.get("kind", "") if sign_in else "")
         db.add(scan)
         db.flush()
         scan_id = scan.id
@@ -1268,12 +1310,15 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
 def _builtin(scan_id: int) -> None:
     from app.core import dast_engines, external_dast
 
+    from app.core import external_auth
+
     with session_scope() as db:
         scan = db.get(ExternalDastScan, scan_id)
         asset = db.get(ExternalAsset, scan.asset_id)
         host, asset_id, profile = asset.host, asset.id, scan.profile
         opts = options(db)
         why = blocked(db, asset)
+        auth = external_auth.load(asset) if scan.authenticated else {}
     if why:
         _update(scan_id, status="failed", error=f"may not be scanned: {why}"[:500])
         return
@@ -1298,6 +1343,23 @@ def _builtin(scan_id: int) -> None:
                                    + ", ".join(r["repository"] for r in wb["repos"])
                                    if wb["repos"] else "no repository is mapped"),
                         "repos": wb["repos"], "seconds": 0})
+    # Signing in, for the engines.  Baseline and testssl stay signed out:
+    # one reads the public posture, the other only talks TLS.
+    session, secrets = {}, []
+    if auth and url and plan:
+        _update(scan_id, step="signing in")
+        session = external_auth.session_for(auth, opts["allow_private"])
+        secrets = external_auth.secrets_of(auth, session.get("cookie", ""))
+        engines.append({"tool": "signin", "name": "Sign in",
+                        "status": "ok" if session["ok"] else "failed",
+                        "detail": external_auth.redact(
+                            f"{external_auth.KINDS[auth['kind']].lower()}: {session['detail']}"
+                            + ("" if session["ok"] else
+                               (".  wapiti will try the form itself; the other engines run "
+                                "signed out" if auth["kind"] == "form" else "")), secrets),
+                        "seconds": 0})
+    elif auth:
+        secrets = external_auth.secrets_of(auth)
     _update(scan_id, engines=json.dumps(engines))
     if url and plan:
         workdir = app_settings.work_dir / "dast" / str(scan_id)
@@ -1317,8 +1379,12 @@ def _builtin(scan_id: int) -> None:
                                     "seconds": 0})
                     continue
                 _update(scan_id, step=f"running {dast_engines.ENGINE_NAMES[tool]}")
+                args = external_auth.engine_args(tool, session) \
+                    if tool in external_auth.SIGNS_IN else []
                 result = dast_engines.run_engine(tool, url, host, profile, workdir,
-                                                 scan_id, paths=extra)
+                                                 scan_id, paths=extra, auth_args=args)
+                if session:
+                    result["signed_in"] = bool(args)
                 if tool == "ffuf":
                     extra += [p for p in result.get("paths", []) if p not in extra]
                 findings += result.pop("findings")
@@ -1327,6 +1393,9 @@ def _builtin(scan_id: int) -> None:
                 _update(scan_id, engines=json.dumps(engines))
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
+    # Nothing an engine echoed back of the sign in is kept.
+    findings = external_auth.redact(findings, secrets)
+    engines = external_auth.redact(engines, secrets)
     findings, dropped = drop_soft_404(findings, url, opts["allow_private"])
     if dropped:
         engines.append({"tool": "verify", "name": "Soft 404 check", "status": "ok",
@@ -1622,13 +1691,20 @@ def _start_remote(scan_id: int) -> None:
             body = {"fqdn": asset.host, "profile": scan.profile or "quick",
                     "llm_tier": "none", "scan_http": True, "scan_https": True,
                     "application_id": (asset.application or asset.host)[:128]}
+            if scan.authenticated:
+                from app.core import external_auth
+
+                body.update(external_auth.for_nextgen(external_auth.load(asset)))
         got = _ngd(url, token, "POST", "/scans", body)
         _update(scan_id, status="running", remote_id=str(got.get("scan_id") or "")[:64],
                 step=f"queued on {url}",
                 result_url=f"{url.rstrip('/')}/assessment/{got.get('scan_id')}")
     except Exception as exc:  # noqa: BLE001
+        # The request carried the password, so nothing from it is repeated.
         _update(scan_id, status="failed", step="",
-                error=f"could not start it: {type(exc).__name__}: {exc}"[:500])
+                error=f"could not start it: {type(exc).__name__}: {str(exc)[:200]}"
+                .replace(str(body.get("creds_password") or "\x00"), "[redacted]")
+                if "body" in locals() else f"could not start it: {type(exc).__name__}")
 
 
 def poll_remote() -> int:

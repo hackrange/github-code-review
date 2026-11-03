@@ -1,6 +1,6 @@
 {# The details a person fills in about a site, shared by Add sites and Edit.
    `a` is the site being edited, or none when adding. #}
-{% macro detail_fields(a, environments, statuses, picks_json='[]') %}
+{% macro detail_fields(a, environments, statuses, picks_json='[]', profiles=none) %}
 <div class="ext-fields">
 <div class="form-grid">
   <label>Executive owner
@@ -27,6 +27,14 @@
       <option value="{{ key }}" {{ 'selected' if (a.status if a else 'active') == key }}>{{ label }}</option>
       {% endfor %}
     </select></label>
+  {% if profiles %}
+  <label>Default scan profile
+    <select name="default_profile">
+      <option value="" {{ 'selected' if not (a and a.default_profile) }}>quick (the product default)</option>
+      {% for name in profiles %}<option value="{{ name }}" {{ 'selected' if a and a.default_profile == name }}>{{ name }}</option>{% endfor %}
+    </select>
+    <span class="faint small">What Scan starts with for this site.  It can still be changed each time.</span></label>
+  {% endif %}
   <label>Change frequency, in days
     <input type="number" name="change_frequency_days" min="1" max="3650"
            value="{{ a.change_frequency_days if a and a.change_frequency_days else '' }}"

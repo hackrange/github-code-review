@@ -1891,6 +1891,14 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
         for key in ("external.enabled", "external.screenshots",
                     "external.whitebox", "external.allow_private"):
             put(key, _checked(form, key))
+        from app.core import external_probe as _probe
+
+        agent = text("external.user_agent").strip()
+        if agent and not _probe.UA_RE.fullmatch(agent):
+            raise HTTPException(status_code=400, detail=(
+                "The user agent for scans has to be one line starting Mozilla/5.0 (, "
+                "the way a real browser's does."))
+        put("external.user_agent", agent)
         put("external.refresh_days", clean_int(form.get("external.refresh_days", 7) or 0,
                                                "Read telemetry again after",
                                                low=0, high=365))

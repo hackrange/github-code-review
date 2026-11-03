@@ -2264,6 +2264,14 @@ class ExternalAsset(Base):
     no_scan = Column(Boolean, default=False, nullable=False)
     no_scan_reason = Column(String(300), default="")
 
+    # How a scan signs in: header, cookie or form, or empty for not at all.
+    # The secrets are in auth_data, encrypted the way settings secrets are,
+    # and are never shown again once saved.
+    auth_kind = Column(String(16), default="", nullable=False)
+    auth_data = Column(Text, default="")
+    auth_set_by = Column(String(120), default="")
+    auth_set_at = Column(DateTime(timezone=True))
+
     # Who answers for the site, as addresses, comma separated.
     executive_owner = Column(String(500), default="")
     technical_owner = Column(String(500), default="")
@@ -2278,6 +2286,9 @@ class ExternalAsset(Base):
     whitelist_needed = Column(Boolean, default=False, nullable=False)
     # How often the site changes, in days, as somebody who knows it said.
     change_frequency_days = Column(Integer)
+    # The scan profile a scan of this site starts with when nobody picks one.
+    # Empty means the product's default, quick.
+    default_profile = Column(String(16), default="")
 
     # The last telemetry pass.  The whole record is kept as JSON, and the few
     # fields the list filters on are copied out.
@@ -2430,6 +2441,9 @@ class ExternalDastScan(Base):
     # For a scan run here: baseline, quick, standard, thorough or premium,
     # the step it is on, and what each engine did (JSON).
     profile = Column(String(16), default="")
+    # Whether the engines were signed in, and how.  Never the secret.
+    authenticated = Column(Boolean, default=False, nullable=False)
+    auth_kind = Column(String(16), default="")
     step = Column(String(120), default="")
     engines = Column(LONG_JSON, default="")
     # The AI triage of the findings, when asked for.  Every call is also in

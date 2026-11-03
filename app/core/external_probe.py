@@ -34,8 +34,26 @@ from pathlib import Path
 
 log = logging.getLogger("gcr.external")
 
-MOZILLA_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-              "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+# A current desktop Chrome on Windows, which is what a site's own visitors
+# send most.  A scanner's own name, or a browser years out of date, is what a
+# firewall blocks first, and then the scan reports on the block page instead
+# of the site.  Settings can replace it (external.user_agent); everything that
+# makes a request reads user_agent() so all of it sends the same one.
+DEFAULT_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
+MOZILLA_UA = DEFAULT_USER_AGENT
+_UA = {"value": DEFAULT_USER_AGENT}
+UA_RE = re.compile(r"^Mozilla/5\.0 \([\x20-\x7e]{5,380}$")
+
+
+def user_agent() -> str:
+    return _UA["value"]
+
+
+def set_user_agent(value: str) -> None:
+    """Use this user agent from now on, when it looks like a browser's."""
+    text = str(value or "").strip()
+    _UA["value"] = text if UA_RE.fullmatch(text) else DEFAULT_USER_AGENT
 
 # The common services worth knowing about on something facing the internet.
 DEFAULT_PORTS = [
@@ -91,17 +109,24 @@ HEADER_WEIGHTS = [
     ("cross-origin-resource-policy", 3, "CORP"),
 ]
 
-WAF_BLOCK_SIGNATURES = [
+# A firewall or bot wall that refused the request, as opposed to the site
+# answering.  The strong ones only ever appear on a block.  The weak ones
+# also turn up on ordinary pages (a cookie notice says "please enable
+# cookies"), so they only count on a refusal status.  A Cloudflare error page
+# for a down origin (502, 522 and the like) carries cf-error-details too, and
+# is the site being down, not a block.
+WAF_STRONG = [
     "Sorry, you have been blocked",
     "Attention Required! | Cloudflare",
-    "cf-error-details",
-    "Please enable cookies",
+    "error code: 1020", "Error 1020", "Error 1010", "Error 1015",
     "needs to review the security of your connection",
-    "Access denied | ",
-    "Your IP address has been blocked",
     "Akamai Reference",
-    "The requested URL was rejected",
+    "The requested URL was rejected. Please consult with your administrator",
+    "Your IP address has been blocked",
+    "Request unsuccessful. Incapsula incident ID",
 ]
+WAF_WEAK = ["Please enable cookies", "Access denied | ", "cf-error-details", "Just a moment..."]
+WAF_BLOCK_SIGNATURES = WAF_STRONG + WAF_WEAK
 
 WEB_PORTS = (80, 443, 8080, 8443, 8000, 8888, 8081)
 WEB_CATEGORIES = {"live", "redir", "gated", "err4", "err5"}
@@ -435,7 +460,7 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
            "set_cookies": [], "body": "", "redirects": [], "error": ""}
     current = url
     sent = dict(headers or {})
-    sent.setdefault("User-Agent", MOZILLA_UA)
+    sent.setdefault("User-Agent", user_agent())
     sent.setdefault("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
     try:
         with httpx.Client(verify=False, timeout=timeout, follow_redirects=False,
@@ -517,9 +542,23 @@ def http_redirects_to_https(host: str, allow_private: bool = False) -> bool | No
     return 300 <= got["status"] < 400 and location.lower().startswith("https://")
 
 
-def detect_waf_block(body: str) -> bool:
+def detect_waf_block(body: str, status: int = 0) -> bool:
+    """Whether the answer was a firewall turning the request away."""
     lowered = (body or "").lower()
-    return any(sig.lower() in lowered for sig in WAF_BLOCK_SIGNATURES)
+    if any(sig.lower() in lowered for sig in WAF_STRONG):
+        return True
+    if status in (403, 429, 503):
+        return any(sig.lower() in lowered for sig in WAF_WEAK)
+    return False
+
+
+def origin_down(status: int, headers: dict, body: str) -> bool:
+    """A CDN answering for a site it could not reach: Cloudflare's 52x pages
+    and 502/504 with its error page.  The site is down, not blocking."""
+    server = (headers or {}).get("server", "").lower()
+    return (status in (502, 504, 520, 521, 522, 523, 524, 525, 526, 530)
+            and ("cloudflare" in server or "cf-error-details" in (body or "").lower()
+                 or "akamai" in server))
 
 
 def classify(status: int, has_web: bool) -> str:
@@ -790,7 +829,7 @@ def take_screenshot(browser: str, urls: list, out_path: Path) -> tuple:
                              "--run-all-compositor-stages-before-draw",
                              "--force-device-scale-factor=1",
                              f"--user-data-dir={scratch / 'profile'}",
-                             f"--user-agent={MOZILLA_UA}", "--window-size=1280,800",
+                             f"--user-agent={user_agent()}", "--window-size=1280,800",
                              f"--screenshot={tmp}", "--virtual-time-budget=10000", url],
                             capture_output=True, timeout=timeout, cwd=scratch,
                             env={**os.environ, "TMPDIR": str(scratch),
@@ -892,7 +931,9 @@ def probe(host: str, shot_path: Path = None, screenshots: bool = True,
         if 80 in rec["ports"] and not passive:
             rec["http_to_https"] = http_redirects_to_https(host, allow_private)
     rec["category"] = classify(rec["status"], has_web)
-    rec["waf_block"] = rec["category"] in WEB_CATEGORIES and detect_waf_block(rec["body_sample"])
+    rec["waf_block"] = rec["category"] in WEB_CATEGORIES and detect_waf_block(
+        rec["body_sample"], rec["status"])
+    rec["origin_down"] = origin_down(rec["status"], rec["headers"], rec["body_sample"])
 
     if rec["category"] in WEB_CATEGORIES and screenshots and shot_path is not None:
         browser = find_browser()

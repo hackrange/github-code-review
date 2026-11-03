@@ -5,7 +5,8 @@
 {% set here = base ~ '/external/' ~ asset.id ~ '/scans/' ~ scan.id %}
 <div class="page-head">
   <div><h1>Dynamic scan of <span class="mono">{{ asset.host }}</span></h1>
-    <div class="faint small">{{ view.server }}{% if view.profile %}, {{ view.profile }} profile{% endif %}
+    <div class="faint small">{% if view.profile %}<span class="badge {{ 'waived' if view.profile == 'baseline' else 'info' }}">{{ view.profile }}</span> {% endif %}
+      {%- if view.authenticated %}<span class="badge ok">signed in, {{ view.auth_kind }}</span> {% elif view.source == 'builtin' %}<span class="badge waived">not signed in</span> {% endif %}{{ view.server }}
       &middot; {{ {'builtin':'run on this server','remote':'started from here on a DAST server','recorded':'recorded'}[view.source] }}
       {% if view.recorded_by %}by {{ view.recorded_by }}{% endif %}
       {% if scan.scanned_at %}&middot; {{ scan.scanned_at | dt('%Y-%m-%d %H:%M') }}{% endif %}</div></div>
@@ -104,6 +105,7 @@
     {% endfor %}
     </tbody></table></div>
   {% elif scan.status == 'done' %}<div class="empty">Nothing found.
+    {% if view.profile == 'baseline' %}<div style="margin-top:.6rem"><a class="btn primary" href="{{ base }}/external/{{ asset.id }}#scan">Run a deeper scan</a></div>{% endif %}
     {% if view.profile == 'baseline' %}<div class="small faint" style="margin-top:.4rem">A baseline scan only reads
       headers, cookies, TLS, open ports and a list of files that should never be served.  The quick
       profile and up also run testssl and nuclei, and standard and up crawl the site and try attack

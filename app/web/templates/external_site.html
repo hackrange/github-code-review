@@ -81,8 +81,15 @@
         <tr><th>Status</th><td>{{ statuses.get(asset.status, asset.status) }}</td></tr>
         <tr><th>External auth needed</th><td>{{ 'Yes' if asset.external_auth_needed else 'No' }}</td></tr>
         <tr><th>Whitelist needed</th><td>{{ 'Yes' if asset.whitelist_needed else 'No' }}</td></tr>
+        <tr><th>Default scan</th><td>{{ site_profile }}{% if not asset.default_profile %} <span class="faint small">(the product default)</span>{% endif %}</td></tr>
         <tr><th>Change frequency</th><td>{{ ('every %d days' % asset.change_frequency_days) if asset.change_frequency_days else '' }}{% if not asset.change_frequency_days %}<span class="faint">nobody has said</span>{% endif %}</td></tr>
         <tr><th>Scanning</th><td>{% if blocked %}<strong>Not to be scanned.</strong> {{ blocked }}{% else %}Allowed{% endif %}</td></tr>
+        <tr><th>Scan sign in</th><td>{% if auth %}{{ auth.kind_name }}
+            {%- if auth.header_name %}, {{ auth.header_name }}{% endif %}
+            {%- if auth.cookie_names %}, {{ auth.cookie_names | join(', ') }}{% endif %}
+            {%- if auth.username %}, {{ auth.username }} at <span class="mono">{{ auth.login_url }}</span>{% endif %}
+            <div class="faint small">The secret is saved encrypted and never shown.  Set {{ auth.set_at[:10] if auth.set_at else '' }}{% if auth.set_by %} by {{ auth.set_by }}{% endif %}.</div>
+          {% else %}<span class="faint">none, scans see only the public site</span>{% endif %}</td></tr>
         {% if asset.notes %}<tr><th>Comments</th><td class="small" style="white-space:pre-wrap">{{ asset.notes }}</td></tr>{% endif %}
       </tbody></table>
       <form method="post" action="{{ base }}/external/{{ asset.id }}/delete" data-confirm="Remove {{ asset.host }} and every scan recorded against it?" style="margin-top:.6rem">
@@ -179,7 +186,7 @@
         {% for s in scan_views %}
           <tr>
             <td class="small nowrap"><a href="{{ base }}/external/{{ asset.id }}/scans/{{ s.id }}">{{ (s.scanned_at or s.started_at or '')[:16] | replace('T', ' ') }}</a>
-              {% if s.profile %}<div class="faint">{{ s.profile }}</div>{% endif %}</td>
+              {% if s.profile %}<div><span class="badge {{ 'waived' if s.profile == 'baseline' else 'info' }}">{{ s.profile }}</span>{% if s.authenticated %} <span class="badge ok" title="Signed in with the {{ s.auth_kind }}">signed in</span>{% endif %}</div>{% endif %}</td>
             <td class="small">{{ s.server }}<div class="faint">{{ {'builtin':'run here','remote':'started from here','recorded':'recorded'}[s.source] }}{% if s.recorded_by %} by {{ s.recorded_by }}{% endif %}</div></td>
             <td class="small">
               {% if s.status in ('queued','running') %}<span class="badge pending">{{ s.status }}</span><div class="faint">{{ s.step }}</div>
@@ -279,10 +286,37 @@
       <label>Application <input type="text" name="application" maxlength="200" value="{{ asset.application }}"></label>
       <label>Tags <input type="text" name="tags" maxlength="1000" value="{{ tags | join(', ') }}">
         <span class="faint small">Comma separated.  A tag that matches a repository's application name links them.</span></label>
-      {{ detail_fields(asset, environments, statuses, picks_json) }}
+      {{ detail_fields(asset, environments, statuses, picks_json, profiles) }}
       <label class="check"><input type="checkbox" name="no_scan" value="1" {{ 'checked' if asset.no_scan }}>
         <span>No scan.  We are not allowed to scan this host{% if asset.kind == 'domain' %} or anything under it{% endif %}.</span></label>
       <label>Why not <input type="text" name="no_scan_reason" maxlength="300" value="{{ asset.no_scan_reason }}" placeholder="Vendor hosted SaaS"></label>
+      <details class="hand-fields" {{ 'open' if auth }}>
+        <summary><strong>Scan sign in</strong> <span class="faint small">so the engines see what a signed in user sees.  Saved encrypted; a secret left empty keeps the saved one.</span></summary>
+        <input type="hidden" name="with_auth" value="1">
+        <label>How the scan signs in
+          <select name="auth_kind" data-auth-kind>
+            {% for k, label in auth_kinds.items() %}<option value="{{ k }}" {{ 'selected' if (auth.kind if auth else '') == k }}>{{ label }}</option>{% endfor %}
+          </select></label>
+        <div data-auth-for="header" class="form-grid">
+          <label>Header name <input type="text" name="auth_header_name" maxlength="100" value="{{ auth.header_name if auth and auth.header_name else 'Authorization' }}"></label>
+          <label>Header value <input type="password" name="auth_header_value" maxlength="8000" autocomplete="off"
+                 placeholder="{{ 'saved, leave empty to keep' if auth and auth.kind == 'header' else 'Bearer eyJ...' }}"></label>
+        </div>
+        <div data-auth-for="cookie">
+          <label>Session cookie <input type="password" name="auth_cookie" maxlength="8000" autocomplete="off"
+                 placeholder="{{ 'saved, leave empty to keep' if auth and auth.kind == 'cookie' else 'session=abc123; csrftoken=def456' }}">
+            <span class="faint small">Copy it from a browser that is signed in, for single sign on.  It stops working when that session ends.</span></label>
+        </div>
+        <div data-auth-for="form" class="form-grid">
+          <label>Login page <input type="url" name="auth_login_url" maxlength="1000" value="{{ auth.login_url if auth and auth.login_url else '' }}" placeholder="https://{{ asset.host }}/login"></label>
+          <label>User name <input type="text" name="auth_username" maxlength="300" autocomplete="off" value="{{ auth.username if auth and auth.username else '' }}"></label>
+          <label>Password <input type="password" name="auth_password" maxlength="1000" autocomplete="new-password"
+                 placeholder="{{ 'saved, leave empty to keep' if auth and auth.kind == 'form' else '' }}"></label>
+          <label>User name field <input type="text" name="auth_username_field" maxlength="100" value="{{ auth.username_field if auth and auth.username_field else '' }}" placeholder="found on the page"></label>
+          <label>Password field <input type="text" name="auth_password_field" maxlength="100" value="{{ auth.password_field if auth and auth.password_field else '' }}" placeholder="found on the page"></label>
+        </div>
+        <div class="faint small">Use a test account.  A signed in scan can change what that user can change.</div>
+      </details>
       <details class="hand-fields">
         <summary><strong>Telemetry by hand</strong> <span class="faint small">for a site the scan cannot reach, or to correct it.  A value here wins over the scan's until it is cleared.</span></summary>
         {% for group, rows in fields %}
@@ -317,14 +351,23 @@
         </select></label>
       <label>Profile
         <select name="profile">
-          {% for name, what in profiles.items() %}<option value="{{ name }}">{{ name }}: {{ what }}</option>{% endfor %}
+          {% for name, what in profiles.items() %}<option value="{{ name }}" {{ 'selected' if name == site_profile }}>{{ name }}{{ ' (this site\'s default)' if name == site_profile }}</option>{% endfor %}
         </select>
+        <div class="profile-help small">
+          {% for name, what in profiles.items() %}<div><strong>{{ name }}</strong>: {{ what }}</div>{% endfor %}
+        </div>
         <span class="faint small">Engines on this server:
           {% for tool, path in engines.items() %}<span class="badge {{ 'ok' if path else 'waived' }}" title="{{ path or 'not installed' }}">{{ engine_names[tool] }}</span> {% endfor %}
           A missing engine is skipped and the scan says so.  The repositories
           behind the site are read first, on the branches picked, for routes to add to the scan.</span></label>
+      {% if auth %}
+      <label class="check"><input type="checkbox" name="authenticated" value="1" checked>
+        <span>Sign in for this scan, with the {{ auth.kind_name | lower }}{% if auth.header_name %} ({{ auth.header_name }}){% endif %}{% if auth.username %} as {{ auth.username }}{% endif %}.
+          The engines act as that user.  Baseline and testssl stay signed out.
+          {% if auth.kind != 'form' %}A nextgen-dast server can only take a form login or HTTP Basic.{% endif %}</span></label>
+      {% endif %}
       <label class="check"><input type="checkbox" name="confirm" value="1">
-        <span>I am allowed to scan {{ asset.host }} with attack payloads.  Needed for standard and up, and for a DAST server.</span></label>
+        <span>I am allowed to scan {{ asset.host }} this way.  Needed for standard and up, for a DAST server, and for any signed in scan past baseline.</span></label>
       <label class="check"><input type="checkbox" name="ai" value="1" {{ 'disabled' if not ai_ready }}>
         <span>Have the model triage the findings when it ends, against the code findings behind the site.
           {% if not ai_ready %}<span class="faint">Set up a model on the AI analysis page first.</span>{% endif %}

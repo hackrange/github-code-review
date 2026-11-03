@@ -338,6 +338,11 @@ DEFAULTS = {
                                 "Before an engine scan, read the default branch of "
                                 "the repositories mapped to the site for routes to "
                                 "add to the scan and for the site's name in the code."),
+    "external.user_agent":     ("", False,
+                                "The browser every scan and telemetry read says it is. "
+                                "Empty uses a current desktop Chrome. It has to start "
+                                "Mozilla/5.0 like a real browser's; a scanner's own name "
+                                "is what firewalls block first."),
     "external.allow_private":  (False, False,
                                 "Let telemetry and scans reach hosts that resolve to "
                                 "private, loopback or link local addresses. Leave off "
@@ -493,7 +498,7 @@ SECTIONS = [
     ("Web testing", ["dast.max_age_days"]),
     ("External sites", ["external.enabled", "external.screenshots",
                         "external.refresh_days", "external.whitebox",
-                        "external.allow_private"]),
+                        "external.user_agent", "external.allow_private"]),
     ("Limits", ["github.parallel_repos", "scan.max_concurrent",
                 "secrets.history_window_days",
                 "scan.timeout_per_repo", "scan.max_hours",

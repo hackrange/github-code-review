@@ -676,6 +676,12 @@
   <label class="check"><input type="checkbox" name="external.allow_private" value="1" {{ 'checked' if values['external.allow_private'] }}>
     <span>Let telemetry and scans reach private, loopback and link local
       addresses.  Leave off unless the sites really are internal.</span></label>
+  <label class="wide">User agent for scans
+    <input type="text" name="external.user_agent" maxlength="400" class="mono"
+           value="{{ values['external.user_agent'] }}" placeholder="{{ default_user_agent }}">
+    <span class="faint small">What every scan, screenshot and telemetry read says it is.  Empty uses
+      the current desktop Chrome shown.  It has to start Mozilla/5.0, like a real browser.</span>
+  </label>
   <label>Read telemetry again after, in days
     <input type="number" name="external.refresh_days" min="0" max="365"
            value="{{ values['external.refresh_days'] }}">
