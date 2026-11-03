@@ -260,6 +260,22 @@ SECTIONS = [
             "means the code changed, not that the site did.",
         ],
     }),
+    ("external", "External sites", {
+        "title": "External sites",
+        "what": [
+            "The company's domains and subdomains as the internet sees them: "
+            "telemetry and a screenshot of each, dynamic scans run here or on "
+            "a DAST server, and the repositories behind each site.  "
+            "Administrators only.  Off hides the menu entry, and every page "
+            "and API call under it answers as if it were not there.",
+            "A host marked no scan, or any host under a domain marked that "
+            "way, is never scanned.  Its telemetry is one visit to the front "
+            "page, the same as a browser makes.",
+        ],
+        "caution": "From the standard profile up, a scan sends attack "
+                   "payloads.  Only scan sites the company owns and is allowed "
+                   "to test.",
+    }),
     ("limits", "Limits", {
         "title": "Limits",
         "what": [

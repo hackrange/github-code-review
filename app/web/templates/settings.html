@@ -656,6 +656,29 @@
   </label>
 </div>
 
+<div class="card" id="external">
+  <div class="card-head"><span class="head-text">External sites<button type="button" class="help-dot" data-modal="help-external" aria-label="What this section is for">?</button></span></div>
+  <div class="small faint" style="margin-bottom:.6rem">
+    The company's domains and subdomains from outside: telemetry, screenshots,
+    dynamic scans and the repositories behind each site.  Administrators only.
+  </div>
+  <label class="check"><input type="checkbox" name="external.enabled" value="1" {{ 'checked' if values['external.enabled'] }}>
+    <span>Turn on External sites.  It appears in the Administration menu.</span></label>
+  <label class="check"><input type="checkbox" name="external.screenshots" value="1" {{ 'checked' if values['external.screenshots'] }}>
+    <span>Take a screenshot of each site when its telemetry is read.</span></label>
+  <label class="check"><input type="checkbox" name="external.whitebox" value="1" {{ 'checked' if values['external.whitebox'] }}>
+    <span>Before an engine scan, read the default branch of the repositories
+      mapped to the site for routes to scan.</span></label>
+  <label class="check"><input type="checkbox" name="external.allow_private" value="1" {{ 'checked' if values['external.allow_private'] }}>
+    <span>Let telemetry and scans reach private, loopback and link local
+      addresses.  Leave off unless the sites really are internal.</span></label>
+  <label>Read telemetry again after, in days
+    <input type="number" name="external.refresh_days" min="0" max="365"
+           value="{{ values['external.refresh_days'] }}">
+    <span class="faint small">Every night at 03:30.  0 only reads it when asked.</span>
+  </label>
+</div>
+
 <div class="card" id="limits">
   <div class="card-head"><span class="head-text">Limits<button type="button" class="help-dot" data-modal="help-limits" aria-label="What this section is for">?</button></span></div>
   <div class="small faint" style="margin-bottom:.6rem">

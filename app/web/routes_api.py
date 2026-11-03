@@ -1888,6 +1888,12 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
         put("web.company_domains", domains[:200])
         put("dast.max_age_days", clean_int(form.get("dast.max_age_days", 365) or 0,
                                            "Due again after", low=0, high=3650))
+        for key in ("external.enabled", "external.screenshots",
+                    "external.whitebox", "external.allow_private"):
+            put(key, _checked(form, key))
+        put("external.refresh_days", clean_int(form.get("external.refresh_days", 7) or 0,
+                                               "Read telemetry again after",
+                                               low=0, high=365))
 
         put("security.force_https", _checked(form, "security.force_https"))
         put("security.trusted_proxies", _csv_list(text("security.trusted_proxies")))
