@@ -3565,6 +3565,7 @@ def settings_page(request: Request, msg: str = "", kind: str = "",
     from app.core import rule_mutes, settings_store as store
     from app.core.models import RuleMute
     from app.web.help_text import sections as help_sections
+    from app.web.help_text import tabs as settings_tabs
 
     with session_scope() as db:
         context = _shared(db, user)
@@ -3573,7 +3574,7 @@ def settings_page(request: Request, msg: str = "", kind: str = "",
             # The links across the top and the ? beside each heading come from
             # the same list, so a section cannot end up in one and not the
             # other.
-            help_sections=help_sections(),
+            help_sections=help_sections(), settings_tabs=settings_tabs(),
             values=store.all_values(db),
             rulesets=store.RULESETS,
             muted_notes=store.MUTED_RULE_NOTES,

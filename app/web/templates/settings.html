@@ -1,6 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Settings &middot; Git Code Review<script src="{{ base }}/static/settings.js?v={{ asset_v('settings.js') }}"></script>
-{% endblock %}
+{% block title %}Settings &middot; Git Code Review{% endblock %}
 {% block content %}
 <div class="page-head">
   <div><h1>Settings</h1>
@@ -8,9 +7,14 @@
       database, so nothing here is in a file anybody can clone.</div></div>
 </div>
 
-<nav class="section-nav" aria-label="Sections of this page">
-  {% for section in help_sections %}
-  <a href="#{{ section.id }}">{{ section.nav }}</a>
+{# One tab per group of sections.  Every section stays in the one form, so
+   saving from any tab keeps what is on the others: a hidden field is still
+   sent.  Without script every section shows, the way the page used to. #}
+<nav class="section-nav settings-tabs" role="tablist" aria-label="Settings">
+  {% for tab in settings_tabs %}
+  <a href="#tab-{{ tab.id }}" role="tab" data-tab="{{ tab.id }}"
+     data-sections="{{ tab.sections | map(attribute='id') | join(' ') }}"
+     title="{{ tab.sections | map(attribute='nav') | join(', ') }}">{{ tab.label }}</a>
   {% endfor %}
 </nav>
 
@@ -50,7 +54,7 @@
   </div>
 </div>
 
-<div class="small faint" style="margin:1.2rem 0 .8rem">
+<div class="small faint" style="margin:1.2rem 0 .8rem" data-on-tab="scanning">
   Everything below applies to every account: what to look for, where the reports
   go, how people sign in.  The defaults work as they are.  Every branch, full
   history, live credential verification on, every detector on, reports in /out.

@@ -1108,3 +1108,9 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .ext-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 1rem; }
 @media (max-width: 1100px) { .ext-grid { grid-template-columns: 1fr; } }
 .engine-list td { vertical-align: top; }
+
+/* The Settings page tabs.  The same pills as the section bar, with the
+   chosen one filled in. */
+.settings-tabs a { font-size: .85rem; padding: .35rem .9rem; }
+.settings-tabs a.active { color: var(--text); border-color: var(--border-strong);
+  background: var(--bg-sunk); font-weight: 600; }

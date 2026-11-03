@@ -305,3 +305,24 @@ SECTIONS = [
 def sections() -> list:
     """The sections, in page order, as plain dictionaries for the template."""
     return [{"id": key, "nav": nav, **body} for key, nav, body in SECTIONS]
+
+
+# The tabs on the Settings page, and which sections each one holds.  Every
+# section is in exactly one, which a test checks, so a new section cannot be
+# left on no tab and quietly never shown.
+TABS = [
+    ("scanning", "Scanning", ["accounts", "scan", "branches", "people", "limits"]),
+    ("findings", "What it looks for", ["credentials", "code", "dependencies",
+                                       "intel", "fidelity", "sensitivity"]),
+    ("signin", "Sign in", ["signin", "sessions"]),
+    ("reports", "Reports", ["output", "reports", "display"]),
+    ("web", "Web and external sites", ["domains", "webtest", "external"]),
+]
+
+
+def tabs() -> list:
+    """-> [{id, label, sections: [{id, nav}]}] in page order."""
+    names = {key: nav for key, nav, _body in SECTIONS}
+    return [{"id": key, "label": label,
+             "sections": [{"id": s, "nav": names.get(s, s)} for s in ids]}
+            for key, label, ids in TABS]
