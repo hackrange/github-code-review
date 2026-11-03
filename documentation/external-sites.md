@@ -81,6 +81,16 @@ the front page's status, redirects, headers and cookies, a firewall block
 page check, and a screenshot from a headless Chromium.  The site gets a web
 hygiene grade from A to F from its headers and TLS.
 
+Screenshots are taken with Playwright driving full Chromium, which follows
+redirects (including after a bot check, a meta refresh or a script) and gets
+past most bot checks (Imperva, Cloudflare and others) the way a visitor's
+browser does.  The page it ends on is the site's final address, and a page
+that loads and is genuinely empty keeps its white screenshot, marked blank.
+A bot check in front of the site is named, with whether a browser got past
+it; the scanning engines still meet it unless this server is let through, so
+mark such sites Whitelist needed.  When almost every port answers, that is the
+CDN accepting everything, so open ports are not reported for that site.
+
 A firewall or bot wall that refused the scan is marked as a block page and
 its screenshot is left out.  A CDN answering for a site it cannot reach, such
 as a Cloudflare 502, is marked as the site being down instead, with its

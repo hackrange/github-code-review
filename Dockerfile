@@ -234,7 +234,7 @@ RUN python3 -m venv /opt/gcr/venv \
     && ln -sf /opt/gcr/dast-venv/bin/wapiti /usr/local/bin/wapiti \
     && ln -sf /opt/gcr/dast-venv/bin/sqlmap /usr/local/bin/sqlmap \
     && PLAYWRIGHT_BROWSERS_PATH=/opt/gcr/browsers \
-           /opt/gcr/dast-venv/bin/python -m playwright install chromium-headless-shell \
+           /opt/gcr/dast-venv/bin/python -m playwright install chromium chromium-headless-shell \
     && chmod -R a+rX /opt/gcr/browsers \
     && wapiti --version && sqlmap --version \
     && rm -rf /wheels /tmp/requirements.txt /tmp/requirements-scanner.txt \

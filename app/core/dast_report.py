@@ -302,6 +302,14 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
         limitations.append("Signing in to this site goes through an outside service.  A "
                            "session cookie set in the site's sign in settings lets a scan "
                            "get past it.")
+    tele_now = external.telemetry_of(asset)
+    if tele_now.get("bot_check"):
+        limitations.append(f"{tele_now['bot_check']}'s bot check answers in front of the site.  "
+                           "Unless this server's address is let through it, the engines saw the "
+                           "check instead of the site, and an empty result means little.")
+    if tele_now.get("ports_unreliable"):
+        limitations.append("Nearly every port answers, because a CDN or firewall in front accepts "
+                           "every connection.  Open ports were not reported as findings.")
     if asset.whitelist_needed:
         limitations.append("The site needs the scanner's address let through a firewall.  If "
                            "it was not, parts of the site were blocked from the scan.")

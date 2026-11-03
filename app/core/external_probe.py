@@ -552,6 +552,60 @@ def detect_waf_block(body: str, status: int = 0) -> bool:
     return False
 
 
+# A bot check: the CDN answers with a small page that runs a script, sets a
+# cookie and reloads into the real site.  curl sees the small page and stops,
+# a headless browser is usually stopped by it and paints nothing, and every
+# scanning engine sees only the check unless the scanner is let through.
+BOT_CHECKS = [
+    ("Imperva", re.compile(r"_Incapsula_Resource|Incapsula incident ID", re.I)),
+    ("Cloudflare", re.compile(r"/cdn-cgi/challenge-platform|<title>Just a moment\.\.\.</title>|cf-chl-", re.I)),
+    ("Akamai", re.compile(r"_abck|bm-verify|akamai-bot", re.I)),
+    ("PerimeterX", re.compile(r"px-captcha|_pxAppId|perimeterx", re.I)),
+    ("DataDome", re.compile(r"captcha-delivery\.com|datadome", re.I)),
+]
+
+
+def bot_check(body: str, status: int = 200) -> str:
+    """Whose bot check answered instead of the page, or empty."""
+    text = body or ""
+    # A real page can mention these words; a challenge is small and says little else.
+    if len(text) > 30000:
+        return ""
+    for name, pattern in BOT_CHECKS:
+        if pattern.search(text):
+            return name
+    return ""
+
+
+CDN_SIGNS = [
+    ("Imperva", lambda h: "x-iinfo" in h or "imperva" in h.get("x-cdn", "").lower()
+     or "incap_ses" in h.get("set-cookie", "")),
+    ("Cloudflare", lambda h: "cf-ray" in h or h.get("server", "").lower() == "cloudflare"),
+    ("Akamai", lambda h: "akamai" in h.get("server", "").lower() or "x-akamai-transformed" in h),
+    ("Fastly", lambda h: "fastly" in (h.get("x-served-by", "") + h.get("via", "")).lower()),
+    ("CloudFront", lambda h: "x-amz-cf-id" in h),
+    ("Azure Front Door", lambda h: "x-azure-ref" in h),
+    ("Sucuri", lambda h: "x-sucuri-id" in h),
+]
+
+
+def cdn_of(headers: dict) -> str:
+    """The CDN or firewall in front of the site, from its response headers."""
+    h = {k.lower(): str(v) for k, v in (headers or {}).items()}
+    for name, test in CDN_SIGNS:
+        try:
+            if test(h):
+                return name
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
+
+
+# More ports than this answering means something in front accepts every
+# connection, which says nothing about the services behind it.
+PORTS_ALL_OPEN = 20
+
+
 def origin_down(status: int, headers: dict, body: str) -> bool:
     """A CDN answering for a site it could not reach: Cloudflare's 52x pages
     and 502/504 with its error page.  The site is down, not blocking."""
@@ -828,9 +882,12 @@ def take_screenshot(browser: str, urls: list, out_path: Path) -> tuple:
                              "--disable-background-networking",
                              "--run-all-compositor-stages-before-draw",
                              "--force-device-scale-factor=1",
+                             # navigator.webdriver gives a headless browser away
+                             # to every bot check before anything else does.
+                             "--disable-blink-features=AutomationControlled",
                              f"--user-data-dir={scratch / 'profile'}",
                              f"--user-agent={user_agent()}", "--window-size=1280,800",
-                             f"--screenshot={tmp}", "--virtual-time-budget=10000", url],
+                             f"--screenshot={tmp}", "--virtual-time-budget=15000", url],
                             capture_output=True, timeout=timeout, cwd=scratch,
                             env={**os.environ, "TMPDIR": str(scratch),
                                  "HOME": str(scratch)})
@@ -849,13 +906,90 @@ def take_screenshot(browser: str, urls: list, out_path: Path) -> tuple:
                     continue
                 flat = _png_flat_color(tmp)
                 if flat is not None:
-                    result, detail = "blank", f"rendered a flat {flat} page"
+                    # Kept: a page can really be blank.  A later address that
+                    # draws something replaces it.
+                    shutil.copy(str(tmp), str(out_path))
+                    result, detail = "blank", f"the page is blank: it rendered a flat {flat} page"
                     break
                 shutil.move(str(tmp), str(out_path))
                 return "ok", f"{size} bytes from {url}"
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     return result, detail
+
+
+SHOT_SCRIPT = Path(__file__).with_name("browser_shot.py")
+
+
+def playwright_python() -> str:
+    """The Python that has Playwright, or empty.  GCR_DAST_PYTHON wins."""
+    for cand in (os.environ.get("GCR_DAST_PYTHON", ""), "/opt/gcr/dast-venv/bin/python"):
+        if cand and os.access(cand, os.X_OK):
+            return cand
+    return ""
+
+
+def playwright_shot(urls: list, out_path: Path, allow_private: bool = False,
+                    timeout: int = 45) -> dict:
+    """Load the page in a real browser engine, through any bot check, and
+    photograph it.  -> {status, detail, title, url, bot_check, bot_check_seen}
+    status is ok, blank, or failed when it could not run at all."""
+    import json as _json
+
+    py = playwright_python()
+    result = {"status": "failed", "detail": "Playwright is not installed", "title": "",
+              "url": "", "bot_check": "", "bot_check_seen": ""}
+    if not py or not SHOT_SCRIPT.is_file():
+        return result
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix="gcr-pw-"))
+    try:
+        for url in urls[:2]:
+            tmp = scratch / "shot.png"
+            tmp.unlink(missing_ok=True)
+            argv = [py, str(SHOT_SCRIPT), url, str(tmp), "--user-agent", user_agent(),
+                    "--timeout", str(timeout)]
+            if allow_private:
+                argv.append("--allow-private")
+            with SHOT_GATE:
+                try:
+                    proc = subprocess.run(argv, capture_output=True, text=True,
+                                          timeout=timeout + 30, cwd=scratch,
+                                          env={**os.environ, "HOME": str(Path.home())})
+                except subprocess.TimeoutExpired:
+                    result["detail"] = f"the browser took longer than {timeout + 30} seconds"
+                    continue
+            try:
+                got = _json.loads((proc.stdout or "").strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                result["detail"] = ("the browser gave no answer: "
+                                    + ((proc.stderr or "").strip().splitlines() or [""])[-1][:160])
+                continue
+            result.update(title=got.get("title", ""), url=got.get("url", ""),
+                          bot_check=got.get("bot_check", ""),
+                          bot_check_seen=got.get("bot_check_seen", ""))
+            if not got.get("ok") or not tmp.exists() or tmp.stat().st_size == 0:
+                result["detail"] = got.get("error") or "no image came back"
+                continue
+            flat = _png_flat_color(tmp)
+            if flat is not None and not got.get("bot_check"):
+                # It loaded, it got past any bot check, and there is nothing on
+                # it: the page itself is empty.  That is a true picture of it.
+                shutil.move(str(tmp), str(out_path))
+                result.update(status="blank", detail=(
+                    f"the page at {got.get('url') or url} is blank: it loaded, and shows nothing"))
+                return result
+            if flat is not None:
+                result.update(status="failed", detail=f"rendered a flat {flat} page")
+                continue
+            shutil.move(str(tmp), str(out_path))
+            passed = f", through {got['bot_check_seen']}'s bot check" if got.get("bot_check_seen") \
+                and not got.get("bot_check") else ""
+            result.update(status="ok", detail=f"{got.get('engine', 'browser')}{passed}, from {got.get('url') or url}")
+            return result
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return result
 
 
 def screenshot_urls(host: str, rec: dict) -> list:
@@ -933,17 +1067,46 @@ def probe(host: str, shot_path: Path = None, screenshots: bool = True,
     rec["category"] = classify(rec["status"], has_web)
     rec["waf_block"] = rec["category"] in WEB_CATEGORIES and detect_waf_block(
         rec["body_sample"], rec["status"])
+    rec["cdn"] = cdn_of(rec["headers"])
+    rec["bot_check"] = bot_check(rec["body_sample"], rec["status"]) \
+        if rec["category"] in WEB_CATEGORIES else ""
+    rec["ports_unreliable"] = len(rec["ports"]) >= PORTS_ALL_OPEN
     rec["origin_down"] = origin_down(rec["status"], rec["headers"], rec["body_sample"])
 
     if rec["category"] in WEB_CATEGORIES and screenshots and shot_path is not None:
         browser = find_browser()
-        if not browser:
-            rec["shot"], rec["shot_detail"] = "nobrowser", "no headless Chromium on this server"
-        elif rec["waf_block"]:
+        if rec["waf_block"]:
             rec["shot"], rec["shot_detail"] = "waf", "a firewall block page answered"
         else:
-            rec["shot"], rec["shot_detail"] = take_screenshot(
-                browser, screenshot_urls(host, rec), shot_path)
+            # A real browser engine first: it gets through most bot checks and
+            # reads the page as a visitor sees it.  The plain headless capture
+            # is what is left when Playwright is not there or brought nothing.
+            seen = playwright_shot(screenshot_urls(host, rec), shot_path, allow_private)
+            if seen["status"] in ("ok", "blank"):
+                rec["shot"], rec["shot_detail"] = seen["status"], seen["detail"]
+            elif browser:
+                rec["shot"], rec["shot_detail"] = take_screenshot(
+                    browser, screenshot_urls(host, rec), shot_path)
+            else:
+                rec["shot"], rec["shot_detail"] = ("blank" if seen["status"] == "blank" else "nobrowser",
+                                                   seen["detail"])
+            rec["rendered_title"] = seen.get("title", "")
+            rec["rendered_url"] = seen.get("url", "")
+            # Redirects a browser follows that a plain request does not: after a
+            # bot check, a meta refresh or a script.
+            if rec["rendered_url"] and rec["rendered_url"].rstrip("/") != (rec["final_url"] or "").rstrip("/"):
+                if rec["rendered_url"] not in rec["redirects"]:
+                    rec["redirects"] = list(rec["redirects"]) + [rec["rendered_url"]]
+            # The browser loaded the page and no check is left on it: whatever
+            # check the first answer was, the browser got past it.
+            if seen["status"] in ("ok", "blank") and not seen.get("bot_check") \
+                    and (rec["bot_check"] or seen.get("bot_check_seen")):
+                rec["bot_check_passed"] = rec["bot_check"] or seen["bot_check_seen"]
+            if rec["shot"] in ("blank", "blocked") and rec["bot_check"] \
+                    and not rec.get("bot_check_passed"):
+                rec["shot"] = "botcheck"
+                rec["shot_detail"] = (f"{rec['bot_check']}'s bot check answered instead of the "
+                                      "page, and stopped the browser")
     rec["score"] = compute_score(rec)
     rec["seconds"] = round(time.monotonic() - started, 1)
     return rec

@@ -740,7 +740,7 @@ def _report(db, asset, scan, user):
     organization = settings_store.get(db, "report.organization_name", "") or ""
     context = dast_report.build(db, asset, scan, user, organization)
     shot = external.shot_path(asset.id)
-    if asset.screenshot == "ok" and shot.is_file() and shot.stat().st_size < 4_000_000:
+    if asset.screenshot in ("ok", "blank") and shot.is_file() and shot.stat().st_size < 4_000_000:
         context["screenshot"] = "data:image/png;base64," + base64.b64encode(
             shot.read_bytes()).decode()
     logo = (settings_store.get(db, "report.logo", "") or "").strip()

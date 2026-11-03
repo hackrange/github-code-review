@@ -806,6 +806,7 @@ TELEMETRY_FIELDS = [
         ("probe_url", "Probe URL"), ("final_url", "Final URL"),
         ("redirect_target", "Redirect target"), ("title", "Page title"),
         ("server", "Server header"), ("powered_by", "X-Powered-By"),
+        ("cdn", "CDN or firewall"), ("bot_check", "Bot check"),
         ("waf_block", "Firewall block page"), ("origin_down", "CDN could not reach the site"),
         ("http_to_https", "HTTP redirects to HTTPS"),
         ("grade", "Grade"), ("score", "Score"),
@@ -874,19 +875,29 @@ def flatten(rec: dict) -> dict:
         "category": external_probe.CATEGORY_NAMES.get(rec.get("category"), rec.get("category") or ""),
         "status_code": rec.get("status") or "",
         "probe_url": f"https://{rec['host']}/" if rec.get("host") else "",
-        "final_url": rec.get("final_url") if rec.get("status") else "",
+        "final_url": (rec.get("rendered_url") or rec.get("final_url")) if rec.get("status") else "",
         "redirect_target": (rec.get("redirects") or [""])[-1],
-        "title": rec.get("title"), "server": rec.get("server"),
+        # What a browser shows beats what the first answer said: behind a
+        # bot check the first answer is the check, with no title at all.
+        "title": rec.get("rendered_title") or rec.get("title"), "server": rec.get("server"),
         "powered_by": rec.get("powered_by"),
         "waf_block": rec.get("waf_block") if rec.get("status") else None,
         "origin_down": rec.get("origin_down") if rec.get("status") else None,
+        "cdn": rec.get("cdn"),
+        "bot_check": (f"{rec['bot_check']}'s, passed by a real browser; scanners still meet it"
+                      if rec.get("bot_check") and rec.get("bot_check_passed") else
+                      f"{rec['bot_check']}'s bot check answers instead of the page"
+                      if rec.get("bot_check") else ("none seen" if rec.get("status") else "")),
         "http_to_https": rec.get("http_to_https"),
         "grade": score.get("grade") if score.get("grade") != "N/A" else "",
         "score": score.get("score") if score.get("grade") not in (None, "N/A") else "",
         "ip": rec.get("ip"), "ips": rec.get("ips"), "ipv6": dns.get("ipv6"),
         "ptr": dns.get("ptr"), "isp": rec.get("isp"), "asn": who.get("asn"),
         "netblock": who.get("netblock"),
-        "open_ports": [str(p) for p in rec.get("ports") or []],
+        "open_ports": ([f"{len(rec.get('ports') or [])} of the ports checked answer, which is "
+                        "the CDN or firewall in front accepting everything, not the site's "
+                        "own services"] if rec.get("ports_unreliable")
+                       else [str(p) for p in rec.get("ports") or []]),
         "nameservers": dns.get("nameservers"), "cname": dns.get("cname"),
         "mx": dns.get("mx"), "registrar": who.get("registrar"),
         "domain_created": who.get("domain_created"),
@@ -1041,7 +1052,7 @@ def asset_dict(asset: ExternalAsset, links: list = None, counts: dict = None,
             "waf_block": bool(tele.get("waf_block")),
             "screenshot": asset.screenshot,
             "screenshot_url": (f"{base_url}/external/{asset.id}/screenshot.png"
-                               if asset.screenshot == "ok" else ""),
+                               if asset.screenshot in ("ok", "blank") else ""),
         },
         "fields": {row["key"]: {"value": row["value"], "scan": row["scan"],
                                 "manual": row["manual"]}
@@ -1169,7 +1180,7 @@ def save_telemetry(asset_id: int, rec: dict) -> None:
             asset.category = rec.get("category") or ""
         if rec.get("shot"):
             asset.screenshot = rec["shot"][:16]
-            if rec["shot"] != "ok":
+            if rec["shot"] not in ("ok", "blank"):
                 shot_path(asset_id).unlink(missing_ok=True)
 
 

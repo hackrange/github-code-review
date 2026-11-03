@@ -6,6 +6,15 @@ moved.
 
 ## 2026-11-03
 
+**Screenshots through bot checks, and pages that really are blank.**  A site
+behind Imperva showed "a flat white page" and seventy open ports.  The
+screenshot browser was stopped by Imperva's bot check, and the ports were
+Imperva answering on everything.  Screenshots now use Playwright with full
+Chromium, which gets past such checks and follows the redirects behind them,
+so the site's real final page and address are recorded, and a page that is
+genuinely empty keeps its white picture, marked blank.  The CDN and any bot
+check are named, and open ports are not reported when nearly all of them answer.
+
 **Scheduled scans, and how many run at once.**  A site can be scanned on a
 schedule: once, or every day, week or month at a time, in the time zone set in
 Settings.  Settings also says how many scans run at the same time, 1 to 6; a

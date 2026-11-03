@@ -41,6 +41,10 @@
     <button class="btn sm danger" type="submit">Stop</button></form>{% endif %}
 </div></div>
 {% endif %}
+{% if tele.bot_check and not active_scan %}<div class="notice warn"><div>
+  {%- if tele.bot_check_passed %}{{ tele.bot_check }}'s bot check sits in front of this site.  A real browser got through it for the screenshot, but the scanning engines meet the check, not the site, unless this server's address is let through it
+  {%- else %}{{ tele.bot_check }}'s bot check answers instead of this site's pages, and stopped the screenshot browser too.  The scanning engines see the check, not the site, unless this server's address is let through it{% endif %}
+  {%- if not asset.whitelist_needed %}; mark the site Whitelist needed in Edit to track that{% endif %}.</div></div>{% endif %}
 {% if asset.telemetry_status == 'running' %}<div class="notice info"><div>Reading telemetry.  The page shows it when it is done.</div></div>{% endif %}
 {% if asset.telemetry_status == 'failed' %}<div class="notice bad"><div>The last telemetry read failed: {{ asset.telemetry_error }}</div></div>{% endif %}
 </div>
@@ -50,13 +54,13 @@
   <div class="card-head">Screenshot
     <span class="faint small" style="font-weight:400">{{ tele.final_url or ('https://' ~ asset.host ~ '/') }}{% if asset.telemetry_at %}, {{ asset.telemetry_at | dt('%Y-%m-%d %H:%M') }}{% endif %}</span></div>
   <div class="card-body">
-    {% if asset.screenshot == 'ok' %}
+    {% if asset.screenshot in ('ok', 'blank') %}
     {% set shot_src = base ~ '/external/' ~ asset.id ~ '/screenshot.png?v=' ~ (asset.telemetry_at.timestamp() | int if asset.telemetry_at else 0) %}
     <button type="button" class="shot-thumb-btn" data-modal="shot-modal" title="Show it larger">
       <img class="shot-small" alt="Screenshot of {{ asset.host }}, click to enlarge" src="{{ shot_src }}">
-      <span class="small faint">Click to enlarge</span></button>
+      <span class="small faint">{% if asset.screenshot == 'blank' %}The page is blank: it loaded and shows nothing.  {% endif %}Click to enlarge</span></button>
     {% else %}
-    <div class="shot-hero-none">{{ {'waf':'A firewall block page answered, so the screenshot is left out.','blank':'The page rendered blank.','nobrowser':'No headless browser on this server.','blocked':'The browser brought back no image.'}.get(asset.screenshot, 'No screenshot yet.  Refresh telemetry to take one.') }}
+    <div class="shot-hero-none">{{ {'waf':'A firewall block page answered, so the screenshot is left out.','botcheck':'A bot check answered instead of the page, and stopped the screenshot browser.','blank':'The page rendered blank.','nobrowser':'No headless browser on this server.','blocked':'The browser brought back no image.'}.get(asset.screenshot, 'No screenshot yet.  Refresh telemetry to take one.') }}
       {% if tele.shot_detail %}<div class="small faint">{{ tele.shot_detail }}</div>{% endif %}</div>
     {% endif %}
   </div>
@@ -301,7 +305,7 @@
   </div>
 </div>
 
-{% if asset.screenshot == 'ok' %}
+{% if asset.screenshot in ('ok', 'blank') %}
 <div class="modal-backdrop" id="shot-modal" hidden>
   <div class="modal shot-modal">
     <div class="modal-head">{{ tele.final_url or asset.host }}

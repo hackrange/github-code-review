@@ -159,8 +159,10 @@ def scan(host: str, allow_private: bool = False) -> dict:
         count += 1
         return probe_mod.fetch(url, allow_private=allow_private, **kw)
 
-    # ---- ports that should not face the internet
-    for port in rec.get("ports") or []:
+    # ---- ports that should not face the internet.  Not when nearly every
+    # port answers: that is a CDN or firewall accepting everything, and a
+    # finding for each would be a list of things that are not there.
+    for port in ([] if rec.get("ports_unreliable") else rec.get("ports") or []):
         if port in probe_mod.RISKY_PORTS:
             what = probe_mod.RISKY_PORTS[port]
             findings.append(_finding(
