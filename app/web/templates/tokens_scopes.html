@@ -7,10 +7,12 @@
       <tr>
         <td class="mono nowrap">reports</td>
         <td>Pipelines and scripts that read results: the fix plan, the deploy
-          check, findings, SBOMs, trends, and asking for an exception.</td>
-        <td>Only repositories your account can open.  It can ask for an
-          exception but never approve one.  The whole-estate report files need
-          an administrator's account as well.</td>
+          check, findings, SBOMs, trends, and exceptions.  It can ask for an
+          exception, change or withdraw your own, and on an administrator's
+          account revoke exceptions and exclusions.</td>
+        <td>Only repositories your account can open, and only your own
+          exceptions unless you approve them.  It can never approve one.  The
+          whole-estate report files need an administrator's account as well.</td>
         <td>A build or deploy pipeline.  This is the one the sample kit uses.</td>
       </tr>
       <tr>
@@ -26,6 +28,15 @@
           noise this server does.</td>
         <td>The rules, and only the exclusions for repositories you can see.</td>
         <td>Your editor, alongside <span class="mono">review</span>.</td>
+      </tr>
+      <tr>
+        <td class="mono nowrap">approve</td>
+        <td>Approves and rejects exceptions, and adds exclusions, such as
+          excluding a credential's fingerprint everywhere it appears.</td>
+        <td>Administrators' tokens only, checked on every call.  Only findings
+          your account can see.  These take findings out of the report files,
+          so keep this off any token a pipeline holds.</td>
+        <td>An administrator's own script or triage tool.</td>
       </tr>
       <tr>
         <td class="mono nowrap">gate</td>

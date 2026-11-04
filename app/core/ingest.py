@@ -2010,9 +2010,7 @@ def apply_exceptions(session, findings=None) -> int:
 
     Returns how many it changed.
     """
-    import fnmatch
-
-    from app.core.exclusions import active_rules
+    from app.core.exclusions import active_rules, matches
 
     rules = active_rules(session)
     if not rules:
@@ -2025,26 +2023,6 @@ def apply_exceptions(session, findings=None) -> int:
 
     rows = findings if findings is not None else (
         session.query(Finding).filter(Finding.excepted.is_(False)).all())
-
-    def matches(rule, finding) -> bool:
-        kind = _exception_kind(finding)
-        if rule.kind not in ("any", kind):
-            return False
-        for pattern, value in ((rule.organization, finding.organization or ""),
-                               (rule.repository, finding.repository or ""),
-                               (rule.path, finding.file_path or ""),
-                               (rule.rule, finding.rule or "")):
-            pattern = pattern or "*"
-            if pattern == "*":
-                continue
-            target = value
-            if pattern is rule.repository and "/" not in pattern:
-                target = value.split("/")[-1]
-            if not fnmatch.fnmatch(target.lower(), pattern.lower()):
-                return False
-        if rule.fingerprint:
-            return rule.fingerprint == finding.fingerprint
-        return True
 
     changed = 0
     for finding in rows:

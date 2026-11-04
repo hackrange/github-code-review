@@ -561,8 +561,13 @@ def write(g: Guide):
     g.p("What each scope allows:")
     g.table(["Scope", "What it is for", "Give it to"], [
         ["reports", "Reads your findings, fix plan, SBOMs and trends, runs the deploy check, "
-                    "and asks for exceptions.  Sees only repositories your account can open.",
+                    "and asks for, changes and withdraws your own exceptions.  Sees only "
+                    "repositories your account can open.  On an administrator's account it "
+                    "can also revoke exceptions and exclusions.",
          "Build and deploy pipelines.  This kit uses only this one."],
+        ["approve", "Approves and rejects exceptions, and adds exclusions.  Only an "
+                    "administrator's token can have it.  It takes findings out of the reports.",
+         "An administrator's own scripts.  Never a pipeline."],
         ["review", "Sends code to be checked and gets problems back.  Nothing is saved.",
          "Editor plugins."],
         ["rules", "Reads the triage rules, so an editor hides the same noise.", "Editor plugins."],
@@ -686,8 +691,30 @@ git push""", "Copy the files and push them")
   -t SEC-1203""", "Ask for an exception on finding 4182")
     g.p("The finding number is the `id` in the fix plan's details link, or in "
         "the address of the finding's page.")
+    g.p("You can look at, change or withdraw your own exception later.  Nobody "
+        "else's is visible to you.  Changing one that was already approved sends "
+        "it back to waiting, and the finding comes back into the reports until "
+        "an administrator agrees again.")
+    g.code("""bash bash/gcr-exception.sh list -s requested
+bash bash/gcr-exception.sh edit -i 77 -e 2027-03-31
+bash bash/gcr-exception.sh withdraw -i 77""", "Follow, change or withdraw your own")
 
-    g.h2("7.5  Fail when things get worse")
+    g.h2("7.5  For administrators: approve, revoke and exclude")
+    g.p("With a `reports` token, an administrator can revoke an approved exception "
+        "and revoke exclusions.  Revoking only ever puts findings back into the "
+        "reports.  Approving, rejecting and adding an exclusion take findings out, "
+        "so they need a separate token with the `approve` scope.  Keep that token "
+        "out of every pipeline.")
+    g.code("""bash bash/gcr-exception.sh approve -i 77 -n "Agreed for one quarter."
+bash bash/gcr-exception.sh revoke -i 77
+bash bash/gcr-exclusion.sh add -p cred:4f1c9a0b7e2d6c35 -m "Test key from the vendor docs."
+bash bash/gcr-exclusion.sh revoke -p cred:4f1c9a0b7e2d6c35""",
+           "Sign off, take back, exclude a value and take that back")
+    g.p("A revoked exclusion stays on the Exclusions page, marked revoked.  The "
+        "finding page also lists any exclusion that covers it, with a button to "
+        "revoke it.")
+
+    g.h2("7.6  Fail when things get worse")
     g.p("`bash/gcr-trend-guard.sh` fails when a severity has gone up over a period.  "
         "Run it weekly to catch a team falling behind.")
     g.code("bash .github/gcr/bash/gcr-trend-guard.sh --days 30 --severity critical")
@@ -756,8 +783,17 @@ bash bash/gcr-deploy-check.sh -r your-org/your-repo -b main""")
         ["findings --format csv", "gcr-findings-summary.sh --csv f.csv", "Lists open findings, or saves them for a spreadsheet."],
         ["sbom --format cdx", "gcr-sbom.sh -f cdx", "Downloads the SBOM (cdx or spdx)."],
         ["trends --days 30", "gcr-trend-guard.sh -d 30", "Shows how the numbers moved; can fail when they rise."],
-        ["exceptions", "", "Lists the exceptions you asked for."],
+        ["exceptions", "gcr-exception.sh list", "Lists the exceptions you asked for."],
         ["request-exception", "gcr-request-exception.sh", "Asks for an exception on one finding."],
+        ["exception --id N", "gcr-exception.sh show -i N", "Shows one of your exceptions."],
+        ["edit-exception", "gcr-exception.sh edit", "Changes your own exception."],
+        ["withdraw-exception", "gcr-exception.sh withdraw", "Takes back your own exception."],
+        ["revoke-exception", "gcr-exception.sh revoke", "Administrators: revokes an approved exception."],
+        ["approve-exception, reject-exception", "gcr-exception.sh approve, reject",
+         "Administrators, approve scope: decides a waiting exception."],
+        ["exclusions", "gcr-exclusion.sh list", "Administrators: lists exclusions."],
+        ["exclude", "gcr-exclusion.sh add", "Administrators, approve scope: excludes a fingerprint or finding."],
+        ["revoke-exclusion", "gcr-exclusion.sh revoke", "Administrators: revokes by id or fingerprint."],
         ["", "gcr-token-store.sh save", "Saves your token encrypted on your computer."],
     ], [2.1, 2.1, 2.3])
     g.p("Add `--help` to any command to see every option, for example "

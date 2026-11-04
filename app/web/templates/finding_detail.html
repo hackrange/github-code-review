@@ -1099,6 +1099,57 @@
     <p class="small faint">Asked for by {{ waiver.requested_by }},
       expires {{ waiver.expires_at | dt('%Y-%m-%d') if waiver.expires_at }}
       {% if waiver.decided_by %}, decided by {{ waiver.decided_by }}{% endif %}</p>
+    {% if can_revoke and waiver.status.value == 'approved' %}
+    <form method="post" action="{{ base }}/waivers/{{ waiver.id }}/revoke"
+          data-confirm="The finding comes straight back into both report files. Continue?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="back" value="finding">
+      <button class="btn sm danger" type="submit">Revoke this exception</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% if exclusions_here %}
+{# The rules holding this finding out of the report files.  An exclusion on a
+   value covers it everywhere, so revoking one here brings back every finding
+   it covered, not just this one. #}
+<div class="card">
+  <div class="card-head">Excluded by {{ exclusions_here | length }} rule{{ '' if exclusions_here | length == 1 else 's' }}</div>
+  <div class="card-body">
+    <table class="small">
+      <tbody>
+      {% for e in exclusions_here %}
+        <tr>
+          <td>
+            {% if e.fingerprint %}<div>Value <span class="mono small">{{ e.fingerprint }}</span>
+              {%- if (e.organization or '*') == '*' and (e.repository or '*') == '*' %}
+              <span class="faint small">wherever it appears</span>{% endif %}</div>
+            {% elif e.vuln_id %}<div>This finding, <span class="mono small">{{ e.vuln_id }}</span></div>
+            {% else %}<div class="mono small">{{ e.organization or '*' }}/{{ e.repository or '*' }}:{{ e.path or '*' }}
+              {%- if e.rule and e.rule != '*' %} rule {{ e.rule }}{% endif %}</div>{% endif %}
+            {% if e.reason %}<div class="small">{{ e.reason }}</div>{% endif %}
+            <div class="small faint">By {{ e.reviewed_by or 'unknown' }}
+              {%- if e.reviewed_date %} on {{ e.reviewed_date | dt('%Y-%m-%d') }}{% endif %},
+              {% if e.expires_at %}until {{ e.expires_at | dt('%Y-%m-%d') }}{% else %}no end date{% endif %}
+              {%- if e.ticket %}, ticket {{ e.ticket }}{% endif %}</div>
+          </td>
+          <td class="nowrap">
+            {% if can_exclude %}
+            <form method="post" action="{{ base }}/exclusions/{{ e.id }}/revoke"
+                  data-confirm="Everything this rule covers comes back into both report files, not just this finding. Continue?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="finding_id" value="{{ f.id }}">
+              <input type="hidden" name="back" value="finding">
+              <button class="btn sm danger" type="submit">Revoke exclusion</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
   </div>
 </div>
 {% endif %}

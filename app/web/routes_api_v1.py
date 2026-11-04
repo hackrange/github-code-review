@@ -627,6 +627,12 @@ def list_exceptions(request: Request,
                                Waiver.expires_at < now)
         elif wanted:
             base = base.filter(Waiver.status == wanted)
+        finding_raw = (params.get("finding", "") or "").strip()
+        if finding_raw:
+            if not finding_raw.isdigit():
+                raise HTTPException(status_code=400,
+                                    detail="finding is a finding number.")
+            base = base.filter(Waiver.finding_id == int(finding_raw))
 
         total = base.count()
         rows = (base.order_by(Waiver.requested_at.desc(), Waiver.id.desc())
@@ -711,6 +717,519 @@ async def ask_for_exception(finding_id: int, request: Request,
         out = _exception_dict(waiver, finding)
 
     return JSONResponse(status_code=201, content=out)
+
+
+# --- one exception: read, change, withdraw, revoke -------------------------
+#
+# Every call here finds the exception through the findings the token's owner
+# can see, then applies the same rule as the Exceptions page.  An id that is
+# not yours answers 404, the same as one that does not exist, so it cannot be
+# used to find out what other teams asked for.
+
+_EDITABLE = ("reason", "expires", "ticket", "category")
+
+
+def _visible_waiver(db, me, waiver_id):
+    """(waiver, finding) when this person may read it, else a 404."""
+    from app.core import rbac
+    from app.core.models import Waiver
+
+    waiver = db.query(Waiver).filter(Waiver.id == waiver_id).one_or_none()
+    finding = (rbac.visible_finding(db, me, waiver.finding_id)
+               if waiver is not None else None)
+    if (finding is None or (finding.out_of_scope and not rbac.can(me, "repo.scope"))
+            or _own_waiver(me, waiver) is None):
+        raise HTTPException(status_code=404, detail="No such exception.")
+    return waiver, finding
+
+
+def _is_owner(me, waiver) -> bool:
+    return (waiver.requested_by or "").lower() == (me.username or "").lower()
+
+
+async def _json_object(request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Send JSON.")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Send an object.")
+    return body
+
+
+@router.get("/exceptions/{exception_id}")
+def one_exception(exception_id: int,
+                  caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
+    """One exception.  Yours, or any you could approve."""
+    _require(caller.user, "findings.read")
+    with session_scope() as db:
+        me = _me(db, caller)
+        waiver, finding = _visible_waiver(db, me, exception_id)
+        return JSONResponse(_exception_dict(waiver, finding))
+
+
+@router.patch("/exceptions/{exception_id}")
+async def edit_exception(exception_id: int, request: Request,
+                         caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
+    """Change your own exception.
+
+    Only the person who asked can change it, whatever their role, so an
+    approver cannot rewrite somebody else's argument under their name.  An
+    approved exception that is changed goes back to waiting: what was signed
+    off is not what it says any more, so its finding comes back into the
+    report files until an administrator agrees again.
+    """
+    from app.core.audit import record
+    from app.core.models import FindingKind, WaiverStatus, utcnow
+    from app.web.routes_api import (_parse_expiry, _waiver_category,
+                                    take_back_waiver)
+    from app.core.reports import request_rewrite
+    from app.web.security import clean_text, client_ip
+
+    _require(caller.user, "waiver.request")
+    body = await _json_object(request)
+    unknown = sorted(set(body) - set(_EDITABLE))
+    if unknown:
+        raise HTTPException(status_code=400,
+                            detail="Only reason, expires, ticket and category "
+                                   "can be changed.")
+    if not any(field in body for field in _EDITABLE):
+        raise HTTPException(status_code=400, detail="Send something to change.")
+    for field in _EDITABLE:
+        if body.get(field) is not None and not isinstance(body.get(field), str):
+            raise HTTPException(status_code=400,
+                                detail=f"{field} has to be a string.")
+
+    with session_scope() as db:
+        me = _me(db, caller)
+        waiver, finding = _visible_waiver(db, me, exception_id)
+        if not _is_owner(me, waiver):
+            raise HTTPException(status_code=403,
+                                detail="Only the person who asked for it can change it.")
+        if waiver.status not in {WaiverStatus.REQUESTED, WaiverStatus.APPROVED}:
+            raise HTTPException(
+                status_code=409,
+                detail="That one is closed.  Ask again with POST "
+                       "/findings/{id}/exceptions.")
+
+        if "reason" in body:
+            reason = clean_text(body.get("reason") or "", "Reason", limit=2000)
+            if len(reason) < 20:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Say a bit more about why this is acceptable, at "
+                           "least 20 characters.")
+            waiver.reason = reason
+        if "ticket" in body:
+            waiver.ticket = clean_text(body.get("ticket") or "", "Ticket",
+                                       limit=120, required=False)
+        if "expires" in body:
+            waiver.expires_at = _parse_expiry(body.get("expires") or "")
+        if "category" in body:
+            category = _waiver_category(body.get("category") or "")
+            if category == "not_deployed" and finding.kind == FindingKind.CREDENTIAL:
+                raise HTTPException(status_code=400, detail=(
+                    "A credential works wherever it was pushed, deployed or not.  "
+                    "Rotate it, or ask for an accepted risk exception instead."))
+            waiver.category = category
+
+        was_approved = waiver.status == WaiverStatus.APPROVED
+        if was_approved:
+            take_back_waiver(db, waiver, finding, me.username)
+        waiver.status = WaiverStatus.REQUESTED
+        waiver.requested_at = utcnow()
+        waiver.decided_by = ""
+        waiver.decided_at = None
+        waiver.decision_note = ""
+        db.flush()
+
+        record(db, "waiver.edited", actor=me.username, target=finding.fingerprint,
+               detail=(f"{', '.join(sorted(body))} changed"
+                       + ("; approval undone, waiting again" if was_approved else "")
+                       + f" (api token {caller.token.prefix})"),
+               source_ip=client_ip(request))
+        if was_approved:
+            request_rewrite()
+        return JSONResponse(_exception_dict(waiver, finding))
+
+
+@router.post("/exceptions/{exception_id}/withdraw")
+def withdraw_exception(exception_id: int, request: Request,
+                       caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
+    """Take back your own exception, waiting or approved.
+
+    Only the person who asked.  It is kept as revoked with a note saying it
+    was withdrawn, and an approved one's finding comes straight back.
+    """
+    from app.core.audit import record
+    from app.core.models import WaiverStatus
+    from app.core.reports import request_rewrite
+    from app.web.routes_api import take_back_waiver
+    from app.web.security import client_ip
+
+    _require(caller.user, "waiver.request")
+    with session_scope() as db:
+        me = _me(db, caller)
+        waiver, finding = _visible_waiver(db, me, exception_id)
+        if not _is_owner(me, waiver):
+            raise HTTPException(status_code=403,
+                                detail="Only the person who asked for it can withdraw it.")
+        if waiver.status not in {WaiverStatus.REQUESTED, WaiverStatus.APPROVED}:
+            raise HTTPException(status_code=409,
+                                detail="That one is already closed.")
+        was_approved = waiver.status == WaiverStatus.APPROVED
+        take_back_waiver(db, waiver, finding, me.username,
+                         note="Withdrawn by the person who asked for it.")
+        db.flush()
+        record(db, "waiver.withdrawn", actor=me.username,
+               target=finding.fingerprint,
+               detail=f"api token {caller.token.prefix}",
+               source_ip=client_ip(request))
+        if was_approved:
+            request_rewrite()
+        return JSONResponse(_exception_dict(waiver, finding))
+
+
+@router.post("/exceptions/{exception_id}/revoke")
+def revoke_exception(exception_id: int, request: Request,
+                     caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
+    """Take back an approved exception, as an administrator.
+
+    The safe direction for a token to have: the finding comes back into the
+    report files, it never leaves them.
+    """
+    from app.core.audit import record
+    from app.core.models import WaiverStatus
+    from app.core.reports import request_rewrite
+    from app.web.routes_api import take_back_waiver
+    from app.web.security import client_ip
+
+    _require(caller.user, "waiver.revoke")
+    with session_scope() as db:
+        me = _me(db, caller)
+        waiver, finding = _visible_waiver(db, me, exception_id)
+        if waiver.status != WaiverStatus.APPROVED:
+            raise HTTPException(status_code=409,
+                                detail="Only an approved exception can be revoked.")
+        take_back_waiver(db, waiver, finding, me.username)
+        db.flush()
+        record(db, "waiver.revoked", actor=me.username, target=finding.fingerprint,
+               detail=f"api token {caller.token.prefix}",
+               source_ip=client_ip(request))
+        request_rewrite()
+        return JSONResponse(_exception_dict(waiver, finding))
+
+
+# --- signing off, on the approve scope -------------------------------------
+#
+# The calls that take findings out of the report files.  A token needs the
+# approve scope, which only an administrator can put on one, and the account
+# behind it is checked again on every call in case it has since lost the role.
+
+async def _note(request) -> str:
+    from app.web.security import clean_text
+
+    raw = await request.body()
+    if not raw:
+        return ""
+    body = await _json_object(request)
+    if body.get("note") is not None and not isinstance(body.get("note"), str):
+        raise HTTPException(status_code=400, detail="note has to be a string.")
+    return clean_text(body.get("note") or "", "Note", limit=1000, required=False)
+
+
+@router.post("/exceptions/{exception_id}/approve")
+async def approve_exception(exception_id: int, request: Request,
+                            caller: Caller = Depends(caller_for("approve"))) -> JSONResponse:
+    """Approve a waiting exception.  Its finding leaves both report files."""
+    from app.core.audit import record
+    from app.core.models import FindingState, WaiverStatus, utcnow
+    from app.core.reports import request_rewrite
+    from app.web.routes_api import _mirror_waiver, _set_exception
+    from app.web.security import client_ip
+
+    _require(caller.user, "waiver.approve")
+    note = await _note(request)
+    with session_scope() as db:
+        me = _me(db, caller)
+        waiver, finding = _visible_waiver(db, me, exception_id)
+        if waiver.status != WaiverStatus.REQUESTED:
+            raise HTTPException(status_code=409,
+                                detail="That one is not waiting on a decision.")
+        waiver.status = WaiverStatus.APPROVED
+        waiver.decided_by = me.username
+        waiver.decided_at = utcnow()
+        waiver.decision_note = note
+        finding.state = FindingState.WAIVED
+        _set_exception(finding, waiver, me.username)
+        _mirror_waiver(db, finding, waiver, me.username)
+        db.flush()
+        record(db, "waiver.approved", actor=me.username, target=finding.fingerprint,
+               detail=(f"asked for by {waiver.requested_by} "
+                       f"(api token {caller.token.prefix})"),
+               source_ip=client_ip(request))
+        request_rewrite()
+        return JSONResponse(_exception_dict(waiver, finding))
+
+
+@router.post("/exceptions/{exception_id}/reject")
+async def reject_exception(exception_id: int, request: Request,
+                           caller: Caller = Depends(caller_for("approve"))) -> JSONResponse:
+    """Turn down a waiting exception.  Nothing on disk moves."""
+    from app.core.audit import record
+    from app.core.models import WaiverStatus, utcnow
+    from app.web.security import client_ip
+
+    _require(caller.user, "waiver.approve")
+    note = await _note(request)
+    with session_scope() as db:
+        me = _me(db, caller)
+        waiver, finding = _visible_waiver(db, me, exception_id)
+        if waiver.status != WaiverStatus.REQUESTED:
+            raise HTTPException(status_code=409,
+                                detail="That one is not waiting on a decision.")
+        waiver.status = WaiverStatus.REJECTED
+        waiver.decided_by = me.username
+        waiver.decided_at = utcnow()
+        waiver.decision_note = note
+        db.flush()
+        record(db, "waiver.rejected", actor=me.username, target=str(finding.id),
+               detail=f"{note} (api token {caller.token.prefix})".strip(),
+               source_ip=client_ip(request))
+        return JSONResponse(_exception_dict(waiver, finding))
+
+
+@router.post("/exclusions")
+async def add_exclusion(request: Request,
+                        caller: Caller = Depends(caller_for("approve"))) -> JSONResponse:
+    """Write an exclusion: a value everywhere, or one finding.
+
+    Send a fingerprint to exclude that value wherever it turns up, the same as
+    "Exclude this value" on a finding page.  organization and repository
+    narrow it to one place.  Or send a finding number to exclude just that
+    finding, with by_value to cover its value everywhere instead.
+    """
+    from app.core import exclusions as exclusions_store
+    from app.core import ingest, rbac
+    from app.core.audit import record
+    from app.core.models import Exclusion, utcnow
+    from app.core.reports import request_rewrite
+    from app.web.routes_api import _exclusion_kind, _parse_expiry
+    from app.web.security import clean_text, client_ip
+
+    _require(caller.user, "exclusion.write")
+    body = await _json_object(request)
+    for field in ("fingerprint", "reason", "ticket", "expires",
+                  "organization", "repository"):
+        if body.get(field) is not None and not isinstance(body.get(field), str):
+            raise HTTPException(status_code=400, detail=f"{field} has to be a string.")
+    finding_id = body.get("finding")
+    if finding_id is not None and (isinstance(finding_id, bool)
+                                   or not isinstance(finding_id, int)):
+        raise HTTPException(status_code=400, detail="finding is a finding number.")
+    if (finding_id is None) == (not (body.get("fingerprint") or "").strip()):
+        raise HTTPException(status_code=400,
+                            detail="Send a fingerprint or a finding, not both.")
+
+    reason = clean_text(body.get("reason") or "", "Reason", limit=4000)
+    if len(reason) < 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Say why in a sentence or two.  Somebody reading this in a "
+                   "year has to be able to tell whether it still holds.")
+    ticket = clean_text(body.get("ticket") or "", "Ticket", limit=120, required=False)
+    expires_raw = (body.get("expires") or "").strip()
+    expires_at = _parse_expiry(expires_raw) if expires_raw else None
+    organization = clean_text(body.get("organization") or "", "Organization",
+                              limit=255, required=False) or "*"
+    repository = clean_text(body.get("repository") or "", "Repository",
+                            limit=320, required=False) or "*"
+
+    with session_scope() as db:
+        me = _me(db, caller)
+        kind, vuln_id, path, rule = "secret", "", "*", "*"
+        fingerprint = ""
+        if finding_id is not None:
+            target = rbac.visible_finding(db, me, finding_id)
+            if target is None:
+                raise HTTPException(status_code=404, detail="No such finding.")
+            kind = _exclusion_kind(target)
+            if body.get("by_value"):
+                if not target.fingerprint:
+                    raise HTTPException(status_code=400,
+                                        detail="That finding has no value to exclude.")
+                fingerprint = target.fingerprint
+            else:
+                vuln_id = target.vuln_id or ""
+                organization = target.organization or "*"
+                repository = target.repository or "*"
+                path = target.file_path or "*"
+                rule = target.rule or "*"
+        else:
+            fingerprint = _fingerprint_param(body["fingerprint"])
+            kind = {"cred": "secret", "code": "code", "dep": "vuln"}[
+                fingerprint.split(":", 1)[0]]
+
+        # The same rule as the page: everywhere is an administrator's call,
+        # and a named place has to be one this account can see.
+        if organization == "*" and not rbac.can(me, "settings.write"):
+            raise HTTPException(status_code=403, detail="Name the organization this covers.")
+        if organization != "*" and not rbac.in_scope(
+                me, organization, repository if repository != "*" else "", db):
+            raise HTTPException(status_code=403, detail="That is not yours to exclude.")
+
+        same = [r for r in exclusions_store.active_rules(db)
+                if (r.fingerprint or "") == fingerprint
+                and (r.vuln_id or "") == vuln_id
+                and (r.organization or "*") == organization
+                and (r.repository or "*") == repository
+                and (r.path or "*") == path]
+        if same:
+            raise HTTPException(status_code=409,
+                                detail=f"Exclusion {same[0].id} already covers that.")
+
+        row = Exclusion(vuln_id=vuln_id, kind=kind, organization=organization,
+                        repository=repository, path=path, rule=rule,
+                        fingerprint=fingerprint, reason=reason, ticket=ticket,
+                        reviewed_by=me.username, reviewed_date=utcnow(),
+                        expires_at=expires_at, active=True)
+        db.add(row)
+        db.flush()
+        changed = ingest.apply_exceptions(db)
+        if changed:
+            request_rewrite()
+        record(db, "exclusion.added", actor=me.username,
+               target=(fingerprint if fingerprint
+                       else f"{organization}/{repository}:{path}"),
+               detail=f"{kind}: {reason[:200]} (api token {caller.token.prefix})",
+               source_ip=client_ip(request))
+        out = _exclusion_out(db, row)
+        out["findings_excluded"] = changed
+
+    return JSONResponse(status_code=201, content=out)
+
+
+# --- exclusions ------------------------------------------------------------
+#
+# The rules that hide findings, written on the Exclusions page.  Reading and
+# revoking them follows that page exactly: administrators only today, and
+# only the rules the Exclusions page would show this account.  There is no
+# way to add one here, for the same reason a token cannot approve an
+# exception.
+
+def _exclusion_out(db, row) -> dict:
+    from app.core import exclusions as exclusions_store
+
+    out = exclusions_store.as_dicts(db, rules=[row])[0]
+    out["revoked"] = not row.active
+    return out
+
+
+def _fingerprint_param(raw: str) -> str:
+    from app.core import exclusions as exclusions_store
+
+    text = exclusions_store.normalize_fingerprint(raw or "", "secret")
+    if text and not exclusions_store.FINGERPRINT.match(text):
+        raise HTTPException(status_code=400,
+                            detail="A fingerprint is the hash off the finding, "
+                                   "on its own or with cred: in front.")
+    return text
+
+
+@router.get("/exclusions")
+def list_exclusions(request: Request,
+                    caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
+    """Exclusion rules you can see, by fingerprint, by finding, or all of them."""
+    from app.core import exclusions as exclusions_store
+
+    _require(caller.user, "exclusion.read")
+    params = request.query_params
+    limit, offset = _paging(params)
+    status = (params.get("status", "") or "").strip().lower()
+    if status not in {"", "live", "expired", "revoked"}:
+        raise HTTPException(status_code=400,
+                            detail="status is live, expired or revoked.")
+    fingerprint = _fingerprint_param(params.get("fingerprint", ""))
+    finding_raw = (params.get("finding", "") or "").strip()
+    if finding_raw and not finding_raw.isdigit():
+        raise HTTPException(status_code=400, detail="finding is a finding number.")
+
+    with session_scope() as db:
+        me = _me(db, caller)
+        rows = exclusions_store.visible(
+            db, me, status="expired" if status in {"expired", "revoked"} else status)
+        if status == "revoked":
+            rows = [r for r in rows if not r.active]
+        elif status == "expired":
+            rows = [r for r in rows if r.active]
+        if fingerprint:
+            rows = [r for r in rows if (r.fingerprint or "") == fingerprint]
+        if finding_raw:
+            from app.core import rbac
+
+            target = rbac.visible_finding(db, me, int(finding_raw))
+            if target is None:
+                raise HTTPException(status_code=404, detail="No such finding.")
+            rows = [r for r in rows if r.live() and exclusions_store.matches(r, target)]
+        total = len(rows)
+        out = [_exclusion_out(db, r) for r in rows[offset:offset + limit]]
+
+    return JSONResponse({"total": total, "limit": limit, "offset": offset,
+                         "count": len(out), "exclusions": out})
+
+
+def _revoke_rows(db, me, caller, request, rows) -> list:
+    from app.web.routes_api import revoke_exclusion_rows
+    from app.web.security import client_ip
+
+    live = [r for r in rows if r.active]
+    revoke_exclusion_rows(db, live, me.username, source_ip=client_ip(request),
+                          via=f"api token {caller.token.prefix}")
+    return [_exclusion_out(db, r) for r in live]
+
+
+@router.post("/exclusions/{exclusion_id}/revoke")
+def revoke_one_exclusion(exclusion_id: int, request: Request,
+                         caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
+    """Switch one rule off.  It stays on the record, marked revoked."""
+    from app.core import exclusions as exclusions_store
+
+    _require(caller.user, "exclusion.write")
+    with session_scope() as db:
+        me = _me(db, caller)
+        row = next((r for r in exclusions_store.visible(db, me)
+                    if r.id == exclusion_id), None)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such exclusion.")
+        if not row.active:
+            raise HTTPException(status_code=409, detail="That one is already revoked.")
+        return JSONResponse(_revoke_rows(db, me, caller, request, [row])[0])
+
+
+@router.post("/exclusions/revoke")
+async def revoke_by_fingerprint(request: Request,
+                                caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
+    """Switch off every rule you can see that names this fingerprint.
+
+    What "Exclude this value" on a finding wrote, taken back in one call.
+    """
+    from app.core import exclusions as exclusions_store
+
+    _require(caller.user, "exclusion.write")
+    body = await _json_object(request)
+    if not isinstance(body.get("fingerprint"), str) or not body["fingerprint"].strip():
+        raise HTTPException(status_code=400, detail="Send the fingerprint.")
+    fingerprint = _fingerprint_param(body["fingerprint"])
+    with session_scope() as db:
+        me = _me(db, caller)
+        rows = [r for r in exclusions_store.visible(db, me)
+                if (r.fingerprint or "") == fingerprint and r.active]
+        if not rows:
+            raise HTTPException(status_code=404,
+                                detail="No exclusion on that fingerprint.")
+        out = _revoke_rows(db, me, caller, request, rows)
+    return JSONResponse({"fingerprint": fingerprint, "count": len(out),
+                         "revoked": out})
 
 
 @router.get("/repositories")

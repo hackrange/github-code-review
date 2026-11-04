@@ -38,6 +38,13 @@ SCOPES = {
     # that leaks cannot be used to pull every report, and an editor token
     # cannot be used to run gate checks.
     "gate": "Pull requests: run the gate check before a merge",
+    # Signing off: approving and rejecting exceptions, and writing
+    # exclusions.  These take findings out of the report files, so they are
+    # their own scope rather than part of reports.  A pipeline token that
+    # leaks still cannot hide anything, and only an administrator's token can
+    # carry this one.  The permission is checked again on every call.
+    "approve": ("Administrators: approve or reject exceptions and add "
+                "exclusions"),
     # External sites and their dynamic scans.  Only an administrator's token
     # can use it, since the pages are theirs alone, and the check is made on
     # every call rather than when the token is made.
@@ -66,6 +73,11 @@ def create(session, user, name: str, scopes, days: int = DEFAULT_DAYS):
 
         if not rbac.can(user, "external.manage"):
             raise ValueError("Only an administrator's token can work with external sites.")
+    if "approve" in wanted:
+        from app.core import rbac
+
+        if not (rbac.can(user, "waiver.approve") and rbac.can(user, "exclusion.write")):
+            raise ValueError("Only an administrator's token can approve exceptions.")
     if not wanted:
         raise ValueError("Pick at least one thing it may do.")
 

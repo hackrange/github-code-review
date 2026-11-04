@@ -207,6 +207,56 @@ def _retire_exclusion(db, finding) -> None:
         row.active = False
 
 
+def take_back_waiver(db, waiver, finding, actor: str, note: str = "") -> None:
+    """Close an exception, approved or still waiting, and bring its finding back.
+
+    Used for an administrator's revoke and for somebody withdrawing their own.
+    Either way the row is kept as revoked, so the record of who asked, who
+    agreed and who took it back stays readable.
+    """
+    was_approved = waiver.status == WaiverStatus.APPROVED
+    waiver.status = WaiverStatus.REVOKED
+    waiver.decided_by = actor
+    waiver.decided_at = utcnow()
+    if note:
+        waiver.decision_note = note
+    if finding is not None and was_approved:
+        finding.state = FindingState.OPEN
+        _clear_exception(finding)
+        _retire_exclusion(db, finding)
+
+
+def revoke_exclusion_rows(db, rows, actor: str, source_ip: str = "",
+                          via: str = "") -> int:
+    """Switch these exclusion rules off, then put the exception flags right.
+
+    Anything they covered comes back unless an approved waiver still holds it.
+    """
+    from app.core import exclusions as exclusions_store
+
+    done = 0
+    for row in rows:
+        if not exclusions_store.revoke(row, actor):
+            continue
+        record(db, "exclusion.revoked", actor=actor,
+               target=(row.fingerprint if row.fingerprint
+                       else f"{row.organization}/{row.repository}:{row.path}"),
+               detail=((row.reason or "")[:200] + (f" ({via})" if via else "")),
+               source_ip=source_ip)
+        done += 1
+    if done:
+        db.flush()
+        _reapply_exceptions(db)
+    return done
+
+
+def _back_to(form, finding_id, fallback: str) -> str:
+    """Where to land after a single action: the finding page when it came from there."""
+    if str(form.get("back", "")) == "finding" and finding_id:
+        return f"/findings/{int(finding_id)}"
+    return fallback
+
+
 @router.post("/findings/{finding_id}/waive")
 async def request_waiver(finding_id: int, request: Request,
                          reason: str = Form(""),
@@ -518,6 +568,107 @@ def _apply_finding_filters(query, form, db=None, user=None):
     chosen = _filtered_findings(db, user, form).with_entities(Finding.id)
     return query.filter(Finding.id.in_(chosen.scalar_subquery()))
 
+@router.post("/waivers/{waiver_id}/approve")
+async def approve_waiver(waiver_id: int, request: Request,
+                         user: User = Depends(current_user)):
+    """Agree to one request.  The buttons on each row of the Exceptions page."""
+    await check_csrf(request)
+    rbac.require(user, "waiver.approve")
+
+    from urllib.parse import quote
+
+    form = await request.form()
+    note = clean_text(form.get("note", ""), "Note", limit=1000, required=False)
+    with session_scope() as db:
+        waiver = db.query(Waiver).filter(Waiver.id == waiver_id).one_or_none()
+        if waiver is None or waiver.status != WaiverStatus.REQUESTED:
+            raise HTTPException(status_code=404,
+                                detail="No exception waiting on that one.")
+        # An id from another team does nothing rather than sign off on a
+        # finding this account cannot see.
+        finding = rbac.visible_finding(db, user, waiver.finding_id)
+        if finding is None:
+            raise HTTPException(status_code=404, detail="No such finding.")
+        waiver.status = WaiverStatus.APPROVED
+        waiver.decided_by = user.username
+        waiver.decided_at = utcnow()
+        waiver.decision_note = note
+        finding.state = FindingState.WAIVED
+        _set_exception(finding, waiver, user.username)
+        _mirror_waiver(db, finding, waiver, user.username)
+        db.flush()
+        record(db, "waiver.approved", actor=user.username,
+               target=finding.fingerprint,
+               detail=f"asked for by {waiver.requested_by}",
+               source_ip=client_ip(request))
+        request_rewrite()
+        where = _back_to(form, finding.id, "/waivers")
+
+    return redirect(f"{where}?msg="
+                    + quote("Approved. The finding has left both report files.")
+                    + "&kind=ok")
+
+
+@router.post("/waivers/{waiver_id}/reject")
+async def reject_waiver(waiver_id: int, request: Request,
+                        user: User = Depends(current_user)):
+    await check_csrf(request)
+    rbac.require(user, "waiver.approve")
+
+    from urllib.parse import quote
+
+    form = await request.form()
+    note = clean_text(form.get("note", ""), "Note", limit=1000, required=False)
+    with session_scope() as db:
+        waiver = db.query(Waiver).filter(Waiver.id == waiver_id).one_or_none()
+        if waiver is None or waiver.status != WaiverStatus.REQUESTED:
+            raise HTTPException(status_code=404,
+                                detail="No exception waiting on that one.")
+        if rbac.visible_finding(db, user, waiver.finding_id) is None:
+            raise HTTPException(status_code=404, detail="No such finding.")
+        waiver.status = WaiverStatus.REJECTED
+        waiver.decided_by = user.username
+        waiver.decided_at = utcnow()
+        waiver.decision_note = note
+        record(db, "waiver.rejected", actor=user.username,
+               target=str(waiver.finding_id), detail=note,
+               source_ip=client_ip(request))
+        where = _back_to(form, waiver.finding_id, "/waivers")
+
+    return redirect(f"{where}?msg={quote('Rejected.')}&kind=info")
+
+
+@router.post("/waivers/{waiver_id}/revoke")
+async def revoke_waiver(waiver_id: int, request: Request,
+                        user: User = Depends(current_user)):
+    """Take back an approved exception.  The finding comes straight back."""
+    await check_csrf(request)
+    rbac.require(user, "waiver.revoke")
+
+    from urllib.parse import quote
+
+    form = await request.form()
+    with session_scope() as db:
+        waiver = db.query(Waiver).filter(Waiver.id == waiver_id).one_or_none()
+        if waiver is None or waiver.status != WaiverStatus.APPROVED:
+            raise HTTPException(status_code=404,
+                                detail="No approved exception with that id.")
+        finding = rbac.visible_finding(db, user, waiver.finding_id)
+        if finding is None:
+            raise HTTPException(status_code=404,
+                                detail="No approved exception with that id.")
+        take_back_waiver(db, waiver, finding, user.username)
+        db.flush()
+        record(db, "waiver.revoked", actor=user.username,
+               target=finding.fingerprint, source_ip=client_ip(request))
+        request_rewrite()
+        where = _back_to(form, finding.id, "/waivers")
+
+    return redirect(f"{where}?msg="
+                    + quote("Revoked. The finding is back in both report files.")
+                    + "&kind=warn")
+
+
 def form_ids(form, *names) -> list:
     """Whole numbers out of a form, under any of these field names.
 
@@ -570,13 +721,7 @@ async def revoke_waivers(request: Request, user: User = Depends(current_user)):
                     db, user, finding.id) is None:
                 skipped += 1
                 continue
-            waiver.status = WaiverStatus.REVOKED
-            waiver.decided_by = user.username
-            waiver.decided_at = utcnow()
-            if finding is not None:
-                finding.state = FindingState.OPEN
-                _clear_exception(finding)
-                _retire_exclusion(db, finding)
+            take_back_waiver(db, waiver, finding, user.username)
             revoked += 1
         db.flush()
 
@@ -2508,6 +2653,40 @@ async def delete_exclusion(exclusion_id: int, request: Request,
 
     return redirect("/exclusions?msg=Deleted.+Anything+it+covered+is+back+in+"
                     "both+report+files.&kind=ok")
+
+
+@router.post("/exclusions/{exclusion_id}/revoke")
+async def revoke_exclusion(exclusion_id: int, request: Request,
+                           user: User = Depends(current_user)):
+    """Switch a rule off without deleting it.
+
+    The button on a finding page: whatever it covered comes back, and the rule
+    stays on the Exclusions page marked revoked, reason and all.
+    """
+    await check_csrf(request)
+    rbac.require(user, "exclusion.write")
+
+    from urllib.parse import quote
+
+    from app.core.exclusions import visible
+
+    form = await request.form()
+    finding_id = str(form.get("finding_id", "")).strip()
+    with session_scope() as db:
+        # Through the same filter the page uses, so an id from another team
+        # comes back as nothing.
+        row = next((r for r in visible(db, user) if r.id == exclusion_id), None)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such exclusion.")
+        done = revoke_exclusion_rows(db, [row], user.username,
+                                     source_ip=client_ip(request))
+
+    note = ("Exclusion revoked. Anything it covered is back in both report "
+            "files, unless an approved exception still holds it."
+            if done else "That exclusion was already revoked.")
+    where = _back_to(form, int(finding_id) if finding_id.isdigit() else None,
+                     "/exclusions")
+    return redirect(f"{where}?msg={quote(note)}&kind={'warn' if done else 'info'}")
 
 
 def _reapply_exceptions(db) -> None:

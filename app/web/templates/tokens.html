@@ -67,7 +67,7 @@
       </label>
       <label class="wide">What it may do
         <div class="check-grid">
-          {% for scope, what in scopes.items() if scope != 'external' or user.role.value == 'admin' %}
+          {% for scope, what in scopes.items() if scope not in ('external', 'approve') or user.role.value == 'admin' %}
           <label class="check">
             <input type="checkbox" name="scope:{{ scope }}" value="1"
                    {{ 'checked' if scope == 'review' }}>
@@ -75,12 +75,14 @@
           </label>
           {% endfor %}
         </div>
-        <span class="faint small">None of these can change a setting or
-          approve anything.  A review is worked out and thrown away, the rules
-          are the ones you can already read, and <span class="mono">reports</span>
-          reaches only the repositories your account can open.  The one thing
-          it can write is a request for an exception, which still waits for an
-          administrator.  The <a href="{{ base }}/tokens?tab=reference">API
+        <span class="faint small">None of these can change a setting.  A
+          review is worked out and thrown away, the rules are the ones you can
+          already read, and <span class="mono">reports</span> reaches only the
+          repositories your account can open.  With it you can ask for an
+          exception, change or withdraw your own, and take things back, which
+          only ever returns findings to the report files.  Only
+          <span class="mono">approve</span>, on an administrator's token, can
+          approve an exception or add an exclusion.  The <a href="{{ base }}/tokens?tab=reference">API
           reference</a> lists every call.</span>
       </label>
       <details class="api-scope-help wide">

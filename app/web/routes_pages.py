@@ -1887,8 +1887,21 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
             db, row.repository,
             row.branch or (about or {}).get("default_branch", "") or ""))
 
+        # The exclusion rules holding this finding out of the report files,
+        # so somebody who excluded a value from here can take it back from
+        # here.  Only the ones this account may see on the Exclusions page.
+        exclusions_here = []
+        if rbac.can(user, "exclusion.read"):
+            from app.core import exclusions as exclusions_store
+
+            mine = {r.id for r in exclusions_store.visible(db, user)}
+            exclusions_here = [r for r in exclusions_store.covering(db, row)
+                               if r.id in mine]
+
         context = _shared(db, user)
         context.update(active_page="findings", f=row, waiver=waiver,
+                       exclusions_here=exclusions_here,
+                       can_revoke=rbac.can(user, "waiver.revoke"),
                        host_name=host_name,
                        can_waive=rbac.can(user, "waiver.request"),
                        can_approve=rbac.can(user, "waiver.approve"),
@@ -1993,15 +2006,23 @@ def waivers(request: Request, q: str = "", status: str = "", page_no: int = 1,
             needle = f"%{query}%"
             # The reason and the ticket live on the waiver; the repository and
             # the path live on the finding, so that half is matched by id.
+            on_finding = [Finding.repository.ilike(needle),
+                          Finding.file_path.ilike(needle),
+                          Finding.package_name.ilike(needle),
+                          Finding.title.ilike(needle),
+                          Finding.vuln_id.ilike(needle)]
             matching = (rbac.visible_findings(db, user)
-                        .filter(sa_or(Finding.repository.ilike(needle),
-                                      Finding.file_path.ilike(needle),
-                                      Finding.package_name.ilike(needle)))
+                        .filter(sa_or(*on_finding))
                         .with_entities(Finding.id).scalar_subquery())
-            base = base.filter(sa_or(Waiver.reason.ilike(needle),
-                                     Waiver.ticket.ilike(needle),
-                                     Waiver.requested_by.ilike(needle),
-                                     Waiver.finding_id.in_(matching)))
+            either = [Waiver.reason.ilike(needle),
+                      Waiver.ticket.ilike(needle),
+                      Waiver.requested_by.ilike(needle),
+                      Waiver.finding_id.in_(matching)]
+            # A finding number on its own, as 4182 or #4182, is that finding.
+            number = query.lstrip("#").strip()
+            if number.isdigit():
+                either.append(Waiver.finding_id == int(number))
+            base = base.filter(sa_or(*either))
 
         total = base.count()
         pages = max(1, (total + per - 1) // per)

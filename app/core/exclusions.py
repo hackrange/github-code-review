@@ -85,6 +85,68 @@ def active_rules(session, now: datetime = None) -> list:
 log = logging.getLogger("gcr.exclusions")
 
 
+def finding_kind(finding) -> str:
+    """Which exclusion bucket a finding falls in."""
+    value = getattr(finding.kind, "value", str(finding.kind or "")).lower()
+    if "cred" in value or "secret" in value:
+        return "secret"
+    if "code" in value:
+        return "code"
+    return "vuln"
+
+
+def matches(rule, finding) -> bool:
+    """Whether a rule covers this finding, the way ingest applies it.
+
+    A rule written against one finding id covers that finding and nothing
+    else.  The rest go by kind, place and rule, with * for any, and by value
+    when the rule names a fingerprint.
+    """
+    import fnmatch
+
+    if rule.vuln_id:
+        return rule.vuln_id.strip().upper() == (finding.vuln_id or "").upper()
+    if (rule.kind or "any") not in ("any", finding_kind(finding)):
+        return False
+    for field, pattern, value in (
+            ("organization", rule.organization, finding.organization or ""),
+            ("repository", rule.repository, finding.repository or ""),
+            ("path", rule.path, finding.file_path or ""),
+            ("rule", rule.rule, finding.rule or "")):
+        pattern = pattern or "*"
+        if pattern == "*":
+            continue
+        # A repository named without its organization matches on the name.
+        if field == "repository" and "/" not in pattern:
+            value = value.split("/")[-1]
+        if not fnmatch.fnmatch(value.lower(), pattern.lower()):
+            return False
+    if rule.fingerprint:
+        return rule.fingerprint == finding.fingerprint
+    return True
+
+
+def covering(session, finding, rules=None) -> list:
+    """The live rules that cover this finding, newest first."""
+    pool = active_rules(session) if rules is None else rules
+    return [rule for rule in pool if rule.live() and matches(rule, finding)]
+
+
+def revoke(rule, actor: str) -> bool:
+    """Switch a rule off and keep it on the record.  False if it was off already.
+
+    Unlike deleting it, the row stays: the Exclusions page shows it as revoked,
+    with the reason it was written, until somebody purges it.  The audit log
+    says who did it.  Whoever calls this has to put the exception flags right
+    afterwards.
+    """
+    if not rule.active:
+        return False
+    rule.active = False
+    log.info("exclusion %s revoked by %s", rule.id, actor)
+    return True
+
+
 def to_csv(session, rules=None) -> str:
     """The rules as the scanner's CSV.
 

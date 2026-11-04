@@ -38,6 +38,20 @@ Examples:
   gcr_api.py token-expiry --warn-days 14
   gcr_api.py request-exception --finding 4182 --expires 2027-01-31 \\
       --reason "Only reachable from the admin network, fix planned in Q1."
+  gcr_api.py exception --id 77
+  gcr_api.py edit-exception --id 77 --expires 2027-03-31 --ticket SEC-1300
+  gcr_api.py withdraw-exception --id 77
+  gcr_api.py exclusions --fingerprint cred:4f1c9a0b7e2d6c35
+
+Administrators only (revoke works with a reports token; approve, reject and
+exclude need a token with the "approve" scope):
+  gcr_api.py revoke-exception --id 77
+  gcr_api.py approve-exception --id 77 --note "Agreed for one quarter."
+  gcr_api.py reject-exception --id 77 --note "Upgrade instead."
+  gcr_api.py exclude --fingerprint cred:4f1c9a0b7e2d6c35 \\
+      --reason "Test key from the vendor docs, never valid anywhere."
+  gcr_api.py revoke-exclusion --fingerprint cred:4f1c9a0b7e2d6c35
+  gcr_api.py revoke-exclusion --id 31
 """
 
 from __future__ import annotations
@@ -192,8 +206,54 @@ class Client:
     def trends(self, days: int = 30, basis: str = "actions", **filters) -> dict:
         return self._call("GET", "/trends", dict(filters, days=days, basis=basis))
 
-    def exceptions(self, status: str = "") -> list:
-        return list(self._pages("/exceptions", "exceptions", {"status": status}))
+    def exceptions(self, status: str = "", finding: int = None) -> list:
+        return list(self._pages("/exceptions", "exceptions",
+                                {"status": status, "finding": finding}))
+
+    def exception(self, exception_id: int) -> dict:
+        return self._call("GET", f"/exceptions/{int(exception_id)}")
+
+    def edit_exception(self, exception_id: int, **changes) -> dict:
+        """Change your own.  An approved one goes back to waiting."""
+        body = {k: v for k, v in changes.items() if v is not None}
+        return self._call("PATCH", f"/exceptions/{int(exception_id)}", body=body)
+
+    def withdraw_exception(self, exception_id: int) -> dict:
+        return self._call("POST", f"/exceptions/{int(exception_id)}/withdraw", body={})
+
+    def revoke_exception(self, exception_id: int) -> dict:
+        return self._call("POST", f"/exceptions/{int(exception_id)}/revoke", body={})
+
+    def approve_exception(self, exception_id: int, note: str = "") -> dict:
+        return self._call("POST", f"/exceptions/{int(exception_id)}/approve",
+                          body={"note": note})
+
+    def reject_exception(self, exception_id: int, note: str = "") -> dict:
+        return self._call("POST", f"/exceptions/{int(exception_id)}/reject",
+                          body={"note": note})
+
+    def exclusions(self, fingerprint: str = "", finding: int = None,
+                   status: str = "") -> list:
+        return list(self._pages("/exclusions", "exclusions", {
+            "fingerprint": fingerprint, "finding": finding, "status": status}))
+
+    def exclude(self, reason: str, fingerprint: str = "", finding: int = None,
+                by_value: bool = False, expires: str = "", ticket: str = "",
+                organization: str = "", repository: str = "") -> dict:
+        body = {"reason": reason, "expires": expires, "ticket": ticket}
+        if finding is not None:
+            body.update(finding=int(finding), by_value=bool(by_value))
+        else:
+            body.update(fingerprint=fingerprint, organization=organization,
+                        repository=repository)
+        return self._call("POST", "/exclusions", body=body)
+
+    def revoke_exclusion(self, exclusion_id: int) -> dict:
+        return self._call("POST", f"/exclusions/{int(exclusion_id)}/revoke", body={})
+
+    def revoke_fingerprint(self, fingerprint: str) -> dict:
+        return self._call("POST", "/exclusions/revoke",
+                          body={"fingerprint": fingerprint})
 
     def request_exception(self, finding_id: int, reason: str, expires: str,
                           ticket: str = "", category: str = "") -> dict:
@@ -513,8 +573,88 @@ def cmd_request_exception(client: Client, args) -> int:
     return EXIT_OK
 
 
+def _say_exception(row: dict, what: str) -> None:
+    print(f"Exception {row['id']} on finding {row['finding']} {what}, "
+          f"now {row['status']}.")
+
+
+def cmd_exception(client: Client, args) -> int:
+    print(json.dumps(client.exception(args.id), indent=2))
+    return EXIT_OK
+
+
+def cmd_edit_exception(client: Client, args) -> int:
+    row = client.edit_exception(args.id, reason=args.reason, expires=args.expires,
+                                ticket=args.ticket, category=args.category)
+    _say_exception(row, "changed")
+    if row["status"] == "requested":
+        print("It waits for an administrator to approve it.")
+    return EXIT_OK
+
+
+def cmd_withdraw_exception(client: Client, args) -> int:
+    _say_exception(client.withdraw_exception(args.id), "withdrawn")
+    return EXIT_OK
+
+
+def cmd_revoke_exception(client: Client, args) -> int:
+    _say_exception(client.revoke_exception(args.id), "revoked")
+    return EXIT_OK
+
+
+def cmd_approve_exception(client: Client, args) -> int:
+    _say_exception(client.approve_exception(args.id, args.note), "approved")
+    return EXIT_OK
+
+
+def cmd_reject_exception(client: Client, args) -> int:
+    _say_exception(client.reject_exception(args.id, args.note), "rejected")
+    return EXIT_OK
+
+
+def _exclusion_rows(rows: list) -> str:
+    return _table([{"id": r["id"], "type": r["type"],
+                    "fingerprint": r.get("fingerprint", ""),
+                    "where": f"{r['organization']}/{r['repository']}:{r['path']}",
+                    "state": ("revoked" if r.get("revoked") else
+                              "in force" if r.get("in_force") else "expired"),
+                    "expires": r.get("expires", "")} for r in rows],
+                  ["id", "type", "fingerprint", "where", "state", "expires"])
+
+
+def cmd_exclusions(client: Client, args) -> int:
+    print(_exclusion_rows(client.exclusions(args.fingerprint, args.finding,
+                                            args.status)))
+    return EXIT_OK
+
+
+def cmd_exclude(client: Client, args) -> int:
+    if (args.finding is None) == (not args.fingerprint):
+        raise ApiError(0, "Give --fingerprint or --finding, not both.")
+    row = client.exclude(args.reason, fingerprint=args.fingerprint,
+                         finding=args.finding, by_value=args.by_value,
+                         expires=args.expires, ticket=args.ticket,
+                         organization=args.org, repository=args.repo)
+    print(f"Exclusion {row['id']} added.  {row.get('findings_excluded', 0)} "
+          "finding(s) left the report files.")
+    return EXIT_OK
+
+
+def cmd_revoke_exclusion(client: Client, args) -> int:
+    if (args.id is None) == (not args.fingerprint):
+        raise ApiError(0, "Give --id or --fingerprint, not both.")
+    if args.id is not None:
+        rows = [client.revoke_exclusion(args.id)]
+    else:
+        rows = client.revoke_fingerprint(args.fingerprint)["revoked"]
+    print(f"{len(rows)} exclusion(s) revoked.  What they covered is back in "
+          "the report files, unless an approved exception still holds it.")
+    print(_exclusion_rows(rows))
+    return EXIT_OK
+
+
 def cmd_exceptions(client: Client, args) -> int:
-    rows = client.exceptions(args.status)
+    rows = client.exceptions(args.status, args.finding)
     print(_table([{"id": r["id"], "finding": r["finding"], "status": r["status"],
                    "expires": (r.get("expires_at") or "")[:10],
                    "repository": r.get("repository", ""),
@@ -790,6 +930,54 @@ def main(argv=None) -> int:
     p = sub.add_parser("exceptions", help="list your exceptions")
     p.add_argument("--status", default="", choices=["", "requested", "approved",
                                                     "rejected", "revoked", "expired"])
+    p.add_argument("--finding", type=int, default=None, help="only on this finding")
+
+    p = sub.add_parser("exception", help="show one exception")
+    p.add_argument("--id", type=int, required=True)
+
+    p = sub.add_parser("edit-exception",
+                       help="change your own exception (an approved one waits again)")
+    p.add_argument("--id", type=int, required=True)
+    p.add_argument("--reason", default=None, help="at least 20 characters")
+    p.add_argument("--expires", default=None, help="YYYY-MM-DD, within a year")
+    p.add_argument("--ticket", default=None)
+    p.add_argument("--category", default=None, choices=["", "not_deployed"])
+
+    p = sub.add_parser("withdraw-exception", help="take back your own exception")
+    p.add_argument("--id", type=int, required=True)
+
+    p = sub.add_parser("revoke-exception",
+                       help="administrators: revoke an approved exception")
+    p.add_argument("--id", type=int, required=True)
+
+    for name, what in (("approve-exception", "approve"), ("reject-exception", "reject")):
+        p = sub.add_parser(name, help=f"administrators, approve scope: {what} "
+                                      "a waiting exception")
+        p.add_argument("--id", type=int, required=True)
+        p.add_argument("--note", default="")
+
+    p = sub.add_parser("exclusions", help="administrators: list exclusions")
+    p.add_argument("--fingerprint", default="")
+    p.add_argument("--finding", type=int, default=None,
+                   help="the rules hiding this finding")
+    p.add_argument("--status", default="", choices=["", "live", "expired", "revoked"])
+
+    p = sub.add_parser("exclude", help="administrators, approve scope: exclude a "
+                                       "fingerprint or a finding")
+    p.add_argument("--fingerprint", default="")
+    p.add_argument("--finding", type=int, default=None)
+    p.add_argument("--by-value", action="store_true",
+                   help="with --finding: cover its value everywhere")
+    p.add_argument("--reason", required=True, help="at least 20 characters")
+    p.add_argument("--expires", default="", help="YYYY-MM-DD, empty for no end")
+    p.add_argument("--ticket", default="")
+    p.add_argument("--org", default="", help="with --fingerprint: only here")
+    p.add_argument("--repo", default="", help="with --fingerprint: only here")
+
+    p = sub.add_parser("revoke-exclusion",
+                       help="administrators: revoke an exclusion by id or fingerprint")
+    p.add_argument("--id", type=int, default=None)
+    p.add_argument("--fingerprint", default="")
 
     p = sub.add_parser("request-exception", help="ask for an exception on a finding")
     p.add_argument("--finding", type=int, required=True)
@@ -801,7 +989,14 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     handlers = {"ping": cmd_ping, "token-expiry": cmd_token_expiry, "check": cmd_check,
                 "findings": cmd_findings, "fix-plan": cmd_fix_plan, "sbom": cmd_sbom, "trends": cmd_trends,
-                "exceptions": cmd_exceptions, "request-exception": cmd_request_exception}
+                "exceptions": cmd_exceptions, "request-exception": cmd_request_exception,
+                "exception": cmd_exception, "edit-exception": cmd_edit_exception,
+                "withdraw-exception": cmd_withdraw_exception,
+                "revoke-exception": cmd_revoke_exception,
+                "approve-exception": cmd_approve_exception,
+                "reject-exception": cmd_reject_exception,
+                "exclusions": cmd_exclusions, "exclude": cmd_exclude,
+                "revoke-exclusion": cmd_revoke_exclusion}
     try:
         return handlers[args.command](Client(), args)
     except ApiError as err:

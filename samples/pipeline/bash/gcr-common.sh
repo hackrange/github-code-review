@@ -113,10 +113,17 @@ gcr_get() {
 }
 
 # gcr_post PATH JSON.  Never retried, so a request is never sent twice.
-gcr_post() {
-  local body status
-  body="$(_gcr_curl -X POST -H "Content-Type: application/json" \
-            --data-binary "$2" -w $'\n%{http_code}' "$GCR_URL$1")" \
+gcr_post() { gcr_send POST "$1" "$2"; }
+
+# gcr_patch PATH JSON.  Changes part of something, such as your exception.
+gcr_patch() { gcr_send PATCH "$1" "$2"; }
+
+# gcr_send METHOD PATH JSON.  Never retried.
+gcr_send() {
+  local body status data="${3:-}"
+  [[ -n "$data" ]] || data='{}'
+  body="$(_gcr_curl -X "$1" -H "Content-Type: application/json" \
+            --data-binary "$data" -w $'\n%{http_code}' "$GCR_URL$2")" \
     || { echo "Could not reach $GCR_URL" >&2; return 3; }
   status="${body##*$'\n'}"; body="${body%$'\n'*}"
   if [[ "$status" != 2* ]]; then gcr_explain "$status" "$body"; return 3; fi

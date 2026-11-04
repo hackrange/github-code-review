@@ -26,7 +26,7 @@
   <div class="field" style="flex:1;min-width:220px">
     <label for="q">Search</label>
     <input type="text" id="q" name="q" value="{{ q }}"
-           placeholder="repository, path, reason, ticket or who asked">
+           placeholder="finding number, GCR id, repository, path, reason, ticket or who asked">
   </div>
   <div class="field">
     <label for="status">Status</label>
@@ -91,7 +91,7 @@
         <th class="nowrap"><input type="checkbox" id="bulk-select-page"
             title="Everything on this page you can act on"></th>
         {% endif %}
-        <th>Status</th><th>Finding</th><th>Why</th><th>Asked by</th><th></th></tr></thead>
+        <th class="nowrap" title="The finding number">#</th><th>Status</th><th>Finding</th><th>Why</th><th>Asked by</th><th></th></tr></thead>
       <tbody>
       {% for w in rows %}
         {% set f = findings.get(w.finding_id) %}
@@ -107,6 +107,8 @@
                      data-state="{{ w.status.value }}"
                      {{ 'disabled' if not can_act }}></td>
           {% endif %}
+          <td class="nowrap mono"><a href="{{ base }}/findings/{{ w.finding_id }}"
+              title="Open finding {{ w.finding_id }}">{{ w.finding_id }}</a></td>
           <td class="stack nowrap">
             {% if w.status.value == 'approved' and w.expires_at and w.expires_at.replace(tzinfo=None) < now.replace(tzinfo=None) %}
               <span><span class="badge medium">expired</span></span>

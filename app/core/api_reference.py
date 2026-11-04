@@ -74,8 +74,13 @@ GROUPS = [
                      "this repository and branch to fix first."),
     ("Findings", "Your vulnerabilities, credentials and code findings.  "
                  "Only repositories your account can open are included."),
-    ("Exceptions", "Ask for an exception and follow it.  A request made with a "
-                   "token always waits for an administrator to approve it."),
+    ("Exceptions", "Ask for an exception, follow it, change it or withdraw it.  "
+                   "A request made with a token always waits for an "
+                   "administrator to approve it.  You can only read, change or "
+                   "withdraw your own, and an id that is not yours answers 404."),
+    ("Exclusions", "The rules that keep findings out of the report files, and "
+                   "taking one back.  Administrators only.  A token can revoke "
+                   "an exclusion but never add one."),
     ("SBOMs", "Software bills of materials for the repositories you can see."),
     ("Trends", "How your numbers have moved over time."),
     ("Report files", "The whole estate report files.  Administrators only."),
@@ -227,7 +232,9 @@ def endpoints() -> list:
                            "your account approves exceptions.",
             "params": [_p("status", "Only this status.",
                           choices=["requested", "approved", "rejected",
-                                   "revoked", "expired"])] + PAGING,
+                                   "revoked", "expired"]),
+                       _p("finding", "Only the exception on this finding number.",
+                          kind="integer")] + PAGING,
             "example": {"total": 1, "limit": 100, "offset": 0, "count": 1, "exceptions": [{
                 "id": 77, "finding": 4182, "status": "requested", "category": "",
                 "reason": "Only reachable from the admin network, fix planned in Q1.",
@@ -267,6 +274,222 @@ def endpoints() -> list:
             "status": 201,
             "example": {"id": 77, "finding": 4182, "status": "requested",
                         "expires_at": "2027-01-31T00:00:00Z"},
+        },
+        {
+            "id": "exception", "group": "Exceptions", "method": "GET",
+            "path": "/exceptions/{exception_id}",
+            "scope": "reports", "permission": "findings.read",
+            "summary": "Read one exception",
+            "description": "One of your own, or any on a finding you can see if "
+                           "your account approves exceptions.",
+            "params": [_p("exception_id", "The exception number.", where="path",
+                          kind="integer", example=77)],
+            "example": {"id": 77, "finding": 4182, "status": "approved", "category": "",
+                "reason": "Only reachable from the admin network, fix planned in Q1.",
+                "ticket": "SEC-1203", "requested_by": "jsmith",
+                "requested_at": "2026-11-02T15:00:00Z",
+                "expires_at": "2027-01-31T00:00:00Z", "decided_by": "admin",
+                "decided_at": "2026-11-03T09:12:00Z", "decision_note": "",
+                "vuln_id": "GCR-7Q2K9", "repository": "acme/payments",
+                "title": "lodash prototype pollution"},
+        },
+        {
+            "id": "edit_exception", "group": "Exceptions", "method": "PATCH",
+            "path": "/exceptions/{exception_id}",
+            "scope": "reports", "permission": "waiver.request",
+            "summary": "Change your own exception",
+            "description": "Send only the fields to change.  Only the person "
+                           "who asked can change it, whatever their role.  A "
+                           "waiting one stays waiting.  An approved one goes "
+                           "back to waiting and its finding returns to the "
+                           "report files until an administrator approves it "
+                           "again.  Answers 409 on one that is rejected or "
+                           "revoked: ask again instead.",
+            "params": [_p("exception_id", "The exception number.", where="path",
+                          kind="integer", example=77)],
+            "body": [
+                {"name": "reason", "type": "string", "required": False,
+                 "description": "Why this is acceptable.  At least 20 characters."},
+                {"name": "expires", "type": "string", "required": False,
+                 "description": "When it runs out, as YYYY-MM-DD.  Up to a year away."},
+                {"name": "ticket", "type": "string", "required": False,
+                 "description": "A ticket number to tie it to."},
+                {"name": "category", "type": "string", "required": False,
+                 "enum": ["", "not_deployed"],
+                 "description": "Empty for an accepted risk, or not_deployed."},
+            ],
+            "body_example": {"expires": "2027-03-31", "ticket": "SEC-1300"},
+            "example": {"id": 77, "finding": 4182, "status": "requested",
+                        "expires_at": "2027-03-31T00:00:00Z"},
+        },
+        {
+            "id": "withdraw_exception", "group": "Exceptions", "method": "POST",
+            "path": "/exceptions/{exception_id}/withdraw",
+            "scope": "reports", "permission": "waiver.request",
+            "summary": "Withdraw your own exception",
+            "description": "Only the person who asked.  Works on a waiting or "
+                           "approved one.  It is kept as revoked with a note "
+                           "that it was withdrawn, and the finding comes "
+                           "straight back.",
+            "params": [_p("exception_id", "The exception number.", where="path",
+                          kind="integer", example=77)],
+            "example": {"id": 77, "finding": 4182, "status": "revoked",
+                        "decided_by": "jsmith",
+                        "decision_note": "Withdrawn by the person who asked for it."},
+        },
+        {
+            "id": "revoke_exception", "group": "Exceptions", "method": "POST",
+            "path": "/exceptions/{exception_id}/revoke",
+            "scope": "reports", "permission": "waiver.revoke",
+            "summary": "Revoke an approved exception",
+            "description": "Administrators only, and only on findings they can "
+                           "see.  The finding comes straight back into both "
+                           "report files, and the exclusion the approval made "
+                           "is switched off.",
+            "params": [_p("exception_id", "The exception number.", where="path",
+                          kind="integer", example=77)],
+            "example": {"id": 77, "finding": 4182, "status": "revoked",
+                        "decided_by": "admin"},
+        },
+        {
+            "id": "approve_exception", "group": "Exceptions", "method": "POST",
+            "path": "/exceptions/{exception_id}/approve",
+            "scope": "approve", "permission": "waiver.approve",
+            "summary": "Approve an exception",
+            "description": "Needs the approve scope, which only an "
+                           "administrator's token can carry.  Only on findings "
+                           "you can see.  The finding leaves both report files "
+                           "and an exclusion is written so the next scan agrees.  "
+                           "Answers 409 if it is not waiting on a decision.",
+            "params": [_p("exception_id", "The exception number.", where="path",
+                          kind="integer", example=77)],
+            "body": [{"name": "note", "type": "string", "required": False,
+                      "description": "A note kept with the decision."}],
+            "body_example": {"note": "Agreed, revisit after the Q1 upgrade."},
+            "example": {"id": 77, "finding": 4182, "status": "approved",
+                        "decided_by": "admin",
+                        "decision_note": "Agreed, revisit after the Q1 upgrade."},
+        },
+        {
+            "id": "reject_exception", "group": "Exceptions", "method": "POST",
+            "path": "/exceptions/{exception_id}/reject",
+            "scope": "approve", "permission": "waiver.approve",
+            "summary": "Reject an exception",
+            "description": "Needs the approve scope.  The finding stays in the "
+                           "report files and the person who asked sees why.",
+            "params": [_p("exception_id", "The exception number.", where="path",
+                          kind="integer", example=77)],
+            "body": [{"name": "note", "type": "string", "required": False,
+                      "description": "Why, for the person who asked."}],
+            "body_example": {"note": "Upgrade instead, the fix is a patch release."},
+            "example": {"id": 77, "finding": 4182, "status": "rejected",
+                        "decided_by": "admin"},
+        },
+        {
+            "id": "add_exclusion", "group": "Exclusions", "method": "POST",
+            "path": "/exclusions",
+            "scope": "approve", "permission": "exclusion.write",
+            "summary": "Exclude a fingerprint or a finding",
+            "description": "Needs the approve scope.  Send fingerprint to "
+                           "exclude that value wherever it appears, the same as "
+                           "\"Exclude this value\" on a finding, or add "
+                           "organization and repository to keep it to one "
+                           "place.  Or send finding to exclude one finding, with "
+                           "by_value true to cover its value everywhere instead.  "
+                           "Answers 409 if a rule already covers it.",
+            "params": [],
+            "body": [
+                {"name": "fingerprint", "type": "string", "required": False,
+                 "description": "The hash off the finding, on its own or with "
+                                "cred: in front.  This or finding."},
+                {"name": "finding", "type": "integer", "required": False,
+                 "description": "A finding number.  This or fingerprint."},
+                {"name": "by_value", "type": "boolean", "required": False,
+                 "description": "With finding: cover its value everywhere."},
+                {"name": "reason", "type": "string", "required": True,
+                 "description": "Why.  At least 20 characters."},
+                {"name": "expires", "type": "string", "required": False,
+                 "description": "YYYY-MM-DD, up to a year away.  Empty for no end."},
+                {"name": "ticket", "type": "string", "required": False,
+                 "description": "A ticket number to tie it to."},
+                {"name": "organization", "type": "string", "required": False,
+                 "description": "With fingerprint: only in this organization."},
+                {"name": "repository", "type": "string", "required": False,
+                 "description": "With fingerprint: only in this repository, "
+                                "by full name."},
+            ],
+            "body_example": {"fingerprint": "cred:4f1c9a0b7e2d6c35",
+                             "reason": "Test key from the vendor docs, never valid.",
+                             "ticket": "SEC-1188"},
+            "status": 201,
+            "example": {"id": 31, "type": "secret", "fingerprint": "cred:4f1c9a0b7e2d6c35",
+                        "organization": "*", "repository": "*", "in_force": True,
+                        "revoked": False, "findings_excluded": 3},
+        },
+        {
+            "id": "exclusions", "group": "Exclusions", "method": "GET",
+            "path": "/exclusions",
+            "scope": "reports", "permission": "exclusion.read",
+            "summary": "List exclusions",
+            "description": "The rules the Exclusions page shows your account.  "
+                           "Use fingerprint to find what \"Exclude this value\" "
+                           "wrote, or finding to see what is hiding one finding.",
+            "params": [
+                _p("fingerprint", "Only rules on this value.  The hash on its "
+                   "own or with cred: in front.", example="cred:4f1c9a0b7e2d6c35"),
+                _p("finding", "Only the rules in force that cover this finding "
+                   "number.", kind="integer"),
+                _p("status", "Only these.", choices=["live", "expired", "revoked"]),
+            ] + PAGING,
+            "example": {"total": 1, "limit": 100, "offset": 0, "count": 1,
+                        "exclusions": [{"id": 31, "type": "secret", "vuln_id": "", "organization": "*",
+                "repository": "*", "path": "*", "rule": "*",
+                "fingerprint": "cred:4f1c9a0b7e2d6c35", "reason": "Test key from the vendor docs.",
+                "ticket": "SEC-1188", "reviewed_by": "admin",
+                "reviewed_date": "2026-10-20", "expires": "", "in_force": True,
+                "revoked": False}]},
+        },
+        {
+            "id": "revoke_exclusion", "group": "Exclusions", "method": "POST",
+            "path": "/exclusions/{exclusion_id}/revoke",
+            "scope": "reports", "permission": "exclusion.write",
+            "summary": "Revoke one exclusion",
+            "description": "Switches the rule off.  It stays on the Exclusions "
+                           "page marked revoked.  Everything it covered comes "
+                           "back into the report files, unless an approved "
+                           "exception still holds it.  Answers 409 if it is "
+                           "already revoked.",
+            "params": [_p("exclusion_id", "The exclusion number.", where="path",
+                          kind="integer", example=31)],
+            "example": {"id": 31, "type": "secret", "vuln_id": "", "organization": "*",
+                "repository": "*", "path": "*", "rule": "*",
+                "fingerprint": "cred:4f1c9a0b7e2d6c35", "reason": "Test key from the vendor docs.",
+                "ticket": "SEC-1188", "reviewed_by": "admin",
+                "reviewed_date": "2026-10-20", "expires": "", "in_force": False,
+                "revoked": True},
+        },
+        {
+            "id": "revoke_fingerprint", "group": "Exclusions", "method": "POST",
+            "path": "/exclusions/revoke",
+            "scope": "reports", "permission": "exclusion.write",
+            "summary": "Revoke every exclusion on a fingerprint",
+            "description": "Takes back \"Exclude this value\" in one call: every "
+                           "rule in force that you can see and that names this "
+                           "value is switched off.  Answers 404 when there is none.",
+            "params": [],
+            "body": [
+                {"name": "fingerprint", "type": "string", "required": True,
+                 "description": "The hash off the finding, on its own or with "
+                                "cred: in front."},
+            ],
+            "body_example": {"fingerprint": "cred:4f1c9a0b7e2d6c35"},
+            "example": {"fingerprint": "cred:4f1c9a0b7e2d6c35", "count": 1,
+                        "revoked": [{"id": 31, "type": "secret", "vuln_id": "", "organization": "*",
+                "repository": "*", "path": "*", "rule": "*",
+                "fingerprint": "cred:4f1c9a0b7e2d6c35", "reason": "Test key from the vendor docs.",
+                "ticket": "SEC-1188", "reviewed_by": "admin",
+                "reviewed_date": "2026-10-20", "expires": "", "in_force": False,
+                "revoked": True}]},
         },
         {
             "id": "repositories", "group": "SBOMs", "method": "GET",

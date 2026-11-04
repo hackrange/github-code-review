@@ -133,7 +133,7 @@
             <span class="sub">
               {% if e.expires_at %}expires {{ e.expires_at | dt('%Y-%m-%d') }}
               {% else %}no end date{% endif %}
-              {% if not e.live() %}<span class="badge medium">expired</span>{% endif %}
+              {% if not e.active %}<span class="badge medium">revoked</span>{% elif not e.live() %}<span class="badge medium">expired</span>{% endif %}
             </span>
           </td>
           <td class="nowrap">
