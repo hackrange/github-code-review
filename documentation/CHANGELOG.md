@@ -4,6 +4,27 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-11-04
+
+**Code behind it, from a scan.**  A dynamic scan run here now says which
+repositories likely serve the site, from the paths it reached rather than the
+host name.  Each code scan reads the routes a repository declares, and the
+scan page lists the repositories whose routes the site really served, with a
+confidence score, the matching paths, and a **Pin** button that links the
+repository to the site.  **Match again** re-runs the match against the
+routes as they are now without touching the site.
+
+**How many URI paths a scan reached.**  Only a 200 counts, and only when it
+is a real page rather than the site's answer for an address that cannot
+exist.  The scan page shows that count, every address that answered, the
+status mix and which engine found them, and for each linked repository how
+many of its routes the scan reached.  The PDF report says it too, and the
+External sites CSV has `url_paths` and `url_paths_scan`, so you can see how
+big a site's scan is.
+
+**Up to 12 scans at once.**  Settings now allows 1 to 12 engine scans at the
+same time, up from 6.  The default is still 1.
+
 ## 2026-11-03
 
 **Decide on external scan findings.**  Each finding on a scan has small

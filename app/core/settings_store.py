@@ -339,7 +339,7 @@ DEFAULTS = {
                                 "the repositories mapped to the site for routes to "
                                 "add to the scan and for the site's name in the code."),
     "external.max_concurrent": (1, False,
-                                "How many scans run at once on this server, 1 to 6. "
+                                "How many scans run at once on this server, 1 to 12. "
                                 "Each runs its own engines, and wapiti and nuclei use "
                                 "real memory, so raise it with the container's memory "
                                 "limit in mind. A site is never scanned twice at once."),

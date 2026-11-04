@@ -331,7 +331,64 @@ def run_engine(tool: str, url: str, host: str, profile: str, workdir: Path,
         out["status"] = "ok"
         out["detail"] = f"{len(parsed)} finding{'s' if len(parsed) != 1 else ''}"
     out["findings"] = parsed or []
+    try:
+        out["seen"] = seen_paths(tool, engine_dir)
+    except Exception as exc:  # noqa: BLE001 - the findings stand without it
+        log.warning("%s: the paths it reached could not be read: %s", tool, exc)
+        out["seen"] = []
     return out
+
+
+# ------------------------------------------------------- what an engine reached
+
+MAX_SEEN = 5000
+
+
+def seen_paths(tool: str, engine_dir: Path) -> list:
+    """Every address the engine got an answer for, with the status.
+
+    Only the engines that write that down.  wapiti keeps every page its
+    crawler fetched, and the answer, in its session database.  ffuf lists the
+    words that answered.  The others only name the addresses of their
+    findings, and those are read from the findings instead.
+    -> [{"url", "status", "method"}]
+    """
+    if tool == "ffuf":
+        data = _read_json(engine_dir / "ffuf.json") or {}
+        return [{"url": str(r.get("url") or ""), "status": int(r.get("status") or 0),
+                 "method": "GET"}
+                for r in (data.get("results") or [])[:MAX_SEEN] if r.get("url")]
+    if tool == "wapiti":
+        return _wapiti_seen(engine_dir / "wapiti-session")
+    return []
+
+
+def _wapiti_seen(session_dir: Path) -> list:
+    """The pages wapiti's crawler fetched.  Its attack requests are marked
+    evil in the same table and are left out: a payload is not a page."""
+    import sqlite3
+
+    out = []
+    for db_file in sorted(session_dir.glob("*.db")) if session_dir.is_dir() else []:
+        # Not read only: a wapiti stopped on a timeout leaves its write ahead
+        # log beside the file, and only a normal open replays it.  The file
+        # is in the scan's scratch directory and goes with it.
+        try:
+            conn = sqlite3.connect(str(db_file), timeout=5)
+        except sqlite3.Error:
+            continue
+        try:
+            rows = conn.execute(
+                "SELECT p.path, p.method, r.status_code FROM paths p "
+                "JOIN responses r ON r.response_id = p.response_id "
+                "WHERE p.evil = 0 LIMIT ?", (MAX_SEEN,)).fetchall()
+        except sqlite3.Error:
+            rows = []
+        finally:
+            conn.close()
+        out += [{"url": str(path or ""), "method": str(method or "GET")[:16],
+                 "status": int(status or 0)} for path, method, status in rows if path]
+    return out[:MAX_SEEN]
 
 
 # ------------------------------------------------------------------ parsers

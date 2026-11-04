@@ -129,6 +129,7 @@
   {% if asset.technical_owner %}<tr><td class="k">Technical owner</td><td>{{ asset.technical_owner }}</td></tr>{% endif %}
   <tr><td class="k">Scan</td><td>Number {{ scan.id }}, the {{ profile or 'dynamic' }} profile, run by {{ view.server }}{% if scan.recorded_by %} for {{ scan.recorded_by }}{% endif %}</td></tr>
   <tr><td class="k">Signed in</td><td>{% if scan.authenticated %}Yes, with {{ {'header':'a header','cookie':'a session cookie','form':'a form login'}.get(scan.auth_kind, 'a sign in') }}{% else %}No, public site only{% endif %}</td></tr>
+  {% if view.coverage and view.coverage.answered is defined %}<tr><td class="k">URI paths</td><td>{{ view.coverage.reachable | thousands }} reachable, meaning each answered with a real page (HTTP 200).  {{ view.coverage.answered | thousands }} addresses answered in all.</td></tr>{% endif %}
   {% if started %}<tr><td class="k">Started</td><td>{{ started.strftime('%Y-%m-%d %H:%M') }} UTC</td></tr>{% endif %}
   {% if finished %}<tr><td class="k">Finished</td><td>{{ finished.strftime('%Y-%m-%d %H:%M') }} UTC{% if duration is not none %}, {{ duration // 60 }} minute{{ '' if duration // 60 == 1 else 's' }} {{ duration % 60 }} second{{ '' if duration % 60 == 1 else 's' }}{% endif %}</td></tr>{% endif %}
   <tr><td class="k">Report date</td><td>{{ issued_at }}</td></tr>

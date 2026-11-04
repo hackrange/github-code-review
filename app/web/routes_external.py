@@ -17,6 +17,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import logging
 from datetime import datetime, timezone
 
@@ -50,8 +51,10 @@ NOT_FOUND = "Not Found"
 def _back(where: str, message: str, kind: str = "ok") -> str:
     from urllib.parse import quote
 
-    return "%s%smsg=%s&kind=%s" % (where, "&" if "?" in where else "?",
-                                   quote(message), kind)
+    # A #section stays at the end, where the browser reads it.
+    where, hash_mark, section = where.partition("#")
+    return "%s%smsg=%s&kind=%s%s" % (where, "&" if "?" in where else "?",
+                                     quote(message), kind, hash_mark + section)
 
 
 def _guard(db, user) -> None:
@@ -294,7 +297,9 @@ def export_csv(request: Request, user: User = Depends(current_user)):
                          "external_auth_needed", "whitelist_needed",
                          "change_frequency_days", "no_scan", "no_scan_reason",
                          "telemetry_at", "last_dast_at", "last_dast_severity",
-                         "last_dast_server", "last_dast_url", "repositories", "comments"]
+                         "last_dast_server", "last_dast_url",
+                         "url_paths", "url_paths_scan",
+                         "repositories", "comments"]
                         + external.FIELD_KEYS)
         for a in db.query(ExternalAsset).order_by(ExternalAsset.host):
             values = external.field_values(a)
@@ -315,7 +320,11 @@ def export_csv(request: Request, user: User = Depends(current_user)):
                 a.telemetry_at.strftime("%Y-%m-%d %H:%M") if a.telemetry_at else "",
                 a.last_dast_at.strftime("%Y-%m-%d") if a.last_dast_at else "",
                 a.last_dast_severity or "", a.last_dast_server or "",
-                a.last_dast_url or "", " ".join(repos),
+                a.last_dast_url or "",
+                "" if a.last_paths is None else a.last_paths,
+                (a.last_paths_at.strftime("%Y-%m-%d") + " " + (a.last_paths_profile or "")).strip()
+                if a.last_paths_at else "",
+                " ".join(repos),
                 (a.notes or "").replace("\n", " ")] + [values.get(k, "") for k in external.FIELD_KEYS]])
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
     return Response(content=out.getvalue(), media_type="text/csv; charset=utf-8",
@@ -764,6 +773,10 @@ async def link_repo(asset_id: int, request: Request, user: User = Depends(curren
 
     form = await request.form()
     here = f"/external/{asset_id}"
+    # A Pin on a scan page goes back to that scan's code section.
+    back = str(form.get("back") or "")
+    if re.fullmatch(rf"/external/{int(asset_id)}/scans/\d{{1,9}}", back):
+        here = back + "#code"
     action = str(form.get("action") or "link")
     with session_scope() as db:
         _guard(db, user)
@@ -964,8 +977,11 @@ def scan_report(asset_id: int, scan_id: int, request: Request,
 def scan_json(asset_id: int, scan_id: int, user: User = Depends(current_user)):
     with session_scope() as db:
         _guard(db, user)
-        _asset(db, asset_id)
-        body = external.scan_dict(_scan(db, asset_id, scan_id), findings=True)
+        asset = _asset(db, asset_id)
+        scan = _scan(db, asset_id, scan_id)
+        body = external.scan_dict(scan, findings=True)
+        body["code_behind"] = external.code_behind(db, user, scan, asset)
+        body["paths"] = external.paths_of(scan)
     return JSONResponse(body, headers={"Content-Disposition":
                                        f'attachment; filename="dast-scan-{scan_id}.json"'})
 
@@ -996,6 +1012,7 @@ def scan_page(asset_id: int, scan_id: int, request: Request, sev: str = "",
         if verdict == "decided":
             findings = [f for f in findings if f.get("decision")]
         context.update(active_page="external", asset=asset, scan=scan, view=view,
+                       code=external.code_behind(db, user, scan, asset),
                        findings=findings, sev=sev, verdict=verdict, decided=decided,
                        decision_kinds=external_decisions.KINDS,
                        severities=external_decisions.SEVERITIES,
@@ -1019,6 +1036,7 @@ async def scan_action(asset_id: int, scan_id: int, action: str, request: Request
         asset = _asset(db, asset_id)
         scan = _scan(db, asset_id, scan_id)
         host = asset.host
+        scan_status = scan.status
         if action == "delete":
             form = await request.form()
             back = _safe_back(form.get("back"), asset_id, f"/external/{asset_id}")
@@ -1038,6 +1056,14 @@ async def scan_action(asset_id: int, scan_id: int, action: str, request: Request
         form = await request.form()
         # Back to where the Stop was pressed, and only to a page of ours.
         here = _safe_back(form.get("back"), asset_id, here)
+    elif action == "rematch":
+        if scan_status in ("queued", "running"):
+            message, kind = "Wait for the scan to finish.", "error"
+        elif external.rematch(scan_id):
+            message, kind = "Matched its paths again against the routes as they are now.", "ok"
+        else:
+            message, kind = "This scan kept no paths to match.", "error"
+        here = here + "#code"
     elif action == "triage":
         problem = external.start_triage(scan_id, user.username)
         message, kind = (problem, "error") if problem else ("Asking the model.  This page "

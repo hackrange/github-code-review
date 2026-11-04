@@ -75,6 +75,10 @@ scan_one_repo() {
   BRANCH_HEADS_JSON='{}'
   # When the default branch last got a commit, and how many it got lately.
   DEFAULT_HEAD_JSON='null'
+  # The routes the default branch declares, so a dynamic scan of a site can
+  # say which code answers its paths.  null when they were not read, which
+  # leaves the last list standing.
+  DEFAULT_ROUTES_JSON='null'
   # Every branch that is there, as opposed to the ones this run walked.  A
   # branch skipped for being quiet is still a branch, and a sign off on one is
   # not a sign off on code that has gone.
@@ -146,6 +150,7 @@ scan_one_repo() {
       --argjson dast "${DAST_JSON:-null}" \
       --argjson branch_heads "${BRANCH_HEADS_JSON:-{\}}" \
       --argjson default_head "${DEFAULT_HEAD_JSON:-null}" \
+      --argjson default_routes "${DEFAULT_ROUTES_JSON:-null}" \
       --argjson branches_present "${BRANCHES_PRESENT_JSON:-[]}" \
       --argjson code_rules "${CODE_RULES_LOADED_JSON:-[]}" '
       {
@@ -162,6 +167,8 @@ scan_one_repo() {
         branch_heads: $branch_heads,
         # When the default branch last got a commit, and how many in 90 days.
         default_head: $default_head,
+        # The routes the default branch declares.  null when not read.
+        default_routes: $default_routes,
         branch_count: ($branches[0] | length),
         # The semgrep rules this run had, so a finding whose rule was not among
         # them is held open rather than read as fixed.
@@ -734,6 +741,22 @@ scan_one_repo() {
       log_warn "[$full_name] $nc code vulnerability finding(s), $(printf '%s' "$CODE_FINDINGS_JSON" | jq '[.[]|select(.severity=="critical")]|length') critical, semgrep used ${GHSCAN_SEMGREP_RULESETS:-an unknown number of} rulesets"
     else
       log_info "[$full_name] no code vulnerabilities found"
+    fi
+  fi
+
+  # --- routes ----------------------------------------------------------------
+  # What paths the code serves, read off the default branch checkout.  A
+  # dynamic scan of a site matches the paths it found against these to say
+  # which repository is likely behind it.  Reading only, nothing runs.
+  if (( full_passes )) && [[ -d "$clone_dir" ]]; then
+    local rt_py; rt_py=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
+    if [[ -n "$rt_py" ]]; then
+      local rt_out
+      rt_out=$("$rt_py" "$GHSCAN_HOME/lib/routes.py" "$clone_dir" 2>/dev/null) || rt_out=""
+      if [[ "$rt_out" == \[* ]]; then
+        DEFAULT_ROUTES_JSON="$rt_out"
+        log_info "[$full_name] $(printf '%s' "$rt_out" | jq 'length') route(s) declared"
+      fi
     fi
   fi
 

@@ -19,7 +19,7 @@ Settings, External sites:
 | `external.screenshots` | Take a screenshot of each site when its telemetry is read. |
 | `external.refresh_days` | Read every site's telemetry again after this many days, at 03:30.  0 only reads it when asked. |
 | `external.whitebox` | Before an engine scan, read the default branch of the mapped repositories for routes and for the host name. |
-| `external.max_concurrent` | How many engine scans this server runs at once, 1 to 6, default 1.  The rest queue.  Read on every scan, so a change needs no restart.  A site is never scanned twice at once. |
+| `external.max_concurrent` | How many engine scans this server runs at once, 1 to 12, default 1.  The rest queue.  Read on every scan, so a change needs no restart.  A site is never scanned twice at once. |
 | `external.environments` | The environments a site can be in, comma separated.  The first is the default for a new site.  A site in one that is taken off the list keeps it until somebody picks another. |
 | `external.user_agent` | The browser every request says it is.  Empty uses a current desktop Chrome. |
 | `external.allow_private` | Let telemetry and scans reach private, loopback and link local addresses.  Leave it off unless the sites really are internal. |
@@ -329,6 +329,47 @@ Worked out on every read, best first:
 hides a link for good, and **Unpin** sends a hand made link back to being
 worked out.  Only repositories the person can see are offered, so a group
 that narrows what someone sees narrows this too.
+
+## Code behind it, from a scan
+
+A scan run on this server also works out which code answers the site, from
+the paths it reached rather than the host name.  That finds the repository
+nobody wrote the host down in.
+
+**The routes.**  Every code scan reads the routes the default branch declares
+(Express, Flask, FastAPI, Django, Spring, JAX-RS, ASP.NET, Go, Rails, Mule,
+Laravel and OpenAPI files) and keeps them on the repository.  A repository
+nobody has scanned since this shipped has no routes yet.  Archived
+repositories are left out.
+
+**The paths.**  wapiti's crawler keeps every page it fetched in its session,
+with the status, and ffuf lists the words that answered.  The other engines
+name the addresses of their findings.  Only a 200 is a URI path.  A redirect,
+a sign in prompt or a refusal is something in front of a page.  A 200 only
+counts as reachable when the site answers an address that cannot exist some
+other way.  That answer is asked for at the root and under each prefix, so a
+single page app's catch all or a gateway that answers 200 under `/api/v1`
+does not count.  A 200 beside a 200 is fetched again, up to 150 of them, and
+counts only when its page differs.  What could not be checked is shown as
+unchecked and counts for nothing.
+
+**The match.**  A reachable path that a repository declares is evidence for
+that repository.  A route parameter matches any one segment.  A route with
+two or more fixed segments also matches under a prefix, such as a servlet
+context.  Routes every repository has (`/login`, `/health`, and any route
+more than 5% of repositories declare) are ignored.  A path several
+repositories declare is split between them.  The confidence never reaches
+100: **Pin** links the repository to the site, the same as linking it by
+hand, and later scans read its routes.  **Match again** re-runs the match
+against the routes as they are now and sends nothing to the site.
+
+The scan page also says how many URI paths were reachable, how many
+addresses answered in all, the status mix, which engine found them, and for
+each linked repository how many of its routes the scan reached.  The newest
+scan that counted its paths sets `url_paths` and `url_paths_scan` (date and
+profile) in the External sites CSV and `url_paths` in the API, so you can
+see how big a site's scan is.  Recorded scans count nothing and leave the
+last count alone.
 
 ## Combined risk
 

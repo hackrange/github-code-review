@@ -954,6 +954,14 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                                        if isinstance(t, int) and t > 0),
                                       reverse=True)[:1500])
                     if isinstance(times, list) else "")
+        # The routes the default branch declares.  Only from a run that read
+        # them: a report without the list says nothing about the routes.
+        routes = entry.get("default_routes")
+        if isinstance(routes, list):
+            repo.default_routes = json.dumps(
+                [r for r in routes if isinstance(r, str) and r.startswith("/")
+                 and len(r) <= 200][:300])
+            repo.default_routes_at = utcnow()
         dast = entry.get("dast")
         if isinstance(dast, dict) and dast.get("verdict"):
             repo.dast_verdict = str(dast.get("verdict"))[:16]

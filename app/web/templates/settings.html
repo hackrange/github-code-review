@@ -677,9 +677,9 @@
     <span>Let telemetry and scans reach private, loopback and link local
       addresses.  Leave off unless the sites really are internal.</span></label>
   <label>Scans at once
-    <input type="number" name="external.max_concurrent" min="1" max="6"
+    <input type="number" name="external.max_concurrent" min="1" max="12"
            value="{{ values['external.max_concurrent'] }}">
-    <span class="faint small">Engine scans this server runs at the same time, 1 to 6.  The rest
+    <span class="faint small">Engine scans this server runs at the same time, 1 to 12.  The rest
       queue.  Each runs its own engines and wapiti and nuclei use real memory, so raise it with the
       container's memory limit in mind.  A site is never scanned twice at once.</span>
   </label>

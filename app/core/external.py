@@ -1274,6 +1274,10 @@ def asset_dict(asset: ExternalAsset, links: list = None, counts: dict = None,
             "server": asset.last_dast_server or "",
             "status": due_status(asset, max_age_days),
         },
+        # How big a scan of the site is, from the newest scan that counted.
+        "url_paths": {"reachable": asset.last_paths,
+                      "scanned_at": _iso(asset.last_paths_at),
+                      "profile": asset.last_paths_profile or ""},
         "repositories": [{"full_name": l["full_name"], "score": l["score"],
                           "linked": l["linked"], "reasons": l["reasons"],
                           "picked": l["source"] == "manual",
@@ -1309,6 +1313,9 @@ def scan_dict(scan: ExternalDastScan, findings: bool = False) -> dict:
         out["engines"] = json.loads(scan.engines or "[]")
     except ValueError:
         out["engines"] = []
+    from app.core import dast_paths
+
+    out["coverage"] = dast_paths.load(scan.paths).get("counts") or {}
     if findings:
         out["findings"] = findings_of(scan)
         try:
@@ -1465,7 +1472,7 @@ class _Slots:
         return self._busy
 
 
-MAX_CONCURRENT = 6
+MAX_CONCURRENT = 12
 _slots = _Slots()
 _stopping: set = set()
 
@@ -1589,7 +1596,7 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
         scan = db.get(ExternalDastScan, scan_id)
         who = actor_user(db, scan.recorded_by if scan else "")
         if who is _NOBODY:
-            return {"repos": [], "routes": []}
+            return {"repos": [], "routes": [], "by_repo": {}}
         links = [l for l in Mapper(db, who).links(asset) if l["linked"]]
         # Picked first: somebody said which code is behind the site, and on
         # which branches.  Each branch is its own checkout, so the cap is on
@@ -1600,7 +1607,7 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
             for branch in (l.get("branches") or [l["repo"].default_branch or ""]):
                 plan.append((l["repo"].id, l["full_name"], l["repo"].connection or "", branch))
         plan = plan[:MAX_WHITEBOX_REPOS]
-    out = {"repos": [], "routes": []}
+    out = {"repos": [], "routes": [], "by_repo": {}}
     for repo_id, name, connection, branch in plan:
         if scan_id in _stopping:
             break
@@ -1615,6 +1622,8 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
                     got = dast_whitebox.read(root, host)
                     entry["routes"] = len(got["routes"])
                     entry["host_in_code"] = got["host_files"]
+                    have = out["by_repo"].setdefault(repo_id, [])
+                    have += [r for r in got["routes"] if r not in have]
                     for route in got["routes"]:
                         if route not in out["routes"]:
                             out["routes"].append(route)
@@ -1670,6 +1679,9 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
     url = base["base_url"]
     plan = dast_engines.PLANS.get(profile, [])
     routes = []
+    wb = {"routes": [], "by_repo": {}}
+    seen = {"baseline": [{"url": url, "status": base["telemetry"].get("status"),
+                          "method": "GET"}] if url else []}
     if url and plan and opts["whitebox"]:
         wb = _whitebox(scan_id, asset_id, host)
         routes = [url.rstrip("/") + r for r in wb["routes"]]
@@ -1734,6 +1746,9 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                     extra += [p for p in result.get("paths", []) if p not in extra]
                 findings += result.pop("findings")
                 result.pop("paths", None)
+                seen[tool] = result.pop("seen", None) or []
+                if seen[tool]:
+                    result["reached"] = len(seen[tool])
                 engines.append(result)
                 _update(scan_id, engines=json.dumps(engines))
         finally:
@@ -1750,6 +1765,11 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                                   "cannot exist"})
     findings = merge(findings)
     stopped = scan_id in _stopping
+    if url:
+        try:
+            _paths_and_code(scan_id, asset_id, url, seen, findings, wb, opts, stopped)
+        except Exception:  # noqa: BLE001 - the findings stand without it
+            log.exception("scan %s: the paths and the code behind them were not read", scan_id)
     with session_scope() as db:
         scan = db.get(ExternalDastScan, scan_id)
         want_ai = scan.ai_status == "wanted"
@@ -1836,6 +1856,135 @@ def merge(findings: list) -> list:
     return out[:MAX_FINDINGS]
 
 
+def _paths_and_code(scan_id, asset_id, url, seen, findings, wb, opts, stopped) -> None:
+    """What the scan reached, and the repositories whose routes it answered."""
+    from urllib.parse import urljoin
+
+    from app.core import dast_paths, external_probe
+
+    _update(scan_id, step="matching the paths it reached to code")
+    records = dast_paths.inventory(url, seen, findings, from_code=wb.get("routes") or [])
+
+    def fetch(path):
+        got = external_probe.fetch(urljoin(url, path), allow_private=opts["allow_private"],
+                                   follow=False, body_limit=65536)
+        return {"status": got.get("status"), "body": got.get("body") or ""}
+
+    controls = {}
+    if not stopped:
+        controls = dast_paths.classify(records, fetch)
+    with session_scope() as db:
+        index, names = code_index(db, wb.get("by_repo"))
+    if controls and not stopped:
+        # The pages that could point at code get their second request first.
+        first = {r["p"] for r in records if r.get("v") and index.any_match(r["p"])}
+        dast_paths.verify(records, controls, fetch, first)
+    paths = {"control": {p: c["status"] for p, c in controls.items()},
+             "paths": records, "counts": dast_paths.counts(records)}
+    _update(scan_id, paths=json.dumps(paths), paths_count=paths["counts"]["answered"],
+            paths_real=paths["counts"]["reachable"], code_matches=json.dumps(
+        _code_matches(asset_id, records, index, names)))
+
+
+def code_index(db, extra: dict = None):
+    """Every repository's declared routes, with the routes the scan just read
+    from the ones linked to the site.  -> (dast_paths.Index, {id: name})"""
+    from app.core import dast_paths
+
+    routes, names = {}, {}
+    for repo_id, full_name, raw in (db.query(Repository.id, Repository.full_name,
+                                             Repository.default_routes)
+                                    .filter(Repository.archived.is_(False),
+                                            Repository.default_routes.isnot(None),
+                                            Repository.default_routes != "")):
+        try:
+            value = json.loads(raw or "[]")
+        except ValueError:
+            continue
+        if isinstance(value, list) and value:
+            routes[repo_id] = value
+            names[repo_id] = full_name
+    for repo_id, extra_routes in (extra or {}).items():
+        have = routes.setdefault(repo_id, [])
+        have += [r for r in extra_routes if r not in have]
+        if repo_id not in names:
+            repo = db.get(Repository, repo_id)
+            names[repo_id] = repo.full_name if repo else ""
+    return dast_paths.Index(routes), names
+
+
+def _code_matches(asset_id: int, records: list, index, names: dict) -> dict:
+    from app.core import dast_paths
+
+    found = dast_paths.match(records, index, names)
+    shown = [c for c in found if c["confidence"] >= dast_paths.SHOW_AT][:dast_paths.MAX_CANDIDATES]
+    linked = []
+    with session_scope() as db:
+        asset = db.get(ExternalAsset, asset_id)
+        for link in (Mapper(db).links(asset) if asset is not None else []):
+            if link["linked"]:
+                linked.append(dict(dast_paths.reached(records, index, link["id"]),
+                                   repo_id=link["id"], full_name=link["full_name"]))
+    return {"at": utcnow().isoformat(), "indexed": len(index.routes),
+            "candidates": shown, "linked": linked}
+
+
+def rematch(scan_id: int) -> bool:
+    """Match a finished scan's paths again, against the routes as they are
+    now.  Nothing is sent to the site: a page that needed a second look and
+    did not get one still does not count.  -> False when it has no paths"""
+    from app.core import dast_paths
+
+    with session_scope() as db:
+        scan = db.get(ExternalDastScan, scan_id)
+        if scan is None:
+            return False
+        records = dast_paths.load(scan.paths).get("paths") or []
+        asset_id = scan.asset_id
+        if not records:
+            return False
+        index, names = code_index(db)
+    _update(scan_id, code_matches=json.dumps(_code_matches(asset_id, records, index, names)))
+    return True
+
+
+def code_behind(db, user, scan: ExternalDastScan, asset: ExternalAsset) -> dict:
+    """The scan's code matches as one person may see them: only repositories
+    in their scope, each marked with how it is linked to the site now."""
+    from app.core import dast_paths, rbac
+
+    data = dast_paths.load(scan.code_matches)
+    paths = dast_paths.load(scan.paths)
+    if not data and not paths:
+        return {}
+    ids = set()
+    for c in (data.get("candidates") or []) + (data.get("linked") or []):
+        ids.add(c.get("repo_id"))
+    visible = {r.id: r for r in rbac.visible_repositories(db, user)
+               .filter(Repository.id.in_([i for i in ids if isinstance(i, int)]))}
+    links = {l["id"]: l for l in Mapper(db, user).links(asset)}
+    out = []
+    for c in data.get("candidates") or []:
+        repo = visible.get(c.get("repo_id"))
+        if repo is None:
+            continue
+        link = links.get(repo.id) or {}
+        out.append(dict(c, full_name=repo.full_name, linked=bool(link.get("linked")),
+                        link_source=link.get("source") or "",
+                        link_reasons=link.get("reasons") or []))
+    linked = [dict(l, full_name=visible[l["repo_id"]].full_name)
+              for l in data.get("linked") or [] if l.get("repo_id") in visible]
+    return {"counts": paths.get("counts") or {}, "control": paths.get("control") or {},
+            "candidates": out, "linked": linked, "indexed": data.get("indexed", 0),
+            "at": data.get("at", ""), "has_paths": bool(paths.get("paths"))}
+
+
+def paths_of(scan: ExternalDastScan) -> list:
+    from app.core import dast_paths
+
+    return dast_paths.load(scan.paths).get("paths") or []
+
+
 def finish(scan_id: int, findings: list, status: str = "done", error: str = "",
            engines: list = None, result_url: str = None, when=None) -> None:
     """Store a scan's findings and copy its result onto the site."""
@@ -1906,6 +2055,16 @@ def copy_newest(db, asset: ExternalAsset) -> None:
     asset.last_dast_severity = (newest.severity or "") if newest else ""
     asset.last_dast_url = (newest.result_url or "") if newest else ""
     asset.last_dast_server = (newest.server_name or "") if newest else ""
+    # The newest scan that counted its paths, which a recorded scan never does.
+    counted = (db.query(ExternalDastScan)
+               .filter(ExternalDastScan.asset_id == asset.id,
+                       ExternalDastScan.status == "done",
+                       ExternalDastScan.paths_count.isnot(None))
+               .order_by(ExternalDastScan.scanned_at.desc(), ExternalDastScan.id.desc())
+               .first())
+    asset.last_paths = counted.paths_real if counted else None
+    asset.last_paths_at = counted.scanned_at if counted else None
+    asset.last_paths_profile = (counted.profile or "") if counted else ""
 
 
 def record_scan(db, asset: ExternalAsset, data: dict, actor: str) -> ExternalDastScan:

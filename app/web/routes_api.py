@@ -1910,7 +1910,7 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
                 "the way a real browser's does."))
         put("external.user_agent", agent)
         put("external.max_concurrent", clean_int(form.get("external.max_concurrent", 1) or 1,
-                                                 "Scans at once", low=1, high=6))
+                                                 "Scans at once", low=1, high=12))
         from app.core import external as _external
 
         try:

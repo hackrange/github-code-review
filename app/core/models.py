@@ -391,6 +391,12 @@ class Repository(Base):
     # only, so a merged pull request is one change.  What lets a site say how
     # many changes landed since its last test.  Text so it stays off the row.
     default_commit_times = Column(Text, default="")
+    # The routes the default branch declares, as a JSON list of paths with
+    # parameters written as 1.  Read by the scanner, so a dynamic scan of a
+    # site can say which repository answers the paths it found.  Text so it
+    # stays off the row.
+    default_routes = Column(Text, default="")
+    default_routes_at = Column(DateTime(timezone=True))
 
     # Every branch the last scan actually walked here, as a list of names.
     #
@@ -2320,6 +2326,12 @@ class ExternalAsset(Base):
     last_dast_severity = Column(String(16), default="")
     last_dast_url = Column(String(1000), default="")
     last_dast_server = Column(String(120), default="")
+    # How big a scan of the site is: the paths the newest scan that counted
+    # them reached with a 200 that was a real page.  Empty until a scan run
+    # here counts them.
+    last_paths = Column(Integer)
+    last_paths_at = Column(DateTime(timezone=True))
+    last_paths_profile = Column(String(16), default="")
 
     # The last AI read across the dynamic and static findings.
     ai_status = Column(String(16), default="", nullable=False)
@@ -2460,6 +2472,16 @@ class ExternalDastScan(Base):
     ai_input_tokens = Column(Integer, default=0)
     ai_output_tokens = Column(Integer, default=0)
     ai_cost = Column(String(32), default="")
+    # Every path the engines got an answer for, with the status and which
+    # engine saw it, and the repositories whose routes match those paths.
+    # Both JSON, and only for a scan run here.
+    paths = Column(LONG_JSON, default="")
+    code_matches = Column(LONG_JSON, default="")
+    # The two counts out of paths, so a list of sites does not read every
+    # scan's paths to say how big each one is: every path with an answer,
+    # and the ones that were reachable (a 200 that was a real page).
+    paths_count = Column(Integer)
+    paths_real = Column(Integer)
     note = Column(Text, default="")
     recorded_by = Column(String(120), default="")
     recorded_at = Column(DateTime(timezone=True), default=utcnow)
