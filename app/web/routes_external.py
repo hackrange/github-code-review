@@ -499,6 +499,50 @@ async def bulk_edit(request: Request, user: User = Depends(current_user)):
     return redirect(_back("/external", f"Changed {len(changed)} site{'s' if len(changed) != 1 else ''}."))
 
 
+@router.post("/external/schedule-monthly")
+async def schedule_monthly(request: Request, user: User = Depends(current_user)):
+    """A monthly scan for the ticked sites, or every site, spread over the
+    month and inside a time window, such as 22:00 to 04:00."""
+    await check_csrf(request)
+    from app.core import dast_engines, external_schedule
+
+    form = await request.form()
+    profile = str(form.get("bulk_profile") or "standard")
+    start = str(form.get("window_start") or "22:00")
+    end = str(form.get("window_end") or "04:00")
+    every = str(form.get("bulk_scope") or "") == "all"
+    with session_scope() as db:
+        _guard(db, user)
+        ids = _ticked(form)
+        if not every and not ids:
+            return redirect(_back("/external", "Tick the sites to schedule, or pick every site.",
+                                  "error"))
+        if profile in dast_engines.ACTIVE_PROFILES and not _checked(form, "bulk_confirm"):
+            return redirect(_back("/external", "Tick the box to confirm you are allowed to "
+                                               "scan these sites this way.", "error"))
+        query = db.query(ExternalAsset)
+        if not every:
+            query = query.filter(ExternalAsset.id.in_(ids))
+        try:
+            got = external_schedule.bulk_monthly(db, query.all(), profile, start, end,
+                                                 user.username)
+        except ValueError as exc:
+            db.rollback()
+            return redirect(_back("/external", f"Nothing was scheduled.  {exc}", "error"))
+        record(db, "external.schedules_added", actor=user.username,
+               target=f"{len(got['created'])} sites",
+               detail=(f"monthly {profile}, {start} to {end}, {len(got['skipped'])} skipped: "
+                       + ", ".join(h for h, _w in got["created"]))[:500],
+               source_ip=client_ip(request))
+    count = len(got["created"])
+    message = (f"Scheduled a monthly {profile} scan of {count} site{'s' if count != 1 else ''} "
+               f"between {start} and {end}.")
+    if got["skipped"]:
+        message += (f"  Skipped {len(got['skipped'])}: "
+                    + "; ".join(f"{h} ({w})" for h, w in got["skipped"][:3]))
+    return redirect(_back("/external", message, "ok" if count else "error"))
+
+
 @router.post("/external/delete-many")
 async def delete_many(request: Request, user: User = Depends(current_user)):
     """Remove the ticked sites and their scan history.  One with a scan

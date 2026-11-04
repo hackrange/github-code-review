@@ -182,6 +182,7 @@
     <button class="btn sm" type="submit" form="pick" formaction="{{ here }}/refresh" data-needs-tick>Refresh telemetry</button>
     <button class="btn sm" type="button" data-modal="bulk-edit-modal" data-needs-tick>Edit the ticked sites</button>
     <button class="btn sm" type="button" data-modal="scan-many-modal" data-needs-tick>Scan the ticked sites</button>
+    <button class="btn sm" type="button" data-modal="schedule-many-modal">Schedule monthly scans</button>
     <button class="btn sm danger" type="submit" form="pick" formaction="{{ here }}/delete-many" data-needs-tick
             data-ext-confirm="Remove the ticked sites and every scan recorded against them?">Delete the ticked sites</button>
     <span class="faint small" data-tick-count style="align-self:center"></span>
@@ -270,6 +271,37 @@
         at a time, run one after another.</div>
     </div>
     <div class="modal-foot"><button class="btn primary" type="submit" form="pick" formaction="{{ here }}/scan-many">Start</button>
+      <button class="btn" type="button" data-close-modal>Cancel</button></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="schedule-many-modal" hidden>
+  <div class="modal">
+    <div class="modal-head">Schedule monthly scans <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <label>Sites
+        <select name="bulk_scope" form="pick">
+          <option value="ticked">the ticked sites</option>
+          <option value="all">every site</option>
+        </select></label>
+      <label>Profile
+        <select name="bulk_profile" form="pick">
+          {% for name, what in profiles.items() %}<option value="{{ name }}" {{ 'selected' if name == 'standard' }}>{{ name }}</option>{% endfor %}
+        </select>
+        <span class="faint small">Standard and up crawl the site, which is what fills in the
+          url_paths, http_200_paths and unique_endpoints columns.</span></label>
+      <div class="form-grid">
+        <label>Not before <input type="time" name="window_start" value="22:00" form="pick"></label>
+        <label>Done starting by <input type="time" name="window_end" value="04:00" form="pick"></label>
+      </div>
+      <label class="check"><input type="checkbox" name="bulk_confirm" value="1" form="pick">
+        <span>I am allowed to scan these sites this way.  Needed for standard and up.</span></label>
+      <div class="faint small">Each site gets its own day, 1 to 28, and a half hour slot inside the
+        window, in the time zone set in Settings, so a night holds a few scans.  Sites marked no
+        scan, obsolete ones and ones that already have a monthly scan are skipped.  Each schedule
+        shows on its site's page, where it can be changed or removed.</div>
+    </div>
+    <div class="modal-foot"><button class="btn primary" type="submit" form="pick" formaction="{{ here }}/schedule-monthly">Schedule</button>
       <button class="btn" type="button" data-close-modal>Cancel</button></div>
   </div>
 </div>

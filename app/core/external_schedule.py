@@ -177,6 +177,86 @@ def create(db, asset: ExternalAsset, data: dict, actor: str) -> ExternalScanSche
     return sched
 
 
+# Bulk monthly schedules: days 1 to 28 so every month has each one, and a
+# slot every half hour inside the window, so a night holds a handful of
+# scans instead of every site at once.
+BULK_DAYS = 28
+BULK_STEP = 30
+
+
+def window_slots(start: str, end: str, step: int = BULK_STEP) -> list:
+    """The HH:MM times from start up to, not including, end.  A window may
+    cross midnight, as 22:00 to 04:00 does.  Raises ValueError."""
+    def minutes(text, what):
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(text or "")):
+            raise ValueError(f"Give the {what} time as HH:MM, such as 22:00.")
+        hour, minute = (int(x) for x in text.split(":"))
+        return hour * 60 + minute
+
+    first, last = minutes(start, "start"), minutes(end, "end")
+    length = (last - first) % (24 * 60)
+    if length < step:
+        raise ValueError(f"The window has to be at least {step} minutes long.")
+    return [f"{((first + n) // 60) % 24:02d}:{(first + n) % 60:02d}"
+            for n in range(0, length, step)]
+
+
+def bulk_monthly(db, assets: list, profile: str, start: str, end: str,
+                 actor: str) -> dict:
+    """A monthly scan for each site, spread over the month and the window.
+
+    Each site gets the least used slot: across the days first, then the
+    times, counting the monthly schedules already there.  A site marked no
+    scan, one a block rule covers, an obsolete one, or one that already has a
+    monthly scan of its own is skipped and named.
+    -> {"created": [(host, when)], "skipped": [(host, why)]}
+    """
+    from app.core import dast_engines, external
+
+    if profile not in dast_engines.PROFILES:
+        raise ValueError("Pick a scan profile.")
+    times = window_slots(start, end)
+    used = {}
+    for day, time_of_day in db.query(ExternalScanSchedule.day_of_month,
+                                     ExternalScanSchedule.time_of_day).filter(
+            ExternalScanSchedule.frequency == "monthly",
+            ExternalScanSchedule.enabled.is_(True)):
+        used[(int(day or 1), time_of_day)] = used.get((int(day or 1), time_of_day), 0) + 1
+    order = [(day, t) for t in times for day in range(1, BULK_DAYS + 1)]
+    has_monthly = {a for a, ias in db.query(ExternalScanSchedule.asset_id,
+                                            ExternalScanSchedule.ias_config).filter(
+        ExternalScanSchedule.frequency == "monthly",
+        ExternalScanSchedule.enabled.is_(True)) if not ias}
+    created, skipped = [], []
+    for asset in sorted(assets, key=lambda a: a.host):
+        if asset.no_scan:
+            skipped.append((asset.host, "marked no scan"))
+            continue
+        if (asset.status or "active") == "obsolete":
+            skipped.append((asset.host, "obsolete"))
+            continue
+        why = external.blocked(db, asset)
+        if why:
+            skipped.append((asset.host, why))
+            continue
+        if asset.id in has_monthly:
+            skipped.append((asset.host, "already has a monthly scan"))
+            continue
+        pick = min(range(len(order)), key=lambda i: (used.get(order[i], 0), i))
+        day, time_of_day = order[pick]
+        try:
+            sched = create(db, asset, {"frequency": "monthly", "day_of_month": day,
+                                       "time_of_day": time_of_day, "profile": profile},
+                           actor)
+        except ValueError as exc:
+            skipped.append((asset.host, str(exc)))
+            continue
+        used[(day, time_of_day)] = used.get((day, time_of_day), 0) + 1
+        has_monthly.add(asset.id)
+        created.append((asset.host, describe(sched)))
+    return {"created": created, "skipped": skipped}
+
+
 def run_due(now: datetime = None) -> int:
     """Start every scan whose time has come.  The scheduler calls this each minute."""
     from app.core import external
