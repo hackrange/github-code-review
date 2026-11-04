@@ -278,6 +278,25 @@ repo_branches_present() {
              --sort=-committerdate refs/heads/ 2>/dev/null)
 }
 
+# repo_branch_dates <clone_dir> -> a JSON object of branch name to the unix
+# time of its newest commit, for every branch repo_branches_present lists.
+#
+# The quiet branch filter above already reads these and throws them away.
+# Kept so a staleness report can name the branches nobody has touched, which
+# is the same question asked of people instead of the scanner.  The committer
+# date, so a branch rebased last week counts as touched last week.
+repo_branch_dates() {
+  local dir="$1" br ts
+  while IFS=$'\t' read -r br ts; do
+    [[ -z "$br" || ! "$ts" =~ ^[0-9]+$ ]] && continue
+    branch_allowed "$br" || continue
+    printf '%s\t%s\n' "$br" "$ts"
+  done < <(git -C "$dir" for-each-ref --format='%(refname:strip=2)%09%(committerdate:unix)' \
+             refs/heads/ 2>/dev/null) \
+    | jq -Rsc '[split("\n")[] | select(length > 0) | split("\t")
+                | {(.[0]): (.[1] | tonumber)}] | add // {}'
+}
+
 # branches_containing <clone_dir> <sha> -> comma-free newline list of branches
 # whose history contains that commit. This is how a finding at a commit is
 # attributed back to every branch it is reachable from.

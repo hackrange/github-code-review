@@ -4791,6 +4791,104 @@ async def reject_repository_change(proposal_id: int, request: Request,
                                f"Turned down the change {asked_by} asked for."))
 
 
+def _staleness_back(message: str, kind: str = "ok"):
+    from urllib.parse import quote
+
+    return redirect(f"/notifications?tab=staleness&msg={quote(message[:300])}&kind={kind}")
+
+
+@router.post("/notifications/staleness/save")
+async def save_staleness(request: Request, user: User = Depends(current_user)):
+    """What counts as stale, and when and to whom the digest goes."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+    import re as _re
+
+    from app.core import settings_store as store
+    from app.core import staleness
+
+    form = await request.form()
+    days = clean_int(form.get("notify.stale_days") or 180, "Days with no commit",
+                     low=1, high=3650)
+    frequency = str(form.get("notify.stale_frequency") or "weekly")
+    if frequency not in ("weekly", "monthly"):
+        return _staleness_back("How often is every week or every month.", "error")
+    weekday = clean_int(form.get("notify.stale_weekday") or 0, "Day of the week", low=0, high=6)
+    day = clean_int(form.get("notify.stale_day") or 1, "Day of the month", low=1, high=28)
+    at = str(form.get("notify.stale_time") or "08:00").strip()
+    if not _re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", at):
+        return _staleness_back("Give the time as HH:MM, such as 08:00.", "error")
+    to = clean_text(form.get("notify.stale_to"), "To", limit=500, required=False)
+    with session_scope() as db:
+        moved = []
+
+        def put(key, value):
+            if store.set_value(db, key, value, user.username):
+                moved.append(key)
+
+        put("notify.stale_days", days)
+        put("notify.stale_include_archived", _checked(form, "notify.stale_include_archived"))
+        put("notify.stale_enabled", _checked(form, "notify.stale_enabled"))
+        put("notify.stale_to", to)
+        put("notify.stale_frequency", frequency)
+        put("notify.stale_weekday", weekday)
+        put("notify.stale_day", day)
+        put("notify.stale_time", at)
+        db.flush()
+        # The next one from the schedule as it now stands.
+        store.set_value(db, "notify.stale_next", staleness.next_due(db).isoformat(),
+                        user.username)
+        record(db, "notifications.staleness_saved", actor=user.username,
+               detail=(f"{len(moved)} setting(s) changed: " + ", ".join(sorted(moved)))
+               if moved else "saved with nothing changed",
+               source_ip=client_ip(request))
+    if {"notify.stale_days", "notify.stale_include_archived"} & set(moved):
+        # The report files follow the new number now, not after the next scan.
+        from starlette.concurrency import run_in_threadpool
+
+        def _rewrite():
+            with session_scope() as db:
+                return staleness.write(db)
+
+        try:
+            await run_in_threadpool(_rewrite)
+        except Exception as exc:  # noqa: BLE001 - the settings are saved either way
+            log.warning("could not rewrite the staleness report: %s", exc)
+    return _staleness_back("Saved.")
+
+
+@router.post("/notifications/staleness/send")
+async def send_staleness(request: Request, user: User = Depends(current_user)):
+    """The digest now, to the saved addresses, whatever the schedule says."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+    from starlette.concurrency import run_in_threadpool
+
+    from app.core import staleness
+
+    def _send():
+        with session_scope() as db:
+            found = staleness.find(db)
+            return staleness.send(db, found), found["counts"], staleness.recipients(db)
+
+    sent, counts, to = await run_in_threadpool(_send)
+    ok = bool(sent) and all(sent.values())
+    with session_scope() as db:
+        record(db, "notifications.staleness_sent", actor=user.username,
+               detail=f"{counts}; " + (", ".join(f"{k}: {'ok' if v else 'failed'}"
+                                                for k, v in sorted(sent.items()))
+                                       or "no recipients"),
+               outcome="ok" if ok else "warn", source_ip=client_ip(request))
+    if not to:
+        return _staleness_back("Nobody to send it to.  Give an address here or on the "
+                               "Criticality Notifications tab.", "error")
+    if not ok:
+        return _staleness_back("It did not go out.  Check the mail settings on the "
+                               "Criticality Notifications tab; Send a test there says why.",
+                               "error")
+    return _staleness_back(f"Sent to {', '.join(to)[:200]}.")
+
+
 @router.post("/notifications/save")
 async def save_notifications(request: Request,
                              user: User = Depends(current_user)):

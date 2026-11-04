@@ -61,6 +61,18 @@
           <td class="nowrap">{% if cyclonedx_file.exists and can_download %}
             <a class="btn sm" href="{{ base }}/reports/download/vex-cyclonedx">Download</a>{% endif %}</td>
         </tr>
+        {% for f, which, what in [(stale_csv, 'staleness-csv', 'staleness.csv'), (stale_json, 'staleness-json', 'staleness.json')] %}
+        <tr>
+          <td class="mono small">{{ what }}<div class="faint small">repositories and branches with no commit in {{ stale_days }} days.
+            The number of days is set on the <a href="{{ base }}/notifications?tab=staleness">Staleness tab</a> of Notifications.</div></td>
+          <td>{% if f.exists %}<span class="badge ok">present</span>
+              {% else %}<span class="badge medium">not written yet</span>{% endif %}</td>
+          <td class="small">{{ '{:,}'.format(f.size) }} bytes</td>
+          <td class="small faint">{{ f.modified }}</td>
+          <td class="nowrap">{% if f.exists and can_download %}
+            <a class="btn sm" href="{{ base }}/reports/download/{{ which }}">Download</a>{% endif %}</td>
+        </tr>
+        {% endfor %}
       </tbody>
     </table>
   </div>

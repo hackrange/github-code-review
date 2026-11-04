@@ -938,6 +938,12 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         heads = entry.get("branch_heads")
         if isinstance(heads, dict) and heads:
             repo.branch_heads = json.dumps(heads)
+        # Each branch's newest commit time.  A report without them, from an
+        # older scanner or a run that never cloned, leaves the last ones.
+        dates = entry.get("branch_dates")
+        if isinstance(dates, dict) and dates:
+            repo.branch_dates = json.dumps({str(k)[:255]: int(v) for k, v in dates.items()
+                                            if isinstance(v, (int, float))})
         # When the default branch last got a commit.  Only from a run that
         # read it, so a report without it leaves the last answer standing.
         head = entry.get("default_head")

@@ -3085,6 +3085,9 @@ def reports(request: Request, user: User = Depends(current_user)):
                        csv_file=describe(csv_path), csv_path=str(csv_path),
                        openvex_file=describe(report_dir / "vex.openvex.json"),
                        cyclonedx_file=describe(report_dir / "vex.cyclonedx.json"),
+                       stale_csv=describe(report_dir / "staleness.csv"),
+                       stale_json=describe(report_dir / "staleness.json"),
+                       stale_days=__import__("app.core.staleness", fromlist=["x"]).days(db),
                        sbom_rows=sbom_files(report_dir),
                        reports_dir=str(report_dir),
                        can_download=rbac.can(user, "report.files"))
@@ -3408,6 +3411,8 @@ def download_report(which: str, request: Request,
              "csv": ("vulnerabilities.csv", "text/csv"),
              "vex-openvex": ("vex.openvex.json", "application/json"),
              "vex-cyclonedx": ("vex.cyclonedx.json", "application/json"),
+             "staleness-csv": ("staleness.csv", "text/csv"),
+             "staleness-json": ("staleness.json", "application/json"),
              "sbom-cdx": (reports_mod.SBOM_COMBINED["cdx"][1], "application/json"),
              "sbom-spdx": (reports_mod.SBOM_COMBINED["spdx"][1], "application/json"),
              "sbom-summary": (reports_mod.SBOM_COMBINED["summary"][1],
@@ -4629,7 +4634,7 @@ def _when(value):
 
 
 @router.get("/notifications")
-def notifications_page(request: Request, msg: str = "", kind: str = "",
+def notifications_page(request: Request, msg: str = "", kind: str = "", tab: str = "",
                        user: User = Depends(current_user)):
     """Telling somebody, without waiting for them to log in."""
     rbac.require(user, "settings.read")
@@ -4650,14 +4655,31 @@ def notifications_page(request: Request, msg: str = "", kind: str = "",
 
         coverage = org_coverage.last(db)
         context = _shared(db, user)
+        tab = "staleness" if tab == "staleness" else "criticality"
+        stale_view = {}
+        if tab == "staleness":
+            from app.core import live, staleness
+            from app.web.render import local_dt
+
+            last = values.get("notify.stale_last") or {}
+            nxt = _when(values.get("notify.stale_next"))
+            if values.get("notify.stale_enabled") and nxt is None:
+                nxt = staleness.next_due(db)
+            stale_view = dict(
+                stale=staleness.find(db), zone_name=live.timezone_name(),
+                schedule_text=staleness.describe_schedule(db),
+                next_at=local_dt(nxt) if nxt else "",
+                last_at=local_dt(_when(last.get("at"))) if last.get("at") else "",
+                digest_lines=staleness.DIGEST_LINES)
         context.update(
             active_page="notifications",
+            tab=tab,
             values=values,
             coverage=coverage,
             coverage_at=_when(coverage.get("checked_at")),
             can_write=rbac.can(user, "settings.write"),
             message=clean_notice(msg, limit=300),
-            message_kind="error" if kind == "error" else "ok")
+            message_kind="error" if kind == "error" else "ok", **stale_view)
         return page(request, "notifications.html", **context)
 
 

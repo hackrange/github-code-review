@@ -83,6 +83,8 @@ scan_one_repo() {
   # branch skipped for being quiet is still a branch, and a sign off on one is
   # not a sign off on code that has gone.
   BRANCHES_PRESENT_JSON='[]'
+  # Each of those branches' newest commit time, for the staleness report.
+  BRANCH_DATES_JSON='{}'
   GHSCAN_SBOM_CDX=""
 
   local result_file="$results_dir/${slug}.json"
@@ -152,6 +154,7 @@ scan_one_repo() {
       --argjson default_head "${DEFAULT_HEAD_JSON:-null}" \
       --argjson default_routes "${DEFAULT_ROUTES_JSON:-null}" \
       --argjson branches_present "${BRANCHES_PRESENT_JSON:-[]}" \
+      --argjson branch_dates "${BRANCH_DATES_JSON:-{\}}" \
       --argjson code_rules "${CODE_RULES_LOADED_JSON:-[]}" '
       {
         repository: $repo[0],
@@ -163,6 +166,8 @@ scan_one_repo() {
         # name missing from it does not mean the branch has gone, and taking a
         # sign off away on that evidence throws away a review somebody did.
         branches_present: $branches_present,
+        # branch name to the unix time of its newest commit, every branch.
+        branch_dates: $branch_dates,
         # branch name to the commit it was on when this ran.
         branch_heads: $branch_heads,
         # When the default branch last got a commit, and how many in 90 days.
@@ -332,6 +337,8 @@ scan_one_repo() {
     # it from the walked list stamped it onto the default branch, where it is
     # not.  Skipping a branch is meant to save a checkout, not to change what
     # is reported about the code on it.
+    BRANCH_DATES_JSON=$(repo_branch_dates "$clone_dir" 2>/dev/null || echo '{}')
+    [[ "$BRANCH_DATES_JSON" == \{* ]] || BRANCH_DATES_JSON='{}'
     export GHSCAN_BRANCH_SET_PRESENT="$BRANCHES_PRESENT_JSON"
     # Every branch head, for whether a credential is still in the code.  The
     # ones the exclude patterns leave in come first, so a cap on how many are

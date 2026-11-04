@@ -720,6 +720,13 @@ def write_reports(session, reports_dir: Path = None) -> dict:
     except Exception:            # noqa: BLE001 - a report must still be written
         log.warning("could not write the VEX documents", exc_info=True)
 
+    # Repositories and branches nobody has touched, from the same moment.
+    try:
+        from app.core import staleness
+        staleness.write(session, reports_dir)
+    except Exception:            # noqa: BLE001 - a report must still be written
+        log.warning("could not write the staleness report", exc_info=True)
+
     return {"findings": len(findings), "generated_at": generated,
             "by_severity": counts}
 

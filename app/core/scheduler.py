@@ -300,6 +300,13 @@ def start() -> None:
                        CronTrigger(hour=3, minute=30, timezone=_zone()),
                        id="external-refresh", replace_existing=True,
                        misfire_grace_time=3600, coalesce=True, max_instances=1)
+    # The staleness digest, on the schedule set on the Notifications page.
+    # Checked every five minutes; it does nothing until the digest is due.
+    from app.core import staleness
+
+    _scheduler.add_job(staleness.tick, IntervalTrigger(minutes=5),
+                       id="staleness-digest", replace_existing=True,
+                       misfire_grace_time=240, coalesce=True, max_instances=1)
     # Certificates about to expire, after the night's telemetry is in.
     from app.core import external_certs
 

@@ -424,6 +424,10 @@ class Repository(Base):
     # and a commit that introduced no finding is still a commit nobody
     # reviewed.
     branch_heads = Column(LONG_JSON, default="{}")
+    # Branch name to the unix time of its newest commit, for every branch that
+    # is there, as of the last scan.  What the staleness report reads.  Empty
+    # until a scan from a release that records it.
+    branch_dates = Column(LONG_JSON, default="{}")
     # Whether a dynamic pass could run against this repository, and why not
     # when it could not.  Read only: nothing is built and nothing is started.
     dast_verdict = Column(String(16), default="")

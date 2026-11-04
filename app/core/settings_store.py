@@ -465,6 +465,23 @@ DEFAULTS = {
     # Which applications the last message already named, so the next one only
     # says what is new.
     "notify.dast_due_last":    ([], False, "Applications already reported as due."),
+    # ---- staleness: repositories and branches nobody has touched ----
+    "notify.stale_days":       (180, False,
+                                "A repository or branch with no commit in this many "
+                                "days is stale."),
+    "notify.stale_include_archived": (False, False,
+                                "Count archived repositories too.  Off, since an "
+                                "archived repository is already dealt with."),
+    "notify.stale_enabled":    (False, False, "Mail the staleness digest on a schedule."),
+    "notify.stale_to":         ("", False,
+                                "Where the staleness digest goes.  Several, separated "
+                                "by commas.  Empty uses the Criticality To list."),
+    "notify.stale_frequency":  ("weekly", False, "weekly or monthly."),
+    "notify.stale_weekday":    (0, False, "For weekly: 0 is Monday."),
+    "notify.stale_day":        (1, False, "For monthly: the day of the month, 1 to 28."),
+    "notify.stale_time":       ("08:00", False, "HH:MM, in the time zone set in Settings."),
+    "notify.stale_next":       ("", False, "When the next digest is due, in UTC."),
+    "notify.stale_last":       ({}, False, "What the last digest said and whether it went."),
 
     # ---- how times are shown and when schedules fire ----
     "ui.timezone":             ("GMT", False,

@@ -288,6 +288,8 @@ report_build() {
           # a name missing from it does not mean the branch has gone.  A sign
           # off may only be taken away on the evidence of this one.
           branches_present: (.branches_present // null),
+          # Each branch's newest commit time, for the staleness report.
+          branch_dates: (.branch_dates // null),
           branch_count,
           # Where each branch actually was, and whether a dynamic pass could
           # run here.  Both are worked out per repository and both were being

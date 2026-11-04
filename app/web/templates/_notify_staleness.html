@@ -1,0 +1,85 @@
+{# The Staleness tab of the Notifications page. #}
+{% set st = stale %}
+<div class="card">
+  <div class="card-head">Stale right now</div>
+  <div class="card-body">
+    <div class="stats">
+      <div class="stat"><div class="n">{{ st.counts.repositories }}</div><div class="l">Repositories with no commit in {{ st.days }} days</div></div>
+      <div class="stat"><div class="n">{{ st.counts.branches }}</div><div class="l">Stale branches in active repositories</div></div>
+      <div class="stat"><div class="n">{{ st.counts.active_repositories }}</div><div class="l">Active repositories</div></div>
+    </div>
+    <p class="faint small">A repository is stale when nothing landed in it for {{ st.days }} days:
+      no push the host knows of, no commit on its default branch and none on any branch.  A branch
+      is stale when its newest commit is that old.  Branches are listed only in repositories that
+      are still active, since every branch of a stale repository is stale too; the repository row
+      says how many it holds.
+      {% if st.counts.no_branch_dates %}<strong>{{ st.counts.no_branch_dates }} active
+      repositor{{ 'ies have' if st.counts.no_branch_dates != 1 else 'y has' }} not been scanned since
+      branch dates were recorded</strong>, so their branches come in with their next scan.{% endif %}
+      {% if st.counts.no_dates %}{{ st.counts.no_dates }} with no dates at all are left out rather than
+      called stale.{% endif %}
+      {% if st.counts.archived_left_out %}{{ st.counts.archived_left_out }} archived left out.{% endif %}</p>
+    <p class="small">The full list is <span class="mono">staleness.csv</span> and
+      <span class="mono">staleness.json</span> under <a href="{{ base }}/reports">Report files</a>,
+      rewritten after every scan.</p>
+  </div>
+</div>
+
+<form method="post" action="{{ base }}/notifications/staleness/save">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="card">
+    <div class="card-head">What counts as stale</div>
+    <div class="card-body">
+      <label>Days with no commit
+        <input type="number" name="notify.stale_days" min="1" max="3650" value="{{ values['notify.stale_days'] }}">
+        <span class="faint small">180 by default.  Used by the report files and the digest.</span></label>
+      <label class="check"><input type="checkbox" name="notify.stale_include_archived" value="1"
+          {{ 'checked' if values['notify.stale_include_archived'] }}>
+        <span>Count archived repositories too.  Off by default, since an archived repository is
+          already dealt with.</span></label>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">The email digest</div>
+    <div class="card-body">
+      <label class="check"><input type="checkbox" name="notify.stale_enabled" value="1"
+          {{ 'checked' if values['notify.stale_enabled'] }}>
+        <span>Mail the staleness digest on this schedule</span></label>
+      <label>To
+        <input type="text" name="notify.stale_to" value="{{ values['notify.stale_to'] }}" maxlength="500"
+               placeholder="{{ values['notify.email_to'] or 'security@example.com, platform@example.com' }}">
+        <span class="faint small">Several, separated by commas.  Empty sends it to the To list on the
+          Criticality Notifications tab.  It goes out the same way as the rest of the mail, set up
+          on that tab.</span></label>
+      <div class="form-grid">
+        <label>How often
+          <select name="notify.stale_frequency">
+            <option value="weekly" {{ 'selected' if values['notify.stale_frequency'] != 'monthly' }}>Every week</option>
+            <option value="monthly" {{ 'selected' if values['notify.stale_frequency'] == 'monthly' }}>Every month</option>
+          </select></label>
+        <label>Day of the week
+          <select name="notify.stale_weekday">
+            {% for name in ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'] %}
+            <option value="{{ loop.index0 }}" {{ 'selected' if values['notify.stale_weekday'] == loop.index0 }}>{{ name }}</option>
+            {% endfor %}
+          </select>
+          <span class="faint small">For every week.</span></label>
+        <label>Day of the month
+          <input type="number" name="notify.stale_day" min="1" max="28" value="{{ values['notify.stale_day'] }}">
+          <span class="faint small">For every month, 1 to 28.</span></label>
+        <label>Time
+          <input type="time" name="notify.stale_time" value="{{ values['notify.stale_time'] }}">
+          <span class="faint small">In {{ zone_name }}, the time zone set in Settings.</span></label>
+      </div>
+      <p class="small">{{ schedule_text }}.
+        {% if values['notify.stale_enabled'] and next_at %}Next: {{ next_at }}.{% endif %}
+        {% if last_at %}Last sent {{ last_at }}{{ '' if values['notify.stale_last'].ok else ', and it did not go out' }}.{% endif %}</p>
+      <p class="faint small">The digest counts stale repositories by organization, names the
+        {{ digest_lines }} idle the longest with their owner, and attaches every row as a spreadsheet.</p>
+    </div>
+  </div>
+  {% if can_write %}<div class="page-actions"><button class="btn primary" type="submit">Save</button>
+    <button class="btn" type="submit" formaction="{{ base }}/notifications/staleness/send"
+            title="Sends the digest now to the addresses above, as saved">Send it now</button></div>{% endif %}
+</form>
