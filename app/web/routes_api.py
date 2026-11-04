@@ -669,6 +669,120 @@ async def revoke_waiver(waiver_id: int, request: Request,
                     + "&kind=warn")
 
 
+def _own_unapproved_waiver(db, user, waiver_id, allowed):
+    """(waiver, finding) for a request this person made, in one of these states.
+
+    Somebody else's answers 404, so an id says nothing about whether it
+    exists.  Approved ones are never in the list: what was signed off stays as
+    it was until an administrator revokes it.
+    """
+    waiver = db.query(Waiver).filter(Waiver.id == waiver_id).one_or_none()
+    if waiver is None or ((waiver.requested_by or "").lower()
+                          != (user.username or "").lower()):
+        raise HTTPException(status_code=404,
+                            detail="No exception request of yours with that id.")
+    finding = rbac.visible_finding(db, user, waiver.finding_id)
+    if finding is None:
+        raise HTTPException(status_code=404,
+                            detail="No exception request of yours with that id.")
+    if waiver.status not in allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=("That cannot be done to an exception that is "
+                    + waiver.status.value + "."
+                    + ("  An administrator can revoke it."
+                       if waiver.status == WaiverStatus.APPROVED else "")))
+    return waiver, finding
+
+
+@router.post("/waivers/{waiver_id}/edit")
+async def edit_own_waiver(waiver_id: int, request: Request,
+                          user: User = Depends(current_user)):
+    """Change your own request: reason, expiry, ticket, kind.
+
+    Anything not approved.  One that was rejected or withdrawn goes back to
+    waiting, the same as asking again, with the old decision cleared.
+    """
+    await check_csrf(request)
+    rbac.require(user, "waiver.request")
+
+    from urllib.parse import quote
+
+    form = await request.form()
+    reason_text = clean_text(form.get("reason", ""), "Reason", limit=2000)
+    if len(reason_text) < 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Say a bit more about why this is acceptable, at least 20 characters.")
+    ticket_text = clean_text(form.get("ticket", ""), "Ticket", limit=120,
+                             required=False)
+    expires_at = _parse_expiry(str(form.get("expires", "")))
+    category_value = _waiver_category(form.get("category", ""))
+
+    with session_scope() as db:
+        waiver, finding = _own_unapproved_waiver(
+            db, user, waiver_id,
+            {WaiverStatus.REQUESTED, WaiverStatus.REJECTED, WaiverStatus.REVOKED})
+        reopened = waiver.status != WaiverStatus.REQUESTED
+        if category_value == "not_deployed" and finding.kind == FindingKind.CREDENTIAL:
+            raise HTTPException(status_code=400, detail=(
+                "A credential works wherever it was pushed, deployed or not.  "
+                "Rotate it, or ask for an accepted risk exception instead."))
+        changed = [name for name, old, new in (
+            ("reason", waiver.reason or "", reason_text),
+            ("ticket", waiver.ticket or "", ticket_text),
+            ("expires", waiver.expires_at, expires_at),
+            ("category", waiver.category or "", category_value)) if old != new]
+        waiver.reason = reason_text
+        waiver.ticket = ticket_text
+        waiver.expires_at = expires_at
+        waiver.category = category_value
+        waiver.requested_at = utcnow()
+        if reopened:
+            waiver.status = WaiverStatus.REQUESTED
+            waiver.decided_by = ""
+            waiver.decided_at = None
+            waiver.decision_note = ""
+        db.flush()
+        record(db, "waiver.edited", actor=user.username,
+               target=finding.fingerprint,
+               detail=((", ".join(changed) or "nothing") + " changed"
+                       + ("; sent for approval again" if reopened else "")),
+               source_ip=client_ip(request))
+        where = _back_to(form, finding.id, "/waivers")
+
+    return redirect(f"{where}?msg="
+                    + quote("Request changed.  It is still waiting for an administrator.")
+                    + "&kind=ok")
+
+
+@router.post("/waivers/{waiver_id}/withdraw")
+async def withdraw_own_waiver(waiver_id: int, request: Request,
+                              user: User = Depends(current_user)):
+    """Take back your own request before anybody decides on it.
+
+    Kept as revoked with a note, like the API's withdraw, so the finding can
+    be asked about again and the record of the request stays readable.
+    """
+    await check_csrf(request)
+    rbac.require(user, "waiver.request")
+
+    from urllib.parse import quote
+
+    form = await request.form()
+    with session_scope() as db:
+        waiver, finding = _own_unapproved_waiver(db, user, waiver_id,
+                                                 {WaiverStatus.REQUESTED})
+        take_back_waiver(db, waiver, finding, user.username,
+                         note="Withdrawn by the person who asked for it.")
+        db.flush()
+        record(db, "waiver.withdrawn", actor=user.username,
+               target=finding.fingerprint, source_ip=client_ip(request))
+        where = _back_to(form, finding.id, "/waivers")
+
+    return redirect(f"{where}?msg=" + quote("Request withdrawn.") + "&kind=info")
+
+
 def form_ids(form, *names) -> list:
     """Whole numbers out of a form, under any of these field names.
 

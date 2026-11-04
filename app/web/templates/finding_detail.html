@@ -1091,14 +1091,70 @@
 {% endif %}
 
 {% if waiver %}
-<div class="card">
+<div class="card" id="exception">
   <div class="card-head">Exception</div>
   <div class="card-body">
-    <p><span class="badge {{ 'pending' if waiver.status.value == 'requested' else 'ok' }}">{{ waiver.status.value }}</span></p>
+    <p><span class="badge {{ 'pending' if waiver.status.value == 'requested' else ('ok' if waiver.status.value == 'approved' else 'waived') }}">{{ waiver.status.value }}</span>
+      <span class="faint small mono">E{{ waiver.id }}</span></p>
     <p>{{ waiver.reason }}</p>
     <p class="small faint">Asked for by {{ waiver.requested_by }},
       expires {{ waiver.expires_at | dt('%Y-%m-%d') if waiver.expires_at }}
       {% if waiver.decided_by %}, decided by {{ waiver.decided_by }}{% endif %}</p>
+    {% if waiver.decision_note %}
+    <p class="small"><strong>{{ 'Why it was rejected' if waiver.status.value == 'rejected' else 'Note' }}:</strong>
+      {{ waiver.decision_note }}</p>
+    {% endif %}
+    {# The person who asked can change their own request until somebody
+       approves it, and take it back while it is still waiting.  A rejected or
+       withdrawn one that is changed goes back for approval. #}
+    {% if can_waive and waiver.status.value != 'approved'
+          and (waiver.requested_by or '') | lower == (user.username or '') | lower %}
+    <details style="margin-top:.5rem" {{ 'open' if waiver.status.value == 'rejected' }}>
+      <summary class="small">{{ 'Change this request' if waiver.status.value == 'requested'
+                                else 'Update and resubmit' }}</summary>
+      <form method="post" action="{{ base }}/waivers/{{ waiver.id }}/edit"
+            style="margin-top:.5rem;max-width:70ch">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="back" value="finding">
+        {% if f.kind.value != 'credential' %}
+        <div class="field">
+          <label for="edit-category">Kind of exception</label>
+          <select id="edit-category" name="category">
+            <option value="" {{ 'selected' if not waiver.category }}>Accepted risk</option>
+            <option value="not_deployed" {{ 'selected' if waiver.category == 'not_deployed' }}>Not in scope: this code does not get deployed</option>
+          </select>
+        </div>
+        {% endif %}
+        <div class="field">
+          <label for="edit-reason">Why is this acceptable</label>
+          <textarea id="edit-reason" name="reason" required minlength="20"
+                    maxlength="2000">{{ waiver.reason }}</textarea>
+        </div>
+        <div class="field">
+          <label for="edit-expires">Expires</label>
+          <input type="date" id="edit-expires" name="expires" required
+                 min="{{ expiry_min }}" max="{{ expiry_max }}"
+                 value="{{ waiver.expires_at | dt('%Y-%m-%d') if waiver.expires_at else default_expiry }}">
+        </div>
+        <div class="field">
+          <label for="edit-ticket">Ticket</label>
+          <input type="text" id="edit-ticket" name="ticket" maxlength="120"
+                 value="{{ waiver.ticket or '' }}">
+        </div>
+        <button class="btn sm primary" type="submit">{{ 'Save' if waiver.status.value == 'requested'
+                                               else 'Resubmit for approval' }}</button>
+      </form>
+    </details>
+    {% if waiver.status.value == 'requested' %}
+    <form method="post" action="{{ base }}/waivers/{{ waiver.id }}/withdraw"
+          style="margin-top:.5rem"
+          data-confirm="Withdraw this request? You can ask again later.">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="back" value="finding">
+      <button class="btn sm danger" type="submit">Withdraw request</button>
+    </form>
+    {% endif %}
+    {% endif %}
     {% if can_revoke and waiver.status.value == 'approved' %}
     <form method="post" action="{{ base }}/waivers/{{ waiver.id }}/revoke"
           data-confirm="The finding comes straight back into both report files. Continue?">

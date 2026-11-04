@@ -2018,11 +2018,20 @@ def waivers(request: Request, q: str = "", status: str = "", page_no: int = 1,
                       Waiver.ticket.ilike(needle),
                       Waiver.requested_by.ilike(needle),
                       Waiver.finding_id.in_(matching)]
-            # A finding number on its own, as 4182 or #4182, is that finding.
-            number = query.lstrip("#").strip()
-            if number.isdigit():
-                either.append(Waiver.finding_id == int(number))
-            base = base.filter(sa_or(*either))
+            # A number on its own, as 4182, is that finding or the exception
+            # with that id.  #4182 is only the finding, and E77 or
+            # "exception 77" is only the exception, for when both exist.
+            only_exception = re.fullmatch(r"(?:e|ex|exc|exception)\s*#?\s*(\d+)",
+                                          query.strip(), re.IGNORECASE)
+            if only_exception:
+                base = base.filter(Waiver.id == int(only_exception.group(1)))
+            else:
+                if query.strip().isdigit():
+                    either.append(Waiver.id == int(query.strip()))
+                number = query.lstrip("#").strip()
+                if number.isdigit():
+                    either.append(Waiver.finding_id == int(number))
+                base = base.filter(sa_or(*either))
 
         total = base.count()
         pages = max(1, (total + per - 1) // per)

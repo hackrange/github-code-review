@@ -234,7 +234,11 @@ def endpoints() -> list:
                           choices=["requested", "approved", "rejected",
                                    "revoked", "expired"]),
                        _p("finding", "Only the exception on this finding number.",
-                          kind="integer")] + PAGING,
+                          kind="integer"),
+                       _p("id", "Only these exception numbers.  One, or up to 500 "
+                                "separated by commas, like 77,81."),
+                       _p("vuln_id", "Only exceptions on the finding with this GCR "
+                                     "id, like GCR-1A2B3C4D5E6F.")] + PAGING,
             "example": {"total": 1, "limit": 100, "offset": 0, "count": 1, "exceptions": [{
                 "id": 77, "finding": 4182, "status": "requested", "category": "",
                 "reason": "Only reachable from the admin network, fix planned in Q1.",
@@ -303,8 +307,8 @@ def endpoints() -> list:
                            "waiting one stays waiting.  An approved one goes "
                            "back to waiting and its finding returns to the "
                            "report files until an administrator approves it "
-                           "again.  Answers 409 on one that is rejected or "
-                           "revoked: ask again instead.",
+                           "again.  A rejected or withdrawn one goes back to "
+                           "waiting, the same as asking again.",
             "params": [_p("exception_id", "The exception number.", where="path",
                           kind="integer", example=77)],
             "body": [

@@ -633,6 +633,23 @@ def list_exceptions(request: Request,
                 raise HTTPException(status_code=400,
                                     detail="finding is a finding number.")
             base = base.filter(Waiver.finding_id == int(finding_raw))
+        id_raw = (params.get("id", "") or "").strip()
+        if id_raw:
+            ids = [part.strip() for part in id_raw.split(",") if part.strip()]
+            if not ids or len(ids) > 500 or not all(i.isdigit() for i in ids):
+                raise HTTPException(
+                    status_code=400,
+                    detail="id is an exception number, or up to 500 of them "
+                           "separated by commas.")
+            base = base.filter(Waiver.id.in_({int(i) for i in ids}))
+        vuln_raw = (params.get("vuln_id", "") or "").strip().upper()
+        if vuln_raw:
+            if len(vuln_raw) > 64:
+                raise HTTPException(status_code=400,
+                                    detail="vuln_id is a GCR id, like GCR-1A2B3C4D5E6F.")
+            base = base.filter(Waiver.finding_id.in_(
+                shown.filter(Finding.vuln_id == vuln_raw)
+                .with_entities(Finding.id).scalar_subquery()))
 
         total = base.count()
         rows = (base.order_by(Waiver.requested_at.desc(), Waiver.id.desc())
@@ -777,7 +794,8 @@ async def edit_exception(exception_id: int, request: Request,
     approver cannot rewrite somebody else's argument under their name.  An
     approved exception that is changed goes back to waiting: what was signed
     off is not what it says any more, so its finding comes back into the
-    report files until an administrator agrees again.
+    report files until an administrator agrees again.  A rejected or withdrawn
+    one goes back to waiting too, the same as asking again.
     """
     from app.core.audit import record
     from app.core.models import FindingKind, WaiverStatus, utcnow
@@ -806,11 +824,11 @@ async def edit_exception(exception_id: int, request: Request,
         if not _is_owner(me, waiver):
             raise HTTPException(status_code=403,
                                 detail="Only the person who asked for it can change it.")
-        if waiver.status not in {WaiverStatus.REQUESTED, WaiverStatus.APPROVED}:
-            raise HTTPException(
-                status_code=409,
-                detail="That one is closed.  Ask again with POST "
-                       "/findings/{id}/exceptions.")
+        if waiver.status not in {WaiverStatus.REQUESTED, WaiverStatus.APPROVED,
+                                 WaiverStatus.REJECTED, WaiverStatus.REVOKED}:
+            raise HTTPException(status_code=409,
+                                detail="That one cannot be changed.")
+        reopened = waiver.status in {WaiverStatus.REJECTED, WaiverStatus.REVOKED}
 
         if "reason" in body:
             reason = clean_text(body.get("reason") or "", "Reason", limit=2000)
@@ -846,6 +864,7 @@ async def edit_exception(exception_id: int, request: Request,
         record(db, "waiver.edited", actor=me.username, target=finding.fingerprint,
                detail=(f"{', '.join(sorted(body))} changed"
                        + ("; approval undone, waiting again" if was_approved else "")
+                       + ("; sent for approval again" if reopened else "")
                        + f" (api token {caller.token.prefix})"),
                source_ip=client_ip(request))
         if was_approved:

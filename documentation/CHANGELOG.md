@@ -6,6 +6,24 @@ moved.
 
 ## 2026-11-04
 
+**Change, withdraw or resubmit your own exception request.**  The person who
+asked can now change the reason, expiry, ticket or kind on the finding page,
+and withdraw it while it is still waiting.  A rejected or withdrawn request
+shows why, with **Update and resubmit**, which sends it back for approval.
+An approved one cannot be changed on the screen; an administrator revokes it.
+Nobody else can change or withdraw your request.  The Exceptions page shows
+each exception's id (E77), the approver's note, and a **Change** or
+**Update and resubmit** button and a **Withdraw** button on your own rows.
+The search takes an exception id, as 77, E77 or "exception 77".  In the API,
+`PATCH /exceptions/{id}` on a rejected or withdrawn one now resubmits it
+instead of answering 409.
+
+**Find exceptions by id in the API.**  `GET /api/v1/exceptions` now takes
+`id`, one exception number or several separated by commas, and `vuln_id`, the
+GCR id of the finding.  You still see only the exceptions you could see
+before.  The Python and bash samples take `--id` and `--vuln-id` (`-g` in
+bash) on the exceptions list.
+
 **Code behind it, from a scan.**  A dynamic scan run here now says which
 repositories likely serve the site, from the paths it reached rather than the
 host name.  Each code scan reads the routes a repository declares, and the

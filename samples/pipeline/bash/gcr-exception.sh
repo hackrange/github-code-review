@@ -4,6 +4,7 @@
 #
 #   gcr-exception.sh show     -i ID
 #   gcr-exception.sh list     [-s requested|approved|rejected|revoked|expired] [-f FINDING_ID]
+#                             [-i ID[,ID...]] [-g GCR-ID]
 #   gcr-exception.sh edit     -i ID [-m "reason, 20+ characters"] [-e YYYY-MM-DD] [-t TICKET]
 #   gcr-exception.sh withdraw -i ID      your own, waiting or approved
 #   gcr-exception.sh revoke   -i ID      administrators, an approved one
@@ -18,7 +19,7 @@ HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/gcr-common.sh"
 
 action="${1:-}"; shift || true
-id="" reason="" expires="" ticket="" note="" status="" finding=""
+id="" reason="" expires="" ticket="" note="" status="" finding="" vuln=""
 while (( $# )); do
   case "$1" in
     -i|--id) id="$2"; shift 2 ;;
@@ -28,7 +29,8 @@ while (( $# )); do
     -n|--note) note="$2"; shift 2 ;;
     -s|--status) status="$2"; shift 2 ;;
     -f|--finding) finding="$2"; shift 2 ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -g|--gcr-id) vuln="$2"; shift 2 ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 3 ;;
   esac
 done
@@ -40,7 +42,7 @@ case "$action" in
   show)
     need_id; gcr_get "/exceptions/$id" | jq . ;;
   list)
-    gcr_get "/exceptions" "status=$status" "finding=$finding" "limit=1000" \
+    gcr_get "/exceptions" "status=$status" "finding=$finding" "id=$id" "vuln_id=$vuln" "limit=1000" \
       | jq -r '.exceptions[] | [.id, .finding, .status, (.expires_at // "")[:10], .repository, .reason[:50]] | @tsv' ;;
   edit)
     need_id

@@ -206,9 +206,12 @@ class Client:
     def trends(self, days: int = 30, basis: str = "actions", **filters) -> dict:
         return self._call("GET", "/trends", dict(filters, days=days, basis=basis))
 
-    def exceptions(self, status: str = "", finding: int = None) -> list:
+    def exceptions(self, status: str = "", finding: int = None, ids=None,
+                   vuln_id: str = "") -> list:
+        wanted = ",".join(str(int(i)) for i in ids) if ids else ""
         return list(self._pages("/exceptions", "exceptions",
-                                {"status": status, "finding": finding}))
+                                {"status": status, "finding": finding,
+                                 "id": wanted, "vuln_id": vuln_id}))
 
     def exception(self, exception_id: int) -> dict:
         return self._call("GET", f"/exceptions/{int(exception_id)}")
@@ -654,7 +657,7 @@ def cmd_revoke_exclusion(client: Client, args) -> int:
 
 
 def cmd_exceptions(client: Client, args) -> int:
-    rows = client.exceptions(args.status, args.finding)
+    rows = client.exceptions(args.status, args.finding, args.id, args.vuln_id)
     print(_table([{"id": r["id"], "finding": r["finding"], "status": r["status"],
                    "expires": (r.get("expires_at") or "")[:10],
                    "repository": r.get("repository", ""),
@@ -931,6 +934,9 @@ def main(argv=None) -> int:
     p.add_argument("--status", default="", choices=["", "requested", "approved",
                                                     "rejected", "revoked", "expired"])
     p.add_argument("--finding", type=int, default=None, help="only on this finding")
+    p.add_argument("--id", type=int, nargs="+", default=None,
+                   help="only these exception numbers")
+    p.add_argument("--vuln-id", default="", help="only on the finding with this GCR id")
 
     p = sub.add_parser("exception", help="show one exception")
     p.add_argument("--id", type=int, required=True)

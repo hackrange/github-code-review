@@ -26,7 +26,7 @@
   <div class="field" style="flex:1;min-width:220px">
     <label for="q">Search</label>
     <input type="text" id="q" name="q" value="{{ q }}"
-           placeholder="finding number, GCR id, repository, path, reason, ticket or who asked">
+           placeholder="finding number, exception id (E77), GCR id, repository, path, reason, ticket or who asked">
   </div>
   <div class="field">
     <label for="status">Status</label>
@@ -91,7 +91,7 @@
         <th class="nowrap"><input type="checkbox" id="bulk-select-page"
             title="Everything on this page you can act on"></th>
         {% endif %}
-        <th class="nowrap" title="The finding number">#</th><th>Status</th><th>Finding</th><th>Why</th><th>Asked by</th><th></th></tr></thead>
+        <th class="nowrap" title="The finding number, and the exception id under it">#</th><th>Status</th><th>Finding</th><th>Why</th><th>Asked by</th><th></th></tr></thead>
       <tbody>
       {% for w in rows %}
         {% set f = findings.get(w.finding_id) %}
@@ -107,8 +107,9 @@
                      data-state="{{ w.status.value }}"
                      {{ 'disabled' if not can_act }}></td>
           {% endif %}
-          <td class="nowrap mono"><a href="{{ base }}/findings/{{ w.finding_id }}"
-              title="Open finding {{ w.finding_id }}">{{ w.finding_id }}</a></td>
+          <td class="stack nowrap mono"><a href="{{ base }}/findings/{{ w.finding_id }}"
+              title="Open finding {{ w.finding_id }}">{{ w.finding_id }}</a>
+            <span class="sub" title="The exception id, as the API and E{{ w.id }} in the search know it">E{{ w.id }}</span></td>
           <td class="stack nowrap">
             {% if w.status.value == 'approved' and w.expires_at and w.expires_at.replace(tzinfo=None) < now.replace(tzinfo=None) %}
               <span><span class="badge medium">expired</span></span>
@@ -143,7 +144,8 @@
           </td>
           <td class="stack nowrap">
             <span>{{ w.requested_by }}</span>
-            {% if w.decided_by %}<span class="sub">decided by {{ w.decided_by }}</span>{% endif %}
+            {% if w.decided_by %}<span class="sub">{{ w.status.value if w.status.value in ('approved', 'rejected') else 'decided' }} by {{ w.decided_by }}</span>{% endif %}
+            {% if w.decision_note %}<span class="sub" style="white-space:normal;max-width:40ch">{{ w.decision_note }}</span>{% endif %}
           </td>
           <td class="nowrap">
             {% if can_approve and w.status.value == 'requested' %}
@@ -164,6 +166,22 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <button class="btn sm danger" type="submit">Revoke</button>
               </form>
+            {% endif %}
+            {# The person who asked: change it until it is approved, and
+               withdraw it while it still waits.  The form is on the finding. #}
+            {% if w.status.value != 'approved'
+                  and (w.requested_by or '') | lower == (user.username or '') | lower %}
+              <a class="btn sm{{ ' primary' if w.status.value == 'rejected' }}"
+                 href="{{ base }}/findings/{{ w.finding_id }}#exception"
+                 title="Change the reason, expiry or ticket">{{ 'Change' if w.status.value == 'requested' else 'Update and resubmit' }}</a>
+              {% if w.status.value == 'requested' %}
+              <form method="post" action="{{ base }}/waivers/{{ w.id }}/withdraw"
+                    style="display:inline"
+                    data-confirm="Withdraw this request? You can ask again later.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm danger" type="submit">Withdraw</button>
+              </form>
+              {% endif %}
             {% endif %}
           </td>
         </tr>
