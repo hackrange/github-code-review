@@ -3118,6 +3118,46 @@ async def revoke_token(token_id: int, request: Request,
     return redirect("/tokens?msg=" + quote("That token no longer works."))
 
 
+@router.post("/tokens/{token_id}/scopes")
+async def change_token_scopes(token_id: int, request: Request,
+                              user: User = Depends(current_user)):
+    """Change what an existing token may do.  Administrators only.
+
+    The token string stays the same, so the pipeline or editor holding it
+    carries on without being touched.  The scopes are checked against the
+    token's owner, not against the administrator making the change.
+    """
+    await check_csrf(request)
+    rbac.require(user, "user.write")
+
+    from urllib.parse import quote
+
+    from app.core import api_tokens
+
+    form = await request.form()
+    wanted = [scope for scope in api_tokens.SCOPES
+              if _checked(form, f"scope:{scope}")]
+    with session_scope() as db:
+        actor = db.query(User).filter(User.id == user.id).one()
+        try:
+            row, before = api_tokens.set_scopes(db, token_id, wanted, actor)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="No such token.")
+        except ValueError as exc:
+            return redirect(f"/tokens?msg={quote(str(exc))}&kind=error")
+        if before == row.scopes:
+            return redirect("/tokens?msg=" + quote("Nothing changed."))
+        record(db, "api_token.scopes_changed", actor=user.username,
+               target=row.name,
+               detail=f"{before or 'none'} -> {row.scopes} (owner {row.created_by})",
+               source_ip=client_ip(request))
+        name = row.name
+
+    return redirect("/tokens?msg=" + quote(
+        f"{name} may now: {', '.join(wanted)}.  It works the same as before, "
+        "nothing holding it needs to change."))
+
+
 @router.post("/tokens/{token_id}/delete")
 async def delete_token(token_id: int, request: Request,
                        user: User = Depends(current_user)):

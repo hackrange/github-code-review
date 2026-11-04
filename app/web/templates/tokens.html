@@ -122,7 +122,29 @@
           </td>
           {% if sees_all %}<td class="small">{{ t.created_by }}</td>{% endif %}
           <td class="mono small">{{ t.prefix }}&hellip;</td>
-          <td class="small">{% for s in t.scopes.split(',') %}<span class="badge">{{ s }}</span> {% endfor %}</td>
+          <td class="small">{% for s in t.scopes.split(',') %}<span class="badge">{{ s }}</span> {% endfor %}
+            {% if sees_all and t.live() %}
+            {# Administrators can change what a token may do without anybody
+               having to make a new one and update the secret it lives in. #}
+            <details class="token-scopes">
+              <summary class="small">Edit scopes</summary>
+              <form method="post" action="{{ base }}/tokens/{{ t.id }}/scopes"
+                    data-confirm="Change what this token may do? Whatever holds it gets the new scopes on its next call.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                {% set have = t.scopes.split(',') %}
+                {% for scope, what in scopes.items()
+                       if scope not in ('external', 'approve') or t.id in admin_owned %}
+                <label class="check small" title="{{ what }}">
+                  <input type="checkbox" name="scope:{{ scope }}" value="1"
+                         {{ 'checked' if scope in have }}>
+                  <span class="mono">{{ scope }}</span>
+                </label>
+                {% endfor %}
+                <button class="btn sm" type="submit">Save scopes</button>
+              </form>
+            </details>
+            {% endif %}
+          </td>
           <td class="stack nowrap small">
             {% if t.revoked_at %}<span class="badge critical">revoked</span>
             {% elif not t.live() %}<span class="badge medium">expired</span>

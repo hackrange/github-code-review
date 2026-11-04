@@ -61,25 +61,61 @@ def _hash(token: str) -> str:
     return hashlib.sha256((token or "").encode()).hexdigest()
 
 
+def allowed_scopes(owner, scopes) -> list:
+    """The scopes asked for, checked against the person the token belongs to.
+
+    Raises ValueError with a sentence to show.  Always the owner's role, never
+    the role of whoever is editing: an administrator giving a developer's
+    token the approve scope would hand that developer an administrator's power
+    through the back door.
+    """
+    from app.core import rbac
+
+    wanted = sorted({s.strip() for s in scopes if s.strip() in SCOPES})
+    if "external" in wanted and not rbac.can(owner, "external.manage"):
+        raise ValueError("Only an administrator's token can work with external sites.")
+    if "approve" in wanted and not (rbac.can(owner, "waiver.approve")
+                                    and rbac.can(owner, "exclusion.write")):
+        raise ValueError("Only an administrator's token can approve exceptions.")
+    if not wanted:
+        raise ValueError("Pick at least one thing it may do.")
+    return wanted
+
+
+def set_scopes(session, token_id: int, scopes, actor):
+    """Change what a live token may do.  -> (row, the scopes it had before).
+
+    Administrators only, on anybody's token.  The token itself does not
+    change, so nothing using it has to be updated: the next call is checked
+    against the new list.  Raises LookupError for a token that is not there,
+    or is revoked or expired, and ValueError for scopes its owner may not have.
+    """
+    from app.core.models import User
+
+    if actor is None or not _sees_everything(actor):
+        raise PermissionError("Only an administrator can change a token's scopes.")
+    row = session.query(ApiToken).filter(ApiToken.id == token_id).one_or_none()
+    if row is None or not row.live():
+        raise LookupError("No such token, or it no longer works.")
+    owner = session.query(User).filter(User.id == row.user_id).one_or_none()
+    if owner is None:
+        raise LookupError("No such token, or it no longer works.")
+    wanted = allowed_scopes(owner, scopes)
+    before = row.scopes or ""
+    row.scopes = ",".join(wanted)
+    session.flush()
+    log.info("api token %s scopes %s -> %s by %s", row.name, before, row.scopes,
+             actor.username)
+    return row, before
+
+
 def create(session, user, name: str, scopes, days: int = DEFAULT_DAYS):
     """-> (row, the token itself).  The only time anybody sees the token."""
     name = (name or "").strip()
     if not name:
         raise ValueError("Give it a name, so somebody can tell later what it was for.")
 
-    wanted = sorted({s.strip() for s in scopes if s.strip() in SCOPES})
-    if "external" in wanted:
-        from app.core import rbac
-
-        if not rbac.can(user, "external.manage"):
-            raise ValueError("Only an administrator's token can work with external sites.")
-    if "approve" in wanted:
-        from app.core import rbac
-
-        if not (rbac.can(user, "waiver.approve") and rbac.can(user, "exclusion.write")):
-            raise ValueError("Only an administrator's token can approve exceptions.")
-    if not wanted:
-        raise ValueError("Pick at least one thing it may do.")
+    wanted = allowed_scopes(user, scopes)
 
     try:
         days = int(days)

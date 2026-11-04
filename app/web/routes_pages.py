@@ -3761,6 +3761,15 @@ def tokens_page(request: Request, msg: str = "", kind: str = "",
 
     with session_scope() as db:
         rows = api_tokens.listing(db, user, include_dead=show_dead)
+        # Which tokens belong to somebody who may hold the administrator only
+        # scopes, so the edit form only offers what would be accepted.
+        admin_owned = set()
+        if rbac.can(user, "user.write") and rows:
+            owners = {u.id: u for u in db.query(User).filter(
+                User.id.in_({r.user_id for r in rows})).all()}
+            admin_owned = {r.id for r in rows
+                           if owners.get(r.user_id) is not None
+                           and rbac.can(owners[r.user_id], "waiver.approve")}
         context = _shared(db, user)
         context.update(
             active_page="tokens",
@@ -3771,6 +3780,7 @@ def tokens_page(request: Request, msg: str = "", kind: str = "",
             default_days=api_tokens.DEFAULT_DAYS,
             max_days=api_tokens.MAX_DAYS,
             sees_all=rbac.can(user, "user.write"),
+            admin_owned=admin_owned,
             me=user.username,
             # Shown once, straight after it is made, and never again.  What
             # arrives in the address is a one time key, not the token.
