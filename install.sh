@@ -130,10 +130,109 @@ ensure_container_dir() {
     warn "could not chown $path to uid 10001, the container may not be able to write"
 }
 
+# running_scans
+# How many scans the running container is in the middle of, or nothing when
+# it cannot be asked (not running yet, or too old to answer).  Read from the
+# database, because a live app has already marked any dead run interrupted
+# on its own start, so a row still marked running is a scan really running.
+running_scans() {
+  "${COMPOSE[@]}" exec -T github-code-review python -c '
+from app.core.db import session_scope
+from app.core.models import ScanRun
+with session_scope() as db:
+    print(db.query(ScanRun).filter(ScanRun.status == "running").count())
+' 2>/dev/null | tail -1 | grep -E '^[0-9]+$' || true
+}
+
+# wait_for_scans
+# Restarting stops every scan in progress.  What each one had finished is
+# read back on the next start, but the rest of the run is lost, and on a big
+# estate that read back alone holds the app off the network for minutes.
+# So wait for them, unless told not to.
+wait_for_scans() {
+  local n
+  n="$(running_scans)"
+  [[ -n "$n" && "$n" != 0 ]] || return 0
+  if (( NOW )); then
+    warn "$n scan(s) are running and will be stopped (--now)"
+    hint "What they had finished is kept and read back on start, which takes a while"
+    return 0
+  fi
+  say "Waiting for $n running scan(s) to finish before restarting"
+  hint "A restart would stop them.  Run with --now to restart anyway."
+  local last="$n"
+  while [[ -n "$n" && "$n" != 0 ]]; do
+    if [[ "$n" != "$last" ]]; then
+      hint "$(date +%H:%M) $n still running"
+      last="$n"
+    fi
+    sleep 30
+    n="$(running_scans)"
+  done
+  ok "no scans running"
+}
+
+# wait_for_up
+# Sets up=1 once /healthz answers.  The app does real work before it opens
+# the port: migrations, and reading back what any stopped scan had finished,
+# which has taken over four minutes on production.  So two minutes is only
+# the point to start explaining, not to give up.  It gives up when the
+# container stops or restarts, when startup has logged nothing new for ten
+# minutes, or after thirty minutes in all.
+wait_for_up() {
+  up=0
+  local cid started waited=0 quiet=0 lines=0 now_lines state said=0
+  cid="$("${COMPOSE[@]}" ps -q github-code-review 2>/dev/null | head -1)"
+  [[ -n "$cid" ]] && started="$(docker inspect -f '{{.State.StartedAt}}' "$cid" 2>/dev/null || true)"
+  [[ -n "$started" ]] || cid=""
+  while (( waited < 1800 )); do
+    if curl -fsS "http://${BIND}:${PORT}/healthz" >/dev/null 2>&1; then
+      up=1; return 0
+    fi
+    if [[ -n "$cid" ]]; then
+      state="$(docker inspect -f '{{.State.Status}} {{.State.StartedAt}}' "$cid" 2>/dev/null || true)"
+      if [[ "${state%% *}" != running ]]; then
+        state="${state%% *}"
+        warn "the container is ${state:-gone}, not running"
+        return 1
+      fi
+      if [[ -n "$started" && "${state#* }" != "$started" ]]; then
+        warn "the container restarted while starting up"
+        return 1
+      fi
+      now_lines="$(docker logs --since "$started" "$cid" 2>&1 | wc -l)"
+      if (( now_lines > lines )); then
+        lines="$now_lines"; quiet=0
+      else
+        quiet=$(( quiet + 2 ))
+      fi
+      if (( quiet >= 600 )); then
+        warn "startup has logged nothing for ten minutes"
+        return 1
+      fi
+    fi
+    if (( waited >= 120 && ! said )); then
+      hint "Still starting after two minutes.  That is normal after scans were stopped:"
+      hint "it reads back what they had finished before it opens the port."
+      said=1
+    fi
+    if (( said && waited % 60 == 0 )) && [[ -n "$cid" ]]; then
+      hint "$(date +%H:%M) $(docker logs --since "$started" "$cid" 2>&1 \
+        | grep -E 'salvaged|startup|interrupted' | tail -1 | cut -c1-110)"
+    fi
+    sleep 2
+    waited=$(( waited + 2 ))
+  done
+  warn "it did not answer in thirty minutes"
+  return 1
+}
+
 UPGRADE=0
+NOW=0
 while (( $# )); do
   case "$1" in
     --upgrade|-u) UPGRADE=1; shift ;;
+    --now) NOW=1; shift ;;
     -h|--help)
       cat <<'__USAGE__'
 install.sh - set Git Code Review up, or bring it up to date.
@@ -142,6 +241,10 @@ install.sh - set Git Code Review up, or bring it up to date.
                           where the reports go, then builds and starts it.
   install.sh --upgrade    already installed.  Pulls the latest, rebuilds and
                           restarts.  Asks nothing and changes no settings.
+                          Waits for any running scan to finish first.
+  install.sh --upgrade --now
+                          the same, but restarts straight away.  Running
+                          scans stop; what they finished is kept.
 
 Everything you answered the first time lives in .env and is left alone either
 way, so an upgrade cannot quietly move your database or your reports.
@@ -218,30 +321,32 @@ if (( UPGRADE )); then
   "${COMPOSE[@]}" build || die "build failed"
   ok "image built"
 
+  # Checked after the build, right before the restart, so a scan that a
+  # schedule started while the image was building is caught too.
+  wait_for_scans
+
   say "Restarting"
   # up -d recreates only what changed, so the database container is left
   # alone unless its own definition moved.
   "${COMPOSE[@]}" up -d || die "could not start the container"
 
   say "Waiting for it to come up"
-  up=0
-  for _ in $(seq 1 60); do
-    curl -fsS "http://${BIND}:${PORT}/healthz" >/dev/null 2>&1 && { up=1; break; }
-    sleep 2
-  done
-  if (( up )); then
-    ok "it is up"
-  else
-    warn "it did not answer in two minutes.  Check: ${COMPOSE[*]} logs"
-  fi
+  wait_for_up || true
 
   echo
-  ok "Upgraded.  Running at http://${BIND}:${PORT}"
-  hint "New columns were added on boot, and any that had outgrown their size"
-  hint "were widened.  There is nothing to run by hand."
-  hint "Logs: ${COMPOSE[*]} logs -f"
+  if (( up )); then
+    ok "Upgraded.  Running at http://${BIND}:${PORT}"
+    hint "New columns were added on boot, and any that had outgrown their size"
+    hint "were widened.  There is nothing to run by hand."
+    hint "Logs: ${COMPOSE[*]} logs -f"
+    echo
+    exit 0
+  fi
+  warn "The new image is built and the container was started, but it is not answering."
+  hint "Look at: ${COMPOSE[*]} logs --tail 100 github-code-review"
+  hint "Then: curl -fsS http://${BIND}:${PORT}/healthz"
   echo
-  exit 0
+  exit 1
 fi
 
 say "Git Code Review 1.0.1 setup"
@@ -391,17 +496,10 @@ say "Starting it"
 
 # Wait for the health check rather than guessing.
 say "Waiting for it to come up"
-up=0
-for _ in $(seq 1 60); do
-  if curl -fsS "http://${BIND}:${PORT}/healthz" >/dev/null 2>&1; then
-    up=1; break
-  fi
-  sleep 2
-done
-if (( up )); then
+if wait_for_up; then
   ok "it is up"
 else
-  warn "it did not answer in two minutes.  Check: ${COMPOSE[*]} logs"
+  warn "it is not answering.  Check: ${COMPOSE[*]} logs --tail 100 github-code-review"
 fi
 
 # -----------------------------------------------------------------------------

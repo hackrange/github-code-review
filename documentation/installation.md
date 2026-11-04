@@ -123,6 +123,11 @@ A release that adds a column brings it in on the next start. The app compares
 what the code expects against what the file has and adds anything missing. It
 only ever adds, so an upgrade cannot drop a column or rewrite your data.
 
+`./install.sh --upgrade` waits for running scans to finish before it
+restarts, since a restart stops them.  `--upgrade --now` restarts anyway.
+What a stopped scan had finished is kept and read back on the next start,
+before the app opens its port, so that start can take several minutes.
+
 Take a copy first if you want one:
 
 ```bash

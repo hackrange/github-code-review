@@ -6,6 +6,15 @@ moved.
 
 ## 2026-11-04
 
+**Upgrades wait for running scans, and for a slow start.**  `install.sh
+--upgrade` now waits for any scan in progress to finish before it restarts
+the app, because a restart stops it.  Use `--upgrade --now` to restart
+straight away.  After the restart it keeps waiting while the app is still
+starting, which can take several minutes when stopped scans are being read
+back, and shows what it is doing.  It used to give up after two minutes and
+then print "Upgraded" anyway.  Now it says "Upgraded" only when the app
+answers, and otherwise says it is not answering and exits with an error.
+
 **Change, withdraw or resubmit your own exception request.**  The person who
 asked can now change the reason, expiry, ticket or kind on the finding page,
 and withdraw it while it is still waiting.  A rejected or withdrawn request
