@@ -3575,6 +3575,9 @@ def settings_page(request: Request, msg: str = "", kind: str = "",
             # the same list, so a section cannot end up in one and not the
             # other.
             help_sections=help_sections(), settings_tabs=settings_tabs(),
+            ias={"regions": __import__("app.core.insightappsec", fromlist=["x"]).REGIONS,
+                 "guide": __import__("app.core.insightappsec", fromlist=["x"]).GUIDE,
+                 "catalog": __import__("app.core.insightappsec", fromlist=["x"]).load_catalog()},
             default_user_agent=__import__("app.core.external_probe", fromlist=["x"]).DEFAULT_USER_AGENT,
             values=store.all_values(db),
             rulesets=store.RULESETS,
@@ -3971,6 +3974,8 @@ def blast_web_apps(request: Request, q: str = "", within: str = "",
                        due_only=due_only, max_age=max_age,
                        windows=webapps.WINDOWS, test_kinds=webapps.TEST_KINDS,
                        can_record=rbac.can(user, "repo.write"),
+                       can_remove_url=(rbac.can(user, "repo.write")
+                                       or rbac.can(user, "repo.propose")),
                        today=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                        flash=clean_notice(msg, limit=300),
                        flash_kind=notice_class(kind))
@@ -4843,6 +4848,48 @@ def connection_docs(provider: str, request: Request,
     with session_scope() as db:
         context = _shared(db, user)
         context.update(active_page="connections")
+        return page(request, template, **context)
+
+
+# Setup guides for the integrations on the Settings page's Integrations tab.
+INTEGRATION_LINKS = {
+    "insightappsec": [
+        ("InsightAppSec API reference",
+         "https://help.rapid7.com/insightappsec/en-us/api/v1/docs.html"),
+        ("Managing platform API keys",
+         "https://docs.rapid7.com/insight/managing-platform-api-keys/"),
+        ("Supported regions", "https://docs.rapid7.com/insight/product-apis/#supported-regions"),
+        ("InsightAppSec roles and permissions", "https://docs.rapid7.com/insightappsec/rbac/"),
+        ("Allowlist, add and manage targets",
+         "https://docs.rapid7.com/insightappsec/allowlist-manage-targets/"),
+        ("Allowlist cloud engine IPs",
+         "https://docs.rapid7.com/insightappsec/allowlist-cloud-engine-ips/"),
+        ("Scan configuration", "https://docs.rapid7.com/insightappsec/scan-configuration/"),
+        ("Attack templates", "https://docs.rapid7.com/insightappsec/attack-templates/"),
+        ("Authentication", "https://docs.rapid7.com/insightappsec/authentication/"),
+        ("Set up an on-premises scan engine",
+         "https://docs.rapid7.com/insightappsec/setting-up-an-on-premise-scan-engine/"),
+        ("Failed scan status codes",
+         "https://docs.rapid7.com/insightappsec/failed-scan-status-codes/"),
+    ],
+}
+
+
+@router.get("/docs/integrations-{name}")
+def integration_docs(name: str, request: Request, user: User = Depends(current_user)):
+    """How to set up one integration, step by step.  Linked from its card."""
+    rbac.require(user, "settings.read")
+    from app.core import insightappsec
+
+    pages = {"insightappsec": ("docs_insightappsec.html",
+                               {"regions": insightappsec.REGIONS})}
+    found = pages.get((name or "").strip().lower())
+    if found is None:
+        raise HTTPException(status_code=404, detail="No guide for that one yet.")
+    template, extra = found
+    with session_scope() as db:
+        context = _shared(db, user)
+        context.update(active_page="settings", links=INTEGRATION_LINKS.get(name, []), **extra)
         return page(request, template, **context)
 
 

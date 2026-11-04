@@ -1,0 +1,326 @@
+{% extends "base.html" %}
+{% block title %}Setting up Rapid7 InsightAppSec &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Setting up Rapid7 InsightAppSec</h1>
+  <div class="faint small">Start InsightAppSec scans from External sites and read the findings back.  Step by step, from nothing.</div></div>
+  <div class="page-actions"><a class="btn" href="{{ base }}/settings#tab-integrations">Back to Integrations</a></div>
+</div>
+
+<div class="notice info">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
+  <div><strong>How it fits together.</strong>  InsightAppSec never scans a bare address.  Every
+    scan runs from a <em>scan config</em> that lives in InsightAppSec.  The config holds the
+    start address, what to attack with, which engine runs it and how to sign in.  This product
+    only says which config to run for each site.  It then follows the scan and brings the
+    findings back to the site's page.  So most of the setup happens in Rapid7, and only the last
+    two steps happen here.</div>
+</div>
+
+<div class="card"><div class="card-body">
+  <h2>Before you start</h2>
+  <ul class="small">
+    <li>An InsightAppSec subscription.  A trial account can only read through the API, so it
+      cannot start scans.</li>
+    <li>Somebody who is a platform administrator in the Insight platform, or who can make users
+      and give them InsightAppSec roles.</li>
+    <li>External sites switched on here, on the
+      <a href="{{ base }}/settings#tab-web">Web and external sites</a> tab.  InsightAppSec scans
+      start from a site's page.</li>
+    <li>The sites you want to scan, added under External sites.</li>
+    <li>Permission to scan them.  InsightAppSec sends real attack payloads from Rapid7's
+      engines.</li>
+  </ul>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Step 1.  Find your region</h2>
+  <p class="small">Every Insight account is hosted in one region, and the API answers at that
+    region's own address.  The wrong region gives a refused key or a sign in page.</p>
+  <ol class="small">
+    <li>Sign in to InsightAppSec and look at the address bar.  The first part of the host is the
+      region.  <span class="mono">https://us2.appsec.insight.rapid7.com</span> means
+      <span class="mono">us2</span>.</li>
+    <li>In the United States you can also check <strong>Administration &gt; Company Settings &gt;
+      Organization Settings</strong>.  The Data Storage Region says United States 1, 2 or 3.</li>
+  </ol>
+  <p class="small">Do not go by "the first two letters".  That old advice is wrong for us2, us3,
+    me1 and aps2.</p>
+  <table>
+    <thead><tr><th>Region</th><th>Code</th><th>API address</th></tr></thead>
+    <tbody>
+    {% for code, entry in regions.items() %}
+      <tr><td class="small">{{ entry[0] }}</td><td class="mono small">{{ code }}</td>
+        <td class="mono small">{{ entry[1] }}/ias/v1</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="small faint">Rapid7's own GitHub Action and Jenkins plugin support only the first
+    seven.  me1 (Middle East) was not answering when this was written, so test it before you
+    count on it.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Step 2.  Make an account for this integration</h2>
+  <p class="small">The key you make in step 4 acts as the user who made it, with that user's
+    rights at the moment of each call.  Use an account made for this job, not a person's own.
+    That way the scans it starts are logged under a name everybody recognizes, and nothing
+    breaks when somebody leaves.</p>
+  <ol class="small">
+    <li>In the Insight platform, go to <strong>Administration &gt; User Management</strong> and
+      create a user.  A shared mailbox address works for the email.</li>
+    <li>Give it the <strong>Application Security</strong> product.</li>
+    <li>Give it a role that can read apps, scan configs and vulnerabilities, and that can start
+      and stop scans.  Either of these works:
+      <ul>
+        <li><strong>Read Write</strong>.  Rapid7's API reference lists Manage Scans and Manage
+          Vulnerabilities for it, which covers everything here.</li>
+        <li><strong>Scan Manager</strong>, the smaller choice.  It can start scans and change scan
+          configs, but not edit apps.  Rapid7's two RBAC pages disagree on whether it can see
+          vulnerabilities.  If findings never come back, this is why, and Read Write fixes it.</li>
+      </ul></li>
+  </ol>
+  <table>
+    <thead><tr><th>This product needs to</th><th>Rapid7 permission</th><th>Read Only</th><th>Read Write</th></tr></thead>
+    <tbody>
+      <tr><td class="small">List apps and scan configs</td><td class="small">Read Apps, Read Scan Configs</td><td class="small">yes</td><td class="small">yes</td></tr>
+      <tr><td class="small">Start and stop scans</td><td class="small">Manage Scans</td><td class="small">no</td><td class="small">yes</td></tr>
+      <tr><td class="small">Read the findings</td><td class="small">Read Vulnerabilities</td><td class="small">yes</td><td class="small">yes</td></tr>
+    </tbody>
+  </table>
+  <p class="small"><strong>Could you use an organization key instead?</strong>  You can.  Only a
+    platform administrator can make one, it is not tied to a person, and it reaches every app.
+    The catch is that Rapid7 describes it as a super key that can do anything in every Rapid7
+    product you have, not only InsightAppSec.  A user key with one role is the safer choice.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Step 3.  Let the account see the apps</h2>
+  <p class="small">A user who is not a platform administrator only sees the apps it was given.
+    The key can only scan what the account can see.</p>
+  <ol class="small">
+    <li>In InsightAppSec, open each app you want to scan from here.</li>
+    <li>Go to <strong>Manage App &gt; Manage Users</strong> and add the account.  A user group
+      that holds the account works too, and it is easier when there are many apps.</li>
+  </ol>
+  <p class="small faint">You can skip this step with an organization key.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Step 4.  Make the API key</h2>
+  <ol class="small">
+    <li>Sign in to the Insight platform <strong>as the account from step 2</strong>.  A user key
+      always belongs to the person who makes it.  Nobody can make one for somebody else.</li>
+    <li>Go to <strong>Administration &gt; User API Keys</strong>, then press <strong>Generate New
+      User Key</strong>.</li>
+    <li>Pick the organization, give the key a name such as "Git Code Review", and press
+      <strong>Save</strong>.</li>
+    <li><strong>Copy the key now.</strong>  Rapid7 shows it once and never again.  If it is lost,
+      delete it and make another.</li>
+  </ol>
+  <p class="small">For an organization key, a platform administrator uses <strong>Administration
+    &gt; Administrator API Keys &gt; Generate New Organization Key</strong> instead.  Older Rapid7
+    pages show a gear icon and an API Keys page, which is the same thing in an older layout.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Step 5.  Put each site on the Targets allowlist</h2>
+  <p class="small">InsightAppSec only scans domains on its Targets allowlist.  A scan config whose
+    addresses are not on it fails, and Rapid7 reports that under the confusing name
+    LICENSE_INVALID.</p>
+  <ol class="small">
+    <li>In InsightAppSec, go to <strong>Targets</strong> and press <strong>Add Targets</strong>.</li>
+    <li>Type one domain per line, such as <span class="mono">shop.example.com</span>.  Rapid7
+      drops any protocol or path you type.  <span class="mono">*.example.com</span> covers every
+      host under it.</li>
+    <li>Make sure each target is enabled.  New ones are.</li>
+  </ol>
+  <p class="small faint">A target that has been scanned can be turned off but never deleted.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Step 6.  Make an app and a scan config for each site</h2>
+  <ol class="small">
+    <li>Go to <strong>Apps &gt; Add App</strong>.  Give it a name, its target addresses and the
+      users from step 3.</li>
+    <li>In the app, add a <strong>scan config</strong>.  Give it a name people will recognize
+      here, because this product lists configs as "app: config".</li>
+    <li>Set the <strong>start address</strong> (Rapid7 calls it the seed URL) to the site's own
+      address, such as <span class="mono">https://shop.example.com/</span>.  This product reads
+      the start addresses and offers the config first on the page of the site it starts on.</li>
+    <li>Pick an <strong>attack template</strong>:
+      <ul>
+        <li><strong>Crawl Only</strong> for the first run.  It sends no attacks, and it shows
+          whether the engine can reach the site and sign in.</li>
+        <li><strong>OWASP 2021</strong>, <strong>SQL Injection and XSS</strong> or another focused
+          template for regular scans.</li>
+        <li><strong>All Modules</strong> only on test and staging sites.  Rapid7 warns it can
+          slow down or disrupt a site customers use.</li>
+      </ul></li>
+    <li>Pick the engine.  <strong>Cloud</strong> reaches sites on the internet.  A site only
+      reachable inside the network needs an on premises engine (see step 8).</li>
+    <li>Save, and fix anything the config says is wrong.  A config with errors fails every scan.
+      This product marks such configs "has errors" in its list.</li>
+  </ol>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Step 7.  Set up sign in, if the site has one</h2>
+  <p class="small">The sign in for an InsightAppSec scan lives in its scan config.  The sign in
+    saved on a site here is <strong>not</strong> sent to Rapid7.  In the scan config, under
+    Authentication, pick one of these:</p>
+  <ul class="small">
+    <li><strong>Automated login</strong>: a user name and password with the login page.  Check
+      it with the AppSec Chrome extension.</li>
+    <li><strong>Macro</strong>, <strong>Selenium</strong> or <strong>Traffic</strong>: a
+      recording of the sign in (.rec, .side, or .har and similar).</li>
+    <li><strong>HTTP Basic, NTLM or Kerberos</strong>, a client certificate, or OAuth 2.0.</li>
+    <li><strong>Session hijacking</strong>: paste a signed in cookie.  It stops working when that
+      session ends.</li>
+  </ul>
+  <p class="small">Also set the <strong>logged out detection</strong> so the engine knows when it
+    has been signed out and signs in again.</p>
+  <p class="small"><strong>Avoid multi factor sign in for scans started from here.</strong>  It
+    makes every scan stop at "Awaiting Authentication" until a person signs in through the Rapid7
+    extension.  Rapid7 suggests turning MFA off for the scan account, or using bootstrap
+    authentication.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Step 8.  Let Rapid7's engines through the firewall</h2>
+  <p class="small">A web application firewall such as Cloudflare often blocks attack traffic,
+    and the scan then finds nothing or fails.  Allow the cloud engine addresses for your region.
+    Rapid7 publishes two lists that do not agree, so allowing both is the safe choice.</p>
+  <table>
+    <thead><tr><th>Region</th><th>Cloud engine addresses (engine IP page)</th><th>Also listed in the Targets FAQ</th></tr></thead>
+    <tbody>
+      <tr><td class="small">United States 1</td><td class="mono small">34.192.183.106, 34.205.208.125, 34.224.19.93, 34.227.121.223</td><td class="small"></td></tr>
+      <tr><td class="small">United States 2</td><td class="mono small">3.22.113.166, 52.14.12.25, 52.14.88.11</td><td class="small"></td></tr>
+      <tr><td class="small">United States 3</td><td class="mono small">44.228.9.4, 52.36.241.148, 52.36.245.161</td><td class="small"></td></tr>
+      <tr><td class="small">Europe</td><td class="mono small">35.156.166.245, 35.158.144.37</td><td class="mono small">172.104.153.232</td></tr>
+      <tr><td class="small">Canada</td><td class="mono small">52.60.149.201, 52.60.191.46</td><td class="mono small">172.104.11.18</td></tr>
+      <tr><td class="small">Australia</td><td class="mono small">52.62.83.29, 52.63.190.180</td><td class="mono small">139.162.25.220</td></tr>
+      <tr><td class="small">Japan</td><td class="mono small">52.68.0.155, 54.64.21.140</td><td class="mono small">172.104.83.134</td></tr>
+      <tr><td class="small">Middle East (UAE)</td><td class="mono small">40.172.158.10, 40.172.194.179, 51.112.176.219</td><td class="small"></td></tr>
+      <tr><td class="small">India</td><td class="mono small">18.60.13.186, 40.192.97.217, 98.130.78.206</td><td class="small"></td></tr>
+    </tbody>
+  </table>
+  <p class="small faint">Copied from Rapid7 on 2026-11-04.  Check the
+    <a href="https://docs.rapid7.com/insightappsec/allowlist-cloud-engine-ips/" rel="noopener noreferrer" target="_blank">current list</a>
+    before you change a firewall.</p>
+  <p class="small"><strong>Internal sites</strong> need an on premises engine, installed inside
+    the network.  It runs on Windows (10, 11, or Server 2016 to 2022) with .NET 4.8, about 8 GB of
+    memory, 4 cores and 100 GB of disk.  It only connects out, to
+    <span class="mono">https://&lt;region&gt;.appsec.insight.rapid7.com</span> and
+    <span class="mono">https://&lt;region&gt;.engines.appsec.insight.rapid7.com</span>.  Set it up
+    under <strong>Administration &gt; Application Security Settings &gt; Manage on-premises
+    engines</strong>, then pick its engine group in the scan config.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Step 9.  Connect it here</h2>
+  <p class="small">This server has to be able to reach
+    <span class="mono">https://&lt;region&gt;.api.insight.rapid7.com</span> on port 443.</p>
+  <ol class="small">
+    <li>Open <a href="{{ base }}/settings#tab-integrations">Settings &gt; Integrations</a>.</li>
+    <li>Pick the <strong>Region</strong> from step 1 and paste the <strong>API key</strong> from
+      step 4.</li>
+    <li>Press <strong>Test the connection</strong>.  It reads only, and it uses the key you typed
+      even before it is saved.  It says how many apps and scan configs the key can see.  "Can see
+      no apps" means step 3 is not done.</li>
+    <li>Set <strong>Scans at once</strong> to fit your license and engines.  A start past it is
+      refused, so nobody queues twenty scans on one engine by mistake.</li>
+    <li>Tick <strong>Turn on InsightAppSec scans</strong> and press <strong>Save</strong>.</li>
+    <li>Press <strong>Refresh scan configs</strong>.  This reads every app and scan config the key
+      can see, with their start addresses.  Press it again whenever somebody adds a config in
+      Rapid7.</li>
+  </ol>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Step 10.  Run the first scan</h2>
+  <ol class="small">
+    <li>Open the site under <a href="{{ base }}/external">External sites</a> and press
+      <strong>Run a scan</strong>.</li>
+    <li>Under <strong>Run it on</strong>, pick <strong>Rapid7 InsightAppSec</strong>.</li>
+    <li>Pick the scan config.  The ones that start on this site are listed first and marked
+      "starts on this host".  The one you pick is remembered for the site.</li>
+    <li>Tick the box confirming you may scan the site, and press <strong>Start</strong>.</li>
+  </ol>
+  <p class="small">A Crawl Only config is a good first run.  When it completes with no errors,
+    switch the site to a config with a real attack template.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>While it runs</h2>
+  <p class="small">This product checks the scan every 3 minutes and shows its status on the scan
+    page.  It stops checking when the scan reaches COMPLETE or FAILED, which are the only two end
+    states.  If neither comes in 72 hours, the scan is marked failed here.  It may still be running
+    in Rapid7.</p>
+  <table>
+    <thead><tr><th>Status</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td class="mono small">PENDING, QUEUED, PROVISIONING</td><td class="small">Waiting for an engine.  A second scan waits while the first runs.</td></tr>
+      <tr><td class="mono small">RUNNING</td><td class="small">The engine is crawling and attacking the site.</td></tr>
+      <tr><td class="mono small">SCANNED, PROCESSED</td><td class="small">Done scanning.  Rapid7 is processing the results.  Findings come in at COMPLETE.</td></tr>
+      <tr><td class="mono small">PAUSED</td><td class="small">Paused in Rapid7.  It is stopped after 24 hours paused (4 in Europe).</td></tr>
+      <tr><td class="mono small">BLACKED_OUT</td><td class="small">Inside a blackout window set in Rapid7.  It carries on when the window ends.</td></tr>
+      <tr><td class="mono small">AWAITING_AUTHENTICATION</td><td class="small">A person has to sign in for it in Rapid7.  See step 7.</td></tr>
+      <tr><td class="mono small">COMPLETE</td><td class="small">Finished.  The findings are read and added to the site.</td></tr>
+      <tr><td class="mono small">FAILED</td><td class="small">It could not finish.  The reason is shown on the scan page.</td></tr>
+    </tbody>
+  </table>
+  <p class="small"><strong>Stop</strong> on the scan page asks Rapid7 to stop the scan and keep
+    what it found so far.  Those findings come in when Rapid7 finishes stopping it.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>What comes back</h2>
+  <ul class="small">
+    <li>Each InsightAppSec vulnerability becomes a finding on the scan.  It shows the attack
+      module's name and the parameter, the address, the request method, Rapid7's evidence and
+      recommendation, the CWE where Rapid7 gives one, and the CVSS vector and score.</li>
+    <li>Severity follows Rapid7.  Critical, High, Medium and Low are the same.  Informational
+      and the old Safe level both become info.</li>
+    <li>Each finding links to the same finding in InsightAppSec, and the scan links to the scan.
+      Opening them needs a Rapid7 sign in.</li>
+    <li>Rapid7's review status (unreviewed, verified, false positive, ignored) shows beside each
+      finding.  A false positive marked in Rapid7 is still counted here until somebody marks it
+      here too, because the two products keep their own decisions.</li>
+    <li>False positive, severity and exception decisions made here carry into the next scan of
+      the same site, the same as for any other scan.</li>
+    <li>A completed scan counts as a dynamic test of the web applications behind the site, on the
+      Web Applications tab under Blast Radius.</li>
+  </ul>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>When something goes wrong</h2>
+  <table>
+    <thead><tr><th>You see</th><th>What to do</th></tr></thead>
+    <tbody>
+      <tr><td class="small">The API key was refused</td><td class="small">The key was copied short, was deleted, or belongs to another region's organization.  Check the region first.</td></tr>
+      <tr><td class="small">The key is not allowed to do that</td><td class="small">The account's role is too small.  Use Read Write, or check step 2.</td></tr>
+      <tr><td class="small">Can see no apps</td><td class="small">Give the account access to the apps (step 3).</td></tr>
+      <tr><td class="small">Answered with a web page, or a redirect</td><td class="small">The region is wrong, or a proxy is in the way.</td></tr>
+      <tr><td class="small">An address is not on the Targets allowlist (LICENSE_INVALID)</td><td class="small">A start or scope address in the config is not an allowed target.  Add it (step 5).</td></tr>
+      <tr><td class="small">The scan config is not valid</td><td class="small">Open the config in Rapid7 and fix what it lists.  Usually an address.</td></tr>
+      <tr><td class="small">The sign in did not work (BAD_AUTH)</td><td class="small">Record the sign in again, or check the password in the config (step 7).</td></tr>
+      <tr><td class="small">The site did not answer the engine</td><td class="small">The site is down, or a firewall blocks the engines (step 8).</td></tr>
+      <tr><td class="small">No engine was available</td><td class="small">The on premises engine is offline.  Check it in Rapid7.</td></tr>
+      <tr><td class="small">Rapid7 is limiting requests</td><td class="small">Nothing.  Checking stops until Rapid7's limit resets, then carries on.</td></tr>
+      <tr><td class="small">Complete with no findings, and none expected to be missing</td><td class="small">Check the role can read vulnerabilities (step 2), and that the engines got past the firewall.</td></tr>
+    </tbody>
+  </table>
+  <p class="small">When you ask Rapid7 support for help, give them the "Rapid7 reference" shown
+    with the error.  It is their correlation id for that request.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Rapid7's own pages</h2>
+  <ul class="small">
+    {% for title, url in links %}
+    <li><a href="{{ url }}" rel="noopener noreferrer" target="_blank">{{ title }}</a></li>
+    {% endfor %}
+  </ul>
+</div></div>
+{% endblock %}

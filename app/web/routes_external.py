@@ -634,6 +634,7 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             environments=external.environments(db), statuses=external.STATUSES,
             scan_views=[external.scan_dict(s) for s in page_scans],
             servers=db.query(DastServer).order_by(DastServer.name).all(),
+            ias=_ias_choices(db, asset),
             profiles=dast_engines.PROFILES, active=dast_engines.ACTIVE_PROFILES,
             plans=dast_engines.PLANS, engines=dast_engines.installed(),
             engine_names=dast_engines.ENGINE_NAMES,
@@ -808,6 +809,25 @@ async def link_repo(asset_id: int, request: Request, user: User = Depends(curren
     return redirect(_back(here, message))
 
 
+def _ias_choices(db, asset) -> dict:
+    """InsightAppSec for the scan form: whether it is set up, and its scan
+    configs with the ones that start on this site first."""
+    from app.core import insightappsec as ias
+
+    cfg = ias.config(db)
+    if not cfg["ready"]:
+        return {"ready": False, "guide": ias.GUIDE}
+    catalog = ias.load_catalog()
+    ranked = ias.configs_for(asset.host, catalog)
+    chosen = asset.ias_scan_config_id or ""
+    if not chosen and ranked and ranked[0][1] == "starts on this host":
+        chosen = ranked[0][0]["id"]
+    return {"ready": True, "guide": ias.GUIDE, "name": ias.NAME,
+            "configs": [dict(c, why=why) for c, why in ranked],
+            "chosen": chosen, "fetched_at": catalog.get("fetched_at", ""),
+            "running": external.ias_running(db), "max": cfg["max_concurrent"]}
+
+
 @router.post("/external/{asset_id}/scan")
 async def start_scan(asset_id: int, request: Request, user: User = Depends(current_user)):
     await check_csrf(request)
@@ -818,6 +838,8 @@ async def start_scan(asset_id: int, request: Request, user: User = Depends(curre
     profile = str(form.get("profile") or "")
     server_id = None
     target = str(form.get("server") or "builtin")
+    if target == "insightappsec":
+        return await _start_ias_scan(asset_id, form, request, user)
     with session_scope() as db:
         _guard(db, user)
         asset = _asset(db, asset_id)
@@ -846,6 +868,36 @@ async def start_scan(asset_id: int, request: Request, user: User = Depends(curre
         return redirect(_back(here, problem, "error"))
     return redirect(_back(f"{here}/scans/{scan_id}", "Scan started.  This page refreshes "
                                                      "while it runs."))
+
+
+async def _start_ias_scan(asset_id: int, form, request: Request, user: User):
+    """A scan on Rapid7 InsightAppSec, from the scan config picked for the site."""
+    here = f"/external/{asset_id}"
+    config_id = str(form.get("ias_config") or "").strip()
+    with session_scope() as db:
+        _guard(db, user)
+        host = _asset(db, asset_id).host
+    if not _checked(form, "confirm"):
+        return redirect(_back(here, "Tick the box to confirm you are allowed to scan this "
+                                    "site this way.  InsightAppSec sends attack payloads.",
+                              "error"))
+    from starlette.concurrency import run_in_threadpool
+
+    # Starting it is a call to Rapid7, so it runs off the event loop.
+    scan_id, problem = await run_in_threadpool(
+        external.start_scan, asset_id, "", user.username,
+        ai_triage=_checked(form, "ai"), ias_config=config_id)
+    with session_scope() as db:
+        record(db, "external.scan_started" if scan_id else "external.scan_refused",
+               actor=user.username, target=host,
+               detail=(f"InsightAppSec scan config {config_id}"
+                       + (f": {problem}" if problem else ""))[:300],
+               source_ip=client_ip(request), outcome="ok" if scan_id else "refused")
+    if problem:
+        return redirect(_back(here, problem[:290], "error"))
+    return redirect(_back(f"{here}/scans/{scan_id}",
+                          "Started on InsightAppSec.  Its status is read every few "
+                          "minutes, and the findings come in when it completes."))
 
 
 @router.post("/external/{asset_id}/scans/record")
@@ -1050,9 +1102,13 @@ async def scan_action(asset_id: int, scan_id: int, action: str, request: Request
                    detail=f"scan {scan_id}", source_ip=client_ip(request))
             return redirect(_back(back, "Removed that scan."))
     if action == "stop":
-        ok = external.stop_scan(scan_id)
+        from starlette.concurrency import run_in_threadpool
+
+        # An InsightAppSec scan is stopped with a call to Rapid7.
+        ok = await run_in_threadpool(external.stop_scan, scan_id)
         message, kind = ("Stopping the scan of " + host + ".", "ok") if ok \
-            else ("It is not running.", "error")
+            else ("It is not running, or it could not be stopped.  The scan's status "
+                  "says which.", "error")
         form = await request.form()
         # Back to where the Stop was pressed, and only to a page of ours.
         here = _safe_back(form.get("back"), asset_id, here)

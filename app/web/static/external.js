@@ -430,3 +430,20 @@
   });
   apply();
 })();
+
+/* The scan form: InsightAppSec runs from its own scan config, so the profile
+ * and the saved sign in only show for a scan run here or on a server, and the
+ * scan config picker only for InsightAppSec. */
+(function () {
+  "use strict";
+  document.querySelectorAll("select[data-scan-target]").forEach(function (select) {
+    var form = select.closest("form");
+    function update() {
+      var ias = select.value === "insightappsec";
+      form.querySelectorAll("[data-ias-only]").forEach(function (n) { n.hidden = !ias; });
+      form.querySelectorAll("[data-not-ias]").forEach(function (n) { n.hidden = ias; });
+    }
+    select.addEventListener("change", update);
+    update();
+  });
+})();

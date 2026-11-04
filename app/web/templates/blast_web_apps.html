@@ -143,7 +143,17 @@
             {% endif %}
           </td>
           <td rowspan="{{ app.repos | length }}" class="small">
-            {%- for url in app.urls %}<div class="mono"><a rel="noopener noreferrer" target="_blank" href="{{ url }}">{{ url }}</a></div>{% endfor %}</td>
+            {%- for url in app.urls %}<div class="mono webapp-url"><a rel="noopener noreferrer" target="_blank" href="{{ url }}">{{ url }}</a>
+              {%- if can_remove_url %}
+              {%- set listed = app.url_repos.get(url, []) %}
+              <form method="post" action="{{ base }}/blast-radius/web-apps/urls/remove" style="display:inline"
+                    data-confirm="Remove {{ url }} from {{ app.name }}?  {{ 'This changes the web addresses on' if can_record else 'This asks an administrator to change the web addresses on' }} {{ listed | length }} repositor{{ 'y' if listed | length == 1 else 'ies' }}: {{ listed | join(', ') }}.  A repository left with no address is no longer marked as part of a web application.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="app_key" value="{{ app.key }}">
+                <input type="hidden" name="url" value="{{ url }}">
+                <button class="btn sm" type="submit" title="Take this address off every repository in {{ app.name }} that lists it ({{ listed | length }})">Remove from application</button>
+              </form>
+              {%- endif %}</div>{% endfor %}</td>
           <td rowspan="{{ app.repos | length }}" class="small">
             {%- for one in app.owners %}<div>{{ one }}</div>{% endfor %}
             {%- for one in app.technical %}<div><span class="faint">Technical:</span> {{ one }}</div>{% endfor %}

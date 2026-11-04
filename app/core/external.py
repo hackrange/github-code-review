@@ -29,6 +29,7 @@ import logging
 import re
 import shutil
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -1297,7 +1298,8 @@ def _auth_view(asset) -> dict:
 
 def scan_dict(scan: ExternalDastScan, findings: bool = False) -> dict:
     out = {"id": scan.id, "asset_id": scan.asset_id, "server": scan.server_name,
-           "source": scan.source, "status": scan.status, "profile": scan.profile or "",
+           "source": scan.source, "provider": scan.provider or "",
+           "status": scan.status, "profile": scan.profile or "",
            "authenticated": bool(scan.authenticated), "auth_kind": scan.auth_kind or "",
            "step": scan.step or "", "remote_id": scan.remote_id or "",
            "started_at": _iso(scan.started_at), "scanned_at": _iso(scan.scanned_at),
@@ -1478,12 +1480,18 @@ _stopping: set = set()
 
 
 def start_scan(asset_id: int, profile: str, actor: str, ai_triage: bool = False,
-               server_id: int = None, authenticated: bool = None) -> tuple:
-    """Start a dynamic scan here or on a server.  -> (scan id, problem)
+               server_id: int = None, authenticated: bool = None,
+               ias_config: str = "") -> tuple:
+    """Start a dynamic scan here, on a server, or on InsightAppSec.  -> (scan id, problem)
 
-    authenticated None means sign in when the site has a sign in set.
+    authenticated None means sign in when the site has a sign in set.  A
+    scan config id in ias_config means InsightAppSec, which signs in with
+    whatever its scan config says, never with the sign in saved here.
     """
     from app.core import dast_engines, external_auth
+
+    if ias_config:
+        return _start_ias(asset_id, ias_config, actor, ai_triage)
 
     with session_scope() as db:
         if not enabled(db):
@@ -1542,10 +1550,16 @@ def stop_scan(scan_id: int) -> bool:
         scan = db.get(ExternalDastScan, scan_id)
         if scan is None or scan.status not in ("queued", "running"):
             return False
-        if scan.source == "remote":
+        if scan.source == "remote" and scan.provider == "insightappsec":
+            remote_id = scan.remote_id
+        elif scan.source == "remote":
             scan.status = "failed"
             scan.error = "stopped here; the server may still be running it"
             return True
+        else:
+            remote_id = None
+    if remote_id is not None:
+        return _stop_ias(scan_id, remote_id)
     _stopping.add(scan_id)
     _update(scan_id, step="stopping")
     dast_engines.stop(scan_id)
@@ -2219,17 +2233,154 @@ def _start_remote(scan_id: int) -> None:
                 if "body" in locals() else f"could not start it: {type(exc).__name__}")
 
 
+# ------------------------------------------------------------------ InsightAppSec
+
+# Paused and blacked out scans can wait a day there, and a long site takes
+# hours, so this is longer than a DAST server gets.
+IAS_GIVE_UP_HOURS = 72
+_ias_backoff = {"until": 0.0}
+
+
+def ias_running(db) -> int:
+    return (db.query(ExternalDastScan)
+            .filter(ExternalDastScan.provider == "insightappsec",
+                    ExternalDastScan.status.in_(("queued", "running"))).count())
+
+
+def _start_ias(asset_id: int, config_id: str, actor: str, ai_triage: bool) -> tuple:
+    from app.core import insightappsec as ias
+
+    with session_scope() as db:
+        if not enabled(db):
+            return None, "External sites are switched off in Settings."
+        cfg = ias.config(db)
+        if not cfg["ready"]:
+            return None, ("InsightAppSec is not set up.  Turn it on and give the API "
+                          "key on the Integrations tab in Settings.")
+        asset = db.get(ExternalAsset, asset_id)
+        if asset is None:
+            return None, "No such site."
+        why = blocked(db, asset)
+        if why:
+            return None, f"{asset.host} may not be scanned: {why}."
+        if not ias.is_uuid(config_id):
+            return None, "Pick an InsightAppSec scan config."
+        if db.query(ExternalDastScan).filter(
+                ExternalDastScan.asset_id == asset_id,
+                ExternalDastScan.status.in_(("queued", "running"))).first():
+            return None, f"A scan of {asset.host} is already running."
+        if ias_running(db) >= cfg["max_concurrent"]:
+            return None, (f"{cfg['max_concurrent']} InsightAppSec scan"
+                          f"{'s are' if cfg['max_concurrent'] != 1 else ' is'} already "
+                          f"running from here, the most the Integrations tab allows.")
+        known = ias.find_config(config_id)
+        asset.ias_scan_config_id = config_id
+        scan = ExternalDastScan(
+            asset_id=asset_id, server_id=None, server_name=ias.NAME,
+            source="remote", provider=ias.PROVIDER, status="queued",
+            profile="", started_at=utcnow(), recorded_by=(actor or "")[:120],
+            ai_status="wanted" if ai_triage else "", authenticated=False,
+            step=(f"starting {known['name']}" if known else "starting")[:120],
+            note=(f"InsightAppSec scan config {known['name']} ({known['app']})"
+                  if known else f"InsightAppSec scan config {config_id}")[:500])
+        db.add(scan)
+        db.flush()
+        scan_id = scan.id
+        region, key = cfg["region"], cfg["key"]
+        app_id = (known or {}).get("app_id", "")
+    try:
+        remote = ias.start(region, key, config_id)
+    except ias.IASError as exc:
+        # Kept as a failed scan, so the site's history shows the attempt.
+        _update(scan_id, status="failed", step="", error=f"could not start it: {exc}"[:500])
+        return None, f"InsightAppSec would not start it: {exc}"
+    _update(scan_id, status="running", remote_id=remote, step="queued in InsightAppSec",
+            result_url=ias.scan_link(region, app_id, config_id, remote))
+    return scan_id, ""
+
+
+def _stop_ias(scan_id: int, remote_id: str) -> bool:
+    """Ask InsightAppSec to stop it.  STOP keeps what it found so far, and the
+    poll reads that back when the scan reaches its end."""
+    from app.core import insightappsec as ias
+
+    cfg = ias.config()
+    if not remote_id:
+        _update(scan_id, status="failed", step="", error="stopped before it started")
+        return True
+    try:
+        ias.act(cfg["region"], cfg["key"], remote_id, "STOP")
+    except ias.IASError as exc:
+        _update(scan_id, step=f"could not stop it: {exc}"[:120])
+        return False
+    _update(scan_id, step="stopping in InsightAppSec")
+    return True
+
+
+def _poll_ias(scan_id: int, remote_id: str, started) -> int:
+    """One InsightAppSec scan: its status, and its findings once it is done."""
+    from app.core import insightappsec as ias
+
+    if _ias_backoff["until"] > time.time():
+        return 0
+    cfg = ias.config()
+    if not cfg["key"]:
+        _update(scan_id, status="failed", step="",
+                error="the InsightAppSec key was removed from Settings")
+        return 0
+    if not remote_id:
+        _update(scan_id, status="failed", step="", error="InsightAppSec gave it no id")
+        return 0
+    region, key = cfg["region"], cfg["key"]
+    try:
+        state = ias.status(region, key, remote_id)
+        now = str(state.get("status") or "")
+        if now == "COMPLETE":
+            found = ias.findings(region, key, remote_id)
+            app_id = (state.get("app") or {}).get("id", "")
+            config_id = (state.get("scan_config") or {}).get("id", "")
+            finish(scan_id, merge(found),
+                   result_url=ias.scan_link(region, app_id, config_id, remote_id))
+            with session_scope() as db:
+                want_ai = db.get(ExternalDastScan, scan_id).ai_status == "wanted"
+            if want_ai:
+                triage(scan_id)
+            return 1
+        if now == "FAILED":
+            why = ias.failure(state)
+            event = ias.last_event(region, key, remote_id)
+            _update(scan_id, status="failed", step="",
+                    error=(why + (f".  Last event: {event}" if event else ""))[:500])
+            return 0
+        _update(scan_id, step=f"{now}: {ias.STATUS_WORDS.get(now, now.lower())}"[:120])
+        if started and _aware(started) < utcnow() - timedelta(hours=IAS_GIVE_UP_HOURS):
+            _update(scan_id, status="failed", step="",
+                    error=f"no result after {IAS_GIVE_UP_HOURS} hours; it may still be "
+                          f"running in InsightAppSec")
+    except ias.IASError as exc:
+        if exc.retry_at:
+            _ias_backoff["until"] = exc.retry_at
+        elif exc.status == 404:
+            _update(scan_id, status="failed", step="",
+                    error="InsightAppSec no longer has this scan, or the key cannot see it")
+        log.warning("polling InsightAppSec scan %s: %s", scan_id, exc)
+    return 0
+
+
 def poll_remote() -> int:
     """Read back every remote scan still running.  The scheduler calls this."""
     with session_scope() as db:
         if not enabled(db):
             return 0
-        rows = [(s.id, s.remote_id, s.server_id, s.started_at) for s in
+        rows = [(s.id, s.remote_id, s.server_id, s.started_at, s.provider) for s in
                 db.query(ExternalDastScan).filter(
                     ExternalDastScan.source == "remote",
                     ExternalDastScan.status == "running")]
     done = 0
-    for scan_id, remote_id, server_id, started in rows:
+    for scan_id, remote_id, server_id, started, provider in rows:
+        if provider == "insightappsec":
+            done += _poll_ias(scan_id, remote_id, started)
+            continue
         try:
             with session_scope() as db:
                 server = db.get(DastServer, server_id) if server_id else None

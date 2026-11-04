@@ -363,6 +363,18 @@ DEFAULTS = {
                                 "Empty uses a current desktop Chrome. It has to start "
                                 "Mozilla/5.0 like a real browser's; a scanner's own name "
                                 "is what firewalls block first."),
+    # ---- integrations: other products this one starts work on ----
+    "ias.enabled":             (False, False,
+                                "Start dynamic scans on Rapid7 InsightAppSec from "
+                                "External sites and read the findings back."),
+    "ias.region":              ("us", False,
+                                "The Insight platform region the account is hosted "
+                                "in. It picks the API address."),
+    "ias.api_key":             ("", True, "An Insight platform API key. Stored encrypted."),
+    "ias.max_concurrent":      (2, False,
+                                "InsightAppSec scans started from here that may run "
+                                "at once, 1 to 20. Keep it inside what the license "
+                                "and the engines allow."),
     "external.allow_private":  (False, False,
                                 "Let telemetry and scans reach hosts that resolve to "
                                 "private, loopback or link local addresses. Leave off "
@@ -522,6 +534,8 @@ SECTIONS = [
                         "external.user_agent",
                         "external.allow_private", "external.cert_alert_enabled",
                         "external.cert_alert_days", "external.cert_alert_to"]),
+    ("Integrations", ["ias.enabled", "ias.region", "ias.api_key",
+                      "ias.max_concurrent"]),
     ("Limits", ["github.parallel_repos", "scan.max_concurrent",
                 "secrets.history_window_days",
                 "scan.timeout_per_repo", "scan.max_hours",

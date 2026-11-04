@@ -2300,6 +2300,11 @@ class ExternalAsset(Base):
     # The scan profile a scan of this site starts with when nobody picks one.
     # Empty means the product's default, quick.
     default_profile = Column(String(16), default="")
+    # The Rapid7 InsightAppSec scan config this site is scanned with, when
+    # that integration is on.  A scan there always runs from a config made in
+    # Rapid7, which holds the start address, the attack template, the engine
+    # and the sign in; this only says which one.
+    ias_scan_config_id = Column(String(64), default="")
 
     # The last telemetry pass.  The whole record is kept as JSON, and the few
     # fields the list filters on are copied out.
@@ -2443,6 +2448,9 @@ class ExternalDastScan(Base):
     # queued, running, done or failed.
     status = Column(String(16), default="done", nullable=False, index=True)
     remote_id = Column(String(64), default="")
+    # Which integration ran a remote scan: "" for a DAST server row, or
+    # insightappsec.  Settings own an integration, so it has no server row.
+    provider = Column(String(32), default="")
     started_at = Column(DateTime(timezone=True))
     scanned_at = Column(DateTime(timezone=True), index=True)
     # The worst severity found: critical, high, medium, low, info, or none.

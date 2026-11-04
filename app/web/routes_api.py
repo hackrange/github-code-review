@@ -1928,6 +1928,24 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
                               "Send certificate warnings to")
         put("external.cert_alert_to", "" if cert_to == "-" else cert_to[:500])
 
+        from app.core import insightappsec as _ias
+
+        region = text("ias.region", 10).lower() or "us"
+        if region not in _ias.REGIONS:
+            raise HTTPException(status_code=400,
+                                detail="Pick an Insight platform region for InsightAppSec.")
+        put("ias.region", region)
+        put("ias.api_key", str(form.get("ias.api_key", "")).strip()[:500])
+        put("ias.max_concurrent", clean_int(form.get("ias.max_concurrent", 2) or 2,
+                                            "InsightAppSec scans at once", low=1, high=20))
+        ias_on = _checked(form, "ias.enabled")
+        if ias_on and not store.get(db, "ias.api_key") and not str(
+                form.get("ias.api_key", "")).strip():
+            raise HTTPException(status_code=400, detail=(
+                "Give the InsightAppSec API key before turning it on.  The setup "
+                "guide on the Integrations tab says how to make one."))
+        put("ias.enabled", ias_on)
+
         put("security.force_https", _checked(form, "security.force_https"))
         put("security.trusted_proxies", _csv_list(text("security.trusted_proxies")))
 
@@ -1981,6 +1999,67 @@ async def test_settings(request: Request, user: User = Depends(current_user)):
 
     kind = "ok" if result["ok"] else "error"
     return redirect(f"/settings?msg={quote(result['detail'][:300])}&kind={kind}")
+
+
+def _integrations_back(message: str, kind: str):
+    from urllib.parse import quote
+
+    return redirect(f"/settings?msg={quote(message[:300])}&kind={kind}#tab-integrations")
+
+
+@router.post("/settings/integrations/insightappsec/test")
+async def test_insightappsec(request: Request, user: User = Depends(current_user)):
+    """Try the InsightAppSec key.  Reads only.
+
+    Uses what is typed on the form when there is something, so a key can be
+    tried before it is saved, and the stored one otherwise.  Nothing typed is
+    kept by this.
+    """
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+    from app.core import insightappsec as ias
+
+    form = await request.form()
+    cfg = ias.config()
+    region = str(form.get("ias.region") or cfg["region"]).strip().lower()
+    key = str(form.get("ias.api_key") or "").strip()[:500] or cfg["key"]
+    from starlette.concurrency import run_in_threadpool
+
+    # Off the event loop: a slow answer from Rapid7 must not stall every page.
+    ok, detail = await run_in_threadpool(ias.test, region, key)
+    with session_scope() as db:
+        record(db, "integration.tested", actor=user.username, target=ias.NAME,
+               outcome="ok" if ok else "error", detail=f"{region}: {detail}"[:400],
+               source_ip=client_ip(request))
+    return _integrations_back(f"InsightAppSec: {detail}", "ok" if ok else "error")
+
+
+@router.post("/settings/integrations/insightappsec/refresh")
+async def refresh_insightappsec(request: Request, user: User = Depends(current_user)):
+    """Read the apps and scan configs the stored key can see, for the pickers."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+    from app.core import insightappsec as ias
+
+    cfg = ias.config()
+    if not cfg["key"]:
+        return _integrations_back("InsightAppSec: save the API key first.", "error")
+    from starlette.concurrency import run_in_threadpool
+
+    try:
+        got = await run_in_threadpool(ias.refresh_catalog, cfg["region"], cfg["key"])
+    except ias.IASError as exc:
+        detail, ok = str(exc), False
+    else:
+        matched = sum(1 for c in got["configs"] if c["hosts"])
+        detail = (f"read {len(got['configs'])} scan configs in {got['apps']} apps; "
+                  f"{matched} have start addresses to match sites by")
+        ok = True
+    with session_scope() as db:
+        record(db, "integration.refreshed", actor=user.username, target=ias.NAME,
+               outcome="ok" if ok else "error", detail=detail[:400],
+               source_ip=client_ip(request))
+    return _integrations_back(f"InsightAppSec: {detail}", "ok" if ok else "error")
 
 
 # ---------------------------------------------------------------------------
@@ -4137,6 +4216,89 @@ async def record_web_app_test(request: Request,
                source_ip=client_ip(request))
         name = app["name"]
     return redirect(_back_with(back, f"Recorded the test of {name}."))
+
+
+@router.post("/blast-radius/web-apps/urls/remove")
+async def remove_web_app_url(request: Request,
+                             user: User = Depends(current_user)):
+    """Take one address off a web application, from every repository listing it.
+
+    The application's addresses are the ones its repositories carry, so
+    removing one means editing each of those repositories.  A repository left
+    with no address is no longer marked as part of a web application, because
+    the repository's own form will not keep the tick without one.  An
+    administrator's change goes straight on.  Anybody else's becomes a
+    proposal per repository, folded into what they already have waiting.
+    """
+    await check_csrf(request)
+    can_change = rbac.can(user, "repo.write")
+    if not can_change:
+        rbac.require(user, "repo.propose")
+
+    from app.core import proposals, tagging
+    from app.core.models import Repository as m_Repository
+
+    form = await request.form()
+    back = "/blast-radius/web-apps"
+    key = clean_text(form.get("app_key"), "Application", limit=320)
+    url = clean_text(form.get("url"), "Web address", limit=300)
+
+    with session_scope() as db:
+        app = next((a for a in _visible_apps(db, user) if a["key"] == key), None)
+        if app is None:
+            raise HTTPException(status_code=404, detail="No such web application.")
+        names = app.get("url_repos", {}).get(url, [])
+        if not names:
+            return redirect(_back_with(
+                back, f"{app['name']} does not list that address.", "warn"))
+        repos = (rbac.visible_repositories(db, user)
+                 .filter(m_Repository.full_name.in_(names)).all())
+
+        changed, unmarked = [], []
+        for repo in repos:
+            mine = None if can_change else proposals.mine(db, repo.id,
+                                                          user.username)
+            start = proposals.wanted(mine) if mine else proposals.current(repo)
+            kept = [u for u in tagging.web_urls(start["web_app_urls"])[0]
+                    if u != url]
+            values = {"web_app_urls": ", ".join(kept)}
+            if not kept:
+                values["web_app"] = False
+            detail = (f"web address removed from {app['name']}: {url}"
+                      + ("; no longer a web application" if not kept else ""))
+            if can_change:
+                moved = tagging.set_own(db, repo, values, actor=user.username)
+                if moved:
+                    record(db, "repository.tagged", actor=user.username,
+                           target=repo.full_name, detail=detail[:200],
+                           source_ip=client_ip(request))
+            else:
+                start.update(values)
+                moved = proposals.propose(db, repo, start, user.username)
+                if moved:
+                    record(db, "repository.change_proposed",
+                           actor=user.username, target=repo.full_name,
+                           detail=detail[:200],
+                           source_ip=client_ip(request))
+            if moved:
+                changed.append(repo.full_name)
+                if not kept:
+                    unmarked.append(repo.full_name)
+        name = app["name"]
+
+    if not changed:
+        return redirect(_back_with(back, "Nothing changed.", "warn"))
+    count = (f"{len(changed)} repositor"
+             f"{'y' if len(changed) == 1 else 'ies'}")
+    if can_change:
+        said = f"Removed {url} from {name}, on {count}."
+        if unmarked:
+            said += (f"  No longer a web application, with no address left: "
+                     f"{', '.join(unmarked)}.")
+    else:
+        said = (f"Sent to an administrator to approve: {url} off {name}, "
+                f"on {count}.")
+    return redirect(_back_with(back, said[:290]))
 
 
 @router.post("/blast-radius/web-apps/tests/{test_id}/delete")

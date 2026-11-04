@@ -98,10 +98,14 @@ def inventory(session, base=None, counts=None, now=None) -> list:
         app = apps.setdefault(key, {
             "key": key,
             "name": name or repo.full_name, "named": bool(name),
-            "urls": [], "repos": [], "owners": [], "technical": []})
+            "urls": [], "repos": [], "owners": [], "technical": [],
+            "url_repos": {}})
         for url in tagging.web_urls(repo.web_app_urls)[0]:
             if url not in app["urls"]:
                 app["urls"].append(url)
+            # Which repositories list each address, so taking one off the
+            # application can say first whose settings it changes.
+            app["url_repos"].setdefault(url, []).append(repo.full_name)
         for field, into in (("application_owner", "owners"),
                             ("technical_owner", "technical")):
             for one in tagging._owners(

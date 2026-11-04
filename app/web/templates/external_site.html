@@ -401,11 +401,31 @@
       {% if asset.whitelist_needed %}<div class="notice warn"><div>This site needs the scanner's address let through a firewall first.</div></div>{% endif %}
       {% if asset.external_auth_needed %}<div class="notice warn"><div>Signing in to this site goes through something outside it.  A scan here only sees what is public.</div></div>{% endif %}
       <label>Run it on
-        <select name="server">
+        <select name="server" data-scan-target>
           <option value="builtin">This server</option>
           {% for s in servers if s.kind == 'nextgen-dast' %}<option value="{{ s.id }}">{{ s.name }} (nextgen-dast)</option>{% endfor %}
-        </select></label>
-      <label>Profile
+          {% if ias.ready %}<option value="insightappsec" {{ 'selected' if asset.ias_scan_config_id }}>{{ ias.name }}</option>{% endif %}
+        </select>
+        {% if not ias.ready %}<span class="faint small">Rapid7 InsightAppSec can be added on the
+          <a href="{{ base }}/settings#tab-integrations">Integrations tab</a> in Settings.</span>{% endif %}</label>
+      {% if ias.ready %}
+      <div data-ias-only>
+        <label>InsightAppSec scan config
+          <select name="ias_config">
+            <option value="">Pick one</option>
+            {% for c in ias.configs %}<option value="{{ c.id }}" {{ 'selected' if c.id == ias.chosen }}>{{ c.app }}: {{ c.name }}{% if c.why %} ({{ c.why }}){% endif %}{% if c.errors %} (has errors){% endif %}</option>{% endfor %}
+          </select>
+          <span class="faint small">The scan config in InsightAppSec decides what is scanned:
+            the start address, the attack template, the engine and the sign in.  The sign in
+            saved on this site is not sent.  The one picked is remembered for this site.
+            {% if not ias.configs %}<strong>No scan configs are loaded yet.</strong>  Press
+              Refresh scan configs on the <a href="{{ base }}/settings#tab-integrations">Integrations tab</a>.
+            {% elif ias.fetched_at %}Read from InsightAppSec {{ ias.fetched_at[:16] | replace('T', ' ') }} UTC.{% endif %}
+            {{ ias.running }} of {{ ias.max }} InsightAppSec scans allowed at once are running.
+            <a href="{{ base }}{{ ias.guide }}">Setup guide</a></span></label>
+      </div>
+      {% endif %}
+      <label data-not-ias>Profile
         <select name="profile">
           {% for name, what in profiles.items() %}<option value="{{ name }}" {{ 'selected' if name == site_profile }}>{{ name }}{{ ' (this site\'s default)' if name == site_profile }}</option>{% endfor %}
         </select>
@@ -417,7 +437,7 @@
           A missing engine is skipped and the scan says so.  The repositories
           behind the site are read first, on the branches picked, for routes to add to the scan.</span></label>
       {% if auth %}
-      <label class="check"><input type="checkbox" name="authenticated" value="1" checked>
+      <label class="check" data-not-ias><input type="checkbox" name="authenticated" value="1" checked>
         <span>Sign in for this scan, with the {{ auth.kind_name | lower }}{% if auth.header_name %} ({{ auth.header_name }}){% endif %}{% if auth.username %} as {{ auth.username }}{% endif %}.
           The engines act as that user.  Baseline and testssl stay signed out.
           {% if auth.kind != 'form' %}A nextgen-dast server can only take a form login or HTTP Basic.{% endif %}</span></label>
