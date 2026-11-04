@@ -20,7 +20,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.core import external, rbac
@@ -135,10 +135,17 @@ def repo_recommendations(hosts: str = "", application: str = "", tags: str = "",
 
 # ------------------------------------------------------------------ list
 
+# Rows a page of the list shows.  The first is the default: a page of sites
+# is a page of screenshots, and fifty keep the first paint quick.
+PAGE_SIZES = [50, 100, 200, 500, 1000]
+
+
 @router.get("/external")
 def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
               grade: str = "", dast: str = "", risk: str = "", scope: str = "",
-              env: str = "", status: str = "", user: User = Depends(current_user)):
+              env: str = "", status: str = "",
+              page_no: str = Query("1", alias="page"), per_page: str = "",
+              user: User = Depends(current_user)):
     """Every external site, newest problems first."""
     with session_scope() as db:
         _guard(db, user)
@@ -206,11 +213,38 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
             rows.append(row)
         order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "unknown": 5}
         rows.sort(key=lambda r: (order.get(r["risk"]["level"], 9), r["a"].host))
+        # One page of what matched.  A size off the list, or a page past the
+        # end, falls back to the nearest one there is rather than an error.
+        try:
+            size = int(per_page or PAGE_SIZES[0])
+        except ValueError:
+            size = PAGE_SIZES[0]
+        if size not in PAGE_SIZES:
+            size = PAGE_SIZES[0]
+        matched = len(rows)
+        pages = max(1, -(-matched // size))
+        try:
+            page_no = min(max(1, int(page_no or 1)), pages)
+        except ValueError:
+            page_no = 1
+        offset = (page_no - 1) * size
+        rows = rows[offset:offset + size]
+        from urllib.parse import urlencode
+
+        filters = [(k, v) for k, v in (("q", q), ("tag", tag), ("app", app), ("grade", grade),
+                                       ("dast", dast), ("risk", risk), ("scope", scope),
+                                       ("env", env), ("status", status)) if v]
+        paging = {"page": page_no, "pages": pages, "size": size, "sizes": PAGE_SIZES,
+                  "offset": offset, "matched": matched,
+                  # Filters, and the size when it is not the default, so
+                  # every page link keeps both.
+                  "query": urlencode(filters + ([("per_page", size)] if size != PAGE_SIZES[0] else [])),
+                  "filters": urlencode(filters)}
         all_tags = sorted({t.tag for t in db.query(ExternalAssetTag.tag).distinct()},
                           key=str.casefold)
         apps = sorted({a.application for a in assets if a.application}, key=str.casefold)
         totals = {
-            "sites": len(assets), "shown": len(rows),
+            "sites": len(assets), "shown": matched,
             "domains": sum(1 for a in assets if a.kind == "domain"),
             "live": sum(1 for a in assets if a.category in ("live", "redir", "gated")),
             "never": sum(1 for a in assets if not a.last_dast_at and not a.no_scan
@@ -233,7 +267,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                        profiles=dast_engines.PROFILES, default_profile=dast_engines.DEFAULT_PROFILE,
                        auth_kinds=external_auth_mod.KINDS,
                        q=q, tag=tag, app=app, grade=grade, dast=dast, risk=risk,
-                       scope=scope, all_tags=all_tags, apps=apps, opts=opts,
+                       scope=scope, all_tags=all_tags, apps=apps, opts=opts, paging=paging,
                        env=env, status=status, environments=envs,
                        statuses=external.STATUSES,
                        servers=servers,

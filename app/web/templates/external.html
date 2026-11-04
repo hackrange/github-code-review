@@ -75,10 +75,30 @@
   <a class="btn" href="{{ here }}">Clear</a>
 </form>
 
+{% macro pager() %}
+{%- set p = paging %}
+{%- set link = here ~ '?' ~ (p.query ~ '&' if p.query else '') ~ 'page=' %}
+<div class="card-body flex-between">
+  <span class="small faint">Showing {{ p.offset + 1 }} to {{ p.offset + rows|length }} of {{ p.matched }}</span>
+  <span class="flex" style="gap:.4rem;align-items:center;flex-wrap:wrap">
+    <span class="small faint">Rows</span>
+    {% for s in p.sizes %}
+      <a class="btn sm {{ 'primary' if p.size == s }}" href="{{ here }}?{{ (([p.filters] if p.filters else []) + (['per_page=' ~ s] if s != p.sizes[0] else [])) | join('&') }}">{{ s }}</a>
+    {% endfor %}
+    {% if p.pages > 1 %}
+      {% if p.page > 1 %}<a class="btn sm" href="{{ link }}{{ p.page - 1 }}">Back</a>{% endif %}
+      <span class="small faint">Page {{ p.page }} of {{ p.pages }}</span>
+      {% if p.page < p.pages %}<a class="btn sm" href="{{ link }}{{ p.page + 1 }}">Next</a>{% endif %}
+    {% endif %}
+  </span>
+</div>
+{% endmacro %}
+
 <div class="card">
   <div class="card-head">{{ totals.shown }} of {{ totals.sites }} site{{ '' if totals.sites == 1 else 's' }}
     <span class="faint small" style="font-weight:400;margin-left:.5rem">highest combined risk first</span></div>
   {% if rows %}
+  {{ pager() }}
   <form method="post" action="{{ here }}/refresh" id="pick">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   </form>
@@ -166,6 +186,7 @@
             data-ext-confirm="Remove the ticked sites and every scan recorded against them?">Delete the ticked sites</button>
     <span class="faint small" data-tick-count style="align-self:center"></span>
   </div>
+  {{ pager() }}
   {% elif totals.sites %}
   <div class="empty">Nothing matches that.  <a href="{{ here }}">Show every site</a></div>
   {% else %}

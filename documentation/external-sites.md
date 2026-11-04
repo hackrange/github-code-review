@@ -108,6 +108,10 @@ its screenshot is left out.  A CDN answering for a site it cannot reach, such
 as a Cloudflare 502, is marked as the site being down instead, with its
 screenshot.
 
+The list shows 50 sites a page, highest combined risk first, with 100, 200,
+500 and 1000 a click away at the top and bottom.  Filters and the chosen size
+carry across pages.
+
 The list shows a 256x160 JPEG made from each screenshot rather than the
 full 1280x800 picture, so a long list loads quickly.  The thumbnail is made
 when the screenshot is taken.  Screenshots from before that get theirs the
