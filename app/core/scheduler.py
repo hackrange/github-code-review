@@ -293,6 +293,13 @@ def start() -> None:
                        CronTrigger(hour=3, minute=30, timezone=_zone()),
                        id="external-refresh", replace_existing=True,
                        misfire_grace_time=3600, coalesce=True, max_instances=1)
+    # Certificates about to expire, after the night's telemetry is in.
+    from app.core import external_certs
+
+    _scheduler.add_job(external_certs.daily,
+                       CronTrigger(hour=8, minute=0, timezone=_zone()),
+                       id="external-cert-expiry", replace_existing=True,
+                       misfire_grace_time=3600, coalesce=True, max_instances=1)
 
     # CPU, memory, disk and network for the Utilization page.  The sample is
     # a few file reads, the breakdown asks the database how big it is, and

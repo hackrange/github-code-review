@@ -222,6 +222,10 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
             "mapped": sum(1 for a in assets if any(l["linked"] for l in every_link[a.id])),
         }
         servers = db.query(DastServer).order_by(DastServer.name).all()
+        # Screenshots taken before thumbnails existed, or by a server
+        # without Playwright, get theirs made in the background; until then
+        # those rows load the full picture.
+        external.backfill_thumbs([r["a"].id for r in rows])
         context = _shared(db, user)
         from app.core import dast_engines
 
@@ -467,7 +471,7 @@ async def delete_many(request: Request, user: User = Depends(current_user)):
                target=f"{len(removed)} sites",
                detail=", ".join(h for _i, h in removed)[:500], source_ip=client_ip(request))
     for asset_id, _host in removed:
-        external.shot_path(asset_id).unlink(missing_ok=True)
+        external.drop_shot(asset_id)
     message = f"Removed {len(removed)} site{'s' if len(removed) != 1 else ''}."
     if kept:
         message += f"  Left {', '.join(kept[:5])}: a scan is running."
@@ -611,6 +615,25 @@ def screenshot(asset_id: int, user: User = Depends(current_user)):
                         headers={"Cache-Control": "private, max-age=300"})
 
 
+@router.get("/external/{asset_id}/thumb.jpg")
+def screenshot_thumb(asset_id: int, v: str = "", user: User = Depends(current_user)):
+    """The list's small picture.  The list adds ?v= from when telemetry was
+    read, so a new screenshot is a new address and the browser may keep
+    this one for a day.  Without a thumbnail yet it answers with the full
+    screenshot, kept only briefly so the small one replaces it soon."""
+    with session_scope() as db:
+        _guard(db, user)
+        _asset(db, asset_id)
+    if external.thumb_fresh(asset_id):
+        return FileResponse(external.thumb_path(asset_id), media_type="image/jpeg",
+                            headers={"Cache-Control": "private, max-age=86400"})
+    path = external.shot_path(asset_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No screenshot.")
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "private, max-age=60"})
+
+
 @router.post("/external/{asset_id}/edit")
 async def edit(asset_id: int, request: Request, user: User = Depends(current_user)):
     await check_csrf(request)
@@ -684,7 +707,7 @@ async def delete(asset_id: int, request: Request, user: User = Depends(current_u
         record(db, "external.deleted", actor=user.username, target=host,
                source_ip=client_ip(request))
         db.delete(asset)
-    external.shot_path(asset_id).unlink(missing_ok=True)
+    external.drop_shot(asset_id)
     return redirect(_back("/external", f"Removed {host} and its scan history."))
 
 
@@ -1470,7 +1493,7 @@ def api_delete(asset_id: int, request: Request, caller=Depends(_api_caller())):
         record(db, "external.deleted", actor=me.username, target=asset.host,
                detail=f"api token {caller.token.prefix}", source_ip=client_ip(request))
         db.delete(asset)
-    external.shot_path(asset_id).unlink(missing_ok=True)
+    external.drop_shot(asset_id)
     return Response(status_code=204)
 
 

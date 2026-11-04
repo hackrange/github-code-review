@@ -11,7 +11,7 @@ The grade follows nextgen-dast's rules.  Each finding costs points by
 severity, the second and later findings in the same OWASP category cost
 less, and no one category can take more than 25 points off the overall
 score, so one bad library cannot fail an otherwise clean site.  nextgen-dast
-counts only findings its probes confirmed.  Here the AI triage plays that
+counts only findings its probes confirmed.  Here the enhanced review plays that
 part: when it ran, a finding it called a likely false positive costs nothing
 and one it wants reviewed costs half.  When it did not run, every finding
 counts in full and the report says they are unconfirmed.
@@ -218,11 +218,11 @@ def narrative(host: str, view: dict, overall: dict, by_sev: dict, triaged: bool,
                "same kind take less off than the first, and no single kind can take off more "
                "than 25 points.")
     if triaged:
-        out.append("An AI review read every finding after the scan.  Findings it judged to be "
+        out.append("An enhanced review read every finding after the scan.  Findings it judged to be "
                    "likely false positives do not count toward the grade, and findings it wants "
                    "a person to check count half.  Its verdict is shown on each finding.")
     elif total:
-        out.append("No AI review was run on this scan, so every finding counts in full and none "
+        out.append("No enhanced review was run on this scan, so every finding counts in full and none "
                    "of them has been confirmed.  Scanners report some issues that turn out not "
                    "to be real, so check each one before acting on it.")
     return out

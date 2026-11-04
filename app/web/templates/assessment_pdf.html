@@ -181,7 +181,7 @@
 <h3>Method</h3>
 <ul>
   <li><strong>Automated scanning.</strong>  {{ "Secret, code, dependency and configuration scanning of the branch and its history." | sentence_spaced }}</li>
-  <li><strong>Review of each alert.</strong>  {{ "Alerts were grouped by rule and file, and each group was judged against the code around it.  An alert a person already graded, or one whose AI validation still stands, keeps that grade and was not judged again." | sentence_spaced }}</li>
+  <li><strong>Review of each alert.</strong>  {{ "Alerts were grouped by rule and file, and each group was judged against the code around it.  An alert a person already graded, or one whose earlier validation still stands, keeps that grade and was not judged again." | sentence_spaced }}</li>
   <li><strong>Review of the repository.</strong>  {{ "The file tree and key files were read for problems a scanner does not look for, such as access settings and trust placed in browser code." | sentence_spaced }}</li>
 </ul>
 <h3>Limits of This Review</h3>
@@ -199,7 +199,7 @@
   <tr><td>1 to 4</td><td>Low</td><td>Fix as part of normal work.</td></tr>
   <tr><td>Not scored</td><td>Informational</td><td>{{ "No risk.  Recorded for accuracy, such as a false alarm." | sentence_spaced }}</td></tr>
 </table>
-<p>{{ "Some ratings were already decided before this review.  A grade a person set, or the rating from an alert's own AI validation, is used as it is and is not scored again.  A package on the CISA known exploited list is rated at least High until a person rules on it.  A waived issue is rated the same way as any other, and the reason it was waived is shown beside its rating." | sentence_spaced }}</p>
+<p>{{ "Some ratings were already decided before this review.  A grade a person set, or the rating from an alert's own earlier validation, is used as it is and is not scored again.  A package on the CISA known exploited list is rated at least High until a person rules on it.  A waived issue is rated the same way as any other, and the reason it was waived is shown beside its rating." | sentence_spaced }}</p>
 
 {# ---------------------------------------------------------- risk matrix #}
 <h2 class="new-page" style="margin-top:0">4.  Risk Matrix</h2>
@@ -244,7 +244,7 @@
     {% endif %}
     {% if i.decided %}
     <tr><td class="k">Rated by</td><td>
-      {%- if i.decided.by == 'validation' %}{{ ("AI validation #" ~ i.decided.id ~ (" on " ~ i.decided.at if i.decided.at else "") ~ ", rated " ~ (i.decided.rating | lower) ~ (", " ~ i.decided.confidence ~ " confidence" if i.decided.confidence else "") ~ ".  Not judged again for this report.") | sentence_spaced }}
+      {%- if i.decided.by == 'validation' %}{{ ("Validation #" ~ i.decided.id ~ (" on " ~ i.decided.at if i.decided.at else "") ~ ", rated " ~ (i.decided.rating | lower) ~ (", " ~ i.decided.confidence ~ " confidence" if i.decided.confidence else "") ~ ".  Not judged again for this report.") | sentence_spaced }}
       {%- else %}{{ (i.decided.who ~ ", a person's own grade" ~ (" set on " ~ i.decided.at if i.decided.at else "") ~ ".  Not judged again for this report.") | sentence_spaced }}{% endif %}</td></tr>
     {% elif i.rating != 'Informational' %}
     <tr><td class="k">Likelihood x Impact</td><td>{{ i.likelihood }} x {{ i.impact }} = {{ i.score }}</td></tr>

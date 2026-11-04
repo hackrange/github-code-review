@@ -137,10 +137,10 @@
 <h2>2.  Executive summary</h2>
 {% for paragraph in narrative %}<p>{{ paragraph | sentence_spaced }}</p>{% endfor %}
 {% if ai_summary and ai_summary.summary %}
-<h3>2.1  What the AI review found</h3>
+<h3>2.1  What the enhanced review found</h3>
 <p>{{ ai_summary.summary | sentence_spaced }}</p>
 {% if ai_summary.priorities %}<ol>{% for p in ai_summary.priorities %}<li>{{ p | sentence_spaced }}</li>{% endfor %}</ol>{% endif %}
-<p class="faint">Written by {{ ai_summary.model or 'a language model' }} from the findings in section 4.  Check it against them.</p>
+<p class="faint">Written from the findings in section 4.  Check it against them.</p>
 {% endif %}
 
 {% if top %}
@@ -219,15 +219,15 @@
   <h3>{{ f.ref }}  {{ f.title }}</h3>
   <table>
     <tr><td class="k">Severity</td><td><span class="badge r-{{ f.severity }}">{{ f.severity | upper }}</span>
-      {% if triaged and f.counted == 0 %} <span class="soft">Not counted: the AI review judged it a likely false positive.</span>
-      {% elif triaged and f.counted < 1 %} <span class="soft">Counted at half: the AI review wants a person to check it.</span>{% endif %}</td></tr>
+      {% if triaged and f.counted == 0 %} <span class="soft">Not counted: the enhanced review judged it a likely false positive.</span>
+      {% elif triaged and f.counted < 1 %} <span class="soft">Counted at half: the enhanced review wants a person to check it.</span>{% endif %}</td></tr>
     <tr><td class="k">OWASP Top 10</td><td>{{ f.owasp }}  {{ f.owasp_name }}</td></tr>
     {% if f.cwe %}<tr><td class="k">CWE</td><td>{{ f.cwe }}</td></tr>{% endif %}
     {% if f.url %}<tr><td class="k">Location</td><td class="mono">{{ f.url }}</td></tr>{% endif %}
     <tr><td class="k">Found by</td><td>{{ (f.tools or [f.tool or f.check]) | join(', ') }}</td></tr>
     {% if f.decision and f.decision.kind == 'severity' %}<tr><td class="k">Severity set by</td><td>{{ f.decision.by }}.  {{ f.decision.reason | sentence_spaced }}</td></tr>{% endif %}
     {% if f.decision and f.decision.kind == 'exception' %}<tr><td class="k">Exception</td><td>Accepted until {{ f.decision.expires[:10] }} by {{ f.decision.by }}.  {{ f.decision.reason | sentence_spaced }}  Not counted toward the grade.</td></tr>{% endif %}
-    {% if f.ai_verdict %}<tr><td class="k">AI review</td><td>{{ f.ai_verdict | replace('_', ' ') }}{% if f.ai_why %}.  {{ f.ai_why | sentence_spaced }}{% endif %}{% if f.ai_sast %}  Matches code finding {{ f.ai_sast }}.{% endif %}</td></tr>{% endif %}
+    {% if f.ai_verdict %}<tr><td class="k">Enhanced review</td><td>{{ f.ai_verdict | replace('_', ' ') }}{% if f.ai_why %}.  {{ f.ai_why | sentence_spaced }}{% endif %}{% if f.ai_sast %}  Matches code finding {{ f.ai_sast }}.{% endif %}</td></tr>{% endif %}
   </table>
   {% if f.evidence %}<div class="label"><strong>Evidence</strong></div><pre>{{ f.evidence }}</pre>{% endif %}
   {% if f.repro.command %}
@@ -246,7 +246,7 @@
   <tr><td class="k">Run by</td><td>{{ view.server }}</td></tr>
   <tr><td class="k">Profile</td><td>{{ profile }}</td></tr>
   <tr><td class="k">Findings</td><td>{{ findings | length }}, {{ overall.counted }} counted toward the grade</td></tr>
-  {% if view.ai.calls %}<tr><td class="k">AI review</td><td>{{ view.ai.calls }} request{{ '' if view.ai.calls == 1 else 's' }}, {{ view.ai.input_tokens }} tokens in and {{ view.ai.output_tokens }} out{% if view.ai.cost %}, {{ view.ai.cost }}{% endif %}</td></tr>{% endif %}
+  {% if view.ai.calls %}<tr><td class="k">Enhanced review</td><td>Every finding, after the scan</td></tr>{% endif %}
 </table>
 {% for e in skipped %}{% if loop.first %}<p>These steps did not finish, so the report does not cover what they would have checked:</p><ul>{% endif %}
   <li>{{ e.name or e.tool }}: {{ e.detail or e.status }}</li>{% if loop.last %}</ul>{% endif %}{% endfor %}

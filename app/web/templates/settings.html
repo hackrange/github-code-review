@@ -700,6 +700,21 @@
            value="{{ values['external.refresh_days'] }}">
     <span class="faint small">Every night at 03:30.  0 only reads it when asked.</span>
   </label>
+  <label class="check"><input type="checkbox" name="external.cert_alert_enabled" value="1" {{ 'checked' if values['external.cert_alert_enabled'] }}>
+    <span>Email when a site's TLS certificate is about to expire.  Checked every morning at
+      08:00.  Each certificate is named once, and read again from the site first so a renewed
+      one is not reported.</span></label>
+  <label>Warn this many days before expiry
+    <input type="number" name="external.cert_alert_days" min="1" max="365"
+           value="{{ values['external.cert_alert_days'] }}">
+    <span class="faint small">1 to 365.  Sites marked obsolete are left out.</span>
+  </label>
+  <label class="wide">Send certificate warnings to
+    <input type="text" name="external.cert_alert_to" maxlength="500"
+           value="{{ values['external.cert_alert_to'] }}" placeholder="Empty uses the Notifications page's To list">
+    <span class="faint small">Email addresses, comma separated.  Mail goes out through the server
+      set on the Notifications page.</span>
+  </label>
 </div>
 
 <div class="card" id="limits">

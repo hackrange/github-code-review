@@ -23,6 +23,18 @@ Settings, External sites:
 | `external.environments` | The environments a site can be in, comma separated.  The first is the default for a new site.  A site in one that is taken off the list keeps it until somebody picks another. |
 | `external.user_agent` | The browser every request says it is.  Empty uses a current desktop Chrome. |
 | `external.allow_private` | Let telemetry and scans reach private, loopback and link local addresses.  Leave it off unless the sites really are internal. |
+| `external.cert_alert_enabled` | Email when a site's TLS certificate comes within the warning window.  Off by default.  Checked every morning at 08:00. |
+| `external.cert_alert_days` | How many days before expiry to warn, 1 to 365, default 29. |
+| `external.cert_alert_to` | Who the warnings go to, comma separated.  Empty uses the To list on the Notifications page.  Mail goes through the server set there. |
+
+Certificate warnings name every site, except obsolete ones, whose certificate
+ends within the window, soonest first, in one message.  Expired ones are
+named too.  Each certificate is named once: a renewed certificate is named
+again only if it also comes within the window.  The stored date is as old as
+the site's telemetry, so before naming a site its certificate is read again
+from the site.  A renewed one is dropped, and when the site does not answer,
+the stored date is used and the message says so.  If the mail cannot be sent,
+the next morning tries again.
 
 The age at which a scan counts as overdue is the same `dast.max_age_days` the
 Web Applications tab uses.
@@ -95,6 +107,11 @@ A firewall or bot wall that refused the scan is marked as a block page and
 its screenshot is left out.  A CDN answering for a site it cannot reach, such
 as a Cloudflare 502, is marked as the site being down instead, with its
 screenshot.
+
+The list shows a 256x160 JPEG made from each screenshot rather than the
+full 1280x800 picture, so a long list loads quickly.  The thumbnail is made
+when the screenshot is taken.  Screenshots from before that get theirs the
+first time the list is opened, and show the full picture until then.
 
 Also from DNS and whois, without touching the site: nameservers, the CNAME
 chain, IPv6 addresses, mail servers, reverse DNS, the ASN and netblock, and

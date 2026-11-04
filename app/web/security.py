@@ -184,8 +184,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "max-age=31536000; includeSubDomains")
 
         # Pages behind a login should never sit in a shared cache.
+        # A route may let the signed in user's own browser keep a response
+        # (the External sites screenshots, whose address changes with each
+        # new picture) by saying private with a max-age itself.
+        own = (headers.get("Cache-Control") or "").replace(" ", "").lower()
         if request.url.path.startswith(f"{settings.base_path}/static"):
             headers["Cache-Control"] = "public, max-age=3600"
+        elif own.startswith("private,max-age="):
+            pass
         else:
             headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
             headers["Pragma"] = "no-cache"

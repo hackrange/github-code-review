@@ -343,6 +343,17 @@ DEFAULTS = {
                                 "Each runs its own engines, and wapiti and nuclei use "
                                 "real memory, so raise it with the container's memory "
                                 "limit in mind. A site is never scanned twice at once."),
+    "external.cert_alert_enabled": (False, False,
+                                "Email when a site's TLS certificate comes within "
+                                "the warning window. Checked every morning at 08:00, "
+                                "and each certificate is named once."),
+    "external.cert_alert_days": (29, False,
+                                "Warn this many days before a site's certificate "
+                                "expires, 1 to 365."),
+    "external.cert_alert_to":  ("", False,
+                                "Who the certificate warnings go to, comma separated. "
+                                "Empty uses the To list on the Notifications page."),
+    "external.cert_alert_last": ({}, False, "Certificates already warned about."),
     "external.environments":   (["Prod", "Dev", "Stage", "Clone"], False,
                                 "The environments a site can be in. The first is the "
                                 "default for a new site. A site keeps one that is "
@@ -509,7 +520,8 @@ SECTIONS = [
                         "external.refresh_days", "external.whitebox",
                         "external.max_concurrent", "external.environments",
                         "external.user_agent",
-                        "external.allow_private"]),
+                        "external.allow_private", "external.cert_alert_enabled",
+                        "external.cert_alert_days", "external.cert_alert_to"]),
     ("Limits", ["github.parallel_repos", "scan.max_concurrent",
                 "secrets.history_window_days",
                 "scan.timeout_per_repo", "scan.max_hours",

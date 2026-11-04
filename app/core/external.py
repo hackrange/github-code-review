@@ -137,6 +137,75 @@ def shot_path(asset_id: int) -> Path:
     return data_dir() / "shots" / f"{int(asset_id)}.png"
 
 
+def thumb_path(asset_id: int) -> Path:
+    """The small JPEG the list shows in place of the full screenshot."""
+    return data_dir() / "shots" / f"{int(asset_id)}.thumb.jpg"
+
+
+def drop_shot(asset_id: int) -> None:
+    shot_path(asset_id).unlink(missing_ok=True)
+    thumb_path(asset_id).unlink(missing_ok=True)
+
+
+def thumb_fresh(asset_id: int) -> bool:
+    """A thumbnail made from the screenshot that is there now."""
+    try:
+        return thumb_path(asset_id).stat().st_mtime >= shot_path(asset_id).stat().st_mtime
+    except OSError:
+        return False
+
+
+def make_thumbs(asset_ids) -> int:
+    """Shrink these sites' screenshots in one browser.  -> how many written.
+    Quietly does nothing where Playwright is not installed; the list then
+    falls back to the full screenshot."""
+    import subprocess
+
+    from app.core import external_probe
+
+    py = external_probe.playwright_python()
+    script = Path(__file__).with_name("browser_thumb.py")
+    argv = []
+    for asset_id in asset_ids:
+        if shot_path(asset_id).is_file():
+            argv += [str(shot_path(asset_id)), str(thumb_path(asset_id))]
+    if not py or not script.is_file() or not argv:
+        return 0
+    written = 0
+    for start in range(0, len(argv), 100):  # 50 a browser keeps argv short
+        try:
+            proc = subprocess.run([py, str(script), *argv[start:start + 100]],
+                                  capture_output=True, text=True, timeout=300)
+            got = json.loads((proc.stdout or "").strip().splitlines()[-1])
+        except (subprocess.TimeoutExpired, ValueError, IndexError, OSError) as exc:
+            log.warning("thumbnails failed: %s", exc)
+            continue
+        written += int(got.get("written") or 0)
+        if got.get("error"):
+            log.warning("thumbnails: %s", got["error"])
+    return written
+
+
+_thumb_lock = threading.Lock()
+
+
+def backfill_thumbs(asset_ids) -> bool:
+    """Make missing or stale thumbnails off the request thread.  One pass at
+    a time; a pass already running is left to finish.  -> started or not."""
+    todo = [a for a in asset_ids if shot_path(a).is_file() and not thumb_fresh(a)]
+    if not todo or not _thumb_lock.acquire(blocking=False):
+        return False
+
+    def run():
+        try:
+            make_thumbs(todo)
+        finally:
+            _thumb_lock.release()
+
+    threading.Thread(target=run, name="gcr-thumbs", daemon=True).start()
+    return True
+
+
 # ------------------------------------------------------------------ hosts
 
 def parent_of(host: str) -> str:
@@ -1327,7 +1396,11 @@ def save_telemetry(asset_id: int, rec: dict) -> None:
         if rec.get("shot"):
             asset.screenshot = rec["shot"][:16]
             if rec["shot"] not in ("ok", "blank", "waf") or not shot_path(asset_id).exists():
-                shot_path(asset_id).unlink(missing_ok=True)
+                drop_shot(asset_id)
+    if shot_path(asset_id).is_file() and not thumb_fresh(asset_id):
+        # Made now, while the probe's thread is spent anyway, so the list
+        # never waits on the full picture.
+        make_thumbs([asset_id])
 
 
 def refresh_stale() -> int:

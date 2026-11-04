@@ -1898,7 +1898,8 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
         put("dast.max_age_days", clean_int(form.get("dast.max_age_days", 365) or 0,
                                            "Due again after", low=0, high=3650))
         for key in ("external.enabled", "external.screenshots",
-                    "external.whitebox", "external.allow_private"):
+                    "external.whitebox", "external.allow_private",
+                    "external.cert_alert_enabled"):
             put(key, _checked(form, key))
         from app.core import external_probe as _probe
 
@@ -1920,6 +1921,12 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
         put("external.refresh_days", clean_int(form.get("external.refresh_days", 7) or 0,
                                                "Read telemetry again after",
                                                low=0, high=365))
+        put("external.cert_alert_days", clean_int(form.get("external.cert_alert_days", 29) or 29,
+                                                  "Warn this many days before expiry",
+                                                  low=1, high=365))
+        cert_to = clean_email(form.get("external.cert_alert_to"),
+                              "Send certificate warnings to")
+        put("external.cert_alert_to", "" if cert_to == "-" else cert_to[:500])
 
         put("security.force_https", _checked(form, "security.force_https"))
         put("security.trusted_proxies", _csv_list(text("security.trusted_proxies")))

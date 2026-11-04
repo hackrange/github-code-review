@@ -129,7 +129,7 @@ def _decided_item(group: dict) -> dict:
     if d["by"] == "validation":
         item["what"] = tidy(d["what"] or group["description"], 600)
         item["evidence"] = tidy(
-            f"AI validation #{d['id']} rated this {d['rating'].lower()}"
+            f"Validation #{d['id']} rated this {d['rating'].lower()}"
             + (f" with {d['confidence']} confidence" if d["confidence"] else "")
             + (f" on {d['at']}" if d["at"] else "") + ".", 600)
         item["why"] = tidy(d["why"], 600)
@@ -923,8 +923,8 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         asked = [ref for ref, g in zip(refs, groups) if not g["decision"]]
 
     if not send_code:
-        notes.append("Sending code is switched off on the AI page, so the model saw "
-                     "scanner details and file names but no code.")
+        notes.append("Sending code is switched off, so the review saw scanner "
+                     "details and file names but no code.")
 
     # ---- one look at the whole repository
     overview = {"what_it_is": "", "positives": [], "concerns": []}
@@ -982,8 +982,8 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         if item is None:
             item = _clean_item({"verdict": "needs_review", "title": group["title"],
                                 "likelihood": 3, "impact": 3,
-                                "what": "The model could not review this group, so it "
-                                        "is reported from the scanner's data.",
+                                "what": "This group could not be reviewed, so it is "
+                                        "reported from the scanner's data.",
                                 "evidence": f"{group['count']} alert(s) of rule "
                                             f"{group['rule'] or group['package']}.",
                                 "why": "It needs a person to look at it.",
@@ -1300,7 +1300,7 @@ def record_concerns(items: list, repository: str, branch: str, actor: str) -> li
                 description=tidy(" ".join(x for x in (item["what"], item["evidence"],
                                                        item["why"]) if x), 3000),
                 confidence="medium",
-                triage_reason=("Found by the AI security report, not by a scanner.  "
+                triage_reason=("Found by the enhanced security report, not by a scanner.  "
                                "A person should confirm it."),
                 url=(f"{web}/blob/{branch}/{item['file']}#L{item['line']}"
                      if web and branch else ""),
