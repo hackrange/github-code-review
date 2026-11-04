@@ -2520,6 +2520,9 @@ class ExternalScanSchedule(Base):
     # monthly: 1 to 31; past the end of a short month it runs on its last day.
     day_of_month = Column(Integer, default=1)
     profile = Column(String(16), default="")
+    # A scan config id when the schedule runs on Rapid7 InsightAppSec
+    # instead of here.  The config holds the profile and the sign in then.
+    ias_config = Column(String(64), default="")
     authenticated = Column(Boolean, default=False, nullable=False)
     ai_triage = Column(Boolean, default=False, nullable=False)
     enabled = Column(Boolean, default=True, nullable=False)

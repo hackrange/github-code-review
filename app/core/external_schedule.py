@@ -119,6 +119,15 @@ def clean(data: dict, profiles, site_has_auth: bool) -> dict:
         if isinstance(value, str):
             value = value.lower() in ("1", "on", "true", "yes")
         out[key] = bool(value)
+    ias_config = str(data.get("ias_config") or "").strip()
+    if ias_config:
+        from app.core import insightappsec
+
+        if not insightappsec.is_uuid(ias_config):
+            raise ValueError("Pick an InsightAppSec scan config.")
+        # The scan config in Rapid7 decides the attack and the sign in.
+        out.update(profile="", authenticated=False)
+    out["ias_config"] = ias_config
     if out["authenticated"] and not site_has_auth:
         raise ValueError("This site has no scan sign in to use.  Set one in Edit first.")
     return out
@@ -143,6 +152,8 @@ def as_dict(sched) -> dict:
             "when": describe(sched), "run_on": sched.run_on or None,
             "time_of_day": sched.time_of_day, "weekday": sched.weekday,
             "day_of_month": sched.day_of_month, "profile": sched.profile or "",
+            "runs_on": "insightappsec" if sched.ias_config else "here",
+            "ias_config": sched.ias_config or "",
             "authenticated": bool(sched.authenticated), "ai_triage": bool(sched.ai_triage),
             "enabled": bool(sched.enabled),
             "next_run_at": _aware(sched.next_run_at).isoformat() if sched.next_run_at else None,
@@ -185,24 +196,27 @@ def run_due(now: datetime = None) -> int:
             asset = db.get(ExternalAsset, sched.asset_id) if sched else None
             if sched is None or asset is None:
                 continue
+            ias_config = sched.ias_config or ""
             args = dict(asset_id=asset.id,
-                        profile=sched.profile or external.profile_for(asset),
+                        profile="" if ias_config else (sched.profile or external.profile_for(asset)),
                         actor=sched.created_by, ai=sched.ai_triage,
                         auth=sched.authenticated)
             obsolete = asset.status == "obsolete"
         if obsolete:
             scan_id, problem = None, "the site is obsolete"
         else:
+            extra = {"ias_config": ias_config} if ias_config else {}
             scan_id, problem = external.start_scan(args["asset_id"], args["profile"],
                                                    args["actor"], ai_triage=args["ai"],
-                                                   authenticated=args["auth"])
+                                                   authenticated=args["auth"], **extra)
         with session_scope() as db:
             sched = db.get(ExternalScanSchedule, sched_id)
             if sched is None:
                 continue
             sched.last_run_at = now
             sched.last_scan_id = scan_id
-            sched.last_result = (f"started a {args['profile']} scan" if scan_id
+            what = "an InsightAppSec" if ias_config else f"a {args['profile']}"
+            sched.last_result = (f"started {what} scan" if scan_id
                                  else f"skipped: {problem}")[:300]
             sched.next_run_at = next_run(sched, now)
             if sched.frequency == "once":

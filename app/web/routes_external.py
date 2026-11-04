@@ -1147,8 +1147,14 @@ async def add_schedule(asset_id: int, request: Request, user: User = Depends(cur
             return redirect(_back(here, "This site may not be scanned, so it cannot have a schedule.", "error"))
         profile = str(form.get("profile") or "") or external.profile_for(asset)
         signs_in = _checked(form, "authenticated")
-        if (profile in dast_engines.ACTIVE_PROFILES or (signs_in and profile != "baseline")) \
-                and not _checked(form, "confirm"):
+        on_ias = str(form.get("server") or "") == "insightappsec"
+        ias_config = str(form.get("ias_config") or "").strip() if on_ias else ""
+        if on_ias and not ias_config:
+            return redirect(_back(here, "Pick the InsightAppSec scan config to run.", "error"))
+        if on_ias:
+            profile, signs_in = "", False
+        if (on_ias or profile in dast_engines.ACTIVE_PROFILES
+                or (signs_in and profile != "baseline")) and not _checked(form, "confirm"):
             return redirect(_back(here, "Tick the box to confirm you are allowed to scan this "
                                         "site this way, every time the schedule runs.", "error"))
         try:
@@ -1156,12 +1162,14 @@ async def add_schedule(asset_id: int, request: Request, user: User = Depends(cur
                 "frequency": form.get("frequency"), "time_of_day": form.get("time_of_day"),
                 "run_on": form.get("run_on"), "weekday": form.get("weekday"),
                 "day_of_month": form.get("day_of_month"), "profile": profile,
+                "ias_config": ias_config,
                 "authenticated": signs_in, "ai_triage": _checked(form, "ai")}, user.username)
         except ValueError as exc:
             db.rollback()
             return redirect(_back(here, str(exc), "error"))
         record(db, "external.schedule_added", actor=user.username, target=asset.host,
-               detail=f"{external_schedule.describe(sched)}, {profile}"[:300],
+               detail=(f"{external_schedule.describe(sched)}, "
+                       + (f"InsightAppSec scan config {ias_config}" if ias_config else profile))[:300],
                source_ip=client_ip(request))
         when = sched.next_run_at
     return redirect(_back(here, f"Scheduled.  The first run is {when:%Y-%m-%d %H:%M} UTC."))
@@ -1672,7 +1680,7 @@ async def api_add_schedule(asset_id: int, request: Request, caller=Depends(_api_
     from app.core import dast_engines
 
     body = await _body(request)
-    for key in ("frequency", "time_of_day", "run_on", "profile"):
+    for key in ("frequency", "time_of_day", "run_on", "profile", "ias_config"):
         if body.get(key) is not None and not isinstance(body[key], str):
             raise HTTPException(status_code=400, detail=f"{key} has to be a string.")
     with session_scope() as db:
@@ -1680,9 +1688,10 @@ async def api_add_schedule(asset_id: int, request: Request, caller=Depends(_api_
         asset = _asset(db, asset_id)
         if external.blocked(db, asset):
             raise HTTPException(status_code=409, detail="This site may not be scanned.")
-        profile = body.get("profile") or external.profile_for(asset)
-        if (profile in dast_engines.ACTIVE_PROFILES or (body.get("authenticated") is True
-                                                        and profile != "baseline")) \
+        on_ias = bool(body.get("ias_config"))
+        profile = "" if on_ias else (body.get("profile") or external.profile_for(asset))
+        if (on_ias or profile in dast_engines.ACTIVE_PROFILES
+                or (body.get("authenticated") is True and profile != "baseline")) \
                 and body.get("confirm") is not True:
             raise HTTPException(status_code=400, detail=(
                 "This schedule sends attack payloads or acts as a signed in user.  Send "
