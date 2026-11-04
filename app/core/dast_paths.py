@@ -235,6 +235,79 @@ def counts(records: list) -> dict:
     return out
 
 
+# ------------------------------------------------------------------ scoping
+
+# What a penetration test is scoped on is the application's own pages and
+# endpoints.  Three kinds of 200 are not that: files a CDN or firewall serves
+# on every site behind it, static files the pages load, and a site that turned
+# the scanner away, where the few 200s left are the firewall's own.
+STATIC = re.compile(r"\.(js|mjs|css|map|png|jpe?g|gif|svg|ico|webp|avif|bmp|woff2?|ttf|otf|eot"
+                    r"|mp4|webm|mp3|wav|pdf|txt|json|xml|webmanifest)$", re.I)
+EDGE = [("Cloudflare", re.compile(r"^/(cdn-cgi|__cf)(/|$)", re.I)),
+        ("Imperva", re.compile(r"^/(_Incapsula_Resource|_incapsula)", re.I)),
+        ("Akamai", re.compile(r"^/(akam|_sec)/", re.I))]
+# A segment that is a value rather than a name: a number, a UUID, a long hex
+# or mixed token, or a date.  /orders/1001 and /orders/1002 are one endpoint.
+_VALUE = re.compile(r"^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+                    r"|[0-9a-f]{12,}|(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}"
+                    r"|\d{4}-\d{2}-\d{2})$", re.I)
+# Most of what was asked was refused: the scan saw the firewall, not the site.
+BLOCKED_SHARE = 0.8
+BLOCKED_MIN = 10
+
+
+def edge_of(path: str) -> str:
+    """The CDN or firewall a path belongs to, or ""."""
+    return next((name for name, rule in EDGE if rule.match(path or "")), "")
+
+
+def endpoint(path: str) -> str:
+    """The path with its values written as {id}."""
+    segs = [s for s in (path or "/").split("/") if s]
+    return "/" + "/".join("{id}" if _VALUE.match(s) else s for s in segs)
+
+
+def scoping(records: list) -> dict:
+    """The numbers a penetration test is scoped on, from one scan's paths.
+
+    http_200    every path that answered HTTP 200
+    endpoints   the application's own pages and endpoints: a 200 that is a
+                real page (see classify), less CDN and firewall files and
+                static files, with values collapsed.  The site's root counts
+                when it answered 200, since a site that answers is real.
+    blocked     most answers were 401 or 403, so the count is the firewall's
+    """
+    records = records or []
+    answered = len(records)
+    http_200 = [r for r in records if r.get("s") == 200]
+    edges, refused, found = set(), 0, set()
+    for r in records:
+        name = edge_of(r.get("p", ""))
+        if name:
+            edges.add(name)
+        if r.get("s") in (401, 403):
+            refused += 1
+    for r in http_200:
+        path = r.get("p", "")
+        if edge_of(path) or STATIC.search(path):
+            continue
+        if r.get("r") is True or path == "/":
+            found.add(endpoint(path))
+    share = refused / answered if answered else 0.0
+    return {"answered": answered, "http_200": len(http_200),
+            "endpoints": sorted(found), "refused_share": round(share, 3),
+            "edge": sorted(edges),
+            "blocked": answered >= BLOCKED_MIN and share >= BLOCKED_SHARE}
+
+
+def blocked_text(scope: dict) -> str:
+    """For the CSV: empty, or yes with why."""
+    if not scope.get("blocked"):
+        return ""
+    by = ", ".join(scope.get("edge") or [])
+    return f"yes, {round(scope['refused_share'] * 100)}% refused" + (f" by {by}" if by else "")
+
+
 # ------------------------------------------------------------------ matching
 
 def _segs(path: str) -> list:

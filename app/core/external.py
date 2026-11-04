@@ -2058,6 +2058,29 @@ def touch_asset(db, scan: ExternalDastScan) -> None:
                             scan.recorded_by)
 
 
+def scoping_by_asset(db, asset_ids=None) -> dict:
+    """The pen test scoping numbers of each site, from its newest finished
+    scan that recorded paths, the same scan url_paths comes from.
+    -> {asset id: {"scan": scan, "scope": dast_paths.scoping(...)}}"""
+    from app.core import dast_paths
+
+    query = (db.query(ExternalDastScan.id, ExternalDastScan.asset_id)
+             .filter(ExternalDastScan.status == "done",
+                     ExternalDastScan.paths_count.isnot(None)))
+    if asset_ids is not None:
+        query = query.filter(ExternalDastScan.asset_id.in_(list(asset_ids) or [0]))
+    newest = {}
+    for scan_id, asset_id in query.order_by(ExternalDastScan.scanned_at.desc(),
+                                            ExternalDastScan.id.desc()):
+        newest.setdefault(asset_id, scan_id)
+    out = {}
+    for asset_id, scan_id in newest.items():
+        scan = db.get(ExternalDastScan, scan_id)
+        out[asset_id] = {"scan": scan, "scope": dast_paths.scoping(
+            dast_paths.load(scan.paths).get("paths") or [])}
+    return out
+
+
 def copy_newest(db, asset: ExternalAsset) -> None:
     """The newest finished scan onto the site, or nothing when there is none."""
     newest = (db.query(ExternalDastScan)

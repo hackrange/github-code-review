@@ -81,6 +81,18 @@
       <div class="faint">{{ cc.answered | thousands }} addresses answered.  {% for k, n in cc.by_status.items() if n %}{{ k }}: {{ n | thousands }}{{ ', ' if not loop.last }}{% endfor %}
         {% if cc.by_engine %}&middot; by engine: {% for k, n in cc.by_engine.items() %}{{ k }} {{ n | thousands }}{{ ', ' if not loop.last }}{% endfor %}{% endif %}</div>
     </div>
+    {% if scope %}
+    <div class="small" style="margin-bottom:.5rem">For penetration test scoping:
+      <strong>{{ scope.endpoints | length | thousands }}</strong> unique endpoint{{ '' if scope.endpoints | length == 1 else 's' }}
+      <span class="faint" title="Real pages that answered 200, without CDN or firewall files and static files, with numbers and ids collapsed so /orders/1001 and /orders/1002 are one">(the application's own pages, ids collapsed)</span>
+      &middot; {{ scope.http_200 | thousands }} path{{ '' if scope.http_200 == 1 else 's' }} answered HTTP 200
+      {% if blocked_text %}<div><span class="badge high">blocked</span> {{ blocked_text | capitalize }}.  The scan mostly saw the
+        firewall, so these counts are not the site's.  Let the scanner's address through, then scan again.</div>{% endif %}
+      {% if scope.endpoints %}<details style="margin-top:.3rem"><summary class="faint">The endpoints</summary>
+        <div class="mono small">{% for e in scope.endpoints[:500] %}<div>{{ e }}</div>{% endfor %}
+          {% if scope.endpoints | length > 500 %}<div class="faint">and {{ scope.endpoints | length - 500 }} more</div>{% endif %}</div></details>{% endif %}
+    </div>
+    {% endif %}
     {% endif %}
     {% if code.linked %}
     <div class="small" style="margin-bottom:.5rem">Linked code reached:

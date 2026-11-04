@@ -299,10 +299,16 @@ def export_csv(request: Request, user: User = Depends(current_user)):
                          "telemetry_at", "last_dast_at", "last_dast_severity",
                          "last_dast_server", "last_dast_url",
                          "url_paths", "url_paths_scan",
+                         "http_200_paths", "unique_endpoints", "scan_blocked",
+                         "paths_answered",
                          "repositories", "comments"]
                         + external.FIELD_KEYS)
+        # One read of each site's newest counted scan, not one per column.
+        scoped = external.scoping_by_asset(db)
+        from app.core import dast_paths as _dast_paths
         for a in db.query(ExternalAsset).order_by(ExternalAsset.host):
             values = external.field_values(a)
+            scope = (scoped.get(a.id) or {}).get("scope")
             repos = []
             for l in mapper.links(a):
                 if l["linked"]:
@@ -324,6 +330,10 @@ def export_csv(request: Request, user: User = Depends(current_user)):
                 "" if a.last_paths is None else a.last_paths,
                 (a.last_paths_at.strftime("%Y-%m-%d") + " " + (a.last_paths_profile or "")).strip()
                 if a.last_paths_at else "",
+                "" if scope is None else scope["http_200"],
+                "" if scope is None else len(scope["endpoints"]),
+                "" if scope is None else (_dast_paths.blocked_text(scope) or "no"),
+                "" if scope is None else scope["answered"],
                 " ".join(repos),
                 (a.notes or "").replace("\n", " ")] + [values.get(k, "") for k in external.FIELD_KEYS]])
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
@@ -1063,7 +1073,12 @@ def scan_page(asset_id: int, scan_id: int, request: Request, sev: str = "",
         context = _shared(db, user)
         if verdict == "decided":
             findings = [f for f in findings if f.get("decision")]
+        from app.core import dast_paths as _dast_paths
+
+        scope = (_dast_paths.scoping(_dast_paths.load(scan.paths).get("paths") or [])
+                 if scan.paths_count is not None else None)
         context.update(active_page="external", asset=asset, scan=scan, view=view,
+                       scope=scope, blocked_text=_dast_paths.blocked_text(scope or {}),
                        code=external.code_behind(db, user, scan, asset),
                        findings=findings, sev=sev, verdict=verdict, decided=decided,
                        decision_kinds=external_decisions.KINDS,
