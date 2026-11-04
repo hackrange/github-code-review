@@ -94,6 +94,8 @@ def recount(db, asset_id: int, now=None) -> None:
 
     decisions = for_asset(db, asset_id)
     for scan in db.query(ExternalDastScan).filter_by(asset_id=asset_id, status="done"):
+        if scan.summary_only:
+            continue
         findings = apply(external.findings_of(scan), decisions, now, scan.id)
         roll = external_dast.rollup([f for f in findings if counted(f)])
         scan.findings = json.dumps(findings, default=str)

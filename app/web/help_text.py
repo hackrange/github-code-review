@@ -291,6 +291,9 @@ SECTIONS = [
             "scans of the sites they touched.  Import results now runs it "
             "straight away.  Hosts with Rapid7 results that are not sites here "
             "are listed on the card.",
+            "A scan with more than 5 findings keeps only its counts and date "
+            "here; the detail stays in Rapid7.  Rapid7 false positives and "
+            "duplicates are left out.",
             "The key needs to see the apps and scan configs, and to start "
             "scans.  The setup guide says which role does that.",
         ],

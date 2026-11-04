@@ -1305,6 +1305,7 @@ def scan_dict(scan: ExternalDastScan, findings: bool = False) -> dict:
            "started_at": _iso(scan.started_at), "scanned_at": _iso(scan.scanned_at),
            "severity": scan.severity or "",
            "counts": {s: getattr(scan, s) or 0 for s in SEVERITIES},
+           "summary_only": bool(scan.summary_only),
            "result_url": scan.result_url or "", "error": scan.error or "",
            "note": scan.note or "", "recorded_by": scan.recorded_by,
            "ai": {"status": scan.ai_status or "", "calls": scan.ai_calls or 0,
@@ -2359,13 +2360,14 @@ def _poll_ias(scan_id: int, remote_id: str, started) -> int:
         state = ias.status(region, key, remote_id)
         now = str(state.get("status") or "")
         if now == "COMPLETE":
-            found = ias.findings(region, key, remote_id)
+            vulns = ias.scan_vulns(region, key, remote_id)
             app_id = (state.get("app") or {}).get("id", "")
             config_id = (state.get("scan_config") or {}).get("id", "")
-            finish(scan_id, merge(found),
-                   result_url=ias.scan_link(region, app_id, config_id, remote_id))
+            _ias_store(ias, region, key, scan_id, vulns,
+                       ias.scan_link(region, app_id, config_id, remote_id))
             with session_scope() as db:
-                want_ai = db.get(ExternalDastScan, scan_id).ai_status == "wanted"
+                row = db.get(ExternalDastScan, scan_id)
+                want_ai = row.ai_status == "wanted" and not row.summary_only
             if want_ai:
                 triage(scan_id)
             return 1
@@ -2513,12 +2515,13 @@ def _import_ias(ias) -> dict:
                         or time.time() - started > IAS_IMPORT_MINUTES * 60):
                     summary["left"] += 1
                     continue
-                found = ias.findings(region, key, scan["id"], cache=cache, client=client)
+                vulns = ias.scan_vulns(region, key, scan["id"], client=client)
                 summary["read"] += 1
                 config = catalog.get(scan["config_id"]) or {}
                 by_host = {}
-                for f in found:
-                    by_host.setdefault(ias.host_of(f.get("url")), []).append(f)
+                for v in vulns:
+                    by_host.setdefault(ias.host_of((v.get("root_cause") or {}).get("url")),
+                                       []).append(v)
                 by_host.pop("", None)
                 hosts = set(by_host) | set(config.get("hosts") or [])
                 seen[scan["id"]] = {"hosts": sorted(hosts), "completed": scan["completed"],
@@ -2528,7 +2531,8 @@ def _import_ias(ias) -> dict:
                     asset_id = sites.get(host)
                     if asset_id is None or (asset_id, scan["id"]) in have:
                         continue
-                    _ias_import_one(ias, region, asset_id, scan, config, by_host.get(host, []))
+                    _ias_import_one(ias, region, key, asset_id, scan, config,
+                                    by_host.get(host, []), cache, client)
                     have.add((asset_id, scan["id"]))
                     touched.add(host)
                     summary["imported"] += 1
@@ -2556,8 +2560,8 @@ def _import_ias(ias) -> dict:
     return summary
 
 
-def _ias_import_one(ias, region: str, asset_id: int, scan: dict, config: dict,
-                    found: list) -> int:
+def _ias_import_one(ias, region: str, key: str, asset_id: int, scan: dict, config: dict,
+                    vulns: list, cache: dict, client) -> int:
     """One finished Rapid7 scan as a finished scan of one site."""
     done = ias.when(scan["completed"]) or utcnow()
     name = config.get("name") or scan["config_id"]
@@ -2576,9 +2580,37 @@ def _ias_import_one(ias, region: str, asset_id: int, scan: dict, config: dict,
         db.add(row)
         db.flush()
         row_id = row.id
-    finish(row_id, merge(found), when=done,
-           result_url=ias.scan_link(region, scan["app_id"], scan["config_id"], scan["id"]))
+    _ias_store(ias, region, key, row_id, vulns,
+               ias.scan_link(region, scan["app_id"], scan["config_id"], scan["id"]),
+               when=done, cache=cache, client=client)
     return row_id
+
+
+def _ias_store(ias, region: str, key: str, scan_id: int, vulns: list, result_url: str,
+               when=None, cache: dict = None, client=None) -> None:
+    """A finished Rapid7 scan onto its row.  A few findings are kept whole.
+    Past that only the counts are kept, and the detail stays in Rapid7, so
+    this database does not fill up with what Rapid7 already holds."""
+    if len(vulns) <= ias.DETAIL_LIMIT:
+        found = ias.describe(region, key, vulns, cache=cache, client=client)
+        finish(scan_id, merge(found), when=when, result_url=result_url)
+        return
+    roll = ias.counts(vulns)
+    with session_scope() as db:
+        scan = db.get(ExternalDastScan, scan_id)
+        if scan is None:
+            return
+        scan.findings = ""
+        scan.summary_only = True
+        scan.status = "done"
+        scan.error = ""
+        scan.step = ""
+        scan.scanned_at = when or utcnow()
+        scan.result_url = (result_url or "")[:1000]
+        for sev in SEVERITIES:
+            setattr(scan, sev, roll[sev])
+        scan.severity = roll["severity"]
+        touch_asset(db, scan)
 
 
 def start_ias_import() -> bool:

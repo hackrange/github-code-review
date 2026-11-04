@@ -507,18 +507,42 @@ def new_cache() -> dict:
     return {"modules": {}, "docs": {}}
 
 
-def findings(region: str, key: str, scan_id: str, cache: dict = None,
-             client=None) -> list:
-    """The vulnerabilities this scan found, as dynamic scan findings."""
+# Rapid7 review statuses that mean it is not a finding at all.  Left out of
+# what comes in, since a scan kept as counts has no row to mark here.
+NOT_FINDINGS = {"FALSE_POSITIVE", "DUPLICATE"}
+# A scan with more findings than this keeps only its counts here.  The
+# detail stays in Rapid7, a link away.
+DETAIL_LIMIT = 5
+
+
+def scan_vulns(region: str, key: str, scan_id: str, client=None) -> list:
+    """The vulnerabilities a scan found, as Rapid7 sends them, minus the ones
+    Rapid7 says are false positives or duplicates."""
     if not is_uuid(scan_id):
         raise IASError("That is not a scan id.")
+    got = search(region, key, "VULNERABILITY", f"vulnerability.scans.id='{scan_id}'",
+                 client=client)
+    return [v for v in got if str(v.get("status") or "") not in NOT_FINDINGS][:MAX_FINDINGS]
+
+
+def counts(vulns: list) -> dict:
+    """{critical, high, medium, low, info, severity} for a list of vulnerabilities."""
+    out = {s: 0 for s in ("critical", "high", "medium", "low", "info")}
+    for v in vulns:
+        out[SEVERITY.get(str(v.get("severity") or "").upper(), "info")] += 1
+    out["severity"] = next((s for s in ("critical", "high", "medium", "low", "info")
+                            if out[s]), "none")
+    return out
+
+
+def describe(region: str, key: str, vulns: list, cache: dict = None, client=None) -> list:
+    """Vulnerabilities as dynamic scan findings, with the module name and fix,
+    which cost a call each the first time a module turns up."""
     cache = cache if cache is not None else new_cache()
     modules, docs = cache["modules"], cache["docs"]
     own = client is None
     client = client or _client()
     try:
-        vulns = search(region, key, "VULNERABILITY",
-                       f"vulnerability.scans.id='{scan_id}'", client=client)[:MAX_FINDINGS]
         for v in vulns:
             variance = ((v.get("variances") or [{}]) or [{}])[0] or {}
             module = str((variance.get("module") or {}).get("id") or "")
@@ -547,6 +571,13 @@ def findings(region: str, key: str, scan_id: str, cache: dict = None,
         if own:
             client.close()
     return [to_finding(v, modules, docs) for v in vulns]
+
+
+def findings(region: str, key: str, scan_id: str, cache: dict = None,
+             client=None) -> list:
+    """The vulnerabilities this scan found, as dynamic scan findings."""
+    return describe(region, key, scan_vulns(region, key, scan_id, client=client),
+                    cache=cache, client=client)
 
 
 # ------------------------------------------------------------------ history
@@ -588,11 +619,16 @@ def when(value):
 
 
 def finished_scans(region: str, key: str, client=None) -> list:
-    """Every scan that reached COMPLETE, newest first.  GET /scans takes no
-    filter, so this reads them all and keeps the finished ones."""
+    """Every full scan that reached COMPLETE, newest first.  GET /scans takes
+    no filter, so this reads them all and keeps the finished ones."""
     rows = []
     for s in paged(region, key, "GET", "/scans", client=client):
         if str(s.get("status") or "") != "COMPLETE" or not is_uuid(s.get("id")):
+            continue
+        # A verification scan retests a few findings and an incremental one
+        # part of the site.  Either, taken as the site's newest scan, would
+        # say everything else went away.
+        if str(s.get("scan_type") or "REGULAR") != "REGULAR":
             continue
         rows.append({"id": s["id"],
                      "app_id": str((s.get("app") or {}).get("id") or ""),

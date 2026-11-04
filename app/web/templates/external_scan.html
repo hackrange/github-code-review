@@ -156,7 +156,7 @@
 {% endif %}
 
 <div class="card">
-  <div class="card-head">{{ findings | length }} finding{{ '' if findings | length == 1 else 's' }}
+  <div class="card-head">{% if scan.summary_only %}Counts from Rapid7{% else %}{{ findings | length }} finding{{ '' if findings | length == 1 else 's' }}{% endif %}
     {% if decided %}<a class="small" href="{{ here }}?verdict=decided" style="font-weight:400;margin-left:.5rem">{{ decided }} decided</a>{% endif %}
     {% if sev or verdict %}<a class="small" href="{{ here }}" style="font-weight:400;margin-left:.5rem">show all</a>{% endif %}</div>
   {% if findings %}
@@ -201,6 +201,12 @@
       </tr>
     {% endfor %}
     </tbody></table></div>
+  {% elif scan.summary_only %}
+  {% set total = (scan.critical or 0) + (scan.high or 0) + (scan.medium or 0) + (scan.low or 0) + (scan.info or 0) %}
+  <div class="empty">Rapid7 found {{ total }}: {{ scan.critical or 0 }} critical, {{ scan.high or 0 }} high,
+    {{ scan.medium or 0 }} medium, {{ scan.low or 0 }} low and {{ scan.info or 0 }} informational.
+    Only the counts are kept here.
+    {% if scan.result_url %}<a href="{{ scan.result_url }}" target="_blank" rel="noopener">See them in InsightAppSec</a>.{% endif %}</div>
   {% elif scan.status == 'done' %}<div class="empty">Nothing found.
     {% if view.profile == 'baseline' %}<div style="margin-top:.6rem"><a class="btn primary" href="{{ base }}/external/{{ asset.id }}#scan">Run a deeper scan</a></div>{% endif %}
     {% if view.profile == 'baseline' %}<div class="small faint" style="margin-top:.4rem">A baseline scan only reads

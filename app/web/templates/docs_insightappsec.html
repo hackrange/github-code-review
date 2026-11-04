@@ -304,16 +304,20 @@
 <div class="card"><div class="card-body">
   <h2>What comes back</h2>
   <ul class="small">
-    <li>Each InsightAppSec vulnerability becomes a finding on the scan.  It shows the attack
+    <li><strong>A scan with more than 5 findings keeps only its counts here</strong>: how many
+      critical, high, medium, low and informational, and the scan date.  The findings themselves
+      stay in InsightAppSec, and the scan page links to them.  This keeps the database small, since
+      Rapid7 already holds the detail.  Decisions made here apply only to scans kept whole.</li>
+    <li>What Rapid7 marked a false positive or a duplicate does not come in at all.</li>
+    <li>In a scan of 5 or fewer, each InsightAppSec vulnerability becomes a finding on the scan.  It shows the attack
       module's name and the parameter, the address, the request method, Rapid7's evidence and
       recommendation, the CWE where Rapid7 gives one, and the CVSS vector and score.</li>
     <li>Severity follows Rapid7.  Critical, High, Medium and Low are the same.  Informational
       and the old Safe level both become info.</li>
     <li>Each finding links to the same finding in InsightAppSec, and the scan links to the scan.
       Opening them needs a Rapid7 sign in.</li>
-    <li>Rapid7's review status (unreviewed, verified, false positive, ignored) shows beside each
-      finding.  A false positive marked in Rapid7 is still counted here until somebody marks it
-      here too, because the two products keep their own decisions.</li>
+    <li>Rapid7's review status (unreviewed, verified, ignored, remediated) shows beside each
+      finding.</li>
     <li>False positive, severity and exception decisions made here carry into the next scan of
       the same site, the same as for any other scan.</li>
     <li>A completed scan counts as a dynamic test of the web applications behind the site, on the

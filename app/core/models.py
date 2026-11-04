@@ -2462,6 +2462,10 @@ class ExternalDastScan(Base):
     info = Column(Integer, default=0)
     result_url = Column(String(1000), default="")
     findings = Column(LONG_JSON, default="")
+    # Only the counts were kept, not the findings: a Rapid7 scan with more
+    # than a few, whose detail stays in Rapid7.  Nothing recounts these from
+    # findings, or they would drop to zero.
+    summary_only = Column(Boolean, default=False, nullable=False)
     error = Column(String(500), default="")
     # For a scan run here: baseline, quick, standard, thorough or premium,
     # the step it is on, and what each engine did (JSON).
