@@ -2238,6 +2238,11 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
         scheduler.reload_jobs()
     except Exception as exc:
         log.warning("could not re-arm schedules after a settings change: %s", exc)
+    # Turning InsightAppSec on brings in what Rapid7 already has, now rather
+    # than at the top of the next hour.
+    if ias_on and ("ias.enabled" in moved or "ias.api_key" in moved):
+        from app.core import external
+        external.start_ias_import()
     return redirect("/settings?msg=Saved.+The+next+scan+uses+this.&kind=ok")
 
 
@@ -2320,6 +2325,31 @@ async def refresh_insightappsec(request: Request, user: User = Depends(current_u
                outcome="ok" if ok else "error", detail=detail[:400],
                source_ip=client_ip(request))
     return _integrations_back(f"InsightAppSec: {detail}", "ok" if ok else "error")
+
+
+@router.post("/settings/integrations/insightappsec/import")
+async def import_insightappsec(request: Request, user: User = Depends(current_user)):
+    """Bring in Rapid7's finished scans now instead of at the next hourly run."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+    from app.core import external
+    from app.core import insightappsec as ias
+
+    with session_scope() as db:
+        if not ias.config(db)["ready"]:
+            return _integrations_back("InsightAppSec: turn it on and save first.", "error")
+        if not external.enabled(db):
+            return _integrations_back("InsightAppSec: External sites has to be on as well.",
+                                      "error")
+    started = external.start_ias_import()
+    with session_scope() as db:
+        record(db, "integration.imported", actor=user.username, target=ias.NAME,
+               outcome="ok" if started else "skipped",
+               detail="started" if started else "one was already running",
+               source_ip=client_ip(request))
+    return _integrations_back(
+        "InsightAppSec: importing in the background.  Reload in a few minutes to see it."
+        if started else "InsightAppSec: an import is already running.", "ok")
 
 
 # ---------------------------------------------------------------------------

@@ -251,8 +251,31 @@
   <p class="small"><strong>To scan on a schedule</strong>, press <strong>Schedule a scan</strong>
     on the site's page and pick Rapid7 InsightAppSec under Run it on.  Each run starts the scan
     config in Rapid7.  A run is skipped, and says so, when the limit on scans at once is already
-    reached.  You can also use the schedules in Rapid7 itself.  Scans started there are not
-    followed here.</p>
+    reached.  You can also use the schedules in Rapid7 itself.  Their results come in through
+    the import below.</p>
+</div></div>
+
+<div class="card"><div class="card-body">
+  <h2>Results from scans run in Rapid7</h2>
+  <p class="small">You do not have to start a scan from here to see its results.  While
+    InsightAppSec is turned on, every hour this product reads the scans that finished in Rapid7,
+    old ones included, and brings each one in as a scan of every site it touched.</p>
+  <ul class="small">
+    <li>A scan touches a site when one of its findings is on that site's host, or when its scan
+      config starts there.  A scan that found nothing on a host its config starts on still comes in,
+      as a clean scan.</li>
+    <li>Each one is dated when Rapid7 finished it, so an old scan never replaces a newer one as
+      the site's latest.</li>
+    <li>Only hosts that are sites under <a href="{{ base }}/external">External sites</a> get
+      results.  The Integrations card lists the hosts Rapid7 has results for that are not sites
+      here.  Add one, and its old scans come in on the next run.</li>
+    <li>Each Rapid7 scan is read once.  A scan started from here is not brought in twice.</li>
+    <li>The first run on an account with a long history reads up to 300 scans, and the rest come
+      in on the runs after it.  <strong>Import results now</strong> on the Integrations card
+      runs it straight away.</li>
+    <li>A scan config with no start address (an API scan from a definition file, for one) can
+      only be matched by the hosts of its findings, so a clean run of one does not come in.</li>
+  </ul>
 </div></div>
 
 <div class="card"><div class="card-body">

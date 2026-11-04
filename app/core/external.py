@@ -2444,6 +2444,151 @@ def poll_remote() -> int:
     return done
 
 
+# Scans a finished Rapid7 scan is read for in one run.  The first run on an
+# old account has a backlog; the rest of it comes in on the next runs.
+IAS_IMPORT_BUDGET = 300
+IAS_IMPORT_MINUTES = 20
+IAS_IMPORTED_BY = "InsightAppSec import"
+_ias_import_lock = threading.Lock()
+
+
+def import_ias() -> dict:
+    """Bring in what Rapid7 already found, old scans included.
+
+    Every scan that reached COMPLETE in InsightAppSec is read once.  Its
+    findings are split by the host in each one's address, and every host that
+    is a site here gets the scan as a finished scan of its own, dated when
+    Rapid7 finished it.  A host the scan config starts on gets the scan even
+    when nothing was found there, because a clean scan is a result too.
+
+    What was read is kept in the data volume with the hosts each scan touched,
+    so a site added later picks up its old scans on the next run, and a scan
+    is never asked for twice when nothing new needs it.  The scheduler runs
+    this every hour.  -> the summary shown on the Integrations tab
+    """
+    from app.core import insightappsec as ias
+
+    if not _ias_import_lock.acquire(blocking=False):
+        return {"skipped": "an import is already running"}
+    try:
+        return _import_ias(ias)
+    finally:
+        _ias_import_lock.release()
+
+
+def _import_ias(ias) -> dict:
+    with session_scope() as db:
+        if not enabled(db):
+            return {"skipped": "External sites are switched off"}
+        cfg = ias.config(db)
+        if not cfg["ready"]:
+            return {"skipped": "InsightAppSec is not turned on"}
+        sites = {a.host.lower(): a.id for a in db.query(ExternalAsset.host, ExternalAsset.id)}
+        have = {(a, r) for a, r in db.query(ExternalDastScan.asset_id, ExternalDastScan.remote_id)
+                .filter(ExternalDastScan.provider == ias.PROVIDER,
+                        ExternalDastScan.status.in_(("done", "queued", "running")))}
+    if _ias_backoff["until"] > time.time():
+        return {"skipped": "Rapid7 asked us to wait"}
+    region, key = cfg["region"], cfg["key"]
+    state = ias.load_import()
+    seen = state["scans"]
+    catalog = {c["id"]: c for c in ias.load_catalog().get("configs") or []}
+    started = time.time()
+    summary = {"ran_at": utcnow().isoformat(), "finished": 0, "read": 0,
+               "imported": 0, "sites": [], "left": 0, "error": ""}
+    touched = set()
+    cache = ias.new_cache()
+    try:
+        with ias._client() as client:
+            scans = ias.finished_scans(region, key, client=client)
+            summary["finished"] = len(scans)
+            for scan in scans:
+                known = seen.get(scan["id"])
+                if known is not None:
+                    wanted = [h for h in known.get("hosts") or []
+                              if h in sites and (sites[h], scan["id"]) not in have]
+                    if not wanted:
+                        continue
+                if (summary["read"] >= IAS_IMPORT_BUDGET
+                        or time.time() - started > IAS_IMPORT_MINUTES * 60):
+                    summary["left"] += 1
+                    continue
+                found = ias.findings(region, key, scan["id"], cache=cache, client=client)
+                summary["read"] += 1
+                config = catalog.get(scan["config_id"]) or {}
+                by_host = {}
+                for f in found:
+                    by_host.setdefault(ias.host_of(f.get("url")), []).append(f)
+                by_host.pop("", None)
+                hosts = set(by_host) | set(config.get("hosts") or [])
+                seen[scan["id"]] = {"hosts": sorted(hosts), "completed": scan["completed"],
+                                    "config_id": scan["config_id"],
+                                    "counts": {h: len(v) for h, v in by_host.items()}}
+                for host in sorted(hosts):
+                    asset_id = sites.get(host)
+                    if asset_id is None or (asset_id, scan["id"]) in have:
+                        continue
+                    _ias_import_one(ias, region, asset_id, scan, config, by_host.get(host, []))
+                    have.add((asset_id, scan["id"]))
+                    touched.add(host)
+                    summary["imported"] += 1
+                ias.save_import(state)
+    except ias.IASError as exc:
+        if exc.retry_at:
+            _ias_backoff["until"] = exc.retry_at
+        summary["error"] = str(exc)[:300]
+        log.warning("importing from InsightAppSec: %s", exc)
+    summary["sites"] = sorted(touched)
+    # Hosts Rapid7 has results for that are not sites here, busiest first,
+    # so somebody can add the ones that matter.
+    other = {}
+    for row in seen.values():
+        for host in row.get("hosts") or []:
+            if host not in sites:
+                got = other.setdefault(host, {"host": host, "scans": 0, "last": ""})
+                got["scans"] += 1
+                got["last"] = max(got["last"], row.get("completed") or "")
+    summary["not_sites"] = sorted(other.values(), key=lambda r: (-r["scans"], r["host"]))[:50]
+    summary["not_sites_count"] = len(other)
+    summary["known"] = len(seen)
+    state["last"] = summary
+    ias.save_import(state)
+    return summary
+
+
+def _ias_import_one(ias, region: str, asset_id: int, scan: dict, config: dict,
+                    found: list) -> int:
+    """One finished Rapid7 scan as a finished scan of one site."""
+    done = ias.when(scan["completed"]) or utcnow()
+    name = config.get("name") or scan["config_id"]
+    app = config.get("app") or ""
+    with session_scope() as db:
+        row = ExternalDastScan(
+            asset_id=asset_id, server_id=None, server_name=ias.NAME,
+            # Failed until finish() fills it in, so a row an error leaves
+            # behind says so, and is never taken for a scan still running.
+            source="remote", provider=ias.PROVIDER, status="failed",
+            error="the import did not finish", remote_id=scan["id"], profile="",
+            started_at=ias.when(scan["submitted"]) or done,
+            recorded_by=IAS_IMPORTED_BY, authenticated=False, step="",
+            note=(f"Imported from InsightAppSec: scan config {name}"
+                  + (f" ({app})" if app else "") + ".")[:500])
+        db.add(row)
+        db.flush()
+        row_id = row.id
+    finish(row_id, merge(found), when=done,
+           result_url=ias.scan_link(region, scan["app_id"], scan["config_id"], scan["id"]))
+    return row_id
+
+
+def start_ias_import() -> bool:
+    """The import in the background, for the button and for turning it on."""
+    if _ias_import_lock.locked():
+        return False
+    threading.Thread(target=import_ias, name="ias-import", daemon=True).start()
+    return True
+
+
 def _aware(value):
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 

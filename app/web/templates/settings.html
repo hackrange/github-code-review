@@ -765,11 +765,32 @@
     {% if ias.catalog.truncated %}<span class="badge medium">only the first 1000 are kept</span>{% endif %}
     {% else %}<span class="faint">No scan configs read yet.  Save the key, then press Refresh scan configs.</span>{% endif %}
   </div>
+  {% set imp = ias.imported %}
+  <div class="small" style="margin-top:.6rem" id="ias-import">
+    <strong>Results from Rapid7.</strong>
+    <span class="faint">While this is on, every scan that finished in InsightAppSec, old ones too,
+      comes in each hour as a scan of each site whose host it touched.  A host that is not a site
+      under External sites is listed here instead.</span><br>
+    {% if imp.ran_at %}
+    Last import {{ imp.ran_at[:16] | replace('T', ' ') }} UTC: {{ imp.finished }} finished
+    scan{{ '' if imp.finished == 1 else 's' }} in Rapid7, {{ imp.read }} read, {{ imp.imported }}
+    brought in{% if imp.sites %} for {{ imp.sites | join(', ') }}{% endif %}.
+    {% if imp.left %}<span class="badge medium">{{ imp.left }} more on the next run</span>{% endif %}
+    {% if imp.error %}<span class="badge high">{{ imp.error }}</span>{% endif %}
+    {% if imp.not_sites %}<br><span class="faint">{{ imp.not_sites_count }} host{{ '' if imp.not_sites_count == 1 else 's' }}
+      with Rapid7 results {{ 'is' if imp.not_sites_count == 1 else 'are' }} not a site here:</span>
+      {% for h in imp.not_sites[:20] %}<span class="mono">{{ h.host }}</span> ({{ h.scans }}){{ ', ' if not loop.last }}{% endfor %}
+      {%- if imp.not_sites_count > 20 %} and {{ imp.not_sites_count - 20 }} more{% endif %}.{% endif %}
+    {% elif imp.skipped %}<span class="faint">Last run skipped: {{ imp.skipped }}.</span>
+    {% else %}<span class="faint">Nothing imported yet.</span>{% endif %}
+  </div>
   <div class="page-actions" style="margin-top:.8rem">
     <button class="btn" type="submit" formaction="{{ base }}/settings/integrations/insightappsec/test"
             title="Reads only.  Uses the key typed above, or the stored one when the box is empty.">Test the connection</button>
     <button class="btn" type="submit" formaction="{{ base }}/settings/integrations/insightappsec/refresh"
             title="Reads every app and scan config the stored key can see, and their start addresses">Refresh scan configs</button>
+    <button class="btn" type="submit" formaction="{{ base }}/settings/integrations/insightappsec/import"
+            title="Brings in Rapid7's finished scans now instead of at the next hourly run">Import results now</button>
   </div>
 </div>
 

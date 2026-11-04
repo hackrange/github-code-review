@@ -287,6 +287,10 @@ SECTIONS = [
             "template, the engine and the sign in.  This product only says "
             "which config to run.  Refresh scan configs reads the list again "
             "after somebody adds one in Rapid7.",
+            "Scans run in Rapid7 itself, old ones too, come in every hour as "
+            "scans of the sites they touched.  Import results now runs it "
+            "straight away.  Hosts with Rapid7 results that are not sites here "
+            "are listed on the card.",
             "The key needs to see the apps and scan configs, and to start "
             "scans.  The setup guide says which role does that.",
         ],

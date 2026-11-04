@@ -501,35 +501,106 @@ def _plain(value, limit: int) -> str:
     return re.sub(r"\s+", " ", text).strip()[:limit]
 
 
-def findings(region: str, key: str, scan_id: str) -> list:
+def new_cache() -> dict:
+    """Module names and fix text, kept across every scan of one import, since
+    the same few modules turn up in nearly every scan."""
+    return {"modules": {}, "docs": {}}
+
+
+def findings(region: str, key: str, scan_id: str, cache: dict = None,
+             client=None) -> list:
     """The vulnerabilities this scan found, as dynamic scan findings."""
     if not is_uuid(scan_id):
         raise IASError("That is not a scan id.")
-    with _client() as client:
+    cache = cache if cache is not None else new_cache()
+    modules, docs = cache["modules"], cache["docs"]
+    own = client is None
+    client = client or _client()
+    try:
         vulns = search(region, key, "VULNERABILITY",
                        f"vulnerability.scans.id='{scan_id}'", client=client)[:MAX_FINDINGS]
-        modules, docs = {}, {}
         for v in vulns:
             variance = ((v.get("variances") or [{}]) or [{}])[0] or {}
             module = str((variance.get("module") or {}).get("id") or "")
             attack = str((variance.get("attack") or {}).get("id") or "")
-            if is_uuid(module) and module not in modules and len(modules) < 300:
+            if is_uuid(module) and module not in modules and len(modules) < 1000:
                 try:
                     got, _h = call(region, key, "GET", f"/modules/{module}", client=client)
                     modules[module] = got or {}
-                except IASError:
+                except IASError as exc:
+                    if exc.retry_at:
+                        raise
                     modules[module] = {}
             pair = (module, attack)
             if (is_uuid(module) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", attack or "")
-                    and pair not in docs and len(docs) < 300):
+                    and pair not in docs and len(docs) < 1000):
                 try:
                     got, _h = call(region, key, "GET",
                                    f"/modules/{module}/attacks/{attack}/documentation",
                                    client=client)
                     docs[pair] = got or {}
-                except IASError:
+                except IASError as exc:
+                    if exc.retry_at:
+                        raise
                     docs[pair] = {}
+    finally:
+        if own:
+            client.close()
     return [to_finding(v, modules, docs) for v in vulns]
+
+
+# ------------------------------------------------------------------ history
+
+def import_path() -> Path:
+    """What the import has read so far: each finished Rapid7 scan and the hosts
+    it touched, so a site added later picks up its old scans too."""
+    return catalog_path().with_name("insightappsec-import.json")
+
+
+def load_import() -> dict:
+    try:
+        got = json.loads(import_path().read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError):
+        got = {}
+    got.setdefault("scans", {})
+    got.setdefault("last", {})
+    return got
+
+
+def save_import(state: dict) -> None:
+    path = import_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state), encoding="utf-8")
+    tmp.replace(path)
+
+
+def when(value):
+    """A Rapid7 time, which comes without a zone and is UTC.  None when absent."""
+    text = str(value or "").strip().replace("Z", "+00:00")
+    if not text:
+        return None
+    try:
+        got = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return got if got.tzinfo else got.replace(tzinfo=timezone.utc)
+
+
+def finished_scans(region: str, key: str, client=None) -> list:
+    """Every scan that reached COMPLETE, newest first.  GET /scans takes no
+    filter, so this reads them all and keeps the finished ones."""
+    rows = []
+    for s in paged(region, key, "GET", "/scans", client=client):
+        if str(s.get("status") or "") != "COMPLETE" or not is_uuid(s.get("id")):
+            continue
+        rows.append({"id": s["id"],
+                     "app_id": str((s.get("app") or {}).get("id") or ""),
+                     "config_id": str((s.get("scan_config") or {}).get("id") or ""),
+                     "submitted": str(s.get("submit_time") or ""),
+                     "completed": str(s.get("completion_time") or s.get("submit_time") or "")})
+    rows.sort(key=lambda r: r["completed"], reverse=True)
+    return rows
 
 
 def to_finding(v: dict, modules: dict = None, docs: dict = None) -> dict:

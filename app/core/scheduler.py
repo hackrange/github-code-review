@@ -16,6 +16,7 @@ import logging
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from datetime import timezone as _dt_timezone
+from datetime import datetime as _dt, timedelta as _td
 
 from app.core.audit import record
 from app.core.db import session_scope
@@ -284,6 +285,12 @@ def start() -> None:
     _scheduler.add_job(external.poll_remote, IntervalTrigger(minutes=3),
                        id="external-poll", replace_existing=True,
                        misfire_grace_time=120, coalesce=True, max_instances=1)
+    # Rapid7 InsightAppSec: finished scans there, old ones included, come in
+    # as scans of the sites they touched.  Hourly, and soon after a start.
+    _scheduler.add_job(external.import_ias, IntervalTrigger(hours=1),
+                       id="ias-import", replace_existing=True,
+                       next_run_time=_dt.now(_UTC) + _td(minutes=5),
+                       misfire_grace_time=1800, coalesce=True, max_instances=1)
     from app.core import external_schedule
 
     _scheduler.add_job(external_schedule.run_due, IntervalTrigger(minutes=1),
