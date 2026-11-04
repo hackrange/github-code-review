@@ -31,6 +31,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from app.config import VERSION
@@ -1114,7 +1115,9 @@ async def add_exclusion(request: Request,
                         expires_at=expires_at, active=True)
         db.add(row)
         db.flush()
-        changed = ingest.apply_exceptions(db)
+        # Off the event loop: it reads every open finding (see
+        # routes_api._reapply_exceptions).
+        changed = await run_in_threadpool(ingest.apply_exceptions, db)
         if changed:
             request_rewrite()
         record(db, "exclusion.added", actor=me.username,
@@ -1246,7 +1249,8 @@ async def revoke_by_fingerprint(request: Request,
         if not rows:
             raise HTTPException(status_code=404,
                                 detail="No exclusion on that fingerprint.")
-        out = _revoke_rows(db, me, caller, request, rows)
+        out = await run_in_threadpool(_revoke_rows, db, me, caller, request,
+                                      rows)
     return JSONResponse({"fingerprint": fingerprint, "count": len(out),
                          "revoked": out})
 

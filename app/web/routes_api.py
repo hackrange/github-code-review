@@ -12,6 +12,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from app.core import live, rbac
 from app.core.audit import record
@@ -1007,7 +1008,7 @@ async def delete_exclusions(request: Request, user: User = Depends(current_user)
             removed += 1
         db.flush()
         if removed:
-            _reapply_exceptions(db)
+            await run_in_threadpool(_reapply_exceptions, db)
 
     note = (f"{removed} exclusion(s) deleted. Anything they covered is back "
             "in both report files.")
@@ -2526,7 +2527,10 @@ async def add_exclusion(request: Request, user: User = Depends(current_user)):
 
         # Apply it now rather than waiting for the next scan, then rewrite the
         # files so anything it covers is gone from both of them straight away.
-        changed = ingest.apply_exceptions(db)
+        # On a worker thread: it reads every open finding, which took over
+        # half a minute on production, and on the event loop that froze the
+        # whole site until the load balancer gave up and answered 502.
+        changed = await run_in_threadpool(ingest.apply_exceptions, db)
         if changed:
             request_rewrite()
 
@@ -2602,7 +2606,7 @@ async def import_exclusions(request: Request,
             expires_at=expires_at, visible_ids=visible_ids)
 
         if result["added"]:
-            _reapply_exceptions(db)
+            await run_in_threadpool(_reapply_exceptions, db)
 
         record(db, "exclusion.imported", actor=user.username,
                target=getattr(upload, "filename", "")[:200],
@@ -2649,7 +2653,7 @@ async def purge_expired_exclusions(request: Request,
             db.delete(row)
         db.flush()
         if expired:
-            _reapply_exceptions(db)
+            await run_in_threadpool(_reapply_exceptions, db)
         count = len(expired)
 
     if not count:
@@ -2726,7 +2730,7 @@ async def save_exclusion(exclusion_id: int, request: Request,
         row.reviewed_date = utcnow()
         db.flush()
 
-        _reapply_exceptions(db)
+        await run_in_threadpool(_reapply_exceptions, db)
         record(db, "exclusion.changed", actor=user.username,
                target=(fingerprint if fingerprint
                        else f"{organization}/{repository}:{path}"),
@@ -2761,7 +2765,7 @@ async def delete_exclusion(exclusion_id: int, request: Request,
         db.delete(row)
         db.flush()
 
-        _reapply_exceptions(db)
+        await run_in_threadpool(_reapply_exceptions, db)
         record(db, "exclusion.deleted", actor=user.username, target=target,
                detail=reason[:200], source_ip=client_ip(request))
 
@@ -2792,8 +2796,9 @@ async def revoke_exclusion(exclusion_id: int, request: Request,
         row = next((r for r in visible(db, user) if r.id == exclusion_id), None)
         if row is None:
             raise HTTPException(status_code=404, detail="No such exclusion.")
-        done = revoke_exclusion_rows(db, [row], user.username,
-                                     source_ip=client_ip(request))
+        done = await run_in_threadpool(revoke_exclusion_rows, db, [row],
+                                       user.username,
+                                       source_ip=client_ip(request))
 
     note = ("Exclusion revoked. Anything it covered is back in both report "
             "files, unless an approved exception still holds it."
@@ -2809,6 +2814,11 @@ def _reapply_exceptions(db) -> None:
     Cheaper to redo than to reason about: a rule that changed might cover more,
     less, or something else entirely.  A finding held by an approved waiver
     keeps its flag regardless.
+
+    Slow: it reads every open finding.  An async handler must call it, and
+    anything that calls it, through run_in_threadpool.  On the event loop it
+    stops every other request, health checks included, and the load balancer
+    answers 502 until it is done.
     """
     from app.core import ingest
 
