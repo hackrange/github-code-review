@@ -144,7 +144,8 @@
     {% if ai.status == 'running' or ai.status == 'wanted' %}<div class="faint">{{ 'Waiting for the scan to finish.' if ai.status == 'wanted' else 'Asking the model.' }}</div>
     {% elif ai.status == 'failed' %}<div class="notice bad"><div>{{ (ai.summary or {}).error or 'The model gave no usable answer.' }}</div></div>
     {% else %}
-      <p>{{ ai.summary.summary }}</p>
+      {% if ai.summary.summary %}<p>{{ ai.summary.summary }}</p>
+      {% elif ai.summary.withheld %}<div class="notice info"><div>The summary is hidden.  It named {{ ai.summary.withheld }} code finding{{ '' if ai.summary.withheld == 1 else 's' }} since given an exception or marked a false positive.  Use AI triage again for a new one.</div></div>{% endif %}
       {% if ai.summary.priorities %}<ol class="small">{% for p in ai.summary.priorities %}<li>{{ p }}</li>{% endfor %}</ol>{% endif %}
       <div class="small faint">The model's verdicts are shown on each finding below.  They do not change any severity.
         <a href="{{ here }}?verdict=likely_real">Likely real</a> &middot;

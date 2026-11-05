@@ -392,6 +392,14 @@ Every call is in the AI cost page under `dast-triage` or `external-risk`.  The
 scan and the site also keep their own token counts and cost.  Path traversal
 and script payloads in engine evidence are left out of what is sent.
 
+Code findings with an exception, a not deployed scope, or a false positive
+grade (info) are never sent, counted or shown.  A saved triage or risk read
+was written from the findings as they were at the time, so it is checked
+each time it is shown.  When its summary names a code finding that has since
+been excepted or marked a false positive, the summary is hidden, on the page
+and in the PDF, until it is run again.  Priorities, next steps, matches and
+correlations that name one are dropped.  A fixed finding is not hidden.
+
 ## API
 
 Make a token with the `external` scope.  Only an administrator can, and the

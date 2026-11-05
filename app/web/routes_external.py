@@ -664,6 +664,8 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             review = json.loads(asset.ai_review or "{}") if asset.ai_review else {}
         except ValueError:
             review = {}
+        if isinstance(review, dict) and review:
+            review = external.scrub_review(db, review)
         active_scan = running.get(asset.id)
         busy = (asset.telemetry_status == "running" or asset.ai_status == "running"
                 or active_scan is not None

@@ -4,6 +4,16 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-11-05
+
+**DAST reports leave out code findings with an exception or a false
+positive.**  A scan's AI triage and a site's AI risk read keep what the model
+wrote, so a code finding given an exception afterward went on appearing in
+the PDF.  Now, when a saved summary names a code finding that has since been
+excepted or marked a false positive, the summary is hidden with a note to run
+it again, and any priority, next step, match or correlation naming one is
+dropped.  The code finding counts beside a site also leave out exceptions.
+
 ## 2026-11-04
 
 **Upgrades wait for running scans, and for a slow start.**  `install.sh

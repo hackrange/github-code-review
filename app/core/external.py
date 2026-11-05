@@ -946,6 +946,7 @@ def sast_counts(db, names, user=None) -> dict:
                 Finding.repository, Finding.severity, func.count(Finding.id))
             .filter(Finding.repository.in_(names))
             .filter(Finding.state == FindingState.OPEN)
+            .filter(Finding.excepted.is_(False))
             .filter(Finding.out_of_scope.is_(False))
             .group_by(Finding.repository, Finding.severity).all()):
         out.setdefault(repo, {})[getattr(severity, "value", str(severity))] = total
@@ -960,10 +961,97 @@ def sast_findings(db, names, limit: int = 80, user=None) -> list:
              Severity.LOW: 3}
     rows = (_findings(db, user).filter(Finding.repository.in_(list(names) or [""]))
             .filter(Finding.state == FindingState.OPEN)
+            .filter(Finding.excepted.is_(False))
             .filter(Finding.out_of_scope.is_(False))
             .filter(Finding.severity.in_(list(order))).limit(2000).all())
     rows.sort(key=lambda f: (order.get(f.severity, 9), -(f.risk_score or 0)))
     return rows[:limit]
+
+
+# How a code finding is named everywhere: GCR- and twelve hex digits.
+_VULN_ID = re.compile(r"\bGCR-[0-9A-F]{12}\b")
+
+
+def settled_sast(db, ids) -> set:
+    """The code findings among these ids a person took out of the counts.
+
+    An exception (an approved waiver or an exclusion rule sets excepted), a
+    not deployed scope, or a false positive, which is a regrade to info.  A
+    fixed finding is not here: it was real, and saying so is still true.
+    """
+    from app.core.models import Severity
+
+    ids = sorted({i for i in ids if i})
+    if not ids:
+        return set()
+    out = set()
+    for start in range(0, len(ids), 500):
+        for vuln_id, excepted, out_of_scope, state, severity in (
+                db.query(Finding.vuln_id, Finding.excepted, Finding.out_of_scope,
+                         Finding.state, Finding.severity)
+                .filter(Finding.vuln_id.in_(ids[start:start + 500])).all()):
+            if (excepted or out_of_scope or state == FindingState.WAIVED
+                    or severity == Severity.INFO):
+                out.add(vuln_id)
+    return out
+
+
+def _cites(text, settled) -> bool:
+    return any(i in settled for i in _VULN_ID.findall(str(text or "")))
+
+
+def _drop_sentences(text, settled) -> str:
+    parts = re.split(r"(?<=[.!?])\s+", str(text or ""))
+    return "  ".join(p for p in parts if not _cites(p, settled)).strip()
+
+
+def scrub_review(db, review: dict, findings: list = None,
+                 text: str = "summary", lists=("priorities", "next_steps")) -> dict:
+    """A saved model answer, less what it said about settled code findings.
+
+    The answer is kept as it was written, so a finding somebody later called
+    a false positive or gave an exception would go on being reported.  This
+    is applied every time one is shown.  The summary goes whole when it names
+    one, since the sentences around the id are about the same code.  Returns
+    a copy, with "withheld" set to how many settled findings it named.
+    """
+    review = dict(review or {})
+    findings = findings if findings is not None else []
+    seen = set()
+    for value in [review.get(text)] + [x for k in lists for x in review.get(k) or []]:
+        seen.update(_VULN_ID.findall(str(value or "")))
+    for c in review.get("correlations") or []:
+        if isinstance(c, dict):
+            seen.update(_VULN_ID.findall(str(c.get("sast") or "")))
+    for f in findings:
+        seen.update(_VULN_ID.findall(str(f.get("ai_sast") or "") + " " + str(f.get("ai_why") or "")))
+    settled = settled_sast(db, seen)
+    review["withheld"] = 0
+    if not settled:
+        return review
+    named = set()
+    for value in [review.get(text)] + [x for k in lists for x in review.get(k) or []]:
+        named.update(i for i in _VULN_ID.findall(str(value or "")) if i in settled)
+    if _cites(review.get(text), settled):
+        review[text] = ""
+    for k in lists:
+        if review.get(k):
+            review[k] = [x for x in review[k] if not _cites(x, settled)]
+    if review.get("correlations"):
+        kept = []
+        for c in review["correlations"]:
+            if isinstance(c, dict) and _cites(c.get("sast"), settled):
+                named.update(i for i in _VULN_ID.findall(str(c.get("sast"))) if i in settled)
+                continue
+            kept.append(c)
+        review["correlations"] = kept
+    for f in findings:
+        if _cites(f.get("ai_sast"), settled):
+            f["ai_sast"] = ""
+        if _cites(f.get("ai_why"), settled):
+            f["ai_why"] = _drop_sentences(f["ai_why"], settled)
+    review["withheld"] = len(named)
+    return review
 
 
 RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0, "none": 0}
@@ -1325,6 +1413,11 @@ def scan_dict(scan: ExternalDastScan, findings: bool = False) -> dict:
             out["ai"]["summary"] = json.loads(scan.ai_summary or "{}")
         except ValueError:
             out["ai"]["summary"] = {}
+        from sqlalchemy.orm import object_session
+
+        db = object_session(scan)
+        if db is not None and isinstance(out["ai"]["summary"], dict):
+            out["ai"]["summary"] = scrub_review(db, out["ai"]["summary"], out["findings"])
     return out
 
 
@@ -2671,7 +2764,9 @@ Answer with JSON only, in this shape:
 {"summary": "three to five sentences for an engineer, plain US English",
  "verdicts": [{"id": "finding id", "verdict": "likely_real", "why": "one sentence",
    "sast": "matching SAST finding id or empty"}],
- "priorities": ["the three things to fix first, one sentence each"]}"""
+ "priorities": ["the three things to fix first, one sentence each"]}
+
+Whenever you mention a SAST finding, give its id (GCR- and twelve characters)."""
 
 RISK_SYSTEM = """You assess the security risk of one public web site from two \
 sources: what a dynamic scan (DAST) found on the live site and what static \
@@ -2684,7 +2779,9 @@ Answer with JSON only:
  "summary": "four to six sentences in plain US English for a business owner",
  "correlations": [{"dast": "DAST finding title", "sast": "SAST finding id and rule", \
 "why": "one sentence"}],
- "next_steps": ["up to five actions, most important first"]}"""
+ "next_steps": ["up to five actions, most important first"]}
+
+Whenever you mention a SAST finding, give its id (GCR- and twelve characters)."""
 
 
 def _json_answer(text: str) -> dict:

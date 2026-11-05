@@ -173,7 +173,8 @@
         {% elif asset.ai_status == 'failed' %}<div class="notice bad"><div>{{ asset.ai_error }}</div></div>{% endif %}
         {% if review %}
           <div><span class="badge {{ review.rating }}">{{ review.rating }}</span> <span class="small faint">{{ asset.ai_at | dt('%Y-%m-%d %H:%M') }}{% if review.model %}, {{ review.model }}{% endif %}.  Written by a model from the findings below: check it against them.</span></div>
-          <p>{{ review.summary }}</p>
+          {% if review.summary %}<p>{{ review.summary }}</p>
+          {% elif review.withheld %}<div class="notice info"><div>The summary is hidden.  It named {{ review.withheld }} code finding{{ '' if review.withheld == 1 else 's' }} since given an exception or marked a false positive.  Read it again for a new one.</div></div>{% endif %}
           {% if review.correlations %}<div class="small"><strong>Seen in both the site and the code</strong>
             {% for c in review.correlations %}<div style="margin:.25rem 0">{{ c.dast }} &harr; <span class="mono">{{ c.sast }}</span><div class="faint">{{ c.why }}</div></div>{% endfor %}</div>{% endif %}
           {% if review.next_steps %}<div class="small" style="margin-top:.5rem"><strong>Next</strong><ol>{% for s in review.next_steps %}<li>{{ s }}</li>{% endfor %}</ol></div>{% endif %}
