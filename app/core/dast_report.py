@@ -147,6 +147,62 @@ def score(findings: list, triaged: bool, only: str = None) -> dict:
             "counted": sum(len(v) for v in by_cat.values())}
 
 
+def scan_grade(scan, decisions: dict):
+    """The report's overall grade for one finished scan, worked out the same
+    way the PDF works it out: decisions as they stand today, false positives
+    left out, and the enhanced review's verdicts when it ran.  -> {"score",
+    "grade"}, or None when the scan kept only counts, since a grade needs
+    each finding's category."""
+    from app.core import external, external_decisions
+
+    if scan is None or scan.status != "done" or scan.summary_only:
+        return None
+    raw = external.findings_of(scan)
+    if not raw and any(getattr(scan, s) or 0 for s in SEVERITIES):
+        return None
+    found = [f for f in external_decisions.apply(raw, decisions, scan_id=scan.id)
+             if (f.get("decision") or {}).get("kind") != "false_positive"]
+    triaged = (scan.ai_status or "") == "done" and any(f.get("ai_verdict") for f in found)
+    for f in found:
+        f["owasp"] = owasp_of(f)
+    graded = score(found, triaged)
+    return {"score": graded["score"], "grade": graded["grade"], "triaged": triaged}
+
+
+def latest_grades(db, asset_ids: list) -> dict:
+    """{asset id: grade dict plus scan id and date} for each site's newest
+    finished scan, the one the list shows as its last dynamic scan.  Reads
+    only those scans' findings, and every site's decisions in one query."""
+    from app.core.models import ExternalDastScan, ExternalFindingDecision
+
+    ids = [int(i) for i in asset_ids if i]
+    if not ids:
+        return {}
+    newest: dict = {}
+    for asset_id, scan_id in (db.query(ExternalDastScan.asset_id, ExternalDastScan.id)
+                              .filter(ExternalDastScan.asset_id.in_(ids),
+                                      ExternalDastScan.status == "done")
+                              .order_by(ExternalDastScan.asset_id,
+                                        ExternalDastScan.scanned_at.desc(),
+                                        ExternalDastScan.id.desc())):
+        newest.setdefault(asset_id, scan_id)
+    if not newest:
+        return {}
+    decisions: dict = {}
+    for d in db.query(ExternalFindingDecision).filter(
+            ExternalFindingDecision.asset_id.in_(list(newest))):
+        decisions.setdefault(d.asset_id, {}).setdefault(
+            d.finding_key, {})[int(d.only_scan_id or 0)] = d
+    out = {}
+    for scan in db.query(ExternalDastScan).filter(ExternalDastScan.id.in_(list(newest.values()))):
+        graded = scan_grade(scan, decisions.get(scan.asset_id, {}))
+        if graded:
+            graded.update(scan_id=scan.id, scanned_at=scan.scanned_at,
+                          report=available(scan))
+            out[scan.asset_id] = graded
+    return out
+
+
 def _q(text: str) -> str:
     return shlex.quote(str(text or ""))
 

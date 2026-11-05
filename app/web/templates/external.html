@@ -154,8 +154,10 @@
                   <button class="btn sm danger" type="submit">Stop</button></form>{% endif %}</div>
             {% endif %}
             {% if a.last_dast_at %}
-              {% if a.last_dast_severity in ('', 'none') %}<span class="badge ok">no findings</span>{% else %}<span class="badge {{ a.last_dast_severity }}">worst: {{ a.last_dast_severity }}</span>{% endif %}
-              {{ a.last_dast_at | dt('%Y-%m-%d') }}
+              <div class="nowrap">{% set g = r.dast_grade %}{% if g %}<a href="{{ base }}/external/{{ a.id }}/scans/{{ g.scan_id }}{{ '/report.pdf' if g.report else '' }}" class="grade {{ g.grade }}" style="text-decoration:none;margin-right:.3rem"
+                 title="DAST grade, score {{ g.score }} of 100, from the scan of {{ g.scanned_at | dt('%Y-%m-%d') }}{{ '' if g.triaged else ', every finding counted in full (no enhanced review)' }}">{{ g.grade }}</a>{% endif %}
+              {% if a.last_dast_severity in ('', 'none') %}<span class="badge ok">no findings</span>{% else %}<span class="badge {{ a.last_dast_severity }}">worst: {{ a.last_dast_severity }}</span>{% endif %}</div>
+              <div>{{ a.last_dast_at | dt('%Y-%m-%d') }}</div>
               <div class="faint">{{ a.last_dast_server }}</div>
               {% if a.last_dast_url %}<div><a rel="noopener noreferrer" {% if a.last_dast_url.startswith('http') %}target="_blank" href="{{ a.last_dast_url }}"{% else %}href="{{ base }}{{ a.last_dast_url }}"{% endif %}>result</a></div>{% endif %}
               {% if r.due == 'due' %}<span class="badge pending">overdue</span>{% endif %}

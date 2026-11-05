@@ -232,6 +232,13 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
             page_no = 1
         offset = (page_no - 1) * size
         rows = rows[offset:offset + size]
+        # The DAST grade of each shown site's newest scan, worked out now so
+        # a decision or a review made since the scan already counts.
+        from app.core import dast_report
+
+        grades = dast_report.latest_grades(db, [r["a"].id for r in rows])
+        for r in rows:
+            r["dast_grade"] = grades.get(r["a"].id)
         from urllib.parse import urlencode
 
         filters = [(k, v) for k, v in (("q", q), ("tag", tag), ("app", app), ("grade", grade),
