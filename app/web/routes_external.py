@@ -306,14 +306,25 @@ def export_csv(request: Request, user: User = Depends(current_user)):
         # One read of each site's newest counted scan, not one per column.
         scoped = external.scoping_by_asset(db)
         from app.core import dast_paths as _dast_paths
+        from app.core import webapps as _webapps
         for a in db.query(ExternalAsset).order_by(ExternalAsset.host):
             values = external.field_values(a)
             scope = (scoped.get(a.id) or {}).get("scope")
-            repos = []
+            repos, moved = [], []
             for l in mapper.links(a):
                 if l["linked"]:
                     repos += [f"{l['full_name']}@{b}" for b in l.get("branches") or []] \
                         or [l["full_name"]]
+                    days = _webapps.changed(l["repo"])["days"]
+                    if days is not None:
+                        moved.append(days)
+            # Typed on the site wins.  Otherwise the newest change on any
+            # linked repository's default branch, the same number the Web
+            # Applications tab shows on an application's line.
+            if a.change_frequency_days:
+                frequency = a.change_frequency_days
+            else:
+                frequency = min(moved) if moved else ""
             writer.writerow([_quote_formula(str(c)) for c in [
                 a.host, a.kind, a.parent_domain, a.application, "; ".join(a.tag_list()),
                 envs.get(a.environment, a.environment or ""),
@@ -321,7 +332,7 @@ def export_csv(request: Request, user: User = Depends(current_user)):
                 a.executive_owner or "", a.technical_owner or "",
                 "yes" if a.external_auth_needed else "no",
                 "yes" if a.whitelist_needed else "no",
-                a.change_frequency_days or "",
+                frequency,
                 "yes" if a.no_scan else "", a.no_scan_reason or "",
                 a.telemetry_at.strftime("%Y-%m-%d %H:%M") if a.telemetry_at else "",
                 a.last_dast_at.strftime("%Y-%m-%d") if a.last_dast_at else "",

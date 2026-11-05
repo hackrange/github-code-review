@@ -2344,6 +2344,71 @@ def export_web_apps(request: Request, user: User = Depends(current_user)):
                  f'attachment; filename="web-applications-{stamp}.csv"'})
 
 
+def _web_import_text(raw: bytes) -> str:
+    """An uploaded file as text, however the spreadsheet saved it."""
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1", "replace")
+
+
+def _web_import_plan(user, text: str):
+    """The plan for a web applications file, worked out off the event loop."""
+    from app.core import tagging
+
+    with session_scope() as db:
+        plan = tagging.web_apps_plan(db, text,
+                                     base=rbac.visible_repositories(db, user))
+        return plan, tagging.web_apps_digest(plan)
+
+
+@router.get("/repositories/web-apps/import")
+def web_apps_import_page(request: Request, user: User = Depends(current_user)):
+    """Where the web applications CSV goes back in."""
+    rbac.require(user, "repo.write")
+    with session_scope() as db:
+        context = _shared(db, user)
+        context.update(active_page="repositories")
+        return page(request, "web_apps_import.html", **context)
+
+
+@router.post("/repositories/web-apps/import")
+async def web_apps_import_check(request: Request,
+                                user: User = Depends(current_user)):
+    """What a web applications CSV would add, change and take off.
+
+    Nothing is written here.  The confirm page carries the file itself and a
+    fingerprint of what it showed, so apply can refuse if anything moved in
+    between.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    from app.core import tagging
+    from app.web.security import check_csrf
+
+    form = await request.form()
+    await check_csrf(request)
+    rbac.require(user, "repo.write")
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(status_code=400, detail="Choose a file first.")
+    raw = await upload.read()
+    if len(raw) > tagging.MAX_WEB_IMPORT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"That file is larger than "
+                   f"{tagging.MAX_WEB_IMPORT_BYTES // 1024}KB.")
+    text = _web_import_text(raw)
+    plan, digest = await run_in_threadpool(_web_import_plan, user, text)
+    with session_scope() as db:
+        context = _shared(db, user)
+        context.update(active_page="repositories", plan=plan, digest=digest,
+                       file_text=text,
+                       changes=(len(plan["adds"]) + len(plan["updates"])
+                                + len(plan["removes"])))
+        return page(request, "web_apps_import_confirm.html", **context)
+
+
 @router.get("/repositories/{repo_id:int}")
 def repository_about(repo_id: int, request: Request, msg: str = "",
                      kind: str = "", user: User = Depends(current_user)):

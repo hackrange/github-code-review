@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Import web applications &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Import web applications</h1>
+  <div class="faint small">Which repositories are part of a web application, and where it answers</div></div>
+  <a class="btn" href="{{ base }}/repositories/web-apps.csv">Export the current list</a></div>
+
+<div class="card">
+  <div class="card-body">
+    <p>The same file the export writes.  Edit it and bring it back.</p>
+    <ul class="small">
+      <li><strong>The file is the whole list.</strong>  A repository in it is
+        marked as part of a web application.  One marked now that is not in
+        the file is taken off, and its web addresses are cleared.</li>
+      <li><strong>repository</strong> and <strong>web_urls</strong> are needed
+        on every row.  Separate addresses with a pipe ( | ).</li>
+      <li><strong>application_name</strong>, <strong>application_owner</strong>,
+        <strong>technical_owner</strong> and <strong>sensitivity</strong> are
+        read when the column is there.  A cell that matches what applies now,
+        even when it comes from the connection, changes nothing.  A cell that
+        differs is set on the repository itself.</li>
+      <li>The other columns are what a scan found, and are ignored.</li>
+      <li>Only repositories you can see are added, changed or taken off.</li>
+    </ul>
+    <p class="small faint">Nothing changes until you have seen the list on the
+      next page.  A row with a problem is left out, and its repository is not
+      taken off.</p>
+
+    <form method="post" action="{{ base }}/repositories/web-apps/import"
+          enctype="multipart/form-data"
+          style="display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap;margin-top:1rem">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field" style="margin:0">
+        <label for="webapps-file">CSV file</label>
+        <input type="file" id="webapps-file" name="file" accept=".csv,text/csv" required>
+      </div>
+      <button class="btn primary" type="submit">Check what this changes</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

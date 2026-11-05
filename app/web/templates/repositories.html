@@ -18,6 +18,10 @@
   {% endif %}
   <a class="btn" href="{{ base }}/repositories/web-apps.csv"
      title="Every repository marked as part of a web application, with its addresses and owners">Export web applications</a>
+  {% if can_tag %}
+  <a class="btn" href="{{ base }}/repositories/web-apps/import"
+     title="Bring the web applications file back.  Rows update what is there, and web applications not in the file are taken off">Import web applications</a>
+  {% endif %}
   {% if certified and not certified_filter %}
   <a class="btn" href="#certifications">Certified branches ({{ certified | length }})</a>
   {% endif %}</div></div>

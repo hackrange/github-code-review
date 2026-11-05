@@ -613,3 +613,224 @@ def from_csv(session, text: str, actor: str = "") -> dict:
     session.flush()
     log.info("tagging import: %s", counts)
     return {**counts, "problems": problems}
+
+
+# The columns the web applications import reads.  The rest of what the export
+# writes (visibility, last change, last scan and so on) is what a scan found,
+# so it is ignored on the way back in.
+WEB_IMPORT_FIELDS = ("application_name", "application_owner",
+                     "technical_owner", "sensitivity")
+
+# Small enough to ride along in the confirm page's form, which is how the
+# apply step gets exactly the file that was shown.
+MAX_WEB_IMPORT_BYTES = 512 * 1024
+
+
+def _web_cell(field: str, value: str) -> str:
+    """A cell the way the repository stores it, so a match reads as a match."""
+    if field in OWNERS:
+        return _owners(value)
+    if field == "sensitivity":
+        return ", ".join(split_labels(value))
+    return value
+
+
+def web_apps_plan(session, text: str, base=None) -> dict:
+    """What a web applications CSV would change.  Nothing is written.
+
+    The file is the whole list.  A repository in it is marked as part of a
+    web application with the addresses it gives, and one marked now that is
+    not in it is taken off, addresses and all.  Only repositories `base`
+    lets this person see are touched either way.
+
+    The export writes what applies, which may be the connection's answer.
+    So a cell that matches what applies is left alone, and only one that
+    differs becomes the repository's own value.  Otherwise every export and
+    import would copy the connection's owner onto each repository, and
+    nobody could tell later which ones had been meant.
+
+    -> {"rows", "adds", "updates", "removes", "same", "unknown",
+        "problems", "refused"}.  Each change is {"id", "repository",
+    "set": {field: (old, new)}}.
+    """
+    import csv
+    import io
+
+    out = {"rows": 0, "adds": [], "updates": [], "removes": [], "same": 0,
+           "unknown": [], "problems": [], "refused": ""}
+
+    try:
+        reader = csv.DictReader(io.StringIO(text))
+        header = [(name or "").strip().lower()
+                  for name in (reader.fieldnames or [])]
+    except (csv.Error, ValueError) as exc:
+        out["refused"] = f"could not read the file: {exc}"
+        return out
+    if "repository" not in header or "web_urls" not in header:
+        out["refused"] = ("that file needs repository and web_urls columns; "
+                          "export the web applications first to see the shape")
+        return out
+
+    query = base if base is not None else session.query(Repository)
+    visible = {row.full_name: row for row in query.all()}
+    applies = effective_many(session, list(visible.values()))
+    offered = labels(session)
+    for repo in visible.values():
+        offered += [x for x in split_labels(repo.sensitivity or "")
+                    if x not in offered]
+    by_case = {label.casefold(): label for label in offered}
+
+    listed = set()
+    try:
+        for raw in reader:
+            out["rows"] += 1
+            if out["rows"] > MAX_IMPORT_ROWS:
+                out["refused"] = f"more than {MAX_IMPORT_ROWS} rows"
+                return out
+            row = {(k or "").strip().lower():
+                   _unquote((str(v) if v is not None else "").strip())
+                   for k, v in raw.items() if k}
+            name = row.get("repository", "")
+            if not name:
+                continue
+            repo = visible.get(name)
+            if repo is None:
+                if name not in out["unknown"]:
+                    out["unknown"].append(name)
+                continue
+            if name in listed:
+                out["problems"].append(f"{name} is in the file twice; the "
+                                       "second row was left out")
+                continue
+            # Listed, even when the row turns out bad below.  A typo in one
+            # row must not read as "take this application off".
+            listed.add(name)
+
+            why, change = _web_row(repo, row, header,
+                                   applies.get(repo.id, {}), by_case, offered)
+            if why:
+                out["problems"].append(f"{name}: {why}")
+                continue
+            if not repo.web_app:
+                out["adds"].append(change)
+            elif change["set"]:
+                out["updates"].append(change)
+            else:
+                out["same"] += 1
+    except csv.Error as exc:
+        out["refused"] = f"could not read the file: {exc}"
+        return out
+
+    for name, repo in sorted(visible.items()):
+        if repo.web_app and name not in listed:
+            out["removes"].append({
+                "id": repo.id, "repository": name,
+                "set": {"web_app": (True, False),
+                        "web_app_urls": (repo.web_app_urls or "", "")}})
+
+    # An empty or wrong file would otherwise take every web application off.
+    if out["removes"] and not listed:
+        out["refused"] = ("the file names no web application you can see, so "
+                          "importing it would take every one off; nothing "
+                          "was changed")
+    return out
+
+
+def _web_row(repo, row, header, said, by_case, offered) -> tuple:
+    """One row of the web applications CSV, checked.  -> (why, change)."""
+    change = {"id": repo.id, "repository": repo.full_name, "set": {}}
+
+    given = row.get("web_urls", "")
+    urls, why = web_urls(given.replace("|", ","))
+    if why:
+        return f"web urls: {why}", None
+    if not urls:
+        return "a web application needs its web urls", None
+    new = ", ".join(urls)
+    if len(new) > LIMITS["web_app_urls"]:
+        return f"web urls is longer than {LIMITS['web_app_urls']}", None
+    if not repo.web_app:
+        change["set"]["web_app"] = (False, True)
+    if web_urls(repo.web_app_urls)[0] != urls:
+        change["set"]["web_app_urls"] = (repo.web_app_urls or "", new)
+
+    after = {}
+    for field in WEB_IMPORT_FIELDS:
+        if field not in header:
+            continue
+        given = row.get(field, "")
+        if given == "-":
+            given = ""
+        if field in OWNERS:
+            bad = bad_address(given.replace("|", ","))
+            if bad:
+                return (f"{field.replace('_', ' ')} has to be an email "
+                        f"address, and {bad!r} is not one"), None
+        elif field == "sensitivity":
+            held = []
+            for one in split_labels(given):
+                label = by_case.get(one.casefold())
+                if label is None:
+                    return (f"{one!r} is not one of the labels on the "
+                            f"Settings page ({', '.join(offered)})"), None
+                if label not in held:
+                    held.append(label)
+            given = ", ".join(held)
+        given = _web_cell(field, given)
+        if len(given) > LIMITS[field]:
+            return (f"{field.replace('_', ' ')} is longer than "
+                    f"{LIMITS[field]}"), None
+        applied = _web_cell(field, (said.get(field) or {}).get("value", ""))
+        own = (getattr(repo, field, "") or "").strip()
+        if given == applied:
+            continue
+        # An empty cell over an inherited answer, with nothing set here, is
+        # already as empty as this repository can make it.
+        if not given and not own:
+            continue
+        change["set"][field] = (own, given)
+        after[field] = given
+
+    # The same rule the repository's form holds to: a notify tick needs an
+    # owner to send to, its own or the connection's.
+    for flag, field in (("notify_application_owner", "application_owner"),
+                        ("notify_technical_owner", "technical_owner")):
+        if field not in after or after[field]:
+            continue
+        if (getattr(repo, flag, False)
+                and (said.get(field) or {}).get("from") != "connection"):
+            return (f"{flag.replace('_', ' ')} is on, but the file leaves no "
+                    f"{field.replace('_', ' ')} to send it to"), None
+    return "", change
+
+
+def web_apps_digest(plan: dict) -> str:
+    """A short fingerprint of a plan, so apply can tell it still holds."""
+    import hashlib
+    import json
+
+    body = json.dumps({side: [[c["id"], sorted(c["set"].items())]
+                              for c in plan[side]]
+                       for side in ("adds", "updates", "removes")},
+                      sort_keys=True, default=list)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def web_apps_apply(session, plan: dict, actor: str = "") -> dict:
+    """Write what web_apps_plan worked out.  -> counts by side."""
+    ids = {c["id"]: c for side in ("adds", "updates", "removes")
+           for c in plan[side]}
+    rows = {row.id: row for row in session.query(Repository)
+            .filter(Repository.id.in_(list(ids))).all()} if ids else {}
+    for repo_id, change in ids.items():
+        repo = rows.get(repo_id)
+        if repo is None:
+            continue
+        for field, (_old, new) in change["set"].items():
+            setattr(repo, field, new)
+        repo.tagged_by = actor or repo.tagged_by or ""
+        repo.tagged_at = utcnow()
+    session.flush()
+    counts = {side: len(plan[side]) for side in ("adds", "updates", "removes")}
+    log.info("web applications import: %s", counts)
+    return counts

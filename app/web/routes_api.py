@@ -4170,6 +4170,55 @@ async def import_tagging(request: Request, user: User = Depends(current_user)):
                     + "&msg=" + quote(said[:290]))
 
 
+@router.post("/repositories/web-apps/import/apply")
+async def apply_web_apps_import(request: Request,
+                                user: User = Depends(current_user)):
+    """The web applications CSV, as the confirm page showed it.
+
+    The file is planned again from scratch.  If that plan is not the one the
+    page showed, because somebody changed a repository in the meantime,
+    nothing is written and the person is sent back to look again.
+    """
+    await check_csrf(request)
+    rbac.require(user, "repo.write")
+
+    from app.core import tagging
+
+    form = await request.form()
+    text = str(form.get("file_text") or "")
+    shown = str(form.get("digest") or "")
+    if not text or len(text.encode("utf-8")) > 2 * tagging.MAX_WEB_IMPORT_BYTES:
+        raise HTTPException(status_code=400, detail="Choose a file first.")
+
+    def work():
+        with session_scope() as db:
+            plan = tagging.web_apps_plan(
+                db, text, base=rbac.visible_repositories(db, user))
+            if plan["refused"]:
+                return None, plan["refused"]
+            if tagging.web_apps_digest(plan) != shown:
+                return None, ("Something changed since that page was shown.  "
+                              "Import the file again to see what it does now.")
+            counts = tagging.web_apps_apply(db, plan, actor=user.username)
+            names = lambda side: ", ".join(c["repository"]
+                                           for c in plan[side])
+            record(db, "webapps.imported", actor=user.username,
+                   detail=(f"{counts['adds']} added, {counts['updates']} "
+                           f"updated, {counts['removes']} removed.  "
+                           f"Added: {names('adds') or '-'}.  "
+                           f"Removed: {names('removes') or '-'}")[:4000],
+                   outcome="warn" if plan["problems"] else "ok",
+                   source_ip=client_ip(request))
+            return counts, ""
+
+    counts, why = await run_in_threadpool(work)
+    if counts is None:
+        return redirect(_back_with("/repositories", why, "warn"))
+    said = (f"Web applications imported: {counts['adds']} added, "
+            f"{counts['updates']} updated, {counts['removes']} removed.")
+    return redirect(_back_with("/repositories", said, "ok"))
+
+
 @router.post("/blast-radius/repo/{repo_id}/describe")
 async def describe_repository(repo_id: int, request: Request,
                               user: User = Depends(current_user)):

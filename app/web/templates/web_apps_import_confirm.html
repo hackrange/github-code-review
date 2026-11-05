@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Confirm web applications import &middot; Git Code Review{% endblock %}
+{% block content %}
+{% set names = {"web_app": "Web application", "web_app_urls": "Web addresses",
+                "application_name": "Application", "application_owner": "Business owner",
+                "technical_owner": "Technical owner", "sensitivity": "Holds"} %}
+<div class="page-head"><div><h1>Import web applications</h1>
+  <div class="faint small">{{ plan.rows }} row{{ '' if plan.rows == 1 else 's' }} read,
+    {{ plan.adds | length }} to add, {{ plan.updates | length }} to update,
+    {{ plan.removes | length }} to take off, {{ plan.same }} already as asked</div></div>
+  <a class="btn" href="{{ base }}/repositories/web-apps/import">Choose another file</a></div>
+
+{% if plan.refused %}
+<div class="notice warn"><div><p><strong>This file was not used:</strong>
+  {{ plan.refused }}.</p></div></div>
+{% endif %}
+
+{% if plan.problems or plan.unknown %}
+<div class="notice warn"><div>
+  {% if plan.problems %}<p><strong>{{ plan.problems | length }} row{{ '' if plan.problems | length == 1 else 's' }}
+    could not be used</strong> and will be left out.  Those repositories stay as they are:</p>
+  <ul class="small">{% for p in plan.problems[:50] %}<li>{{ p }}</li>{% endfor %}
+    {% if plan.problems | length > 50 %}<li>and {{ plan.problems | length - 50 }} more</li>{% endif %}</ul>{% endif %}
+  {% if plan.unknown %}<p><strong>{{ plan.unknown | length }} repositor{{ 'y' if plan.unknown | length == 1 else 'ies' }}
+    not found</strong>, or not one you can see, and will be left out:</p>
+  <p class="mono small">{{ plan.unknown[:50] | join(', ') }}{% if plan.unknown | length > 50 %}
+    and {{ plan.unknown | length - 50 }} more{% endif %}</p>{% endif %}
+</div></div>
+{% endif %}
+
+{% if plan.refused %}
+{% elif not changes %}
+<div class="card"><div class="empty">Nothing to change.  Every web application
+  in the file is already set that way.</div></div>
+{% else %}
+{% for side, title in (("removes", "Taken off"), ("adds", "Added"), ("updates", "Updated")) %}
+{% if plan[side] %}
+<div class="card">
+  <div class="card-head">{{ title }} ({{ plan[side] | length }})</div>
+  {% if side == "removes" %}<div class="card-body small">Not in the file, so no longer
+    part of a web application.  Their web addresses are cleared.</div>{% endif %}
+  <div class="table-scroll">
+    <table class="small">
+      <thead><tr><th>Repository</th><th>What</th><th>Now</th><th>After</th></tr></thead>
+      <tbody>
+      {% for change in plan[side] %}
+        {% for field, pair in change.set.items() %}
+        <tr>
+          {% if loop.first %}<td class="mono" rowspan="{{ change.set | length }}">{{ change.repository }}</td>{% endif %}
+          <td>{{ names.get(field, field) }}</td>
+          {% for value in pair %}
+          <td{% if field == "web_app_urls" %} class="mono"{% endif %}>
+            {%- if value is sameas true %}yes{% elif value is sameas false %}no
+            {%- elif value %}{{ value }}{% else %}<span class="faint">(none)</span>{% endif %}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+
+<div class="card">
+  <div class="card-body">
+    <form method="post" action="{{ base }}/repositories/web-apps/import/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="digest" value="{{ digest }}">
+      <textarea name="file_text" hidden>{{ file_text }}</textarea>
+      {% if plan.removes %}
+      <label class="check">
+        <input type="checkbox" required>
+        I know {{ plan.removes | length }} repositor{{ 'y' if plan.removes | length == 1 else 'ies' }}
+        will be taken off the web applications list.
+      </label>
+      {% endif %}
+      <div style="margin-top:.75rem">
+        <a class="btn" href="{{ base }}/repositories">Cancel</a>
+        <button class="btn primary" type="submit">Import {{ changes }} change{{ '' if changes == 1 else 's' }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
