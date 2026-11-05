@@ -1042,16 +1042,29 @@ async def finding_decision(asset_id: int, scan_id: int, key: str, action: str,
     from app.core import external_decisions
 
     form = await request.form()
+    here = f"/external/{asset_id}/scans/{scan_id}"
+    if key == "bulk" and action == "decide":
+        # Many findings and a recount: off the event loop, or every page waits.
+        from starlette.concurrency import run_in_threadpool
+
+        return await run_in_threadpool(_decide_bulk, asset_id, scan_id, form, request, user, here)
     if key == "form":
         # The dialog is shared by every finding, so it sends the key itself.
         key = str(form.get("key") or "")
-    if not KEY_RE.fullmatch(key) or action not in ("decide", "undo"):
+    if not KEY_RE.fullmatch(key) or action not in ("decide", "undo", "restore"):
         raise HTTPException(status_code=404, detail=NOT_FOUND)
-    here = f"/external/{asset_id}/scans/{scan_id}"
     with session_scope() as db:
         _guard(db, user)
         asset = _asset(db, asset_id)
         scan = _scan(db, asset_id, scan_id)
+        if action == "restore":
+            back = external.restore_removed(db, scan, key, user.username)
+            if not back:
+                return redirect(_back(here, "That finding was not taken out.", "error"))
+            record(db, "external.finding_restored", actor=user.username, target=asset.host,
+                   detail=f"put back: {back.get('title') or key[:12]}"[:300],
+                   source_ip=client_ip(request))
+            return redirect(_back(here, "Put back.  It counts as found again."))
         if action == "undo":
             if not external_decisions.undo(db, asset, key, scan.id):
                 return redirect(_back(here, "There was no decision on it.", "error"))
@@ -1074,6 +1087,42 @@ async def finding_decision(asset_id: int, scan_id: int, key: str, action: str,
         where = (f"on {asset.host} in every scan, new ones too" if not row.only_scan_id
                  else "in this scan only")
     return redirect(_back(here, f"Recorded: {word}, {where}."))
+
+
+def _decide_bulk(asset_id, scan_id, form, request, user, here):
+    """One decision on every ticked finding."""
+    from app.core import external_decisions
+
+    keys = [k for k in (str(x) for x in form.getlist("keys")) if KEY_RE.fullmatch(k)]
+    if not keys:
+        return redirect(_back(here, "Tick the findings first.", "error"))
+    if len(keys) > 2000:
+        return redirect(_back(here, "At most 2,000 findings at once.", "error"))
+    with session_scope() as db:
+        _guard(db, user)
+        asset = _asset(db, asset_id)
+        scan = _scan(db, asset_id, scan_id)
+        d = _decision_from(form)
+        if form.get("with_persist"):
+            d["persist"] = _checked(form, "persist")
+        if d["kind"] not in external_decisions.KINDS or len(d["reason"].strip()) < 10:
+            return redirect(_back(here, "Pick a decision and say why, in at least 10 characters.",
+                                  "error"))
+        done, skipped = external_decisions.decide_many(
+            db, asset, scan, keys, d["kind"], d["reason"], user.username, d["severity"],
+            d["expires"], persist=d["persist"])
+        if not done:
+            db.rollback()
+            why = skipped[0][1] if skipped else "Nothing was recorded."
+            return redirect(_back(here, why, "error"))
+        word = external_decisions.KINDS[d["kind"]].lower()
+        record(db, "external.finding_decided", actor=user.username, target=asset.host,
+               detail=f"{d['kind']}{' ' + d['severity'] if d['kind'] == 'severity' else ''} "
+                      f"on {len(done)} findings"[:300], source_ip=client_ip(request))
+    note = f"Recorded: {word} on {len(done)} finding{'' if len(done) == 1 else 's'}."
+    if skipped:
+        note += f"  {len(skipped)} skipped: {skipped[0][1]}"
+    return redirect(_back(here, note))
 
 
 @router.get("/external/{asset_id}/scans/{scan_id}/report.pdf")
@@ -1122,14 +1171,20 @@ def scan_page(asset_id: int, scan_id: int, request: Request, sev: str = "",
                                                     external_decisions.for_asset(db, asset.id),
                                                     scan_id=scan.id)
         findings = view["findings"]
+        removed = external.removed_of(scan)
+        if isinstance(view["ai"].get("summary"), dict):
+            view["ai"]["summary"] = external.scrub_dast_review(view["ai"]["summary"], findings,
+                                                               removed)
         decided = sum(1 for f in findings if f.get("decision"))
         if sev:
             findings = [f for f in findings if f.get("severity") == sev]
-        if verdict and verdict != "decided":
+        if verdict and verdict not in ("decided", "removed"):
             findings = [f for f in findings if f.get("ai_verdict", "") == verdict]
         context = _shared(db, user)
         if verdict == "decided":
             findings = [f for f in findings if f.get("decision")]
+        if verdict == "removed":
+            findings = []
         from app.core import dast_paths as _dast_paths
 
         scope = (_dast_paths.scoping(_dast_paths.load(scan.paths).get("paths") or [])
@@ -1138,6 +1193,8 @@ def scan_page(asset_id: int, scan_id: int, request: Request, sev: str = "",
                        scope=scope, blocked_text=_dast_paths.blocked_text(scope or {}),
                        code=external.code_behind(db, user, scan, asset),
                        findings=findings, sev=sev, verdict=verdict, decided=decided,
+                       removed=removed if verdict == "removed" else [],
+                       removed_count=len(removed),
                        decision_kinds=external_decisions.KINDS,
                        severities=external_decisions.SEVERITIES,
                        today=datetime.now(timezone.utc).strftime("%Y-%m-%d"),

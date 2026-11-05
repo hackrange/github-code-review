@@ -1005,6 +1005,59 @@ def _drop_sentences(text, settled) -> str:
     return "  ".join(p for p in parts if not _cites(p, settled)).strip()
 
 
+def _dast_marks(f: dict) -> set:
+    """What a model's sentence about this DAST finding would contain: its id,
+    and the file or page it is about."""
+    from urllib.parse import unquote, urlparse
+
+    marks = {str(m).lower() for m in (f.get("id"), f.get("key")) if m}
+    path = unquote(urlparse(str(f.get("url") or "")).path or "").rstrip("/")
+    name = path.rsplit("/", 1)[-1]
+    if len(name) >= 5:
+        marks.add(name.lower())
+    return marks
+
+
+def scrub_dast_review(review: dict, findings: list, removed: list = None) -> dict:
+    """The model's summary and priorities, less every sentence about a DAST
+    finding that is no longer reported: one a person called a false positive
+    or gave an exception, or one the model itself took out.
+
+    The answer was written once, before those decisions, and is shown on every
+    page and report after them.  A sentence goes when it names a settled
+    finding by id, or by a file or page that no reported finding shares.
+    "withheld_dast" says how many sentences went.
+    """
+    review = dict(review or {})
+    settled, live = set(), set()
+    for f in findings or []:
+        out = (f.get("decision") or {}).get("kind") in ("false_positive", "exception")
+        (settled if out else live).update(_dast_marks(f))
+    for f in removed or []:
+        settled.update(_dast_marks(f))
+    settled -= live
+    if not settled:
+        review["withheld_dast"] = 0
+        return review
+
+    def names(text) -> bool:
+        low = str(text or "").lower()
+        return any(m in low for m in settled)
+
+    gone = 0
+    parts = re.split(r"(?<=[.!?])\s+", str(review.get("summary") or ""))
+    keep = [p for p in parts if not names(p)]
+    gone += len(parts) - len(keep)
+    review["summary"] = "  ".join(keep).strip()
+    for k in ("priorities", "next_steps"):
+        if review.get(k):
+            left = [x for x in review[k] if not names(x)]
+            gone += len(review[k]) - len(left)
+            review[k] = left
+    review["withheld_dast"] = gone
+    return review
+
+
 def scrub_review(db, review: dict, findings: list = None,
                  text: str = "summary", lists=("priorities", "next_steps")) -> dict:
     """A saved model answer, less what it said about settled code findings.
@@ -1869,9 +1922,9 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
         engines.append({"tool": "verify", "name": "Soft 404 check", "status": "ok",
                         "seconds": 0,
                         "detail": f"left out {dropped} finding{'s' if dropped != 1 else ''} "
-                                  "for paths that answer with the same page as one that "
-                                  "cannot exist"})
-    findings = merge(findings)
+                                  "for paths that answer not found, or with the same "
+                                  "page as one that cannot exist"})
+    findings = merge(roll_up(findings, url))
     stopped = scan_id in _stopping
     if url:
         try:
@@ -1891,7 +1944,11 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
 # Engines that report a path because it answered, which a site that serves
 # its home page for every address answers every time.
 PATH_ENGINES = {"nikto", "nuclei", "ffuf"}
-MAX_VERIFY = 80
+MAX_VERIFY = 400
+SOFT_404_BODY = 65536
+NOT_THERE = (404, 410)
+REFLECTED = re.compile(r"xss|cross.site.script|reflect|crlf|header injection|response split"
+                       r"|CWE-79\b|CWE-113\b", re.I)
 
 
 def drop_soft_404(findings: list, base_url: str, allow_private: bool = False) -> tuple:
@@ -1899,28 +1956,47 @@ def drop_soft_404(findings: list, base_url: str, allow_private: bool = False) ->
 
     One request to an address that cannot exist gives the site's answer for
     nothing.  A finding whose address answers with the same body found
-    nothing either.  -> (kept, how many were left out)
+    nothing either.  Two such addresses are asked: a file under a folder,
+    and a name that starts with a dot.  Some sites (Adobe Experience
+    Manager among them) answer a missing page with a real 404 but serve the
+    home page for "/.anything", so a reported "/.bash_history" is only the
+    home page.  -> (kept, how many were left out)
     """
-    import hashlib
     import secrets as _s
-    from urllib.parse import urljoin, urlparse
+    from urllib.parse import unquote, urljoin, urlparse
 
     from app.core import external_probe
 
     if not base_url:
         return findings, 0
-    control = external_probe.fetch(urljoin(base_url, f"/gcr-{_s.token_hex(6)}/{_s.token_hex(4)}.html"),
-                                   allow_private=allow_private, body_limit=65536)
-    if control["status"] != 200 or not control["body"]:
-        return findings, 0      # a real 404 page: the engines already saw it
 
-    def norm(body: str) -> str:
-        # Pages that echo the address back differ only by the address.
-        return hashlib.sha256(re.sub(r"\s+", " ", re.sub(r"gcr-[0-9a-f]+", "", body or ""))
-                              .encode()).hexdigest()
+    def norm(body: str, *echoed: str) -> str:
+        # Pages that echo the address back differ only by the address, and
+        # Cloudflare re-encodes protected email addresses on every request.
+        body = re.sub(r"gcr-[0-9a-f]+", "", body or "")
+        for word in echoed:
+            if len(word) >= 3:
+                body = body.replace(word, "")
+        body = re.sub(r"[0-9a-fA-F]{16,}", "", body)
+        return re.sub(r"\s+", " ", body)
 
-    fingerprint = norm(control["body"])
-    size = len(control["body"])
+    def same(a: str, a_cut: bool, b: str, b_cut: bool) -> bool:
+        # A body cut at the limit ends wherever the limit fell, which moves
+        # with the length of the echoed address, so only what both hold is
+        # compared, and only when that is most of a page.
+        if a_cut or b_cut:
+            n = min(len(a), len(b))
+            return n >= SOFT_404_BODY // 2 and a[:n] == b[:n]
+        return a == b
+
+    controls = []
+    for probe in (f"/gcr-{_s.token_hex(6)}/{_s.token_hex(4)}.html", f"/.gcr-{_s.token_hex(6)}"):
+        got = external_probe.fetch(urljoin(base_url, probe), allow_private=allow_private,
+                                   body_limit=SOFT_404_BODY)
+        if got["status"] == 200 and got["body"]:
+            controls.append((norm(got["body"]), len(got["body"]),
+                             len(got["body"]) >= SOFT_404_BODY))
+
     seen, kept, dropped, checked = {}, [], 0, 0
     for f in findings:
         url = f.get("url") or ""
@@ -1931,16 +2007,126 @@ def drop_soft_404(findings: list, base_url: str, allow_private: bool = False) ->
         if url not in seen:
             checked += 1
             got = external_probe.fetch(url, allow_private=allow_private, follow=False,
-                                       body_limit=65536)
-            seen[url] = (got["status"] == 200 and
-                         (norm(got["body"]) == fingerprint
-                          or abs(len(got["body"]) - size) < 16 and
-                          "html" in got["headers"].get("content-type", "")))
-        if seen[url]:
-            dropped += 1
-        else:
-            kept.append(f)
+                                       body_limit=SOFT_404_BODY)
+            name = unquote(path.rstrip("/").rsplit("/", 1)[-1])
+            # The bare name, as the control's own name is taken out, so
+            # whatever was around it (a leading dot) stays on both sides.
+            echoed = (name.lstrip("."),)
+            html = "html" in got["headers"].get("content-type", "")
+            body, cut = got["body"], len(got["body"]) >= SOFT_404_BODY
+            seen[url] = (got["status"], got["status"] == 200 and any(
+                same(norm(body, *echoed), cut, mark, mark_cut)
+                # Bodies cut at the limit all have its length, so only a
+                # whole page can be matched on size.
+                or html and not (cut or mark_cut) and abs(len(body) - size) < 16
+                for mark, size, mark_cut in controls))
+        status, soft = seen[url]
+        # Nothing is there: a claim that a file or page was found is only the
+        # site's not found page.  What the page itself carries stays: input
+        # it echoes back, or a key in it, is on the 404 page too.
+        if soft or status in NOT_THERE:
+            if not about_content(f):
+                dropped += 1
+                continue
+            # True, but of the page every missing address gets, so roll_up
+            # can say that once instead of once per address.
+            f = dict(f, answer="not_found")
+        elif status:
+            f = dict(f, answer="found")
+        kept.append(f)
     return kept, dropped
+
+
+def about_content(f: dict) -> bool:
+    """A finding about what a page holds or echoes, not about a path being
+    there.  Such a finding is as true on a not found page as anywhere."""
+    text = f"{f.get('title') or ''} {f.get('cwe') or ''} {f.get('evidence') or ''}"
+    return bool(REFLECTED.search(text) or SECRET_WORDS.search(text))
+
+
+ROLL_UP_AT = 3
+MAX_ROLLED_URLS = 200
+_PATH_PREFIX = re.compile(r"^/\S*:\s+")
+
+
+def rolled_title(f: dict) -> str:
+    """The title without the path some engines put in front of it."""
+    return _PATH_PREFIX.sub("", str(f.get("title") or "")).strip()
+
+
+def roll_up(findings: list, base_url: str, keep=lambda f: False) -> list:
+    """One finding for one problem seen on many addresses.
+
+    A key in the site's 404 page, or one missing header, is reported once
+    for every address an engine tried.  The same engine giving the same
+    title on ROLL_UP_AT or more addresses becomes one finding at the site's
+    root, at the worst severity, that lists them.  Its key no longer moves
+    with whichever addresses a scan happened to try, so a decision on it
+    holds for the next scan.  keep(f) leaves a finding out of it (one that
+    already has a decision of its own).
+    """
+    from urllib.parse import urlparse
+
+    root = base_url
+    if base_url:
+        u = urlparse(base_url)
+        root = f"{u.scheme}://{u.netloc}/" if u.netloc else base_url
+    groups, order = {}, []
+    for f in findings:
+        if keep(f) or f.get("rolled_up"):
+            order.append(("one", f))
+            continue
+        tool, title = f.get("tool") or f.get("check") or "", rolled_title(f).lower()
+        k = (tool, title)
+        if k not in groups:
+            # Engines cut long titles (nikto at 200 characters), so a long
+            # path in front leaves less of the same message: one that is the
+            # start of another, or the other way round, is the same message.
+            k = next((g for g in groups if g[0] == tool and min(len(g[1]), len(title)) >= 40
+                      and (g[1].startswith(title) or title.startswith(g[1]))), k)
+        if k not in groups:
+            groups[k] = []
+            order.append(("group", k))
+        groups[k].append(f)
+    out = []
+    for kind, item in order:
+        if kind == "one":
+            out.append(item)
+            continue
+        members = groups[item]
+        urls = list(dict.fromkeys(m.get("url") or "" for m in members if m.get("url")))
+        if len(urls) < ROLL_UP_AT:
+            out.extend(members)
+            continue
+        worst = max(members, key=lambda m: RANK.get(m.get("severity"), 0))
+        paths = [urlparse(x).path or "/" for x in urls]
+        one = dict(worst)
+        for gone in ("key", "id", "decision", "ai_verdict", "ai_why", "ai_sast", "ai_kept",
+                     "answer"):
+            one.pop(gone, None)
+        title = max((rolled_title(m) for m in members), key=len) or worst.get("title") or ""
+        among = ", ".join(paths[:10]) + (" ..." if len(paths) > 10 else "")
+        # Of the addresses that were asked again: only so many are, and an
+        # address nobody checked says nothing either way.
+        missing = sum(1 for m in members if m.get("answer") == "not_found")
+        checked = sum(1 for m in members if m.get("answer"))
+        if checked and missing * 2 > checked:
+            # Said once, of the page itself: the problem is in the page the
+            # site gives for an address that does not exist, not at each one.
+            title = f"The site's not found page: {title}"
+            evidence = (f"Every address that does not exist answers with the same page, "
+                        f"and the page has this in it.  Seen on {len(urls)} addresses, "
+                        f"among them: {among}")
+        else:
+            evidence = f"Seen on {len(urls)} addresses, among them: {among}"
+        one.update(title=title[:300], url=root or worst.get("url"), evidence=evidence[:600],
+                   urls=urls[:MAX_ROLLED_URLS], rolled_up=len(urls))
+        from app.core.external_decisions import finding_key
+
+        one["key"] = finding_key(one)
+        one["id"] = one["key"][:12]
+        out.append(one)
+    return out
 
 
 def merge(findings: list) -> list:
@@ -2758,6 +2944,10 @@ matches on a soft 404 page.  When a SAST finding in the code supports a DAST \
 finding (same weakness, same route or parameter), say so; that raises \
 confidence a great deal.
 
+A finding you call likely_false_positive is taken out of the results, so use \
+it only when the evidence shows it is noise.  When unsure, say needs_review.  \
+A finding about an exposed secret stays whatever you say, so judge it anyway.
+
 Do not change severities.  Do not invent findings.
 
 Answer with JSON only, in this shape:
@@ -2766,7 +2956,9 @@ Answer with JSON only, in this shape:
    "sast": "matching SAST finding id or empty"}],
  "priorities": ["the three things to fix first, one sentence each"]}
 
-Whenever you mention a SAST finding, give its id (GCR- and twelve characters)."""
+Whenever you mention a SAST finding, give its id (GCR- and twelve characters).  \
+Whenever the summary or a priority is about a DAST finding, give its id in \
+square brackets, as [id]."""
 
 RISK_SYSTEM = """You assess the security risk of one public web site from two \
 sources: what a dynamic scan (DAST) found on the live site and what static \
@@ -2781,7 +2973,9 @@ Answer with JSON only:
 "why": "one sentence"}],
  "next_steps": ["up to five actions, most important first"]}
 
-Whenever you mention a SAST finding, give its id (GCR- and twelve characters)."""
+Whenever you mention a SAST finding, give its id (GCR- and twelve characters).  \
+Whenever the summary or a priority is about a DAST finding, give its id in \
+square brackets, as [id]."""
 
 
 def _json_answer(text: str) -> dict:
@@ -2903,9 +3097,17 @@ def triage(scan_id: int, actor: str = "") -> None:
             f["ai_sast"] = str(v.get("sast") or "")[:40]
     with session_scope() as db:
         scan = db.get(ExternalDastScan, scan_id)
-        scan.findings = json.dumps(all_findings, default=str)
+        try:
+            before = json.loads(scan.ai_summary or "{}")
+        except ValueError:
+            before = {}
+        kept, removed = split_ai_false_positives(all_findings)
+        removed = _merge_removed((before.get("removed") if isinstance(before, dict) else None),
+                                 removed)
+        scan.findings = json.dumps(kept, default=str)
         scan.ai_status = "done" if ok else "failed"
         scan.ai_summary = json.dumps({
+            "removed": removed, "tidied": (before or {}).get("tidied") if isinstance(before, dict) else None,
             "summary": " ".join(summaries)[:4000], "priorities": priorities[:8],
             "model": next((a.get("model") for a in answers if a.get("model")), ""),
             "error": "" if ok else next(
@@ -2916,12 +3118,155 @@ def triage(scan_id: int, actor: str = "") -> None:
                  + ".  Try again, or raise the longest answer on the AI page.")
                 if unreadable else "The model gave no usable answer."),
             "at": utcnow().isoformat()})
+        if removed:
+            from app.core import external_decisions
+
+            db.flush()
+            external_decisions.recount(db, scan.asset_id)
         scan.ai_calls = (scan.ai_calls or 0) + spent["calls"]
         scan.ai_input_tokens = (scan.ai_input_tokens or 0) + spent["in"]
         scan.ai_output_tokens = (scan.ai_output_tokens or 0) + spent["out"]
         if spent["priced"]:
             before = Decimal(scan.ai_cost or "0")
             scan.ai_cost = f"{before + spent['cost']:.4f}"
+
+
+# A finding that quotes or names a secret is only annotated by the model,
+# never removed: only proof that the secret is dead lowers a credential.
+SECRET_WORDS = re.compile(r"api.?key|secret|passw|token|private.key|credential|"
+                          r"access.key|\.htpasswd|\.npmrc|\.pgpass|id_rsa|\.aws", re.I)
+
+
+def ai_removable(f: dict) -> bool:
+    """The model called it a likely false positive, nobody has decided on it
+    or put it back, and it is not about a secret."""
+    return (f.get("ai_verdict") == "likely_false_positive" and not f.get("decision")
+            and not f.get("ai_kept")
+            and not SECRET_WORDS.search(f"{f.get('title') or ''} {f.get('evidence') or ''} "
+                                        f"{f.get('url') or ''}"))
+
+
+def split_ai_false_positives(findings: list) -> tuple:
+    """-> (findings kept, what was taken out, kept short so it can be shown
+    and put back)."""
+    kept, removed = [], []
+    for f in findings or []:
+        (removed if ai_removable(f) else kept).append(f)
+    return kept, [{k: f.get(k) for k in REMOVED_FIELDS if f.get(k) not in (None, "")}
+                  | {"removed_at": utcnow().isoformat(), "removed_why": "ai"} for f in removed]
+
+
+REMOVED_FIELDS = ("id", "key", "check", "tool", "tools", "title", "severity", "severity_found",
+                  "url", "evidence", "remediation", "cwe", "reference", "ai_verdict", "ai_why",
+                  "ai_sast")
+MAX_REMOVED = 5000
+
+
+def _merge_removed(old, new: list) -> list:
+    out = {}
+    for f in list(old or []) + list(new or []):
+        if isinstance(f, dict) and f.get("key"):
+            out.setdefault(f["key"], f)
+    return list(out.values())[:MAX_REMOVED]
+
+
+def removed_of(scan: ExternalDastScan) -> list:
+    try:
+        summary = json.loads(scan.ai_summary or "{}")
+    except ValueError:
+        return []
+    return [f for f in (summary.get("removed") or []) if isinstance(f, dict)] \
+        if isinstance(summary, dict) else []
+
+
+def restore_removed(db, scan: ExternalDastScan, key: str, actor: str) -> dict:
+    """Put a finding the model took out back on the scan.  -> the finding,
+    or {} when it was not taken out."""
+    from app.core import external_decisions
+
+    summary = json.loads(scan.ai_summary or "{}")
+    removed = summary.get("removed") or []
+    back = next((f for f in removed if isinstance(f, dict) and f.get("key") == key), None)
+    if back is None:
+        return {}
+    summary["removed"] = [f for f in removed if f is not back]
+    back = {k: v for k, v in back.items() if k != "removed_at"}
+    back["ai_kept"] = {"by": (actor or "")[:120], "at": utcnow().isoformat()}
+    scan.ai_summary = json.dumps(summary, default=str)
+    scan.findings = json.dumps(findings_of(scan) + [back], default=str)
+    db.flush()
+    external_decisions.recount(db, scan.asset_id)
+    return back
+
+
+TIDY_VERSION = 1
+
+
+def tidy_findings(scan: ExternalDastScan, findings: list) -> tuple:
+    """A finished scan's findings under the rules a new scan gets: no path
+    claim the site answered not found, one finding for one problem on many
+    addresses, and none the model called a likely false positive.  Findings
+    with a person's decision are left as they are.  -> (kept, removed)"""
+    from urllib.parse import urlparse
+
+    from app.core import dast_paths
+
+    status = {}
+    for r in dast_paths.load(scan.paths).get("paths") or []:
+        if isinstance(r, dict) and r.get("p"):
+            status[r["p"]] = r.get("s")
+    kept, removed = [], []
+    for f in findings:
+        path = urlparse(str(f.get("url") or "")).path or "/"
+        missing = (f.get("tool") in PATH_ENGINES and path != "/"
+                   and status.get(path) in NOT_THERE)
+        if missing and not f.get("decision"):
+            if not about_content(f):
+                removed.append(dict(f, removed_why="not_found"))
+                continue
+            f = dict(f, answer="not_found")
+        elif status.get(path) and f.get("tool") in PATH_ENGINES:
+            f = dict(f, answer="found")
+        kept.append(f)
+    url = next((f.get("url") for f in kept if f.get("url")), "")
+    kept = roll_up(kept, url, keep=lambda f: bool(f.get("decision")))
+    kept, by_ai = split_ai_false_positives(kept)
+    slim = [{k: f.get(k) for k in REMOVED_FIELDS + ("removed_why",) if f.get(k) not in (None, "")}
+            | {"removed_at": utcnow().isoformat()} for f in removed]
+    return kept, slim + by_ai
+
+
+def tidy_old_scans() -> int:
+    """Once at start, then never again for the same scan: scans finished
+    before these rules get them.  -> findings taken out or rolled into one."""
+    from app.core import external_decisions
+
+    total = 0
+    with session_scope() as db:
+        ids = [i for (i,) in db.query(ExternalDastScan.id).filter(
+            ExternalDastScan.status == "done", ExternalDastScan.source == "builtin")]
+    for scan_id in ids:
+        with session_scope() as db:
+            scan = db.get(ExternalDastScan, scan_id)
+            try:
+                summary = json.loads(scan.ai_summary or "{}")
+            except ValueError:
+                summary = {}
+            summary = summary if isinstance(summary, dict) else {}
+            if summary.get("tidied") == TIDY_VERSION:
+                continue
+            before = findings_of(scan)
+            kept, removed = tidy_findings(scan, before)
+            summary["tidied"] = TIDY_VERSION
+            if removed:
+                summary["removed"] = _merge_removed(summary.get("removed"), removed)
+            scan.ai_summary = json.dumps(summary, default=str)
+            if len(kept) != len(before):
+                scan.findings = json.dumps(kept, default=str)
+                db.flush()
+                external_decisions.recount(db, scan.asset_id)
+                total += len(before) - len(kept)
+    return total
 
 
 def start_triage(scan_id: int, actor: str = "") -> str:

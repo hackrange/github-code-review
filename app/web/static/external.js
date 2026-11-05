@@ -447,3 +447,61 @@
     update();
   });
 })();
+
+/* Ticked findings on a scan: one decision for all of them, through the same
+ * dialog a single finding uses. */
+(function () {
+  "use strict";
+  var bar = document.querySelector("[data-finding-bulk]");
+  if (!bar) { return; }
+  var all = document.querySelector("[data-finding-all]");
+  var count = bar.querySelector("[data-finding-count]");
+  var dialog = document.getElementById("decide-modal");
+  var form = dialog && dialog.querySelector("form");
+  var holder = form && form.querySelector("[data-bulk-keys]");
+  function picks() {
+    return Array.prototype.filter.call(
+      document.querySelectorAll("[data-finding-pick]"), function (b) { return b.checked; });
+  }
+  function show() {
+    var n = picks().length;
+    bar.hidden = n === 0;
+    count.textContent = n + " ticked";
+    if (all) {
+      var boxes = document.querySelectorAll("[data-finding-pick]");
+      all.checked = n > 0 && n === boxes.length;
+      all.indeterminate = n > 0 && n < boxes.length;
+    }
+  }
+  document.addEventListener("change", function (event) {
+    if (event.target.matches("[data-finding-pick]")) { show(); }
+    if (event.target === all) {
+      document.querySelectorAll("[data-finding-pick]").forEach(function (b) { b.checked = all.checked; });
+      show();
+    }
+  });
+  bar.querySelector("[data-finding-clear]").addEventListener("click", function () {
+    document.querySelectorAll("[data-finding-pick]").forEach(function (b) { b.checked = false; });
+    show();
+  });
+  document.addEventListener("click", function (event) {
+    var trigger = event.target.closest && event.target.closest('[data-modal="decide-modal"]');
+    if (!trigger || !form || !holder) { return; }
+    var bulk = trigger.hasAttribute("data-finding-bulk-open");
+    /* After the dialog has been reset and filled from the button. */
+    setTimeout(function () {
+      holder.innerHTML = "";
+      form.action = form.getAttribute(bulk ? "data-bulk-action" : "data-one-action");
+      if (!bulk) { return; }
+      var ticked = picks();
+      ticked.forEach(function (box) {
+        var hidden = document.createElement("input");
+        hidden.type = "hidden"; hidden.name = "keys"; hidden.value = box.value;
+        holder.appendChild(hidden);
+      });
+      var title = form.querySelector('[name="finding_title"]');
+      if (title) { title.value = ticked.length + " ticked finding" + (ticked.length === 1 ? "" : "s"); }
+    }, 0);
+  });
+  show();
+})();

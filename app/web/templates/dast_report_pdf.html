@@ -137,10 +137,10 @@
 
 <h2>2.  Executive summary</h2>
 {% for paragraph in narrative %}<p>{{ paragraph | sentence_spaced }}</p>{% endfor %}
-{% if ai_summary and (ai_summary.summary or ai_summary.withheld) %}
+{% if ai_summary and (ai_summary.summary or ai_summary.withheld or ai_summary.withheld_dast) %}
 <h3>2.1  What the enhanced review found</h3>
 {% if ai_summary.summary %}<p>{{ ai_summary.summary | sentence_spaced }}</p>
-{% else %}<p>{{ "The review's summary is left out.  It named code findings that have since been given an exception or marked a false positive.  Run the enhanced review again for a new one." | sentence_spaced }}</p>{% endif %}
+{% else %}<p>{{ "The review's summary is left out.  It named findings that have since been given an exception or marked a false positive.  Run the enhanced review again for a new one." | sentence_spaced }}</p>{% endif %}
 {% if ai_summary.priorities %}<ol>{% for p in ai_summary.priorities %}<li>{{ p | sentence_spaced }}</li>{% endfor %}</ol>{% endif %}
 <p class="faint">Written from the findings in section 4.  Check it against them.</p>
 {% endif %}

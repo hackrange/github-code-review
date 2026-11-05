@@ -108,7 +108,8 @@ def recount(db, asset_id: int, now=None) -> None:
 
 
 def decide(db, asset, scan, key: str, kind: str, reason: str, actor: str,
-           severity: str = "", expires: str = "", persist: bool = True) -> ExternalFindingDecision:
+           severity: str = "", expires: str = "", persist: bool = True,
+           count: bool = True) -> ExternalFindingDecision:
     """Record a decision on one finding.  Raises ValueError with a sentence."""
     from app.core import external
 
@@ -154,8 +155,26 @@ def decide(db, asset, scan, key: str, kind: str, reason: str, actor: str,
         row.expires_at = when
     row.decided_by, row.decided_at, row.scan_id = (actor or "")[:120], utcnow(), scan.id
     db.flush()
-    recount(db, asset.id)
+    if count:
+        recount(db, asset.id)
     return row
+
+
+def decide_many(db, asset, scan, keys: list, kind: str, reason: str, actor: str,
+                severity: str = "", expires: str = "", persist: bool = True) -> tuple:
+    """The same decision on several findings, counted once at the end.
+    -> (rows recorded, [(key, why it was not)])"""
+    done, skipped = [], []
+    for key in dict.fromkeys(keys):
+        try:
+            with db.begin_nested():
+                done.append(decide(db, asset, scan, key, kind, reason, actor, severity,
+                                   expires, persist, count=False))
+        except ValueError as exc:
+            skipped.append((key, str(exc)))
+    if done:
+        recount(db, asset.id)
+    return done, skipped
 
 
 def undo(db, asset, key: str, scan_id: int = 0) -> bool:

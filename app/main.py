@@ -149,6 +149,20 @@ def create_app() -> FastAPI:
         except Exception as exc:
             log.warning("could not adopt the existing credential: %s", exc)
 
+        # Dynamic scans finished before not found answers, repeats and the
+        # model's likely false positives were dealt with.  Each scan once, in
+        # the background, since it reads every one.
+        def _tidy_dast() -> None:
+            try:
+                from app.core import external
+                n = external.tidy_old_scans()
+                if n:
+                    log.info("tidied earlier dynamic scans: %d findings fewer", n)
+            except Exception as exc:  # noqa: BLE001 - the scans stand as they are
+                log.warning("could not tidy earlier dynamic scans: %s", exc)
+        import threading as _threading
+        _threading.Thread(target=_tidy_dast, daemon=True, name="dast-tidy").start()
+
         from app.auth.service import ensure_bootstrap_admin
         from app.core.db import session_scope
         with session_scope() as db:

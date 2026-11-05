@@ -244,9 +244,10 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
     view = external.scan_dict(scan, findings=True)
     # Decisions as they stand today.  A false positive is not in the report
     # at all; a changed severity is the severity.
-    view["findings"] = [f for f in external_decisions.apply(
+    decided_all = external_decisions.apply(
         view.get("findings") or [], external_decisions.for_asset(db, asset.id), scan_id=scan.id)
-        if (f.get("decision") or {}).get("kind") != "false_positive"]
+    view["findings"] = [f for f in decided_all
+                        if (f.get("decision") or {}).get("kind") != "false_positive"]
     triaged = view["ai"]["status"] == "done" and any(
         f.get("ai_verdict") for f in view.get("findings") or [])
     findings = []
@@ -337,6 +338,11 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
     started = scan.started_at or scan.scanned_at
     finished = scan.scanned_at
     ai_summary = (view["ai"].get("summary") or {}) if triaged else {}
+    if ai_summary:
+        # Written before today's decisions: what it said about a finding since
+        # called a false positive, excepted, or taken out is not repeated.
+        ai_summary = external.scrub_dast_review(ai_summary, decided_all,
+                                                external.removed_of(scan))
 
     return {
         "asset": asset, "scan": scan, "view": view, "findings": findings,

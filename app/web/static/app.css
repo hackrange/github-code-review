@@ -1172,3 +1172,10 @@ tr.decided-out > td { opacity: .55; }
 tr.decided-out > td.decision-cell { opacity: 1; }
 .decide-buttons { display: flex; flex-wrap: wrap; gap: .25rem; }
 .btn.xs { padding: .12rem .45rem; font-size: .75rem; line-height: 1.3; }
+
+/* Ticked findings on a dynamic scan page: the decisions for all of them,
+   kept on screen while the list scrolls. */
+.finding-bulk { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: .4rem;
+  align-items: center; padding: .5rem .8rem; background: var(--bg-soft);
+  border-bottom: 1px solid var(--border); }
+.finding-bulk[hidden] { display: none; }

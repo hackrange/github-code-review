@@ -146,10 +146,11 @@
     {% else %}
       {% if ai.summary.summary %}<p>{{ ai.summary.summary }}</p>
       {% elif ai.summary.withheld %}<div class="notice info"><div>The summary is hidden.  It named {{ ai.summary.withheld }} code finding{{ '' if ai.summary.withheld == 1 else 's' }} since given an exception or marked a false positive.  Use AI triage again for a new one.</div></div>{% endif %}
+      {% if ai.summary.withheld_dast %}<div class="small faint">{{ ai.summary.withheld_dast }} sentence{{ '' if ai.summary.withheld_dast == 1 else 's' }} about findings since marked a false positive, given an exception or taken out {{ 'is' if ai.summary.withheld_dast == 1 else 'are' }} left out.</div>{% endif %}
       {% if ai.summary.priorities %}<ol class="small">{% for p in ai.summary.priorities %}<li>{{ p }}</li>{% endfor %}</ol>{% endif %}
       <div class="small faint">The model's verdicts are shown on each finding below.  They do not change any severity.
+        A finding it calls a likely false positive is taken out, unless it is about a secret or somebody decided on it.
         <a href="{{ here }}?verdict=likely_real">Likely real</a> &middot;
-        <a href="{{ here }}?verdict=likely_false_positive">Likely false positive</a> &middot;
         <a href="{{ here }}?verdict=needs_review">Needs review</a></div>
     {% endif %}
   </div>
@@ -159,14 +160,26 @@
 <div class="card">
   <div class="card-head">{% if scan.summary_only %}Counts from Rapid7{% else %}{{ findings | length }} finding{{ '' if findings | length == 1 else 's' }}{% endif %}
     {% if decided %}<a class="small" href="{{ here }}?verdict=decided" style="font-weight:400;margin-left:.5rem">{{ decided }} decided</a>{% endif %}
+    {% if removed_count %}<a class="small" href="{{ here }}?verdict=removed" style="font-weight:400;margin-left:.5rem" title="Taken out by the model as likely false positives, or because the address answered not found">{{ removed_count }} taken out</a>{% endif %}
     {% if sev or verdict %}<a class="small" href="{{ here }}" style="font-weight:400;margin-left:.5rem">show all</a>{% endif %}</div>
   {% if findings %}
+  {% set can_decide = scan.status == 'done' and not scan.summary_only %}
+  {% if can_decide %}
+  <div class="finding-bulk" data-finding-bulk hidden>
+    <span data-finding-count>0 ticked</span>
+    <button class="btn xs" type="button" data-modal="decide-modal" data-kind="false_positive" data-finding-bulk-open>False positive</button>
+    <button class="btn xs" type="button" data-modal="decide-modal" data-kind="severity" data-finding-bulk-open>Change sev</button>
+    <button class="btn xs" type="button" data-modal="decide-modal" data-kind="exception" data-finding-bulk-open>Exception</button>
+    <button class="btn xs" type="button" data-finding-clear>Clear</button>
+  </div>
+  {% endif %}
   <div class="table-scroll"><table>
-    <thead><tr><th>Severity</th><th>Finding</th><th>Where</th><th>Found by</th><th>Decision</th></tr></thead>
+    <thead><tr>{% if can_decide %}<th><input type="checkbox" data-finding-all title="Tick every finding shown" aria-label="Tick every finding shown"></th>{% endif %}<th>Severity</th><th>Finding</th><th>Where</th><th>Found by</th><th>Decision</th></tr></thead>
     <tbody>
     {% for f in findings %}
       {% set d = f.decision %}
       <tr class="{{ 'decided-out' if d and d.kind in ('false_positive', 'exception') }}">
+        {% if can_decide %}<td><input type="checkbox" value="{{ f.key }}" data-finding-pick aria-label="Tick {{ f.title }}"></td>{% endif %}
         <td><span class="badge {{ f.severity }}">{{ f.severity }}</span>
           {% if d and d.kind == 'severity' %}<div class="faint small" title="What the scan found">found as {{ f.severity_found }}</div>{% endif %}
           {% if f.ai_verdict %}<div><span class="badge {{ {'likely_real':'high','likely_false_positive':'waived','needs_review':'pending'}[f.ai_verdict] }}" title="{{ f.ai_why }}">{{ f.ai_verdict | replace('_', ' ') }}</span></div>{% endif %}</td>
@@ -175,7 +188,8 @@
           {% if f.remediation %}<details class="small"><summary>How to fix</summary>{{ f.remediation }}</details>{% endif %}
           {% if f.ai_why %}<div class="small"><span class="badge ai">AI</span> {{ f.ai_why }}{% if f.ai_sast %} <span class="mono">{{ f.ai_sast }}</span>{% endif %}</div>{% endif %}
           {% if f.reference %}<div class="small faint">{{ f.reference }}</div>{% endif %}</td>
-        <td class="small mono" style="word-break:break-all">{{ f.url }}</td>
+        <td class="small mono" style="word-break:break-all">{{ f.url }}
+          {% if f.rolled_up %}<details class="small"><summary>{{ f.rolled_up }} addresses</summary>{% for u in f.urls %}<div>{{ u }}</div>{% endfor %}{% if f.rolled_up > f.urls | length %}<div class="faint">and {{ f.rolled_up - f.urls | length }} more</div>{% endif %}</details>{% endif %}</td>
         <td class="small">{{ (f.tools or [f.tool or f.check]) | join(', ') }}{% if f.validation %}<div class="faint">{{ f.validation }}</div>{% endif %}</td>
         <td class="small decision-cell">
           {% if d %}
@@ -202,6 +216,22 @@
       </tr>
     {% endfor %}
     </tbody></table></div>
+  {% elif verdict == 'removed' %}
+  <div class="table-scroll"><table>
+    <thead><tr><th>Severity</th><th>Finding</th><th>Where</th><th>Why it was taken out</th><th></th></tr></thead>
+    <tbody>
+    {% for f in removed %}
+      <tr>
+        <td><span class="badge {{ f.severity }}">{{ f.severity }}</span></td>
+        <td><strong>{{ f.title }}</strong>{% if f.evidence %}<div class="small mono faint" style="white-space:pre-wrap;word-break:break-word">{{ f.evidence }}</div>{% endif %}</td>
+        <td class="small mono" style="word-break:break-all">{{ f.url }}</td>
+        <td class="small">{% if f.removed_why == 'not_found' %}The address answered not found, so nothing is there.{% else %}<span class="badge ai">AI</span> {{ f.ai_why or 'Called a likely false positive.' }}{% endif %}</td>
+        <td><form method="post" action="{{ here }}/findings/{{ f.key }}/restore" style="display:inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn xs" type="submit" title="Show it as found again">Put back</button></form></td>
+      </tr>
+    {% endfor %}
+    </tbody></table></div>
   {% elif scan.summary_only %}
   {% set total = (scan.critical or 0) + (scan.high or 0) + (scan.medium or 0) + (scan.low or 0) + (scan.info or 0) %}
   <div class="empty">Rapid7 found {{ total }}: {{ scan.critical or 0 }} critical, {{ scan.high or 0 }} high,
@@ -217,11 +247,12 @@
   {% else %}<div class="empty">No findings yet.</div>{% endif %}
 </div>
 <div class="modal-backdrop" id="decide-modal" hidden>
-  <div class="modal"><form method="post" action="{{ here }}/findings/form/decide">
+  <div class="modal"><form method="post" action="{{ here }}/findings/form/decide" data-one-action="{{ here }}/findings/form/decide" data-bulk-action="{{ here }}/findings/bulk/decide">
     <div class="modal-head">Decide on this finding <button type="button" class="modal-close" data-close-modal>&times;</button></div>
     <div class="modal-body">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="key" value="">
+      <div data-bulk-keys></div>
       <div class="small" style="margin-bottom:.5rem"><input type="text" name="finding_title" value="" readonly
         style="border:0;background:none;font-weight:600;width:100%;padding:0"></div>
       <label>Decision

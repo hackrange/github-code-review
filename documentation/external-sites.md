@@ -384,7 +384,10 @@ Both go through the AI analysis page's model and are off until one is set up.
 
 - **AI triage** of a scan: each finding gets likely real, likely false
   positive or needs review, with the code finding that supports it.  It never
-  changes a severity.
+  changes a severity.  A likely false positive is taken out of the scan and
+  its counts, unless it is about a secret (a key, password or token, which
+  only proof lowers) or a person has decided on it.  The scan page links to
+  what was taken out, with the model's reason and a Put back button.
 - **AI risk read** of a site: the last scan and the worst open code findings
   behind it, read together, with where they agree and what to do first.
 
@@ -399,6 +402,34 @@ each time it is shown.  When its summary names a code finding that has since
 been excepted or marked a false positive, the summary is hidden, on the page
 and in the PDF, until it is run again.  Priorities, next steps, matches and
 correlations that name one are dropped.  A fixed finding is not hidden.
+
+## Fewer false positives
+
+Every path an engine claims to have found is asked again before the scan is
+saved (up to 400 addresses):
+
+- An address that answers 404 or 410 has nothing there, so a claim that a
+  file or page was found is dropped.  What the page itself carries stays:
+  input it echoes back (XSS, header injection) or a key in it.
+- An address that answers with the same page as an address that cannot
+  exist is dropped.  Two such addresses are asked: a file under a folder,
+  and a name that starts with a dot.  Some sites (Adobe Experience Manager
+  among them) give a real 404 for a missing page but their home page for
+  `/.anything`, so `/.bash_history` was reported as a shell history file.
+- One engine giving the same title on three or more addresses is one
+  finding at the site's root that lists them.  When most of the addresses
+  that were checked answered not found, it says so: "The site's not found
+  page: Google API keys ... The key is: ...".  A title the engine cut short
+  joins the rest.
+
+Scans finished before these rules got them once, when the application
+started.  Findings with a person's decision were left as they were.
+
+Findings can be ticked on a scan page and given one decision (false
+positive, a new severity, or an exception) together.  A decision shows at
+once on the page and in the PDF, with no new scan: the PDF is typeset on
+each download, and what the saved AI review said about a finding since
+called a false positive, excepted, or taken out is left out of it.
 
 ## API
 
