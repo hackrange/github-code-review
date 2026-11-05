@@ -323,6 +323,10 @@ def start() -> None:
     from app.core import utilization
 
     now = datetime.now(_UTC)
+    # Once at boot, history saved under earlier container names comes home.
+    _scheduler.add_job(utilization.adopt_orphans, "date", run_date=now,
+                       id="utilization-adopt", replace_existing=True,
+                       misfire_grace_time=600)
     for job_id, func, trigger, first in (
             ("utilization-sample", utilization.sample,
              IntervalTrigger(seconds=utilization.PERIOD_SEC), now),

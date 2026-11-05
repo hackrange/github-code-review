@@ -164,6 +164,12 @@ services:
       GCR_GATE_TIMEOUT: ${GCR_GATE_TIMEOUT:-}
       GCR_GATE_WORKERS: ${GCR_GATE_WORKERS:-}
 
+      # The name the Utilization history is saved under.  It must stay the
+      # same across rebuilds, or each install.sh --upgrade starts the charts
+      # from empty.  Give each instance its own name when several share one
+      # database.
+      GCR_NODE_NAME: ${GCR_NODE_NAME:-github-code-review}
+
       TZ: ${TZ:-UTC}
 
     volumes:

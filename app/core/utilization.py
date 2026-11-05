@@ -39,9 +39,26 @@ TIERS = (
 MAX_POINTS = 1440
 MAX_SPAN_SEC = 366 * DAY
 
-NODE = (re.sub(r"[^A-Za-z0-9._-]", "_",
-               os.environ.get("GCR_NODE_NAME") or socket.gethostname())[:64]
-        or "node")
+# The name every row is saved under, and the only name the charts read back.
+# It has to outlive the container.  Docker names a container's host after the
+# first twelve hex digits of its id, which is new on every rebuild, so keying
+# on that hid all the history behind a fresh name after each install.sh
+# --upgrade.  docker-compose.yml sets GCR_NODE_NAME, and a bare container id
+# falls back to a fixed name for anyone running the image some other way.
+DEFAULT_NODE = "github-code-review"
+_CONTAINER_ID = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _node_name():
+    name = os.environ.get("GCR_NODE_NAME", "").strip()
+    if not name:
+        name = socket.gethostname()
+        if _CONTAINER_ID.match(name):
+            name = DEFAULT_NODE
+    return re.sub(r"[^A-Za-z0-9._-]", "_", name)[:64] or DEFAULT_NODE
+
+
+NODE = _node_name()
 
 AVERAGED = ("host_cpu", "app_cpu", "host_mem_used", "app_mem", "disk_used",
             "net_rx_bps", "net_tx_bps")
@@ -324,6 +341,50 @@ def rollup(now=None):
                  .delete(synchronize_session=False))
     except Exception as exc:
         log.warning("utilization rollup failed: %s", exc)
+
+
+def adopt_orphans():
+    """Move rows saved under an old container id onto this node.
+
+    Before the name was fixed every rebuild started a new one, so the history
+    up to now sits under dozens of twelve hex digit names nobody reads.  Only
+    names shaped like a container id are taken, never a real host's name,
+    so two machines sharing one database keep their own rows.  Where two
+    names hold the same slot, the one already here wins and the other is
+    dropped, since the key is the node and the time.  Safe to run on every
+    boot: once there is nothing left to move it does nothing.
+    """
+    moved = 0
+    try:
+        for tier in TIERS:
+            model = tier["model"]
+            with session_scope() as db:
+                nodes = [n for (n,) in db.query(model.node).distinct()
+                         if n != NODE and _CONTAINER_ID.match(n or "")]
+                if not nodes:
+                    continue
+                taken = {ts for (ts,) in
+                         db.query(model.ts).filter(model.node == NODE)}
+            for node in nodes:
+                with session_scope() as db:
+                    stamps = [ts for (ts,) in
+                              db.query(model.ts).filter(model.node == node)]
+                    clash = [ts for ts in stamps if ts in taken]
+                    for i in range(0, len(clash), 500):
+                        (db.query(model)
+                         .filter(model.node == node,
+                                 model.ts.in_(clash[i:i + 500]))
+                         .delete(synchronize_session=False))
+                    moved += (db.query(model).filter(model.node == node)
+                              .update({model.node: NODE},
+                                      synchronize_session=False))
+                    taken.update(stamps)
+        if moved:
+            log.info("utilization: %d rows from old container names now "
+                     "belong to %s", moved, NODE)
+    except Exception as exc:
+        log.warning("could not adopt old utilization rows: %s", exc)
+    return moved
 
 
 def _combine(rows):
