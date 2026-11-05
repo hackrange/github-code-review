@@ -1046,8 +1046,11 @@ async def rebuild_reports(request: Request, user: User = Depends(current_user)):
 async def start_scan(request: Request, user: User = Depends(current_user)):
     """Kick off a scan and come straight back.
 
-    A developer only ever scans what they can already see, so the scope comes
-    from their assignments rather than from anything they send us.
+    Anybody but an administrator scans exactly the repositories they can see,
+    by name.  Their groups used to go to the scanner as whole organizations,
+    and a group entry like "*" turned into "everything" on the way, so one
+    click scanned the estate.  The list comes from the same query the
+    Repositories page uses, never from anything they send us.
     """
     await check_csrf(request)
     rbac.require(user, "scan.run")
@@ -1058,13 +1061,14 @@ async def start_scan(request: Request, user: User = Depends(current_user)):
         return redirect("/scans?msg=A+scan+is+already+running.&kind=warn")
 
     orgs = repos = None
+    # An administrator sees, and so scans, everything.
     if not rbac.sees_everything(user):
-        orgs = [org for org, repo in rbac.scope_pairs(user) if not repo]
-        repos = [f"{org}/{repo}" for org, repo in rbac.scope_pairs(user) if repo]
-        # Out of a scanning group, what their login reaches is all they have.
+        from app.core.models import Repository
+
         with session_scope() as db:
-            repos += rbac.repositories_on_the_host(db, user)
-        if not orgs and not repos:
+            repos = sorted({name for (name,) in rbac.visible_repositories(db, user)
+                            .with_entities(Repository.full_name).all() if name})
+        if not repos:
             raise HTTPException(
                 status_code=403,
                 detail="You have no repositories assigned, so there is nothing to scan.")
@@ -1073,7 +1077,9 @@ async def start_scan(request: Request, user: User = Depends(current_user)):
                                        trigger="manual", orgs=orgs, repos=repos)
     with session_scope() as db:
         record(db, "scan.requested", actor=user.username,
-               detail=f"orgs={orgs or 'all'} repos={repos or 'all'}",
+               detail=(f"orgs={orgs or 'all'} repos={repos or 'all'}"
+                       if repos is None else
+                       f"{len(repos)} repositories: {', '.join(repos)}")[:4000],
                source_ip=client_ip(request))
 
     if not started:

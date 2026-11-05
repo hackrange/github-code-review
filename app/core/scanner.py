@@ -1312,8 +1312,16 @@ def _every_connection(triggered_by, trigger, only, connection_id,
         else:
             chosen = connection_store.usable(db)
             cursor = store.get(db, SWEEP_CURSOR, "") or ""
+        # A list of repositories and nothing else is one person's scan.  Each
+        # account gets only the ones it holds, so no account is sent off to
+        # fetch repositories it has never seen with a credential that cannot.
+        split = (_split_by_connection(db, chosen, repos)
+                 if repos and not orgs and connection_id is None else None)
         # Detach: each scan opens its own session, and a row from a closed one
         # is no use to it.
+        if split is not None:
+            mine = {row.id: names for row, names in split}
+            chosen = [row for row, _names in split]
         chosen = [_Detached(row) for row in chosen]
 
     # One connection by name is somebody asking for that one, so leave the
@@ -1347,8 +1355,9 @@ def _every_connection(triggered_by, trigger, only, connection_id,
                     "stopped": True, "skipped": True}
         log.info("scanning connection %s", row.name)
         result = run_scan(triggered_by=triggered_by, trigger=trigger,
-                          only=only, orgs=orgs, repos=repos, connection=row,
-                          _holds_lock=True)
+                          only=only, orgs=orgs,
+                          repos=mine.get(row.id, repos) if split is not None else repos,
+                          connection=row, _holds_lock=True)
         # Move the mark as we go, not at the end.  A run that dies half way
         # through is exactly the run this is here for, and one that saved
         # nothing would start from the same place again.  A connection that
@@ -1422,6 +1431,44 @@ def _every_connection(triggered_by, trigger, only, connection_id,
     total["empty"] = bool(total["empty_connections"]) and not total["failed"] \
         and total["repositories"] == 0
     return total
+
+
+def _split_by_connection(db, chosen, repos) -> list:
+    """Which of these repositories each account holds.  -> [(row, names)].
+
+    By the account the repository was found on, then by its organization.
+    One nothing claims goes to every account, which is what all of them got
+    before, so a repository is never quietly left out.  Accounts holding none
+    are dropped.
+    """
+    from app.core.models import Repository
+
+    wanted = list(dict.fromkeys(repos))
+    known = {r.full_name: r for r in db.query(Repository)
+             .filter(Repository.full_name.in_(wanted)).all()}
+    by_id = {row.id: row for row in chosen}
+    by_name = {(row.name or "").strip(): row for row in chosen}
+    by_org = {}
+    for row in chosen:
+        for org in row.scope_orgs():
+            by_org.setdefault(org.lower(), row)
+
+    out = {row.id: [] for row in chosen}
+    for name in wanted:
+        repo = known.get(name)
+        owner = None
+        if repo is not None:
+            owner = (by_id.get(repo.connection_id)
+                     or by_name.get((repo.connection or "").strip())
+                     or by_org.get((repo.organization or "").lower()))
+        if owner is None:
+            owner = by_org.get(name.partition("/")[0].lower())
+        if owner is None:
+            for names in out.values():
+                names.append(name)
+        else:
+            out[owner.id].append(name)
+    return [(row, out[row.id]) for row in chosen if out[row.id]]
 
 
 class _Detached:
