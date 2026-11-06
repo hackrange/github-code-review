@@ -67,7 +67,7 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="rule_class" value="{{ cls }}">
         <div class="table-scroll"><table>
-          <thead><tr><th></th><th>Rule</th><th>Safety</th><th>Floor</th><th>State</th><th></th></tr></thead>
+          <thead><tr><th><input type="checkbox" data-check-all aria-label="Select every rule in this class"></th><th>Rule</th><th>Safety</th><th>Floor</th><th>State</th><th></th></tr></thead>
           <tbody>
           {% for r in group.rules %}
             <tr>
@@ -243,6 +243,17 @@
 
 <script>
 (function () {
+  // A header checkbox ticks or clears every rule in its class.
+  document.addEventListener("change", function (e) {
+    var head = e.target;
+    if (!head.matches || !head.matches("[data-check-all]")) { return; }
+    var form = head.closest("form");
+    if (!form) { return; }
+    Array.prototype.forEach.call(
+      form.querySelectorAll('input[name="rule_id"]'),
+      function (cb) { cb.checked = head.checked; });
+  });
+
   // Tabs: show one pane at a time, remember it in the address.
   var tabs = Array.prototype.slice.call(document.querySelectorAll(".section-nav [data-tab]"));
   var panes = Array.prototype.slice.call(document.querySelectorAll("[data-pane]"));
