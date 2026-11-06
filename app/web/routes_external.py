@@ -674,13 +674,19 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
         links = external.Mapper(db, user).links(asset)
         names = [l["full_name"] for l in links]
         counts = external.sast_counts(db, names, user)
-        # Newest first, a page at a time.  Started, then finished, time
-        # order and id order agree, so the id is the cheap way to sort.
+        # Newest first, by the scan's own date, not its id: a scan recorded by
+        # hand or imported from another server (InsightAppSec history) gets a
+        # high id with an older date, so id order would put it in the wrong
+        # place.  Fall back to when it started, then the id, for ties and for a
+        # scan still running (no date yet).
+        from sqlalchemy import func as _func
+
+        recent = _func.coalesce(ExternalDastScan.scanned_at, ExternalDastScan.started_at)
         scan_query = db.query(ExternalDastScan).filter(ExternalDastScan.asset_id == asset.id)
         scan_total = scan_query.count()
         scan_pages = max(1, -(-scan_total // SCANS_PER_PAGE))
         scan_page = min(max(1, scans), scan_pages)
-        page_scans = (scan_query.order_by(ExternalDastScan.id.desc())
+        page_scans = (scan_query.order_by(recent.desc(), ExternalDastScan.id.desc())
                       .offset((scan_page - 1) * SCANS_PER_PAGE).limit(SCANS_PER_PAGE).all())
         running = external.running_scans(db, [asset.id])
         linked = {l["full_name"]: counts.get(l["full_name"], {}) for l in links if l["linked"]}
