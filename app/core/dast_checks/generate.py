@@ -146,3 +146,43 @@ def generate(cfg: dict, prompt: str, actor: str = "") -> dict:
     out["ok"] = True
     out["spec"] = clean
     return out
+
+
+def start_draft(cfg: dict, prompt: str, actor: str) -> int:
+    """Begin drafting a rule in the background.  -> the draft row id.
+
+    Returns at once; the model runs in its own thread, so a slow answer never
+    holds the page.  The draft row moves from working to ready or failed, and
+    the admin page shows it when it is done.
+    """
+    import json
+    import threading
+
+    from app.core.db import session_scope
+    from app.core.models import DastRuleDraft
+
+    with session_scope() as db:
+        row = DastRuleDraft(prompt=(prompt or "")[:2000], status="working",
+                            created_by=(actor or "")[:120])
+        db.add(row)
+        db.flush()
+        draft_id = row.id
+
+    def run():
+        result = generate(cfg, prompt, actor)
+        with session_scope() as db:
+            row = db.get(DastRuleDraft, draft_id)
+            if row is None:
+                return
+            if result["ok"]:
+                row.status = "ready"
+                row.spec = json.dumps(result["spec"], ensure_ascii=False)
+            else:
+                row.status = "failed"
+                row.error = (result.get("error") or "")[:500]
+                if result.get("spec"):
+                    row.spec = json.dumps(result["spec"], ensure_ascii=False)
+            row.model = (result.get("model") or "")[:120]
+
+    threading.Thread(target=run, daemon=True, name=f"dast-draft-{draft_id}").start()
+    return draft_id

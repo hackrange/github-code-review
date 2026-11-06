@@ -55,6 +55,40 @@
     </div>
   </div>
 
+  {% if drafts %}
+  <div class="card">
+    <div class="card-head"><span class="head-text">Drafted rules</span>
+      {% if drafting %}<span class="badge pending">drafting, this page refreshes</span>{% endif %}</div>
+    <div class="card-body">
+      <div class="table-scroll"><table>
+        <thead><tr><th>Prompt</th><th>State</th><th></th></tr></thead>
+        <tbody>
+        {% for d in drafts %}
+          <tr>
+            <td><div>{{ d.prompt }}</div>
+              {% if d.status == 'failed' and d.error %}<div class="small bad">{{ d.error }}</div>{% endif %}</td>
+            <td><span class="badge {{ {'ready':'ok','failed':'bad','working':'pending'}.get(d.status, 'pending') }}">{{ d.status }}</span></td>
+            <td class="nowrap">
+              {% if d.status == 'ready' %}
+              <button class="btn sm primary" type="button" data-modal="rule-modal"
+                      data-editing="" data-origin="ai" data-from-draft="{{ d.id }}"
+                      data-spec="{{ d.spec | e }}">Review and save</button>
+              {% elif d.status == 'failed' %}
+              <button class="btn sm" type="button" data-modal="rule-modal"
+                      data-editing="" data-origin="ai" data-from-draft="{{ d.id }}"
+                      data-spec="{{ d.spec | e }}" title="Open what the model wrote so you can fix it">Fix</button>
+              {% else %}<span class="faint small">working...</span>{% endif %}
+              <form method="post" action="{{ base }}/dast-admin/drafts/{{ d.id }}/delete" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm danger" type="submit">Dismiss</button></form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody></table></div>
+    </div>
+  </div>
+  {% endif %}
+
   {% for cls, group in groups.items() %}
   <div class="card">
     <div class="card-head">
@@ -205,6 +239,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="editing" id="rule-editing" value="">
       <input type="hidden" name="origin" id="rule-origin" value="custom">
+      <input type="hidden" name="from_draft" id="rule-from-draft" value="">
       <p class="small faint">The rule is a JSON spec that follows the
         <a href="{{ base }}/dast-admin/rule-schema.json" class="mono">standard</a>.
         It is checked when you save: it must be in scope, non-destructive, and
@@ -282,11 +317,13 @@
     try { spec.value = JSON.stringify(JSON.parse(text), null, 2); }
     catch (e) { spec.value = text || ""; }
   }
+  var fromDraft = document.getElementById("rule-from-draft");
   document.addEventListener("click", function (e) {
     var b = e.target.closest ? e.target.closest('[data-modal="rule-modal"]') : null;
     if (!b) { return; }
     if (editing) { editing.value = b.getAttribute("data-editing") || ""; }
     if (origin) { origin.value = b.getAttribute("data-origin") || "custom"; }
+    if (fromDraft) { fromDraft.value = b.getAttribute("data-from-draft") || ""; }
     fill(b.getAttribute("data-spec") || "");
   });
 
@@ -307,14 +344,10 @@
       function (cb) { cb.checked = chosen.indexOf(cb.value) !== -1; });
   });
 
-  // A drafted rule, handed back in the address, drops into the editor.
-  var draft = {{ draft | tojson }};
-  if (draft) {
-    fill(draft);
-    if (editing) { editing.value = ""; }
-    if (origin) { origin.value = "ai"; }
-    var modal = document.getElementById("rule-modal");
-    if (modal) { modal.hidden = false; }
+  // While a rule is being drafted in the background, refresh so it appears
+  // under Drafted rules when it is ready, without losing the current tab.
+  if ({{ 'true' if drafting else 'false' }}) {
+    window.setTimeout(function () { window.location.reload(); }, 5000);
   }
 })();
 </script>

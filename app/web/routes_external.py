@@ -1485,8 +1485,9 @@ def _available_rulesets(db):
 def _rule_context(db, user):
     from app.core import ai, settings_store
     from app.core.dast_checks import profiles, spec as spec_mod
-    from app.core.models import DastScanProfile
+    from app.core.models import DastRuleDraft, DastScanProfile
 
+    drafts = db.query(DastRuleDraft).order_by(DastRuleDraft.created_at.desc()).all()
     saved = db.query(DastScanProfile).order_by(DastScanProfile.name).all()
     profile_rulesets = {p.id: profiles._list(p.rulesets) for p in saved}
     context = _shared(db, user)
@@ -1496,6 +1497,7 @@ def _rule_context(db, user):
                    scan_profiles=saved, profile_rulesets=profile_rulesets,
                    available_rulesets=_available_rulesets(db),
                    oob_url=settings_store.get(db, "dast.oob_url") or "",
+                   drafts=drafts, drafting=any(d.status == "working" for d in drafts),
                    ai_on=ai.enabled(ai.config(db)))
     return context
 
@@ -1674,6 +1676,14 @@ async def save_rule(request: Request, user: User = Depends(current_user)):
             db.add(row)
         record(db, "dast.rule_saved", actor=user.username, target=clean["id"],
                detail=clean["class"], source_ip=client_ip(request))
+        # If this came from an AI draft, the draft has served its purpose.
+        from_draft = str(form.get("from_draft") or "")
+        if from_draft.isdigit():
+            from app.core.models import DastRuleDraft
+
+            draft = db.get(DastRuleDraft, int(from_draft))
+            if draft is not None:
+                db.delete(draft)
     return redirect(_back(back, f"Saved rule {clean['id']}."))
 
 
@@ -1753,25 +1763,31 @@ async def ai_draft_rule(request: Request, user: User = Depends(current_user)):
         if not ai.enabled(cfg):
             return redirect(_back(back, "The built in AI is off.  Turn it on in "
                                   "Settings to draft a rule from a prompt.", "error"))
-    result = generate.generate(cfg, prompt, user.username)
+    if not prompt:
+        return redirect(_back(back, "Say what the rule should detect.", "error"))
+    # The model can be slow, so it runs in the background.  The draft shows up
+    # under Drafted rules when it is done; this returns at once.
+    generate.start_draft(cfg, prompt, user.username)
     with session_scope() as db:
-        record(db, "dast.rule_ai_draft", actor=user.username,
-               target=prompt[:120], outcome="ok" if result["ok"] else "refused",
-               detail=(result.get("error") or "")[:200], source_ip=client_ip(request))
-    if not result["ok"]:
-        extra = ""
-        if result.get("spec"):
-            extra = "  The draft is below so you can fix it."
-        back_with = _back(back, f"The draft was not accepted: {result['error']}{extra}",
-                          "error")
-        if result.get("spec"):
-            from urllib.parse import quote
-            back_with += "&draft=" + quote(json.dumps(result["spec"], ensure_ascii=False)[:8000])
-        return redirect(back_with)
-    from urllib.parse import quote
-    draft = quote(json.dumps(result["spec"], ensure_ascii=False)[:8000])
-    return redirect(_back(back, "Drafted a rule.  Review it, then Save to add it "
-                          "(it starts disabled).", "ok") + "&draft=" + draft)
+        record(db, "dast.rule_ai_draft", actor=user.username, target=prompt[:120],
+               outcome="started", source_ip=client_ip(request))
+    return redirect(_back(back, "Drafting a rule.  It shows up under Drafted "
+                          "rules below when it is ready; the page refreshes "
+                          "until then."))
+
+
+@router.post("/dast-admin/drafts/{draft_id}/delete")
+async def delete_draft(draft_id: int, request: Request,
+                       user: User = Depends(current_user)):
+    await check_csrf(request)
+    from app.core.models import DastRuleDraft
+
+    with session_scope() as db:
+        _guard(db, user)
+        row = db.get(DastRuleDraft, draft_id)
+        if row is not None:
+            db.delete(row)
+    return redirect(_back("/dast-admin#tab-rules", "Dismissed the draft."))
 
 
 # ------------------------------------------------------------------ token API

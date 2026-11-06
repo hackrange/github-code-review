@@ -2465,6 +2465,29 @@ class DastRule(Base):
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class DastRuleDraft(Base):
+    """A rule the built in AI is drafting, or has drafted, from a prompt.
+
+    Drafting runs in the background so a slow model never times the page out.
+    A draft sits here until an administrator reviews it: a ready one can be
+    opened in the editor and saved as a real rule, a failed one shows why so it
+    can be fixed, and either can be dismissed.
+    """
+
+    __tablename__ = "dast_rule_drafts"
+
+    id = Column(Integer, primary_key=True)
+    prompt = Column(Text, default="")
+    # working, ready or failed.
+    status = Column(String(16), default="working", nullable=False)
+    spec = Column(LONG_JSON, default="")
+    error = Column(String(500), default="")
+    model = Column(String(120), default="")
+    created_by = Column(String(120), default="")
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class DastScanProfile(Base):
     """A saved scan profile: a depth plus the curated rulesets to run.
 
