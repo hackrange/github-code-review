@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-php-index-reachable",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "info",
+  "title": "PHP application is reachable (index.php is served)",
+  "summary": "GET /index.php returns a real page rather than the not found page, so a PHP front controller is served here.  This marks the site as a PHP runtime to track for patching.  It does not identify the PHP build or confirm any CVE.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/index.php"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s -o /dev/null -w '%{http_code}\\n' https://host/index.php  (200 means a PHP front controller is served here; a 404 means it is not)",
+  "remediate": "This is an inventory signal, not a vulnerability.  If this PHP application is internet facing, make sure its PHP runtime is on a vendor patched release and the host is tracked in your patch inventory.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "php"
+  ]
+}
