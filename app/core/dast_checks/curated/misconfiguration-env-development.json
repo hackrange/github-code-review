@@ -1,0 +1,29 @@
+{
+  "id": "misconfiguration-env-development",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "An environment file is served (/.env.development)",
+  "summary": "An environment file holds database credentials, API keys and other secrets in plain text.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.env.development"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"APP_\") or body_contains(\"DB_\") or body_contains(\"SECRET\")) and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.env.development",
+  "remediate": "Keep environment files out of the web root and rotate any exposed secrets.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-538",
+    "owasp": "A05:2021"
+  }
+}

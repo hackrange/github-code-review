@@ -32,8 +32,8 @@ from app.core.audit import record
 from app.core.db import session_scope
 from app.core.models import utcnow as m_utcnow
 from app.core.models import (
-    DastServer, ExternalAsset, ExternalAssetRepo, ExternalAssetTag,
-    ExternalDastScan, User,
+    DastScanProfile, DastServer, ExternalAsset, ExternalAssetRepo,
+    ExternalAssetTag, ExternalDastScan, User,
 )
 from app.web.render import notice_class, page
 from app.web.security import (
@@ -275,6 +275,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
 
         context.update(active_page="external", rows=rows, totals=totals,
                        profiles=dast_engines.PROFILES, default_profile=dast_engines.DEFAULT_PROFILE,
+                       scan_profiles=db.query(DastScanProfile).order_by(DastScanProfile.name).all(),
                        auth_kinds=external_auth_mod.KINDS,
                        q=q, tag=tag, app=app, grade=grade, dast=dast, risk=risk,
                        scope=scope, all_tags=all_tags, apps=apps, opts=opts, paging=paging,
@@ -377,7 +378,7 @@ async def add(request: Request, user: User = Depends(current_user)):
         no_scan = _checked(form, "no_scan")
         reason = clean_text(form.get("no_scan_reason"), "Reason", limit=300, required=False)
         try:
-            details = external.clean_details(_detail_form(form), envs=external.environments(db))
+            details = external.clean_details(_detail_form(form), envs=external.environments(db), profile_names=external.saved_profile_names(db))
             picks = external.parse_picks(form.getlist("pick"))
             got = external.add_assets(db, rows, user.username, no_scan, reason, tags,
                                       details=details, picks=picks, user=user)
@@ -710,6 +711,7 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             servers=db.query(DastServer).order_by(DastServer.name).all(),
             ias=_ias_choices(db, asset),
             profiles=dast_engines.PROFILES, active=dast_engines.ACTIVE_PROFILES,
+            scan_profiles=db.query(DastScanProfile).order_by(DastScanProfile.name).all(),
             plans=dast_engines.PLANS, engines=dast_engines.installed(),
             engine_names=dast_engines.ENGINE_NAMES,
             ai_ready=not ai.missing(ai.config(db)), review=review, busy=busy,
@@ -765,7 +767,7 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
                                        limit=200, required=False)
         try:
             external.apply_details(asset, external.clean_details(
-                _detail_form(form), envs=external.environments(db), keep_env=asset.environment))
+                _detail_form(form), envs=external.environments(db), keep_env=asset.environment, profile_names=external.saved_profile_names(db)))
             if form.get("with_picks"):
                 external.set_picks(db, asset, external.parse_picks(form.getlist("pick")),
                                    user.username, user)
@@ -924,7 +926,10 @@ async def start_scan(asset_id: int, request: Request, user: User = Depends(curre
             except ValueError:
                 raise HTTPException(status_code=400, detail="Pick a server.")
         sign_in = bool(asset.auth_kind) and _checked(form, "authenticated")
-        if (server_id or profile in dast_engines.ACTIVE_PROFILES
+        # A saved scan profile (a name, not a plain depth) runs the active
+        # engines and the curated rules, so it needs the same confirmation.
+        saved = profile not in dast_engines.PROFILES
+        if (server_id or saved or profile in dast_engines.ACTIVE_PROFILES
                 or (sign_in and profile != "baseline")) and not _checked(form, "confirm"):
             return redirect(_back(here, "Tick the box to confirm you are allowed to scan this "
                                         "site this way.  A signed in scan acts as that user.", "error"))
@@ -1444,6 +1449,331 @@ async def server_action(server_id: int, action: str, request: Request,
     return redirect(_back(back, f"{name}: {message}", "ok" if ok else "error"))
 
 
+# ------------------------------------------------------------------ DAST admin
+#
+# The admin home for dynamic scanning, reached from the External sites page.
+# It keeps the DAST settings out of the crowded general Settings, and it holds
+# the premium curated rules: the enhanced, high fidelity checks.
+
+
+def _rules_by_class(db):
+    """Every rule, grouped under its class, for the admin page."""
+    from app.core.dast_checks import spec as spec_mod
+    from app.core.models import DastRule
+
+    rows = db.query(DastRule).order_by(DastRule.rule_class, DastRule.rule_id).all()
+    groups = {cls: {"label": label, "rules": []}
+              for cls, label in spec_mod.CLASSES.items()}
+    for row in rows:
+        groups.setdefault(row.rule_class,
+                          {"label": row.rule_class, "rules": []})["rules"].append(row)
+    return groups
+
+
+def _available_rulesets(db):
+    """Every ruleset name a profile can pick: the classes, plus any tags on
+    rules."""
+    from app.core.dast_checks import profiles, spec as spec_mod
+    from app.core.models import DastRule
+
+    names = set(spec_mod.CLASSES)
+    for row in db.query(DastRule).all():
+        names |= profiles.membership(row.rule_class, row.rulesets)
+    return sorted(names)
+
+
+def _rule_context(db, user):
+    from app.core import ai, settings_store
+    from app.core.dast_checks import profiles, spec as spec_mod
+    from app.core.models import DastScanProfile
+
+    saved = db.query(DastScanProfile).order_by(DastScanProfile.name).all()
+    profile_rulesets = {p.id: profiles._list(p.rulesets) for p in saved}
+    context = _shared(db, user)
+    context.update(active_page="external", classes=spec_mod.CLASSES,
+                   safety=spec_mod.SAFETY, severities=spec_mod.SEVERITIES,
+                   groups=_rules_by_class(db), depths=profiles.DEPTHS,
+                   scan_profiles=saved, profile_rulesets=profile_rulesets,
+                   available_rulesets=_available_rulesets(db),
+                   oob_url=settings_store.get(db, "dast.oob_url") or "",
+                   ai_on=ai.enabled(ai.config(db)))
+    return context
+
+
+@router.api_route("/oob/{token}", methods=["GET", "POST", "HEAD"],
+                  include_in_schema=False)
+async def oob_callback(token: str, request: Request):
+    """The out of band callback.  Public on purpose: a scanned site hits it.
+
+    Records a hit only for a token this product minted, so it cannot be used to
+    fill the table, and answers a tiny 200 either way so it gives nothing away.
+    """
+    from app.core.dast_checks import callback
+
+    detail = f"{request.method} {str(request.url.path)[:120]}"
+    callback.record(token, kind="http", source_ip=client_ip(request), detail=detail)
+    return Response(content="ok\n", media_type="text/plain")
+
+
+@router.get("/dast-admin/rule-schema.json")
+def dast_rule_schema(user: User = Depends(current_user)):
+    """The rule standard as JSON Schema, so any tool or model can draft to it."""
+    from pathlib import Path
+
+    with session_scope() as db:
+        _guard(db, user)
+    path = Path(__file__).resolve().parents[2] / "schema" / "dast_rule.schema.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
+    return FileResponse(str(path), media_type="application/schema+json")
+
+
+@router.get("/dast-admin")
+def dast_admin_page(request: Request, user: User = Depends(current_user)):
+    with session_scope() as db:
+        _guard(db, user)
+        context = _rule_context(db, user)
+        context.update(
+            flash=clean_notice(request.query_params.get("msg", ""), limit=600),
+            flash_kind=notice_class(request.query_params.get("kind", "")),
+            draft=request.query_params.get("draft", ""))
+        return page(request, "dast_admin.html", **context)
+
+
+@router.post("/dast-admin/settings")
+async def save_dast_settings(request: Request, user: User = Depends(current_user)):
+    await check_csrf(request)
+    form = await request.form()
+    back = "/dast-admin#tab-settings"
+    from app.core import settings_store
+
+    oob = str(form.get("oob_url") or "").strip()[:500]
+    if oob and not oob.startswith(("http://", "https://")):
+        return redirect(_back(back, "The callback address must start with http:// "
+                              "or https://, or be left empty.", "error"))
+    with session_scope() as db:
+        _guard(db, user)
+        settings_store.set_value(db, "dast.oob_url", oob, user.username)
+        record(db, "dast.settings_saved", actor=user.username,
+               detail="oob_url set" if oob else "oob_url cleared",
+               source_ip=client_ip(request))
+    return redirect(_back(back, "Saved DAST settings."))
+
+
+@router.post("/dast-admin/profiles")
+async def save_scan_profile(request: Request, user: User = Depends(current_user)):
+    await check_csrf(request)
+    form = await request.form()
+    back = "/dast-admin#tab-profiles"
+    from app.core.dast_checks import profiles
+    from app.core.models import DastScanProfile
+
+    with session_scope() as db:
+        _guard(db, user)
+        name = clean_text(form.get("name"), "Name", limit=80)
+        depth = str(form.get("depth") or "premium")
+        if depth not in profiles.DEPTHS:
+            return redirect(_back(back, "Pick a depth.", "error"))
+        chosen = [r for r in form.getlist("rulesets") if r]
+        editing = str(form.get("editing") or "")
+        clash = db.query(DastScanProfile).filter(
+            DastScanProfile.name == name,
+            DastScanProfile.id != (int(editing) if editing.isdigit() else 0)).first()
+        if clash:
+            return redirect(_back(back, f"There is already a profile called {name}.",
+                                  "error"))
+        row = None
+        if editing.isdigit():
+            row = db.get(DastScanProfile, int(editing))
+        if row is None:
+            row = DastScanProfile(created_by=user.username[:120])
+            db.add(row)
+        row.name = name
+        row.depth = depth
+        row.rulesets = json.dumps(chosen, ensure_ascii=False)
+        row.notes = clean_text(form.get("notes"), "Notes", limit=2000, required=False)
+        record(db, "dast.profile_saved", actor=user.username, target=name,
+               detail=f"{depth}: {', '.join(chosen) or 'no rulesets'}",
+               source_ip=client_ip(request))
+    return redirect(_back(back, f"Saved scan profile {name}."))
+
+
+@router.post("/dast-admin/profiles/{profile_id}/delete")
+async def delete_scan_profile(profile_id: int, request: Request,
+                              user: User = Depends(current_user)):
+    await check_csrf(request)
+    back = "/dast-admin#tab-profiles"
+    from app.core.models import DastScanProfile
+
+    with session_scope() as db:
+        _guard(db, user)
+        row = db.get(DastScanProfile, profile_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such profile.")
+        name = row.name
+        db.delete(row)
+        record(db, "dast.profile_deleted", actor=user.username, target=name,
+               source_ip=client_ip(request))
+    return redirect(_back(back, f"Removed scan profile {name}."))
+
+
+@router.post("/dast-admin/rules/load")
+async def load_curated(request: Request, user: User = Depends(current_user)):
+    await check_csrf(request)
+    back = "/dast-admin#tab-rules"
+    from app.core.dast_checks import seed
+
+    with session_scope() as db:
+        _guard(db, user)
+        counts = seed.sync(db)
+        record(db, "dast.rules_loaded", actor=user.username,
+               detail=f"added {counts['added']}, refreshed {counts['refreshed']}",
+               source_ip=client_ip(request))
+    return redirect(_back(back, f"Loaded curated rules: {counts['added']} added, "
+                          f"{counts['refreshed']} refreshed.  They start disabled, "
+                          "so enable the ones you want."))
+
+
+@router.post("/dast-admin/rules")
+async def save_rule(request: Request, user: User = Depends(current_user)):
+    await check_csrf(request)
+    form = await request.form()
+    back = "/dast-admin#tab-rules"
+    from app.core.dast_checks import spec as spec_mod
+    from app.core.models import DastRule
+
+    with session_scope() as db:
+        _guard(db, user)
+        raw = str(form.get("spec") or "").strip()
+        try:
+            data = json.loads(raw)
+        except (ValueError, json.JSONDecodeError) as exc:
+            return redirect(_back(back, f"The rule is not valid JSON: {exc}", "error"))
+        try:
+            clean = spec_mod.validate(data)
+        except spec_mod.SpecError as exc:
+            return redirect(_back(back, f"The rule did not meet the standard: {exc}",
+                                  "error"))
+        existing = db.query(DastRule).filter(
+            DastRule.rule_id == clean["id"]).first()
+        editing = str(form.get("editing") or "")
+        if existing and str(existing.id) != editing:
+            return redirect(_back(back, f"There is already a rule called "
+                                  f"{clean['id']}.", "error"))
+        row = existing or DastRule(rule_id=clean["id"], created_by=user.username[:120],
+                                   origin=str(form.get("origin") or "custom")[:16])
+        row.rule_class = clean["class"]
+        row.title = clean["title"][:300]
+        row.safety = clean["safety"]
+        row.severity_floor = clean["severity_floor"]
+        row.spec = json.dumps(clean, ensure_ascii=False)
+        row.updated_by = user.username[:120]
+        if existing:
+            row.version = (row.version or 1) + 1
+        else:
+            db.add(row)
+        record(db, "dast.rule_saved", actor=user.username, target=clean["id"],
+               detail=clean["class"], source_ip=client_ip(request))
+    return redirect(_back(back, f"Saved rule {clean['id']}."))
+
+
+@router.post("/dast-admin/rules/bulk")
+async def bulk_rules(request: Request, user: User = Depends(current_user)):
+    await check_csrf(request)
+    form = await request.form()
+    back = "/dast-admin#tab-rules"
+    from app.core.models import DastRule
+
+    action = str(form.get("action") or "")
+    if action not in ("enable", "disable"):
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
+    want = action == "enable"
+    only_class = str(form.get("rule_class") or "").strip()
+    ids = [int(v) for v in form.getlist("rule_id") if str(v).isdigit()]
+    with session_scope() as db:
+        _guard(db, user)
+        query = db.query(DastRule)
+        if ids:
+            query = query.filter(DastRule.id.in_(ids))
+        elif only_class:
+            query = query.filter(DastRule.rule_class == only_class)
+        else:
+            return redirect(_back(back, "Nothing was selected.", "error"))
+        changed = 0
+        for row in query.all():
+            if row.enabled != want:
+                row.enabled = want
+                changed += 1
+        record(db, "dast.rules_bulk", actor=user.username,
+               target=only_class or f"{len(ids)} rules", detail=action,
+               source_ip=client_ip(request))
+    verb = "Enabled" if want else "Disabled"
+    return redirect(_back(back, f"{verb} {changed} rule{'' if changed == 1 else 's'}."))
+
+
+@router.post("/dast-admin/rules/{rule_db_id}/{action}")
+async def rule_action(rule_db_id: int, action: str, request: Request,
+                      user: User = Depends(current_user)):
+    await check_csrf(request)
+    back = "/dast-admin#tab-rules"
+    from app.core.models import DastRule
+
+    with session_scope() as db:
+        _guard(db, user)
+        row = db.get(DastRule, rule_db_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such rule.")
+        name = row.rule_id
+        if action in ("enable", "disable"):
+            row.enabled = action == "enable"
+            row.updated_by = user.username[:120]
+            record(db, "dast.rule_toggled", actor=user.username, target=name,
+                   detail=action, source_ip=client_ip(request))
+            return redirect(_back(back, f"{action.title()}d {name}."))
+        if action == "delete":
+            db.delete(row)
+            record(db, "dast.rule_deleted", actor=user.username, target=name,
+                   source_ip=client_ip(request))
+            return redirect(_back(back, f"Removed {name}."))
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
+
+
+@router.post("/dast-admin/rules/ai")
+async def ai_draft_rule(request: Request, user: User = Depends(current_user)):
+    await check_csrf(request)
+    form = await request.form()
+    back = "/dast-admin#tab-rules"
+    from app.core import ai
+    from app.core.dast_checks import generate
+
+    prompt = str(form.get("prompt") or "").strip()
+    with session_scope() as db:
+        _guard(db, user)
+        cfg = ai.config(db)
+        if not ai.enabled(cfg):
+            return redirect(_back(back, "The built in AI is off.  Turn it on in "
+                                  "Settings to draft a rule from a prompt.", "error"))
+    result = generate.generate(cfg, prompt, user.username)
+    with session_scope() as db:
+        record(db, "dast.rule_ai_draft", actor=user.username,
+               target=prompt[:120], outcome="ok" if result["ok"] else "refused",
+               detail=(result.get("error") or "")[:200], source_ip=client_ip(request))
+    if not result["ok"]:
+        extra = ""
+        if result.get("spec"):
+            extra = "  The draft is below so you can fix it."
+        back_with = _back(back, f"The draft was not accepted: {result['error']}{extra}",
+                          "error")
+        if result.get("spec"):
+            from urllib.parse import quote
+            back_with += "&draft=" + quote(json.dumps(result["spec"], ensure_ascii=False)[:8000])
+        return redirect(back_with)
+    from urllib.parse import quote
+    draft = quote(json.dumps(result["spec"], ensure_ascii=False)[:8000])
+    return redirect(_back(back, "Drafted a rule.  Review it, then Save to add it "
+                          "(it starts disabled).", "ok") + "&draft=" + draft)
+
+
 # ------------------------------------------------------------------ token API
 #
 # Mounted under /api/v1 by routes_api_v1, so it shares that router's token
@@ -1588,7 +1918,7 @@ async def api_add(request: Request, caller=Depends(_api_caller())):
         me = _api_me(db, caller)
         existed = db.query(ExternalAsset).filter(ExternalAsset.host == host).one_or_none()
         try:
-            details = external.clean_details(_api_details(body), envs=external.environments(db))
+            details = external.clean_details(_api_details(body), envs=external.environments(db), profile_names=external.saved_profile_names(db))
             picks = external.picks_from_names(db, body.get("repositories") or [])
             got = external.add_assets(db, [{
                 "host": host, "application": _str_field(body, "application", 200) or "",
@@ -1628,7 +1958,7 @@ async def api_patch(asset_id: int, request: Request, caller=Depends(_api_caller(
         try:
             external.apply_details(asset, external.clean_details(
                 _api_details(body), partial=True, envs=external.environments(db),
-                keep_env=asset.environment))
+                keep_env=asset.environment, profile_names=external.saved_profile_names(db)))
             if "repositories" in body:
                 external.set_picks(db, asset,
                                    external.picks_from_names(db, body["repositories"] or []),

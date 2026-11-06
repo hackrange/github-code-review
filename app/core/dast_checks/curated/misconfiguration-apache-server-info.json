@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-apache-server-info",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Apache server-info is exposed",
+  "summary": "mod_info reveals the full server configuration and loaded modules.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/server-info"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Apache Server Information\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/server-info",
+  "remediate": "Disable mod_info, or restrict /server-info to localhost.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "apache"
+  ]
+}

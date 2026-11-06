@@ -1,0 +1,32 @@
+{
+  "id": "access-control-horizontal-ab",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "One account can read another account's data (needs two accounts)",
+  "summary": "Account A can read what only account B should see.  This is the cleanest proof of broken object authorization, and it needs both accounts.",
+  "needs": [
+    "two_accounts",
+    "code_routes"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/{route}"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "Fetch the same route as account A and account B and compare the bodies.",
+  "remediate": "Scope every query to the signed in account.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-639",
+    "owasp": "API1:2023"
+  }
+}

@@ -1,0 +1,310 @@
+{% extends "base.html" %}
+{% block title %}DAST admin &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>DAST admin</h1>
+    <div class="faint small">The home for dynamic scanning settings and the
+      premium curated rules.  Rules are the enhanced, high fidelity checks that
+      run after the stock engines.  They only report a weakness that is proven
+      and has an impact, and they only ever run against the company's own
+      domains.</div></div>
+  <div class="page-actions">
+    <a class="btn" href="{{ base }}/external">External sites</a>
+    <a class="btn" href="{{ base }}/external-servers">DAST servers</a>
+  </div>
+</div>
+
+<nav class="section-nav" role="tablist" aria-label="DAST admin">
+  <a href="#tab-rules" role="tab" data-tab="rules" class="active">Premium Curated Rules</a>
+  <a href="#tab-profiles" role="tab" data-tab="profiles">Scan profiles</a>
+  <a href="#tab-settings" role="tab" data-tab="settings">General DAST settings</a>
+</nav>
+
+{% if flash %}
+<div class="card {{ 'bad' if flash_kind == 'error' else 'ok' }}">
+  <div class="small">{{ flash }}</div>
+</div>
+{% endif %}
+
+<section data-pane="rules">
+  {% set total = groups.values() | sum(attribute='rules', start=[]) | length %}
+  <div class="card">
+    <div class="card-head">Premium curated rules</div>
+    <div class="card-body small">
+      <p class="faint">{{ total }} rule{{ '' if total == 1 else 's' }}, grouped
+        by class.  Every rule follows one standard, so a new one is easy to add
+        or edit.  The standard is published as a
+        <a href="{{ base }}/dast-admin/rule-schema.json" class="mono">JSON Schema</a>,
+        so any tool or model can draft a rule to it.  A rule that does not meet
+        the standard, or that is not in scope or could change data, is refused
+        before it is saved.</p>
+      <div>
+        <button class="btn primary" type="button" data-modal="rule-modal"
+                data-editing="" data-origin="custom" data-spec="">New rule</button>
+        {% if ai_on %}
+        <button class="btn" type="button" data-modal="ai-modal">Draft a rule with AI</button>
+        {% endif %}
+        <form method="post" action="{{ base }}/dast-admin/rules/load" style="display:inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="btn" type="submit"
+                  title="Add any shipped rules that are not here yet, and refresh untouched ones">Load curated rules</button></form>
+        {% if not ai_on %}
+        <span class="faint">Turn on the built in AI in Settings to draft a rule from a prompt.</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% for cls, group in groups.items() %}
+  <div class="card">
+    <div class="card-head">
+      <span class="head-text">{{ group.label }}</span>
+      <span class="faint small">{{ group.rules | length }} rule{{ '' if group.rules | length == 1 else 's' }}</span>
+    </div>
+    <div class="card-body">
+      {% if group.rules %}
+      <form method="post" action="{{ base }}/dast-admin/rules/bulk" class="small">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="rule_class" value="{{ cls }}">
+        <div class="table-scroll"><table>
+          <thead><tr><th></th><th>Rule</th><th>Safety</th><th>Floor</th><th>State</th><th></th></tr></thead>
+          <tbody>
+          {% for r in group.rules %}
+            <tr>
+              <td><input type="checkbox" name="rule_id" value="{{ r.id }}"></td>
+              <td><strong class="mono">{{ r.rule_id }}</strong>
+                <div class="faint">{{ r.title }}{% if r.origin == 'ai' %} <span class="badge">AI draft</span>{% elif r.origin == 'curated' %} <span class="badge ok">curated</span>{% endif %}</div></td>
+              <td class="small">{{ r.safety }}</td>
+              <td class="small">{{ r.severity_floor }}</td>
+              <td><span class="badge {{ 'ok' if r.enabled else 'waived' }}">{{ 'enabled' if r.enabled else 'disabled' }}</span></td>
+              <td class="nowrap">
+                <button class="btn sm" type="button" data-modal="rule-modal"
+                        data-editing="{{ r.id }}" data-origin="{{ r.origin }}"
+                        data-spec="{{ r.spec | e }}">Edit</button>
+                <button class="btn sm" type="submit"
+                        formaction="{{ base }}/dast-admin/rules/{{ r.id }}/{{ 'disable' if r.enabled else 'enable' }}">
+                  {{ 'Disable' if r.enabled else 'Enable' }}</button>
+                <button class="btn sm danger" type="submit"
+                        formaction="{{ base }}/dast-admin/rules/{{ r.id }}/delete"
+                        data-confirm="Remove {{ r.rule_id }}?">Remove</button>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody></table></div>
+        <div style="margin-top:.4rem">
+          <button class="btn sm" type="submit" name="action" value="enable" data-needs-tick>Enable ticked</button>
+          <button class="btn sm" type="submit" name="action" value="disable" data-needs-tick>Disable ticked</button>
+          <span class="faint">or</span>
+          <button class="btn sm" type="submit" name="action" value="enable"
+                  data-confirm="Enable every {{ group.label }} rule?">Enable all {{ group.label }}</button>
+          <button class="btn sm" type="submit" name="action" value="disable"
+                  data-confirm="Disable every {{ group.label }} rule?">Disable all</button>
+        </div>
+      </form>
+      {% else %}<div class="empty">No rules in this class yet.</div>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</section>
+
+<section data-pane="profiles" hidden>
+  <div class="card">
+    <div class="card-head">Scan profiles</div>
+    <div class="card-body small">
+      <p class="faint">A scan profile saves a depth and the curated rulesets to
+        run, under one name, so you can apply the same scan to many sites.  For
+        example a PHP profile, premium depth with the php ruleset, for the PHP
+        sites.  A profile is picked when a scan starts, or set as a site's
+        default.</p>
+      <button class="btn primary" type="button" data-modal="profile-modal"
+              data-editing="" data-name="" data-depth="premium" data-notes=""
+              data-rulesets="[]">New profile</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      {% if scan_profiles %}
+      <div class="table-scroll"><table>
+        <thead><tr><th>Name</th><th>Depth</th><th>Rulesets</th><th></th></tr></thead>
+        <tbody>
+        {% for p in scan_profiles %}
+          <tr>
+            <td><strong>{{ p.name }}</strong>{% if p.notes %}<div class="small faint">{{ p.notes }}</div>{% endif %}</td>
+            <td class="small">{{ p.depth }}</td>
+            <td class="small">{% if profile_rulesets[p.id] %}{{ profile_rulesets[p.id] | join(', ') }}{% else %}<span class="faint">none</span>{% endif %}</td>
+            <td class="nowrap">
+              <button class="btn sm" type="button" data-modal="profile-modal"
+                      data-editing="{{ p.id }}" data-name="{{ p.name }}"
+                      data-depth="{{ p.depth }}" data-notes="{{ p.notes }}"
+                      data-rulesets="{{ profile_rulesets[p.id] | tojson | e }}">Edit</button>
+              <form method="post" action="{{ base }}/dast-admin/profiles/{{ p.id }}/delete" style="display:inline"
+                    data-confirm="Remove profile {{ p.name }}?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm danger" type="submit">Remove</button></form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody></table></div>
+      {% else %}<div class="empty">No scan profiles yet.</div>{% endif %}
+    </div>
+  </div>
+</section>
+
+<div class="modal-backdrop" id="profile-modal" hidden>
+  <div class="modal"><form method="post" action="{{ base }}/dast-admin/profiles">
+    <div class="modal-head">Scan profile <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="editing" id="profile-editing" value="">
+      <label>Name <input type="text" name="name" id="profile-name" maxlength="80" required
+                         placeholder="PHP sites, deep"></label>
+      <label>Depth <select name="depth" id="profile-depth">
+        {% for d in depths %}<option value="{{ d }}">{{ d }}</option>{% endfor %}</select>
+        <span class="faint small">How hard the stock engines run.  Curated rules run on top.</span></label>
+      <fieldset style="border:1px solid var(--line);border-radius:6px;padding:.5rem">
+        <legend class="small faint">Curated rulesets to run</legend>
+        <label class="small" style="display:block"><input type="checkbox" name="rulesets" value="*" data-ruleset="*"> All curated rules</label>
+        {% for r in available_rulesets %}
+        <label class="small" style="display:block"><input type="checkbox" name="rulesets" value="{{ r }}" data-ruleset="{{ r }}"> {{ r }}</label>
+        {% endfor %}
+      </fieldset>
+      <label>Notes <input type="text" name="notes" id="profile-notes" maxlength="2000"></label>
+    </div>
+    <div class="modal-foot"><button class="btn primary" type="submit">Save</button>
+      <button class="btn" type="button" data-close-modal>Cancel</button></div>
+  </form></div>
+</div>
+
+<section data-pane="settings" hidden>
+  <div class="card">
+    <div class="card-head">General DAST settings</div>
+    <div class="card-body">
+      <form method="post" action="{{ base }}/dast-admin/settings">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Out of band callback address
+          <input type="url" name="oob_url" maxlength="500" value="{{ oob_url }}"
+                 placeholder="https://oob.example.com">
+          <span class="faint small">The address the enhanced out of band checks
+            use for their callback.  A scanned site that can be made to fetch a
+            URL will hit it here, which proves server side request forgery.  It
+            must be reachable from the sites you scan.  Leave empty to switch the
+            out of band checks off.</span></label>
+        <div style="margin-top:.5rem"><button class="btn primary" type="submit">Save</button></div>
+      </form>
+      <p class="faint small" style="margin-top:.8rem">More dynamic scanning
+        settings will move here from the general Settings page over time.</p>
+    </div>
+  </div>
+</section>
+
+{# ---- create and edit a rule ---- #}
+<div class="modal-backdrop" id="rule-modal" hidden>
+  <div class="modal"><form method="post" action="{{ base }}/dast-admin/rules">
+    <div class="modal-head">Rule <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="editing" id="rule-editing" value="">
+      <input type="hidden" name="origin" id="rule-origin" value="custom">
+      <p class="small faint">The rule is a JSON spec that follows the
+        <a href="{{ base }}/dast-admin/rule-schema.json" class="mono">standard</a>.
+        It is checked when you save: it must be in scope, non-destructive, and
+        able to prove a finding (a control, a differential, a way to reproduce
+        it by hand, and a fix).</p>
+      <label>Rule spec (JSON)
+        <textarea name="spec" id="rule-spec" rows="20" class="mono" required
+                  spellcheck="false" placeholder='{ "id": "injection-example", ... }'></textarea></label>
+    </div>
+    <div class="modal-foot"><button class="btn primary" type="submit">Save</button>
+      <button class="btn" type="button" data-close-modal>Cancel</button></div>
+  </form></div>
+</div>
+
+{# ---- draft a rule from a prompt ---- #}
+{% if ai_on %}
+<div class="modal-backdrop" id="ai-modal" hidden>
+  <div class="modal"><form method="post" action="{{ base }}/dast-admin/rules/ai">
+    <div class="modal-head">Draft a rule with AI <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+    <div class="modal-body">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <p class="small faint">Say what to detect, for example: "a detection rule
+        for a PHP-CGI argument injection flaw".  The model is told the standard
+        and told to stay non-destructive and in scope.  Whatever it writes is
+        checked against the same standard, and a draft always starts disabled
+        for you to review before it runs.</p>
+      <label>What should the rule detect?
+        <textarea name="prompt" rows="4" maxlength="2000" required
+                  placeholder="A detection rule for ..."></textarea></label>
+    </div>
+    <div class="modal-foot"><button class="btn primary" type="submit">Draft it</button>
+      <button class="btn" type="button" data-close-modal>Cancel</button></div>
+  </form></div>
+</div>
+{% endif %}
+
+<script>
+(function () {
+  // Tabs: show one pane at a time, remember it in the address.
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".section-nav [data-tab]"));
+  var panes = Array.prototype.slice.call(document.querySelectorAll("[data-pane]"));
+  function show(name) {
+    tabs.forEach(function (t) { t.classList.toggle("active", t.getAttribute("data-tab") === name); });
+    panes.forEach(function (p) { p.hidden = p.getAttribute("data-pane") !== name; });
+  }
+  tabs.forEach(function (t) {
+    t.addEventListener("click", function (e) {
+      e.preventDefault();
+      var name = t.getAttribute("data-tab");
+      show(name);
+      window.history.replaceState(null, "", "#tab-" + name);
+    });
+  });
+  var hash = (window.location.hash || "").replace("#tab-", "");
+  show(tabs.some(function (t) { return t.getAttribute("data-tab") === hash; }) ? hash : "rules");
+
+  // The rule modal fills its textarea from the button that opened it, and
+  // pretty prints the stored spec so it is easy to edit.
+  var spec = document.getElementById("rule-spec");
+  var editing = document.getElementById("rule-editing");
+  var origin = document.getElementById("rule-origin");
+  function fill(text) {
+    if (!spec) { return; }
+    try { spec.value = JSON.stringify(JSON.parse(text), null, 2); }
+    catch (e) { spec.value = text || ""; }
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest('[data-modal="rule-modal"]') : null;
+    if (!b) { return; }
+    if (editing) { editing.value = b.getAttribute("data-editing") || ""; }
+    if (origin) { origin.value = b.getAttribute("data-origin") || "custom"; }
+    fill(b.getAttribute("data-spec") || "");
+  });
+
+  // The scan profile modal fills from the button that opened it, and ticks
+  // the rulesets the profile already runs.
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest('[data-modal="profile-modal"]') : null;
+    if (!b) { return; }
+    var set = function (id, v) { var el = document.getElementById(id); if (el) { el.value = v; } };
+    set("profile-editing", b.getAttribute("data-editing") || "");
+    set("profile-name", b.getAttribute("data-name") || "");
+    set("profile-depth", b.getAttribute("data-depth") || "premium");
+    set("profile-notes", b.getAttribute("data-notes") || "");
+    var chosen = [];
+    try { chosen = JSON.parse(b.getAttribute("data-rulesets") || "[]"); } catch (x) { chosen = []; }
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#profile-modal [name="rulesets"]'),
+      function (cb) { cb.checked = chosen.indexOf(cb.value) !== -1; });
+  });
+
+  // A drafted rule, handed back in the address, drops into the editor.
+  var draft = {{ draft | tojson }};
+  if (draft) {
+    fill(draft);
+    if (editing) { editing.value = ""; }
+    if (origin) { origin.value = "ai"; }
+    var modal = document.getElementById("rule-modal");
+    if (modal) { modal.hidden = false; }
+  }
+})();
+</script>
+{% endblock %}

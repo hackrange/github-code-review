@@ -381,6 +381,14 @@ DEFAULTS = {
                                 "unless the sites really are internal: on, a host name "
                                 "can point this server at its own network."),
 
+    "dast.oob_url":            ("", False,
+                                "The base address the enhanced out of band checks use "
+                                "for their callback, such as https://oob.example.com or "
+                                "this product's own public address.  A scanned site that "
+                                "can be made to fetch a URL will hit it here, which proves "
+                                "server side request forgery.  Leave empty to switch the "
+                                "out of band checks off; they are then skipped."),
+
     # ---- whose sites these are ----
     "web.company_domains":     ([], False,
                                 "The company's own domains. A host on one, or under "

@@ -1,0 +1,38 @@
+{
+  "id": "injection-ssrf-route-url",
+  "class": "injection",
+  "safety": "oob",
+  "severity_floor": "high",
+  "title": "Server side request forgery on a code route (url)",
+  "summary": "A declared route fetched a URL given in the url parameter.",
+  "needs": [
+    "oob",
+    "code_routes"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/{route}",
+        "query": {
+          "url": "{oob}"
+        }
+      },
+      "oob_token": "dns"
+    }
+  ],
+  "confirm": {
+    "differential": "oob_hit==true",
+    "retest": 1
+  },
+  "reproduce": "curl -s 'https://host/<route>?url=https://CALLBACK/'",
+  "remediate": "Do not fetch a URL from user input.  Allowlist destinations and block internal addresses.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-918",
+    "owasp": "A10:2021"
+  },
+  "rulesets": [
+    "ssrf"
+  ]
+}

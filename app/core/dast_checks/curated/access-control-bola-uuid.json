@@ -1,0 +1,32 @@
+{
+  "id": "access-control-bola-uuid",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Opaque id can be substituted to read another tenant's object (needs two accounts)",
+  "summary": "A UUID or opaque id can be swapped for another to read an object that is not the caller's.  Needs a second account to prove, so it skips until two accounts are configured.",
+  "needs": [
+    "two_accounts",
+    "code_routes"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/{route}"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "As account A, request an object id known to belong to account B.",
+  "remediate": "Check object ownership on the server for every object level read.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-639",
+    "owasp": "API1:2023"
+  }
+}

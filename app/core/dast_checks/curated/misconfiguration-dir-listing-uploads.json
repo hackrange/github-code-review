@@ -1,0 +1,29 @@
+{
+  "id": "misconfiguration-dir-listing-uploads",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Directory listing is on for /uploads/",
+  "summary": "The web server lists the contents of /uploads/, which hands an attacker a map of files that were never meant to be browsed.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/uploads/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Index of /\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/uploads/",
+  "remediate": "Turn off automatic directory listing (Options -Indexes, or autoindex off).",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-548",
+    "owasp": "A05:2021"
+  }
+}

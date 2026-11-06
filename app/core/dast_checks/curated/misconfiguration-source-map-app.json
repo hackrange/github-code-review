@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-source-map-app",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "JavaScript source map is served",
+  "summary": "A .map file rebuilds the original source, and often leaks comments, internal paths and sometimes secrets.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/js/app.js.map"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"mappings\") and body_contains(\"sources\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/js/app.js.map | head",
+  "remediate": "Do not deploy .map files, or block them at the web server.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-540",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "spa"
+  ]
+}

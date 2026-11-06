@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-nginx-status",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "nginx stub status is exposed",
+  "summary": "The nginx status page leaks connection and request volumes about the site.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/nginx_status"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Active connections\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/nginx_status",
+  "remediate": "Restrict the stub status location to localhost.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "nginx"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-jenkins-script-console",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "critical",
+  "title": "Jenkins script console is reachable",
+  "summary": "The Jenkins Groovy script console runs code on the server.  Reachable without a login, it is remote code execution.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/script"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Jenkins\") and body_contains(\"Groovy\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/script",
+  "remediate": "Require authentication on Jenkins and never expose the script console to the internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-284",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "jenkins"
+  ]
+}

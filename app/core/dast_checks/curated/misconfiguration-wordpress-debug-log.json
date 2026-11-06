@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-wordpress-debug-log",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "WordPress debug log is served",
+  "summary": "debug.log often holds stack traces, file paths and sometimes secrets.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/wp-content/debug.log"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"PHP \") or body_contains(\"Stack trace\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/wp-content/debug.log | head",
+  "remediate": "Turn off WP_DEBUG_LOG in production and remove the file.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-532",
+    "owasp": "A09:2021"
+  },
+  "rulesets": [
+    "php",
+    "wordpress"
+  ]
+}

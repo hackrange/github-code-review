@@ -24,6 +24,7 @@
       <input type="hidden" name="all" value="1">
       <button class="btn" type="submit">Refresh all</button>
     </form>
+    <a class="btn" href="{{ base }}/dast-admin">DAST Admin</a>
     <a class="btn" href="{{ base }}/external-servers">DAST servers</a>
     <a class="btn" href="{{ base }}/external.csv">CSV</a>
   </div>
@@ -322,7 +323,7 @@
         <label>Application <input type="text" name="application" maxlength="200" placeholder="for lines that do not say">
         </label>
         <label>Tags <input type="text" name="tags" maxlength="500" placeholder="added to every host, comma separated"></label>
-        {{ detail_fields(none, environments, statuses, '[]', profiles) }}
+        {{ detail_fields(none, environments, statuses, '[]', profiles, scan_profiles) }}
         <label class="check"><input type="checkbox" name="no_scan" value="1">
           <span>No scan.  We are not allowed to scan these, a SaaS product on our name for example.
             No ports, no TLS probing and no dynamic scan, only one look at the front page.</span></label>

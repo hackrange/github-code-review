@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-rails-info",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Rails info page is exposed",
+  "summary": "The Rails properties page shows framework and gem versions, which points an attacker straight at known vulnerabilities.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rails/info/properties"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"Ruby version\") or body_contains(\"Rails version\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/rails/info/properties",
+  "remediate": "Block /rails/info in production (it is only meant for development).",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "rails"
+  ]
+}

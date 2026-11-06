@@ -1,6 +1,6 @@
 {# The details a person fills in about a site, shared by Add sites and Edit.
    `a` is the site being edited, or none when adding. #}
-{% macro detail_fields(a, environments, statuses, picks_json='[]', profiles=none) %}
+{% macro detail_fields(a, environments, statuses, picks_json='[]', profiles=none, scan_profiles=none) %}
 <div class="ext-fields">
 <div class="form-grid">
   <label>Executive owner
@@ -36,7 +36,12 @@
   <label>Default scan profile
     <select name="default_profile">
       <option value="" {{ 'selected' if not (a and a.default_profile) }}>quick (the product default)</option>
+      {% if scan_profiles %}<optgroup label="Saved profiles">
+        {% for p in scan_profiles %}<option value="{{ p.name }}" {{ 'selected' if a and a.default_profile == p.name }}>{{ p.name }} ({{ p.depth }} + rules)</option>{% endfor %}
+      </optgroup>{% endif %}
+      <optgroup label="Depth only">
       {% for name in profiles %}<option value="{{ name }}" {{ 'selected' if a and a.default_profile == name }}>{{ name }}</option>{% endfor %}
+      </optgroup>
     </select>
     <span class="faint small">What Scan starts with for this site.  It can still be changed each time.</span></label>
   {% endif %}

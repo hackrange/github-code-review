@@ -1,0 +1,37 @@
+{
+  "id": "injection-ssrf-param-dest",
+  "class": "injection",
+  "safety": "oob",
+  "severity_floor": "high",
+  "title": "Server side request forgery through the dest parameter",
+  "summary": "The site fetched a URL given in the dest parameter, so an attacker can make it reach internal services it should not.",
+  "needs": [
+    "oob"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/",
+        "query": {
+          "dest": "{oob}"
+        }
+      },
+      "oob_token": "dns"
+    }
+  ],
+  "confirm": {
+    "differential": "oob_hit==true",
+    "retest": 1
+  },
+  "reproduce": "curl -s 'https://host/?dest=https://CALLBACK/'",
+  "remediate": "Do not fetch a URL from user input.  If you must, allowlist the destinations and block internal addresses.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-918",
+    "owasp": "A10:2021"
+  },
+  "rulesets": [
+    "ssrf"
+  ]
+}

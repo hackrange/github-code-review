@@ -283,8 +283,15 @@ def clean_owners(value, what: str) -> str:
     return text
 
 
+def saved_profile_names(db) -> set:
+    """The names of the saved scan profiles, for validating a site's default."""
+    from app.core.models import DastScanProfile
+
+    return {row[0] for row in db.query(DastScanProfile.name).all()}
+
+
 def clean_details(data: dict, partial: bool = False, envs: dict = None,
-                  keep_env: str = "") -> dict:
+                  keep_env: str = "", profile_names: set = None) -> dict:
     """The fields a person fills in about a site, checked.
 
     data holds strings as a form sends them, or JSON values from the API.
@@ -330,11 +337,16 @@ def clean_details(data: dict, partial: bool = False, envs: dict = None,
     if present("default_profile") or not partial:
         from app.core import dast_engines
 
-        value = str(data.get("default_profile") or "").strip().lower()
-        if value and value not in dast_engines.PROFILES:
-            raise ValueError("The default scan profile is baseline, quick, standard, "
-                             "thorough or premium.")
-        out["default_profile"] = value
+        raw = str(data.get("default_profile") or "").strip()
+        if not raw:
+            out["default_profile"] = ""
+        elif raw.lower() in dast_engines.PROFILES:
+            out["default_profile"] = raw.lower()          # a plain depth
+        elif profile_names and raw in profile_names:
+            out["default_profile"] = raw[:80]             # a saved profile name
+        else:
+            raise ValueError("The default scan profile must be baseline, quick, "
+                             "standard, thorough, premium, or a saved profile name.")
     if present("change_frequency_days") or not partial:
         raw = data.get("change_frequency_days")
         if raw in (None, ""):
@@ -429,7 +441,7 @@ def bulk_update(db, assets: list, changes: dict, actor: str, user=None) -> list:
     envs = environments(db)
     details = dict(changes.get("details") or {})
     application = details.pop("application", None)
-    cleaned = clean_details(details, partial=True, envs=envs) if details else {}
+    cleaned = clean_details(details, partial=True, envs=envs, profile_names=saved_profile_names(db)) if details else {}
     tags = changes.get("tags")
     if tags and tags[0] not in ("add", "remove", "replace"):
         raise ValueError("Tags are added, removed or replaced.")
@@ -491,11 +503,24 @@ def bulk_update(db, assets: list, changes: dict, actor: str, user=None) -> list:
 
 
 def profile_for(asset: ExternalAsset) -> str:
-    """The profile a scan of this site starts with when nobody picks one."""
-    from app.core import dast_engines
+    """The profile a scan of this site starts with when nobody picks one.
 
-    value = (getattr(asset, "default_profile", "") or "").lower()
-    return value if value in dast_engines.PROFILES else dast_engines.DEFAULT_PROFILE
+    A plain depth is returned as is.  A saved scan profile name is returned
+    when a profile by that name still exists, so a site can default to, say,
+    the PHP profile.  Anything else falls back to the product default.
+    """
+    from app.core import dast_engines
+    from app.core.models import DastScanProfile
+
+    value = (getattr(asset, "default_profile", "") or "")
+    if value.lower() in dast_engines.PROFILES:
+        return value.lower()
+    if value:
+        with session_scope() as db:
+            if db.query(DastScanProfile).filter(
+                    DastScanProfile.name == value).first():
+                return value
+    return dast_engines.DEFAULT_PROFILE
 
 
 def apply_details(asset: ExternalAsset, details: dict) -> None:
@@ -1653,6 +1678,10 @@ def start_scan(asset_id: int, profile: str, actor: str, ai_triage: bool = False,
                 ExternalDastScan.asset_id == asset_id,
                 ExternalDastScan.status.in_(("queued", "running"))).first():
             return None, f"A scan of {asset.host} is already running."
+        # A saved scan profile resolves to a depth plus the rulesets to run.
+        # After this, profile is a plain depth the engines understand, and the
+        # chosen rulesets are recorded on the scan.
+        profile, chosen_rulesets, from_saved = resolve_profile(db, profile)
         server = None
         if server_id:
             server = db.get(DastServer, server_id)
@@ -1675,7 +1704,9 @@ def start_scan(asset_id: int, profile: str, actor: str, ai_triage: bool = False,
             asset_id=asset_id, server_id=server.id if server else None,
             server_name=(server.name if server else BUILTIN_SERVER)[:120],
             source="remote" if server else "builtin", status="queued",
-            profile=profile, started_at=utcnow(), recorded_by=(actor or "")[:120],
+            profile=profile,
+            curated_rulesets=json.dumps(chosen_rulesets) if from_saved else "",
+            started_at=utcnow(), recorded_by=(actor or "")[:120],
             ai_status="wanted" if ai_triage else "",
             authenticated=sign_in, auth_kind=auth.get("kind", "") if sign_in else "")
         db.add(scan)
@@ -1827,6 +1858,115 @@ def _builtin(scan_id: int) -> None:
         _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy)
 
 
+def resolve_profile(db, profile) -> tuple:
+    """A scan's chosen profile to (depth, ruleset names, whether it was saved).
+
+    A saved profile name gives its depth and its rulesets.  A plain depth gives
+    itself, no recorded rulesets (the depth alone then decides, so premium runs
+    them all), and from_saved False.
+    """
+    from app.core.dast_checks import profiles as prof_mod
+    from app.core.models import DastScanProfile
+
+    saved = db.query(DastScanProfile).filter(
+        DastScanProfile.name == (profile or "")).first()
+    if saved is None:
+        return profile, [], False
+    depth = saved.depth if saved.depth in prof_mod.DEPTHS else "premium"
+    return depth, prof_mod._list(saved.rulesets), True
+
+
+def _scan_rulesets(scan_id, profile) -> list:
+    """The curated rulesets this scan runs.
+
+    The scan's own recorded selection wins (set from a saved profile).  With
+    none recorded, the depth string decides: premium runs them all, the rest
+    run none, which is how it behaved before saved profiles existed.
+    """
+    from app.core.dast_checks import profiles
+
+    with session_scope() as db:
+        scan = db.get(ExternalDastScan, scan_id)
+        recorded = (scan.curated_rulesets or "") if scan else ""
+    if recorded:
+        try:
+            value = json.loads(recorded)
+            if isinstance(value, list):
+                return value
+        except ValueError:
+            pass
+    return ["*"] if profile == "premium" else []
+
+
+def _run_curated_rules(scan_id, url, wb, session, opts, rulesets) -> tuple:
+    """Run the enabled curated rules in the chosen rulesets against the site.
+
+    rulesets is the list the scan profile chose (["*"] for all).  -> (findings,
+    an engines summary row).  Every rule is validated again and runs through
+    the engine, which holds the scope gate and the safety contract, so an out
+    of scope host or an unsafe rule never gets a request.
+    """
+    from urllib.parse import urlparse
+
+    from app.core import settings_store as settings_mod
+    from app.core.dast_checks import callback, engine, profiles, scope
+    from app.core.dast_checks import spec as spec_mod
+    from app.core.models import DastRule
+
+    specs, domains, headers = [], [], {}
+    with session_scope() as db:
+        for row in db.query(DastRule).filter(DastRule.enabled.is_(True)).all():
+            if not profiles.selected(row.rule_class, row.rulesets, rulesets):
+                continue   # not in a ruleset this profile runs
+            try:
+                specs.append(spec_mod.validate(json.loads(row.spec or "{}")))
+            except (ValueError, spec_mod.SpecError):
+                continue   # a bad stored rule is skipped, never run
+        domains = scope.company_domains(
+            settings_mod.get(db, "web.company_domains") or [])
+        oob = callback.for_scan(db)
+    if session.get("cookie"):
+        headers["Cookie"] = session["cookie"]
+
+    host = urlparse(url).hostname or ""
+    row = {"tool": "curated", "name": "Premium curated rules", "status": "ok",
+           "seconds": 0}
+    # The gate, stated once for the whole stage: an out of scope site runs none.
+    if not scope.allowed(host, domains):
+        row["status"] = "skipped"
+        row["detail"] = scope.refuse_reason(host, domains)
+        return [], row
+    if not specs:
+        row["status"] = "skipped"
+        row["detail"] = "no curated rules are enabled"
+        return [], row
+
+    ctx = {"base_url": url, "host": host, "domains": domains,
+           "allow_private": opts["allow_private"],
+           "code_routes": list(wb.get("routes") or []),
+           "headers": headers or None, "budget": 60, "oob": oob}
+    started = time.monotonic()
+    findings, ran, skipped, confirmed = [], 0, 0, 0
+    for spec in specs:
+        if scan_id in _stopping:
+            break
+        result = engine.run_rule(spec, ctx)
+        if result["status"] == "ok":
+            ran += 1
+            findings += result["findings"]
+            confirmed += len(result["findings"])
+        elif result["status"] == "skipped":
+            skipped += 1
+        else:
+            log.info("curated rule %s: %s - %s", spec.get("id"),
+                     result["status"], result.get("detail"))
+    row["seconds"] = int(time.monotonic() - started)
+    row["detail"] = (f"{ran} rule{'' if ran == 1 else 's'} ran, "
+                     f"{confirmed} finding{'' if confirmed == 1 else 's'}, "
+                     f"{skipped} skipped")
+    return findings, row
+
+
 def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
     from app.core import dast_engines, external_auth, external_dast
     engines = []
@@ -1914,6 +2054,17 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                 _update(scan_id, engines=json.dumps(engines))
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
+    # The premium curated rules: the enhanced, high fidelity checks.  They run
+    # last, only on premium, and only against the company's own domains.  With
+    # no rules enabled (the default) this does nothing.
+    if url and plan:
+        rulesets = _scan_rulesets(scan_id, profile)
+        if rulesets:
+            rule_findings, rule_row = _run_curated_rules(scan_id, url, wb, session,
+                                                         opts, rulesets)
+            findings += rule_findings
+            engines.append(rule_row)
+            _update(scan_id, engines=json.dumps(engines))
     # Nothing an engine echoed back of the sign in is kept.
     findings = external_auth.redact(findings, secrets)
     engines = external_auth.redact(engines, secrets)

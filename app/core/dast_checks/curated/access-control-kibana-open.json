@@ -1,0 +1,32 @@
+{
+  "id": "access-control-kibana-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Kibana is reachable without signing in",
+  "summary": "Kibana is an administrative interface.  Reachable without authentication, it is a direct path into the data or the server.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/app/kibana"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Kibana\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/app/kibana",
+  "remediate": "Put the interface behind authentication and off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "kibana"
+  ]
+}

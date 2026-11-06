@@ -1,0 +1,35 @@
+{
+  "id": "access-control-graphql-introspection-api",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "GraphQL introspection is on (/api/graphql)",
+  "summary": "Introspection hands an attacker the full schema: every type, field and mutation, which maps the whole attack surface.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/graphql",
+        "query": {
+          "query": "{__schema{queryType{name}}}"
+        }
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"queryType\") or body_contains(\"__schema\"))",
+    "retest": 2
+  },
+  "reproduce": "curl -s 'https://host/api/graphql?query=%7B__schema%7BqueryType%7Bname%7D%7D%7D'",
+  "remediate": "Turn introspection off in production.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "API8:2023"
+  },
+  "rulesets": [
+    "graphql"
+  ]
+}

@@ -2430,6 +2430,83 @@ class DastServer(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
 
+class DastRule(Base):
+    """One premium curated rule: an enhanced, high fidelity check.
+
+    The rule is a declarative spec (see app.core.dast_checks.spec), stored as
+    JSON text.  The engine reads the spec and runs it; nothing here is code.
+    The columns off to the side (class, safety, enabled) are the spec's own
+    fields lifted out so the admin page can list, group and switch rules
+    without parsing every spec.
+    """
+
+    __tablename__ = "dast_rules"
+
+    id = Column(Integer, primary_key=True)
+    # The spec's own id, a slug, unique across all rules.
+    rule_id = Column(String(80), nullable=False, unique=True)
+    rule_class = Column(String(32), default="injection", nullable=False)
+    title = Column(String(300), default="")
+    safety = Column(String(16), default="read", nullable=False)
+    severity_floor = Column(String(16), default="medium", nullable=False)
+    enabled = Column(Boolean, default=True, nullable=False)
+    # curated (shipped), custom (an admin wrote it), or ai (the model drafted it).
+    origin = Column(String(16), default="custom", nullable=False)
+    # The whole spec as JSON.
+    spec = Column(LONG_JSON, default="")
+    # Extra ruleset names this rule belongs to, as JSON, on top of its class.
+    # A saved scan profile picks rulesets, so "php" here lets a PHP profile run
+    # this rule.  Every rule is always in a ruleset named after its class.
+    rulesets = Column(Text, default="")
+    version = Column(Integer, default=1, nullable=False)
+    created_by = Column(String(120), default="")
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_by = Column(String(120), default="")
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class DastScanProfile(Base):
+    """A saved scan profile: a depth plus the curated rulesets to run.
+
+    A profile names a scan once and reuses it everywhere.  For example a PHP
+    profile, premium depth with the php ruleset, applied to the PHP sites.  The
+    depth is one of the engine profiles (baseline, quick, standard, thorough,
+    premium); rulesets is a JSON list of ruleset names, or ["*"] for all.
+    """
+
+    __tablename__ = "dast_scan_profiles"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(80), nullable=False, unique=True)
+    depth = Column(String(16), default="premium", nullable=False)
+    rulesets = Column(Text, default="")
+    notes = Column(Text, default="")
+    created_by = Column(String(120), default="")
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class DastOobHit(Base):
+    """A hit on the out of band callback: a scanned site reached back to us.
+
+    Written by the public callback endpoint when something fetches the callback
+    URL (or looks up the callback host).  The enhanced engine mints a unique
+    token per probe, puts it in the URL it feeds the site, and later checks here
+    for a hit, which is how an out of band finding (such as SSRF) is proven.
+    Rows are short lived and hold only what proves contact.
+    """
+
+    __tablename__ = "dast_oob_hits"
+
+    id = Column(Integer, primary_key=True)
+    token = Column(String(64), nullable=False, index=True)
+    # http or dns.
+    kind = Column(String(8), default="http", nullable=False)
+    source_ip = Column(String(64), default="")
+    detail = Column(String(300), default="")
+    seen_at = Column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class ExternalDastScan(Base):
     """One dynamic scan of one external site.
 
@@ -2474,6 +2551,9 @@ class ExternalDastScan(Base):
     # For a scan run here: baseline, quick, standard, thorough or premium,
     # the step it is on, and what each engine did (JSON).
     profile = Column(String(16), default="")
+    # The curated rulesets this scan ran, as JSON (["*"] for all).  Set from
+    # the saved scan profile, so a scan records which enhanced checks it ran.
+    curated_rulesets = Column(Text, default="")
     # Whether the engines were signed in, and how.  Never the secret.
     authenticated = Column(Boolean, default=False, nullable=False)
     auth_kind = Column(String(16), default="")

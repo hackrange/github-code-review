@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/ghscan/dast_rule.schema.json",
+  "title": "Premium curated DAST rule",
+  "description": "The standard for an enhanced dynamic check in Git Code Review. A rule is data, not code: a fixed engine reads this spec and runs it. A rule is for scanning only the company's own hosted assets, is never destructive, and only reports a weakness that is proven and has an impact. Any tool or model that writes a rule must produce a document that validates against this schema; the server then applies extra safety rules this schema cannot express (listed in each field's notes).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "id",
+    "class",
+    "safety",
+    "severity_floor",
+    "title",
+    "summary",
+    "probe",
+    "confirm",
+    "reproduce",
+    "remediate"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 80,
+      "description": "A short unique slug, lower case with single dashes. Start it with the class, for example injection-php-cgi-arg."
+    },
+    "class": {
+      "type": "string",
+      "enum": ["access-control", "authentication", "injection", "misconfiguration", "business-logic", "client-side"],
+      "description": "The area the rule belongs to."
+    },
+    "safety": {
+      "type": "string",
+      "enum": ["read", "neutral", "oob"],
+      "description": "read: only GET, HEAD or OPTIONS, changes nothing. neutral: a request that changes nothing lasting (for example a failed login for a user that does not exist). oob: proves the server can be made to make a request, through a callback this product runs, and nothing more."
+    },
+    "severity_floor": {
+      "type": "string",
+      "enum": ["info", "low", "medium", "high", "critical"],
+      "description": "The lowest severity a confirmed finding gets. The engine may raise it on the evidence (for example when a response holds another person's data)."
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Plain language: what weakness this finds and why it matters."
+    },
+    "needs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["session", "two_accounts", "code_routes", "openapi", "oob", "headless"]
+      },
+      "uniqueItems": true,
+      "description": "What the rule needs to run. A rule whose needs are not met is skipped and says so. An oob rule must list oob."
+    },
+    "neutral_justification": {
+      "type": "string",
+      "description": "Required by the server when a neutral rule sends POST: one sentence on why the request changes nothing lasting."
+    },
+    "probe": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The requests to send, in order. The engine fills placeholders in braces, such as {route}, {oob} or a saved value.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "request": {
+            "type": "object",
+            "required": ["method", "path"],
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": ["GET", "HEAD", "OPTIONS", "POST", "TRACE"],
+                "description": "PUT, DELETE and PATCH are never allowed and are not listed. A read rule may use only GET, HEAD or OPTIONS (the server enforces this)."
+              },
+              "path": { "type": "string", "description": "A path on the in-scope host, may contain placeholders." },
+              "query": { "type": "object", "description": "Query parameters as name to value." },
+              "headers": { "type": "object", "description": "Extra request headers." },
+              "body": { "description": "A request body for POST. Must change nothing lasting." }
+            }
+          },
+          "oob_token": {
+            "type": "string",
+            "enum": ["dns", "http"],
+            "description": "Mints a unique callback token for this step, bound into the request through the {oob} placeholder. Required for an oob rule."
+          },
+          "save_as": {
+            "type": "string",
+            "description": "Save part of the response under this name for a later step or the confirm rule."
+          }
+        }
+      }
+    },
+    "confirm": {
+      "type": "object",
+      "required": ["differential", "retest"],
+      "description": "How a real finding is told from nothing. A bare 200 is never a finding.",
+      "properties": {
+        "control": {
+          "type": "string",
+          "description": "The request that cannot succeed (for example a path that cannot exist), so the normal answer is known. Required for read and neutral rules."
+        },
+        "differential": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The difference the finding stands on, as an expression the engine understands, for example: status==200 and body_differs(control); or oob_hit==true; or timing_differs."
+        },
+        "retest": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "How many times the confirming condition is reproduced, so a fluke is not a finding."
+        },
+        "max_delay_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5,
+          "description": "For a timing oracle only. A probe may wait at most 5 seconds; anything longer is a denial of service and is refused."
+        }
+      }
+    },
+    "reproduce": {
+      "type": "string",
+      "minLength": 1,
+      "description": "How a security admin repeats the result by hand, for example a curl command. This is what makes a finding fact based rather than a claim."
+    },
+    "remediate": {
+      "type": "string",
+      "minLength": 1,
+      "description": "How to fix the weakness."
+    },
+    "references": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Links that back the rule up (OWASP, a vendor advisory, research)."
+    },
+    "mappings": {
+      "type": "object",
+      "description": "Standard identifiers for the weakness.",
+      "properties": {
+        "owasp": { "type": "string" },
+        "cwe": { "type": "string" },
+        "capec": { "type": "string" },
+        "attack": { "type": "string" }
+      }
+    }
+  },
+  "$comment": "Extra rules the server enforces beyond this schema: a read rule may use only GET, HEAD or OPTIONS; PUT, DELETE and PATCH are never allowed; a neutral POST needs neutral_justification; an oob rule needs a probe step with an oob_token and oob in needs; no field anywhere may contain a destructive payload (DROP TABLE, DELETE FROM, rm -rf, shutdown, a long sleep, and so on); and every target host must be one of the company's own domains from Settings, or a subdomain under one, or the scan is refused."
+}

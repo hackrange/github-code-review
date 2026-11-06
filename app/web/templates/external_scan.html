@@ -185,6 +185,7 @@
           {% if f.ai_verdict %}<div><span class="badge {{ {'likely_real':'high','likely_false_positive':'waived','needs_review':'pending'}[f.ai_verdict] }}" title="{{ f.ai_why }}">{{ f.ai_verdict | replace('_', ' ') }}</span></div>{% endif %}</td>
         <td><strong>{{ f.title }}</strong>{% if f.cwe %} <span class="faint small mono">{{ f.cwe }}</span>{% endif %}
           {% if f.evidence %}<div class="small mono faint" style="white-space:pre-wrap;word-break:break-word">{{ f.evidence }}</div>{% endif %}
+          {% if f.reproduce %}<details class="small"><summary>How to reproduce</summary><div class="mono" style="white-space:pre-wrap;word-break:break-word">{{ f.reproduce }}</div></details>{% endif %}
           {% if f.remediation %}<details class="small"><summary>How to fix</summary>{{ f.remediation }}</details>{% endif %}
           {% if f.ai_why %}<div class="small"><span class="badge ai">AI</span> {{ f.ai_why }}{% if f.ai_sast %} <span class="mono">{{ f.ai_sast }}</span>{% endif %}</div>{% endif %}
           {% if f.reference %}<div class="small faint">{{ f.reference }}</div>{% endif %}</td>

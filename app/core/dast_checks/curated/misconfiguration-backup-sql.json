@@ -1,0 +1,29 @@
+{
+  "id": "misconfiguration-backup-sql",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A backup or dump file is served (/backup.sql)",
+  "summary": "A backup or database dump served to the internet hands over source code or data in one request.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/backup.sql"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -sI https://host/backup.sql",
+  "remediate": "Remove backup and dump files from the web root, and block these extensions at the web server.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-530",
+    "owasp": "A05:2021"
+  }
+}

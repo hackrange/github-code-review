@@ -1,0 +1,29 @@
+{
+  "id": "misconfiguration-swagger-ui-html",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "low",
+  "title": "Swagger UI is exposed",
+  "summary": "The interactive API explorer is open to anyone, which maps out every endpoint and its parameters.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/swagger-ui.html"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"Swagger UI\") or body_contains(\"swagger-ui\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/swagger-ui.html",
+  "remediate": "Do not serve Swagger UI in production, or require authentication.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  }
+}

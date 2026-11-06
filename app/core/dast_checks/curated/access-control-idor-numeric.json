@@ -1,0 +1,32 @@
+{
+  "id": "access-control-idor-numeric",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Numeric object id can be walked to another user's record (needs two accounts)",
+  "summary": "A numeric id in a route can be changed to read a record that belongs to someone else.  Proving this needs a second test account, so it only runs once two accounts are configured.",
+  "needs": [
+    "two_accounts",
+    "code_routes"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/{route}"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "As account A, request account B's object id over the same route.",
+  "remediate": "Check the object's owner against the signed in user on every read.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-639",
+    "owasp": "API1:2023"
+  }
+}

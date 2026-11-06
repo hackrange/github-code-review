@@ -213,6 +213,13 @@ def reproduce(f: dict, host: str) -> dict:
     The command asks the same question the scanner asked.  If the problem is
     fixed the answer is different, which is the point of including it.
     """
+    # A premium curated rule carries its own reproduction steps.  Use them as
+    # written; nothing is more faithful than what the rule actually did.
+    own = str(f.get("reproduce") or "").strip()
+    if own:
+        return {"command": own,
+                "hint": "The rule's own steps.  Run it from outside the company "
+                        "network; a different answer means it is fixed."}
     url = f.get("url") or ""
     tool = (f.get("tool") or f.get("check") or "").lower()
     evidence = str(f.get("evidence") or "")

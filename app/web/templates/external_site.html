@@ -334,7 +334,7 @@
       <label>Application <input type="text" name="application" maxlength="200" value="{{ asset.application }}"></label>
       <label>Tags <input type="text" name="tags" maxlength="1000" value="{{ tags | join(', ') }}">
         <span class="faint small">Comma separated.  A tag that matches a repository's application name links them.</span></label>
-      {{ detail_fields(asset, environments, statuses, picks_json, profiles) }}
+      {{ detail_fields(asset, environments, statuses, picks_json, profiles, scan_profiles) }}
       <label class="check"><input type="checkbox" name="no_scan" value="1" {{ 'checked' if asset.no_scan }}>
         <span>No scan.  We are not allowed to scan this host{% if asset.kind == 'domain' %} or anything under it{% endif %}.</span></label>
       <label>Why not <input type="text" name="no_scan_reason" maxlength="300" value="{{ asset.no_scan_reason }}" placeholder="Vendor hosted SaaS"></label>
@@ -428,7 +428,12 @@
       {% endif %}
       <label data-not-ias>Profile
         <select name="profile">
+          {% if scan_profiles %}<optgroup label="Saved profiles">
+            {% for p in scan_profiles %}<option value="{{ p.name }}" {{ 'selected' if p.name == site_profile }}>{{ p.name }} ({{ p.depth }} + rules){{ ' (this site\'s default)' if p.name == site_profile }}</option>{% endfor %}
+          </optgroup>{% endif %}
+          <optgroup label="Depth only">
           {% for name, what in profiles.items() %}<option value="{{ name }}" {{ 'selected' if name == site_profile }}>{{ name }}{{ ' (this site\'s default)' if name == site_profile }}</option>{% endfor %}
+          </optgroup>
         </select>
         <div class="profile-help small">
           {% for name, what in profiles.items() %}<div><strong>{{ name }}</strong>: {{ what }}</div>{% endfor %}
@@ -492,7 +497,12 @@
       {% endif %}
       <label data-not-ias>Profile
         <select name="profile">
+          {% if scan_profiles %}<optgroup label="Saved profiles">
+            {% for p in scan_profiles %}<option value="{{ p.name }}" {{ 'selected' if p.name == site_profile }}>{{ p.name }} ({{ p.depth }} + rules){{ ' (this site\'s default)' if p.name == site_profile }}</option>{% endfor %}
+          </optgroup>{% endif %}
+          <optgroup label="Depth only">
           {% for name, what in profiles.items() %}<option value="{{ name }}" {{ 'selected' if name == site_profile }}>{{ name }}{{ ' (this site\'s default)' if name == site_profile }}</option>{% endfor %}
+          </optgroup>
         </select></label>
       {% if auth %}<label class="check" data-not-ias><input type="checkbox" name="authenticated" value="1" checked>
         <span>Sign in, with the {{ auth.kind_name | lower }}.</span></label>{% endif %}
