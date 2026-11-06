@@ -17,6 +17,7 @@
 <nav class="section-nav" role="tablist" aria-label="DAST admin">
   <a href="#tab-rules" role="tab" data-tab="rules" class="active">Premium Curated Rules</a>
   <a href="#tab-profiles" role="tab" data-tab="profiles">Scan profiles</a>
+  <a href="#tab-integrations" role="tab" data-tab="integrations">Integrations</a>
   <a href="#tab-settings" role="tab" data-tab="settings">General DAST settings</a>
 </nav>
 
@@ -208,6 +209,87 @@
       <button class="btn" type="button" data-close-modal>Cancel</button></div>
   </form></div>
 </div>
+
+<section data-pane="integrations" hidden>
+  <div class="card" id="insightappsec">
+    <div class="card-head"><span class="head-text">Rapid7 InsightAppSec</span>
+      <a class="btn sm" href="{{ base }}{{ ias.guide }}" style="margin-left:auto">Setup guide</a></div>
+    <form method="post" action="{{ base }}/dast-admin/integrations">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="small faint" style="margin-bottom:.6rem">
+        Start dynamic scans on InsightAppSec from a site's page under External sites, and read
+        the findings back.  Each site runs from a scan config made in InsightAppSec.
+        New to this?  Follow the <a href="{{ base }}{{ ias.guide }}">step by step setup guide</a>.
+      </div>
+      <label class="check"><input type="checkbox" name="ias.enabled" value="1" {{ 'checked' if values['ias.enabled'] }}>
+        <span>Turn on InsightAppSec scans.  They show under Run it on, on each site's scan form.
+          External sites has to be on as well.</span></label>
+      <div class="form-grid">
+        <label>Region
+          <select name="ias.region">
+            {% for code, entry in ias.regions.items() %}<option value="{{ code }}" {{ 'selected' if values['ias.region'] == code }}>{{ entry[0] }} ({{ code }})</option>{% endfor %}
+          </select>
+          <span class="faint small">Where the Insight account is hosted.  It is the first part of the
+            address you sign in to InsightAppSec at: us2.appsec.insight.rapid7.com is us2.</span>
+        </label>
+        <label>API key
+          <input type="password" name="ias.api_key" autocomplete="new-password" class="mono"
+                 placeholder="{{ 'stored, leave empty to keep it' if values['ias.api_key'] else 'an Insight platform API key' }}">
+          <span class="faint small">Stored encrypted.  A user key for an account made for this,
+            not a person's own key.  The guide says which role it needs.</span>
+        </label>
+        <label>Scans at once
+          <input type="number" name="ias.max_concurrent" min="1" max="20"
+                 value="{{ values['ias.max_concurrent'] }}">
+          <span class="faint small">InsightAppSec scans started from here that may run at the same
+            time, 1 to 20.  A start past it is refused.  Keep it inside what the license and the
+            engines allow.</span>
+        </label>
+      </div>
+      <div class="small" style="margin-top:.6rem">
+        {% if ias.catalog.fetched_at %}
+        Scan configs: <strong>{{ ias.catalog.configs | length }}</strong> in {{ ias.catalog.apps }}
+        app{{ '' if ias.catalog.apps == 1 else 's' }}, read {{ ias.catalog.fetched_at[:16] | replace('T', ' ') }} UTC
+        {%- if ias.catalog.region != values['ias.region'] %} <span class="badge high">from the {{ ias.catalog.region }} region; refresh it</span>{% endif %}.
+        {% set broken = ias.catalog.configs | selectattr('errors') | list %}
+        {% if broken %}<span class="badge medium" title="{{ broken | map(attribute='name') | join(', ') }}">{{ broken | length }} with errors</span>
+          InsightAppSec fails a scan from a config with errors.{% endif %}
+        {% set unread = ias.catalog.configs | rejectattr('seeds_read') | list %}
+        {% if unread %}<span class="faint">{{ unread | length }} whose start addresses could not be read, so they are not matched to a site.</span>{% endif %}
+        {% if ias.catalog.truncated %}<span class="badge medium">only the first 1000 are kept</span>{% endif %}
+        {% else %}<span class="faint">No scan configs read yet.  Save the key, then press Refresh scan configs.</span>{% endif %}
+      </div>
+      {% set imp = ias.imported %}
+      <div class="small" style="margin-top:.6rem" id="ias-import">
+        <strong>Results from Rapid7.</strong>
+        <span class="faint">While this is on, every scan that finished in InsightAppSec, old ones too,
+          comes in each hour as a scan of each site whose host it touched.  A host that is not a site
+          under External sites is listed here instead.</span><br>
+        {% if imp.ran_at %}
+        Last import {{ imp.ran_at[:16] | replace('T', ' ') }} UTC: {{ imp.finished }} finished
+        scan{{ '' if imp.finished == 1 else 's' }} in Rapid7, {{ imp.read }} read, {{ imp.imported }}
+        brought in{% if imp.sites %} for {{ imp.sites | join(', ') }}{% endif %}.
+        {% if imp.left %}<span class="badge medium">{{ imp.left }} more on the next run</span>{% endif %}
+        {% if imp.error %}<span class="badge high">{{ imp.error }}</span>{% endif %}
+        {% if imp.not_sites %}<br><span class="faint">{{ imp.not_sites_count }} host{{ '' if imp.not_sites_count == 1 else 's' }}
+          with Rapid7 results {{ 'is' if imp.not_sites_count == 1 else 'are' }} not a site here:</span>
+          {% for h in imp.not_sites[:20] %}<span class="mono">{{ h.host }}</span> ({{ h.scans }}){{ ', ' if not loop.last }}{% endfor %}
+          {%- if imp.not_sites_count > 20 %} and {{ imp.not_sites_count - 20 }} more{% endif %}.{% endif %}
+        {% elif imp.skipped %}<span class="faint">Last run skipped: {{ imp.skipped }}.</span>
+        {% else %}<span class="faint">Nothing imported yet.</span>{% endif %}
+      </div>
+      <div class="page-actions" style="margin-top:.8rem">
+        <button class="btn primary" type="submit">Save</button>
+        <button class="btn" type="submit" formaction="{{ base }}/settings/integrations/insightappsec/test"
+                title="Reads only.  Uses the key typed above, or the stored one when the box is empty.">Test the connection</button>
+        <button class="btn" type="submit" formaction="{{ base }}/settings/integrations/insightappsec/refresh"
+                title="Reads every app and scan config the stored key can see, and their start addresses">Refresh scan configs</button>
+        <button class="btn" type="submit" formaction="{{ base }}/settings/integrations/insightappsec/import"
+                title="Brings in Rapid7's finished scans now instead of at the next hourly run">Import results now</button>
+      </div>
+    </form>
+  </div>
+</section>
 
 <section data-pane="settings" hidden>
   <div class="card">

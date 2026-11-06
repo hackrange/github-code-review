@@ -276,31 +276,6 @@ SECTIONS = [
                    "payloads.  Only scan sites the company owns and is allowed "
                    "to test.",
     }),
-    ("insightappsec", "Rapid7 InsightAppSec", {
-        "title": "Rapid7 InsightAppSec",
-        "what": [
-            "Starts dynamic scans on Rapid7 InsightAppSec from a site's page "
-            "under External sites, follows them, and reads the findings back "
-            "into the site's scans, with a link to each one in Rapid7.",
-            "A scan there always runs from a scan config made in "
-            "InsightAppSec.  The config holds the start address, the attack "
-            "template, the engine and the sign in.  This product only says "
-            "which config to run.  Refresh scan configs reads the list again "
-            "after somebody adds one in Rapid7.",
-            "Scans run in Rapid7 itself, old ones too, come in every hour as "
-            "scans of the sites they touched.  Import results now runs it "
-            "straight away.  Hosts with Rapid7 results that are not sites here "
-            "are listed on the card.",
-            "A scan with more than 5 findings keeps only its counts and date "
-            "here; the detail stays in Rapid7.  Rapid7 false positives and "
-            "duplicates are left out.",
-            "The key needs to see the apps and scan configs, and to start "
-            "scans.  The setup guide says which role does that.",
-        ],
-        "caution": "An InsightAppSec scan sends attack payloads to the site, "
-                   "from Rapid7's engines.  Only scan sites the company owns "
-                   "and is allowed to test.",
-    }),
     ("limits", "Limits", {
         "title": "Limits",
         "what": [
@@ -342,9 +317,6 @@ TABS = [
     ("signin", "Sign in", ["signin", "sessions"]),
     ("reports", "Reports", ["output", "reports", "display"]),
     ("web", "Web and external sites", ["domains", "webtest", "external"]),
-    # One card per product this one works with.  The next integration is a
-    # section here and a card on the page.
-    ("integrations", "Integrations", ["insightappsec"]),
 ]
 
 

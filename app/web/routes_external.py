@@ -1520,8 +1520,17 @@ def _rule_context(db, user):
                    available_rulesets=_available_rulesets(db),
                    oob_url=settings_store.get(db, "dast.oob_url") or "",
                    drafts=drafts, drafting=any(d.status == "working" for d in drafts),
+                   values=settings_store.all_values(db), ias=_ias_context(),
                    ai_on=ai.enabled(ai.config(db)))
     return context
+
+
+def _ias_context() -> dict:
+    """The InsightAppSec console data, the same the Settings page used to show."""
+    from app.core import insightappsec as ias
+
+    return {"regions": ias.REGIONS, "guide": ias.GUIDE,
+            "catalog": ias.load_catalog(), "imported": ias.load_import()["last"]}
 
 
 @router.api_route("/oob/{token}", methods=["GET", "POST", "HEAD"],
@@ -1562,6 +1571,47 @@ def dast_admin_page(request: Request, user: User = Depends(current_user)):
             flash_kind=notice_class(request.query_params.get("kind", "")),
             draft=request.query_params.get("draft", ""))
         return page(request, "dast_admin.html", **context)
+
+
+@router.post("/dast-admin/integrations")
+async def save_integrations(request: Request, user: User = Depends(current_user)):
+    await check_csrf(request)
+    form = await request.form()
+    back = "/dast-admin#tab-integrations"
+    from app.core import insightappsec as ias
+    from app.core import settings_store
+
+    key_typed = str(form.get("ias.api_key") or "").strip()[:500]
+    enabled = _checked(form, "ias.enabled")
+    try:
+        at_once = max(1, min(20, int(form.get("ias.max_concurrent") or 2)))
+    except (TypeError, ValueError):
+        at_once = 2
+    with session_scope() as db:
+        _guard(db, user)
+        region = str(form.get("ias.region") or "us").strip().lower()[:10]
+        if region not in ias.REGIONS:
+            return redirect(_back(back, "Pick an Insight platform region for "
+                                  "InsightAppSec.", "error"))
+        if enabled and not settings_store.get(db, "ias.api_key") and not key_typed:
+            return redirect(_back(back, "Give the InsightAppSec API key before "
+                                  "turning it on.  The setup guide says how to "
+                                  "make one.", "error"))
+        settings_store.set_value(db, "ias.region", region, user.username)
+        key_changed = bool(key_typed) and settings_store.set_value(
+            db, "ias.api_key", key_typed, user.username)
+        settings_store.set_value(db, "ias.max_concurrent", at_once, user.username)
+        enabled_changed = settings_store.set_value(db, "ias.enabled", enabled,
+                                                   user.username)
+        record(db, "integration.saved", actor=user.username, target="insightappsec",
+               detail=f"{region}, {'on' if enabled else 'off'}",
+               source_ip=client_ip(request))
+    # Turning it on (or changing the key while on) brings in what Rapid7 has now.
+    if enabled and (enabled_changed or key_changed):
+        from app.core import external
+
+        external.start_ias_import()
+    return redirect(_back(back, "Saved InsightAppSec settings."))
 
 
 @router.post("/dast-admin/settings")

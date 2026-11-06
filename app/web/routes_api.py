@@ -2275,7 +2275,7 @@ async def test_settings(request: Request, user: User = Depends(current_user)):
 def _integrations_back(message: str, kind: str):
     from urllib.parse import quote
 
-    return redirect(f"/settings?msg={quote(message[:300])}&kind={kind}#tab-integrations")
+    return redirect(f"/dast-admin?msg={quote(message[:300])}&kind={kind}#tab-integrations")
 
 
 @router.post("/settings/integrations/insightappsec/test")
