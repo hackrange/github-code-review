@@ -487,6 +487,11 @@ def _bulk_changes(form) -> dict:
             key: form.get(f"auth_{key}") or "" for key in (
                 "header_name", "header_value", "cookie", "login_url", "username",
                 "password", "username_field", "password_field")})
+    if on("auth_b"):
+        changes["auth_b"] = (str(form.get("auth_b_kind") or ""), {
+            key: form.get(f"auth_b_{key}") or "" for key in (
+                "header_name", "header_value", "cookie", "login_url", "username",
+                "password", "username_field", "password_field")})
     if on("repositories"):
         changes["repositories"] = (str(form.get("repositories_mode") or "add"),
                                    external.parse_picks(form.getlist("pick")))
@@ -698,7 +703,9 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             blocked=external.blocked(db, asset), scans=page_scans, active_scan=active_scan,
             scan_page=scan_page, scan_pages=scan_pages, scan_total=scan_total,
             fields=external.fields_of(asset), security_headers=external.SECURITY_HEADERS,
-            auth=external_auth_mod.describe(asset), auth_kinds=external_auth_mod.KINDS,
+            auth=external_auth_mod.describe(asset),
+            auth_b=external_auth_mod.describe(asset, "b"),
+            auth_kinds=external_auth_mod.KINDS,
             site_profile=external.profile_for(asset), proxy_label=external.proxy_shown(asset),
             has_shot=external.shot_path(asset.id).is_file(),
             schedules=[external_schedule.as_dict(x) for x in db.query(ExternalScanSchedule)
@@ -797,6 +804,21 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
                         form.get(f"auth_{k}") for k in ("header_value", "cookie", "password")):
                     record(db, "external.auth_set", actor=user.username, target=asset.host,
                            detail=external_auth.KINDS.get(asset.auth_kind, "")[:100],
+                           source_ip=client_ip(request))
+            if form.get("with_auth_b"):
+                from app.core import external_auth
+
+                before_b = asset.auth_kind_b or ""
+                external_auth.save(asset, form.get("auth_b_kind") or "", {
+                    key: form.get(f"auth_b_{key}") or "" for key in (
+                        "header_name", "header_value", "cookie", "login_url",
+                        "username", "password", "username_field", "password_field")},
+                    user.username, asset.parent_domain, slot="b")
+                if (asset.auth_kind_b or "") != before_b or any(
+                        form.get(f"auth_b_{k}") for k in ("header_value", "cookie", "password")):
+                    record(db, "external.auth_set", actor=user.username, target=asset.host,
+                           detail="second account: "
+                           + external_auth.KINDS.get(asset.auth_kind_b, "")[:80],
                            source_ip=client_ip(request))
         except ValueError as exc:
             db.rollback()

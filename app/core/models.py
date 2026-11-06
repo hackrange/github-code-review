@@ -2281,6 +2281,12 @@ class ExternalAsset(Base):
     auth_data = Column(Text, default="")
     auth_set_by = Column(String(120), default="")
     auth_set_at = Column(DateTime(timezone=True))
+    # A second sign in, for the checks that compare what one account can reach
+    # against another (broken object access).  Same shape as the first, slot b.
+    auth_kind_b = Column(String(16), default="", nullable=False)
+    auth_data_b = Column(Text, default="")
+    auth_set_by_b = Column(String(120), default="")
+    auth_set_at_b = Column(DateTime(timezone=True))
     # A web proxy this site's pages, screenshots, sign in and engines go
     # through, for a site that only lets in some networks.  Encrypted, since
     # it can carry a password.  Empty for none.

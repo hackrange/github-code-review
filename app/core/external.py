@@ -484,6 +484,10 @@ def bulk_update(db, assets: list, changes: dict, actor: str, user=None) -> list:
             if changes.get("auth") is not None:
                 kind, values = changes["auth"]
                 external_auth.save(asset, kind, values, actor, asset.parent_domain)
+            if changes.get("auth_b") is not None:
+                kind, values = changes["auth_b"]
+                external_auth.save(asset, kind, values, actor, asset.parent_domain,
+                                   slot="b")
             if repos:
                 mode, picks = repos
                 if mode == "add":
@@ -1898,7 +1902,19 @@ def _scan_rulesets(scan_id, profile) -> list:
     return ["*"] if profile == "premium" else []
 
 
-def _run_curated_rules(scan_id, url, wb, session, opts, rulesets) -> tuple:
+def _session_headers(sess: dict) -> dict:
+    """The request headers a built session signs in with: cookie and any headers."""
+    out = {}
+    if not sess:
+        return out
+    if sess.get("cookie"):
+        out["Cookie"] = sess["cookie"]
+    for name, value in sess.get("headers") or []:
+        out[name] = value
+    return out
+
+
+def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> tuple:
     """Run the enabled curated rules in the chosen rulesets against the site.
 
     rulesets is the list the scan profile chose (["*"] for all).  -> (findings,
@@ -1908,12 +1924,14 @@ def _run_curated_rules(scan_id, url, wb, session, opts, rulesets) -> tuple:
     """
     from urllib.parse import urlparse
 
+    from app.core import external_auth
     from app.core import settings_store as settings_mod
     from app.core.dast_checks import callback, engine, profiles, scope
     from app.core.dast_checks import spec as spec_mod
-    from app.core.models import DastRule
+    from app.core.models import DastRule, ExternalAsset
 
-    specs, domains, headers = [], [], {}
+    specs, domains = [], []
+    second_headers = None
     with session_scope() as db:
         for row in db.query(DastRule).filter(DastRule.enabled.is_(True)).all():
             if not profiles.selected(row.rule_class, row.rulesets, rulesets):
@@ -1925,8 +1943,16 @@ def _run_curated_rules(scan_id, url, wb, session, opts, rulesets) -> tuple:
         domains = scope.company_domains(
             settings_mod.get(db, "web.company_domains") or [])
         oob = callback.for_scan(db)
-    if session.get("cookie"):
-        headers["Cookie"] = session["cookie"]
+        # The second account, for the compare checks.  Built only when one is
+        # set and at least one enabled rule needs it.
+        if any("two_accounts" in (s.get("needs") or []) for s in specs):
+            asset = db.get(ExternalAsset, asset_id)
+            auth_b = external_auth.load_b(asset) if asset else {}
+            if auth_b:
+                sess_b = external_auth.session_for(auth_b, opts["allow_private"])
+                if sess_b.get("ok"):
+                    second_headers = _session_headers(sess_b)
+    headers = _session_headers(session)
 
     host = urlparse(url).hostname or ""
     row = {"tool": "curated", "name": "Premium curated rules", "status": "ok",
@@ -1944,7 +1970,8 @@ def _run_curated_rules(scan_id, url, wb, session, opts, rulesets) -> tuple:
     ctx = {"base_url": url, "host": host, "domains": domains,
            "allow_private": opts["allow_private"],
            "code_routes": list(wb.get("routes") or []),
-           "headers": headers or None, "budget": 60, "oob": oob}
+           "headers": headers or None, "second_headers": second_headers,
+           "budget": 60, "oob": oob}
     started = time.monotonic()
     findings, ran, skipped, confirmed = [], 0, 0, 0
     for spec in specs:
@@ -2060,8 +2087,8 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
     if url and plan:
         rulesets = _scan_rulesets(scan_id, profile)
         if rulesets:
-            rule_findings, rule_row = _run_curated_rules(scan_id, url, wb, session,
-                                                         opts, rulesets)
+            rule_findings, rule_row = _run_curated_rules(scan_id, asset_id, url, wb,
+                                                         session, opts, rulesets)
             findings += rule_findings
             engines.append(rule_row)
             _update(scan_id, engines=json.dumps(engines))

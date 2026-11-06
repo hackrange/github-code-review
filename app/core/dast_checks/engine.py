@@ -22,6 +22,7 @@ was compared against, how to reproduce it by hand, and how to fix it.
 from __future__ import annotations
 
 import ast
+import re
 import secrets
 import time
 from urllib.parse import urljoin, urlparse
@@ -104,7 +105,7 @@ class Client:
 # ------------------------------------------------------------------ the DSL
 
 _ALLOWED_FUNCS = {"body_differs", "body_contains", "header", "reflected",
-                  "status_in"}
+                  "status_in", "differ", "same", "status_of"}
 _ALLOWED_CMP = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
                 ast.In, ast.NotIn)
 
@@ -187,8 +188,12 @@ def _normalize(body: str) -> str:
     return re.sub(r"\s+", " ", body).strip()
 
 
-def _env_for(response: dict, control: dict, oob_hit: bool) -> dict:
-    """The names and helpers a differential may use."""
+def _env_for(response: dict, control: dict, oob_hit: bool, saved: dict = None) -> dict:
+    """The names and helpers a differential may use.
+
+    saved holds other responses by name (for example b and anon in a two
+    account check), so a differential can compare them.
+    """
     body = response.get("body") or ""
     headers = response.get("headers") or {}
 
@@ -207,14 +212,27 @@ def _env_for(response: dict, control: dict, oob_hit: bool) -> dict:
     def status_in(*codes):
         return response.get("status") in codes
 
-    return {
+    def differ(a, b):
+        return _normalize((a or {}).get("body") or "") != _normalize((b or {}).get("body") or "")
+
+    def same(a, b):
+        return not differ(a, b)
+
+    def status_of(resp):
+        return (resp or {}).get("status", 0)
+
+    env = {
         "status": response.get("status", 0),
+        "response": response,
         "control": control,
         "oob_hit": oob_hit,
         "_funcs": {"body_differs": body_differs, "body_contains": body_contains,
                    "header": header, "reflected": reflected,
-                   "status_in": status_in},
+                   "status_in": status_in, "differ": differ, "same": same,
+                   "status_of": status_of},
     }
+    env.update(saved or {})
+    return env
 
 
 # ------------------------------------------------------------------ running
@@ -277,6 +295,18 @@ def run_rule(spec: dict, ctx: dict) -> dict:
         return out
 
     budget = Budget(int(ctx.get("budget") or DEFAULT_BUDGET))
+
+    # A rule that compares two accounts runs its own path: it reads an object
+    # that belongs to the second account and checks the first can read it too.
+    if "two_accounts" in (spec.get("needs") or []):
+        try:
+            out["findings"] = _run_two_account(spec, ctx, domains, budget)
+        except Refused as exc:
+            out["status"], out["detail"] = "refused", str(exc)
+        except Exception as exc:  # noqa: BLE001
+            out["status"], out["detail"] = "error", f"{type(exc).__name__}: {exc}"[:200]
+        return out
+
     client = Client(base_url, domains, spec["safety"], budget,
                     allow_private=bool(ctx.get("allow_private")),
                     headers=ctx.get("headers"))
@@ -318,6 +348,72 @@ def run_rule(spec: dict, ctx: dict) -> dict:
         out["status"] = "error"
         out["detail"] = f"{type(exc).__name__}: {exc}"[:200]
     return out
+
+
+_OBJECT_PATH = re.compile(r"/\d{1,12}(?:/|$)|/[0-9a-fA-F]{8,}(?:/|$)"
+                          r"|[?&][\w-]*id=\w+", re.I)
+
+
+def _b_objects(client_b: Client, base_url: str, code_routes) -> list:
+    """Addresses that look like they point at a specific object of account b.
+
+    A cross account read is only meaningful against an object that belongs to
+    the other account, so this keeps the links from account b's own pages (and
+    any code routes) that carry an id, and leaves the generic pages out.
+    """
+    out = []
+    try:
+        landing = client_b.request("GET", "/")
+    except Refused:
+        return out
+    from app.core.dast_engines import links_in
+
+    for url in links_in(base_url, landing.get("body") or ""):
+        if _OBJECT_PATH.search(url) and url not in out:
+            out.append(url)
+    for route in code_routes or []:
+        if _OBJECT_PATH.search(route) and route not in out:
+            out.append(route)
+    return out[:MAX_ROUTES]
+
+
+def _run_two_account(spec: dict, ctx: dict, domains, budget: Budget) -> list:
+    """Account A reads an object that belongs to account B.  -> findings.
+
+    Reads only.  For each object address found in B's own pages: fetch it as B
+    (to confirm it is really B's and it is a real page), as A, and signed out.
+    The differential decides, for example: A got 200, it is really B's object,
+    A sees the same body as B, and the signed out visitor is turned away.
+    """
+    base_url = ctx.get("base_url") or ""
+    allow_private = bool(ctx.get("allow_private"))
+    a = Client(base_url, domains, "read", budget, allow_private, ctx.get("headers"))
+    b = Client(base_url, domains, "read", budget, allow_private, ctx.get("second_headers"))
+    anon = Client(base_url, domains, "read", budget, allow_private, None)
+
+    confirm = spec.get("confirm") or {}
+    differential = confirm.get("differential") or "False"
+    retest = int(confirm.get("retest") or 1)
+
+    findings = []
+    for url in _b_objects(b, base_url, ctx.get("code_routes")):
+        confirmations, resp_a = 0, None
+        for _attempt in range(retest):
+            resp_b = b.request("GET", url)
+            if resp_b.get("status") != 200:
+                break
+            resp_a = a.request("GET", url)
+            resp_anon = anon.request("GET", url)
+            env = _env_for(resp_a, {}, False,
+                           saved={"b": resp_b, "anon": resp_anon})
+            if evaluate(differential, env):
+                confirmations += 1
+            else:
+                break
+        if confirmations == retest and confirmations > 0:
+            findings.append(_finding(spec, a, resp_a, url))
+            break   # one solid finding per rule
+    return findings
 
 
 def _run_probe(spec: dict, client: Client, route: str, oob_value: str) -> dict:

@@ -3,27 +3,26 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
-  "title": "Opaque id can be substituted to read another tenant's object (needs two accounts)",
-  "summary": "A UUID or opaque id can be swapped for another to read an object that is not the caller's.  Needs a second account to prove, so it skips until two accounts are configured.",
+  "title": "A UUID or opaque object id can be read by another account",
+  "summary": "An object named by a UUID or opaque id that belongs to the second account can be read by the first account.  Guessing the id is hard, but access must still be checked.  Needs a second account configured for the site.",
   "needs": [
-    "two_accounts",
-    "code_routes"
+    "two_accounts"
   ],
   "probe": [
     {
       "request": {
         "method": "GET",
-        "path": "/{route}"
+        "path": "/"
       }
     }
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_differs(control)",
+    "differential": "status==200 and status_of(b)==200 and same(response, b) and differ(response, anon)",
     "retest": 2
   },
-  "reproduce": "As account A, request an object id known to belong to account B.",
-  "remediate": "Check object ownership on the server for every object level read.",
+  "reproduce": "Sign in as account A and open an object URL (with account B's UUID) that belongs to account B.  If A sees B's object, object access is broken.",
+  "remediate": "Check ownership on the server for every object, not just that the id is hard to guess.",
   "references": [],
   "mappings": {
     "cwe": "CWE-639",

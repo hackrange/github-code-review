@@ -3,27 +3,26 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
-  "title": "Numeric object id can be walked to another user's record (needs two accounts)",
-  "summary": "A numeric id in a route can be changed to read a record that belongs to someone else.  Proving this needs a second test account, so it only runs once two accounts are configured.",
+  "title": "A numeric object id can be read by another account",
+  "summary": "An object named by a numeric id that belongs to the second account can be read by the first account, so ids can be walked to read other records.  Needs a second account configured for the site.",
   "needs": [
-    "two_accounts",
-    "code_routes"
+    "two_accounts"
   ],
   "probe": [
     {
       "request": {
         "method": "GET",
-        "path": "/{route}"
+        "path": "/"
       }
     }
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_differs(control)",
+    "differential": "status==200 and status_of(b)==200 and same(response, b) and differ(response, anon)",
     "retest": 2
   },
-  "reproduce": "As account A, request account B's object id over the same route.",
-  "remediate": "Check the object's owner against the signed in user on every read.",
+  "reproduce": "Sign in as account A and open an object URL with account B's numeric id (for example /account/<B's id>).  If A sees B's record, access is broken.",
+  "remediate": "Check the object's owner against the signed in account on every read.",
   "references": [],
   "mappings": {
     "cwe": "CWE-639",

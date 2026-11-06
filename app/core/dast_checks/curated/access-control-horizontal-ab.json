@@ -3,27 +3,26 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
-  "title": "One account can read another account's data (needs two accounts)",
-  "summary": "Account A can read what only account B should see.  This is the cleanest proof of broken object authorization, and it needs both accounts.",
+  "title": "One account can read another account's object",
+  "summary": "The first account can read an object that belongs to the second account, which a signed out visitor cannot.  This is broken object level authorization.  Needs a second account configured for the site.",
   "needs": [
-    "two_accounts",
-    "code_routes"
+    "two_accounts"
   ],
   "probe": [
     {
       "request": {
         "method": "GET",
-        "path": "/{route}"
+        "path": "/"
       }
     }
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_differs(control)",
+    "differential": "status==200 and status_of(b)==200 and same(response, b) and differ(response, anon)",
     "retest": 2
   },
-  "reproduce": "Fetch the same route as account A and account B and compare the bodies.",
-  "remediate": "Scope every query to the signed in account.",
+  "reproduce": "Sign in as account A.  Open an object URL that belongs to account B (for example /invoice/<B's id>).  If A sees B's data, object access is broken.",
+  "remediate": "Check that the signed in account owns the object on every object read.",
   "references": [],
   "mappings": {
     "cwe": "CWE-639",

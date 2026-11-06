@@ -40,28 +40,43 @@ def _encrypt(data: dict) -> str:
     return store._encrypt(json.dumps(data)) if data else ""
 
 
-def load(asset) -> dict:
-    """The site's sign in, decrypted.  {} when there is none or it cannot be read."""
+# The two sign in slots: a is the main account, b is the second account used by
+# the checks that compare what one account can reach against another.
+_SLOTS = {"a": ("auth_kind", "auth_data", "auth_set_by", "auth_set_at"),
+          "b": ("auth_kind_b", "auth_data_b", "auth_set_by_b", "auth_set_at_b")}
+
+
+def load(asset, slot: str = "a") -> dict:
+    """A site's sign in, decrypted.  {} when there is none or it cannot be read."""
     from app.core import settings_store as store
 
-    if not getattr(asset, "auth_kind", "") or not asset.auth_data:
+    kind_attr, data_attr = _SLOTS[slot][0], _SLOTS[slot][1]
+    kind, blob = getattr(asset, kind_attr, ""), getattr(asset, data_attr, "")
+    if not kind or not blob:
         return {}
     try:
-        data = json.loads(store._decrypt(asset.auth_data) or "{}")
+        data = json.loads(store._decrypt(blob) or "{}")
     except Exception:  # noqa: BLE001 - a key change makes it unreadable, not fatal
         return {}
-    data["kind"] = asset.auth_kind
+    data["kind"] = kind
     return data
 
 
-def describe(asset) -> dict:
+def load_b(asset) -> dict:
+    """The second account's sign in, decrypted."""
+    return load(asset, "b")
+
+
+def describe(asset, slot: str = "a") -> dict:
     """What the page and the API may show: never a secret.  {} when none."""
-    data = load(asset)
+    data = load(asset, slot)
     if not data:
         return {}
+    by_attr, at_attr = _SLOTS[slot][2], _SLOTS[slot][3]
+    set_at = getattr(asset, at_attr, None)
     out = {"kind": data["kind"], "kind_name": KINDS.get(data["kind"], data["kind"]),
-           "set_by": asset.auth_set_by or "",
-           "set_at": asset.auth_set_at.isoformat() if asset.auth_set_at else None}
+           "set_by": getattr(asset, by_attr, "") or "",
+           "set_at": set_at.isoformat() if set_at else None}
     if data["kind"] == "header":
         out["header_name"] = data.get("header_name", "")
     elif data["kind"] == "cookie":
@@ -83,21 +98,26 @@ def _clean_line(value: str, what: str, limit: int = 8000) -> str:
     return text
 
 
-def save(asset, kind: str, values: dict, actor: str, parent_domain: str = "") -> None:
+def save(asset, kind: str, values: dict, actor: str, parent_domain: str = "",
+         slot: str = "a") -> None:
     """Set or clear a site's sign in.  A secret left empty keeps the saved one.
 
-    Raises ValueError with a sentence when something will not do.
+    slot a is the main account, slot b the second account for the compare
+    checks.  Raises ValueError with a sentence when something will not do.
     """
     from app.core.models import utcnow
 
+    kind_attr, data_attr, by_attr, at_attr = _SLOTS[slot]
     kind = (kind or "").strip().lower()
     if kind not in KINDS:
         raise ValueError("Sign in is none, header, cookie or form.")
     if not kind:
-        asset.auth_kind, asset.auth_data = "", ""
-        asset.auth_set_by, asset.auth_set_at = (actor or "")[:120], utcnow()
+        setattr(asset, kind_attr, "")
+        setattr(asset, data_attr, "")
+        setattr(asset, by_attr, (actor or "")[:120])
+        setattr(asset, at_attr, utcnow())
         return
-    old = load(asset) if asset.auth_kind == kind else {}
+    old = load(asset, slot) if getattr(asset, kind_attr) == kind else {}
     data = {}
     if kind == "header":
         name = _clean_line(values.get("header_name") or old.get("header_name") or "", "Header name", 100)
@@ -137,9 +157,10 @@ def save(asset, kind: str, values: dict, actor: str, parent_domain: str = "") ->
                 raise ValueError(f"{what} is the name of the form field, such as email.")
             if field:
                 data[key] = field
-    asset.auth_kind = kind
-    asset.auth_data = _encrypt(data)
-    asset.auth_set_by, asset.auth_set_at = (actor or "")[:120], utcnow()
+    setattr(asset, kind_attr, kind)
+    setattr(asset, data_attr, _encrypt(data))
+    setattr(asset, by_attr, (actor or "")[:120])
+    setattr(asset, at_attr, utcnow())
 
 
 # ------------------------------------------------------------------ secrets

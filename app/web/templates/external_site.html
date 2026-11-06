@@ -374,6 +374,33 @@
         </div>
         <div class="faint small">Use a test account.  A signed in scan can change what that user can change.</div>
       </details>
+      <details class="hand-fields" {{ 'open' if auth_b }}>
+        <summary><strong>Second account</strong> <span class="faint small">a second test account, for the checks that compare what one account can reach against another (broken object access).  Optional.</span></summary>
+        <input type="hidden" name="with_auth_b" value="1">
+        <label>How the second account signs in
+          <select name="auth_b_kind" data-auth-kind>
+            {% for k, label in auth_kinds.items() %}<option value="{{ k }}" {{ 'selected' if (auth_b.kind if auth_b else '') == k }}>{{ label }}</option>{% endfor %}
+          </select></label>
+        <div data-auth-for="header" class="form-grid">
+          <label>Header name <input type="text" name="auth_b_header_name" maxlength="100" value="{{ auth_b.header_name if auth_b and auth_b.header_name else 'Authorization' }}"></label>
+          <label>Header value <input type="password" name="auth_b_header_value" maxlength="8000" autocomplete="off"
+                 placeholder="{{ 'saved, leave empty to keep' if auth_b and auth_b.kind == 'header' else 'Bearer eyJ...' }}"></label>
+        </div>
+        <div data-auth-for="cookie">
+          <label>Session cookie <input type="password" name="auth_b_cookie" maxlength="8000" autocomplete="off"
+                 placeholder="{{ 'saved, leave empty to keep' if auth_b and auth_b.kind == 'cookie' else 'session=abc123' }}">
+            <span class="faint small">Copy it from a browser signed in as the second account.</span></label>
+        </div>
+        <div data-auth-for="form" class="form-grid">
+          <label>Login page <input type="url" name="auth_b_login_url" maxlength="1000" value="{{ auth_b.login_url if auth_b and auth_b.login_url else '' }}" placeholder="https://{{ asset.host }}/login"></label>
+          <label>User name <input type="text" name="auth_b_username" maxlength="300" autocomplete="off" value="{{ auth_b.username if auth_b and auth_b.username else '' }}"></label>
+          <label>Password <input type="password" name="auth_b_password" maxlength="1000" autocomplete="new-password"
+                 placeholder="{{ 'saved, leave empty to keep' if auth_b and auth_b.kind == 'form' else '' }}"></label>
+          <label>User name field <input type="text" name="auth_b_username_field" maxlength="100" value="{{ auth_b.username_field if auth_b and auth_b.username_field else '' }}" placeholder="found on the page"></label>
+          <label>Password field <input type="text" name="auth_b_password_field" maxlength="100" value="{{ auth_b.password_field if auth_b and auth_b.password_field else '' }}" placeholder="found on the page"></label>
+        </div>
+        <div class="faint small">Use a second test account that owns different data than the first.  That is what lets the compare checks prove one account can reach the other's objects.</div>
+      </details>
       <details class="hand-fields">
         <summary><strong>Telemetry by hand</strong> <span class="faint small">for a site the scan cannot reach, or to correct it.  A value here wins over the scan's until it is cleared.</span></summary>
         {% for group, rows in fields %}
