@@ -27,6 +27,23 @@ from app.core import external_probe as probe_mod
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 
+
+def _expiry_severity(days) -> str:
+    """Grade a soon to expire certificate by the days it has left.
+
+    Fifteen days or fewer, down to the day it lapses, is high.  Sixteen to
+    twenty nine days is medium.  Thirty to forty days is informational, a
+    heads up with time to act.  A certificate already past its date is graded
+    where the weakness is read, not here.
+    """
+    if days is None:
+        return "medium"
+    if days <= 15:
+        return "high"
+    if days <= 29:
+        return "medium"
+    return "info"
+
 # path, what it is, severity, a pattern its body must match, and how to fix it.
 SENSITIVE_PATHS = [
     ("/.git/HEAD", "Git repository metadata is served", "high",
@@ -175,9 +192,15 @@ def scan(host: str, allow_private: bool = False) -> dict:
     # ---- TLS
     tls = rec.get("tls") or {}
     for weakness in tls.get("weaknesses") or []:
-        sev = "high" if ("expired" in weakness.lower() or "not trusted" in weakness.lower()) else "medium"
-        if "expires soon" in weakness:
-            sev = "low"
+        wl = weakness.lower()
+        if "already expired" in wl:
+            sev = "high"
+        elif "expires soon" in wl:
+            sev = _expiry_severity(tls.get("days_left"))
+        elif "not trusted" in wl:
+            sev = "high"
+        else:
+            sev = "medium"
         findings.append(_finding("tls", weakness, sev, f"https://{host}/", weakness,
                                  "Fix the TLS configuration or the certificate.",
                                  "CWE-326"))

@@ -396,7 +396,7 @@ def analyze_tls(host: str, ip: str, port: int = 443, legacy: bool = True) -> dic
     days = info["days_left"]
     if days is not None and days < 0:
         w.append("Certificate already expired")
-    elif days is not None and days < 30:
+    elif days is not None and days <= 40:
         w.append(f"Certificate expires soon ({days} days)")
     kt = (info.get("key_type") or "").upper()
     kb = info["key_bits"] or 0
