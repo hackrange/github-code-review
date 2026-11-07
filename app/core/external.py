@@ -2109,6 +2109,12 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                         "detail": f"lowered {lowered} reflected XSS finding"
                                   f"{'s' if lowered != 1 else ''} to informational: the "
                                   "site's content security policy blocks inline script"})
+    findings, csrf_low = soften_blocked_csrf(findings, base["telemetry"].get("set_cookies") or [])
+    if csrf_low:
+        engines.append({"tool": "verify", "name": "SameSite check", "status": "ok", "seconds": 0,
+                        "detail": f"lowered {csrf_low} CSRF finding"
+                                  f"{'s' if csrf_low != 1 else ''} to informational: the "
+                                  "site's session cookie is SameSite"})
     findings = merge(roll_up(findings, url))
     stopped = scan_id in _stopping
     if url:
@@ -2136,6 +2142,12 @@ NOT_THERE = (404, 410)
 # not exposed.  An engine that calls such a path a finding read a working
 # control, or a "your session has expired" page, not a served file.
 PROTECTED = (401, 403)
+# A redirect whose target is a sign in page says the same thing a 403 does: the
+# path is behind a login, so an engine that reached it found the login, not the
+# page.  Matched on the redirect target, not the path, so a plain http to https
+# or trailing slash redirect is left alone.
+_LOGIN_URL = re.compile(r"log[\-_]?in|sign[\-_]?in|/auth\b|/authentica|/sso\b|/oauth|"
+                        r"/openid|/account/|/session|/idp/|saml|/login\.", re.I)
 REFLECTED = re.compile(r"xss|cross.site.script|reflect|crlf|header injection|response split"
                        r"|CWE-79\b|CWE-113\b", re.I)
 
@@ -2203,13 +2215,15 @@ def drop_soft_404(findings: list, base_url: str, allow_private: bool = False) ->
             echoed = (name.lstrip("."),)
             html = "html" in got["headers"].get("content-type", "")
             body, cut = got["body"], len(got["body"]) >= SOFT_404_BODY
-            seen[url] = (got["status"], got["status"] == 200 and any(
+            loc = got["headers"].get("location", "")
+            to_login = 300 <= got["status"] < 400 and bool(_LOGIN_URL.search(loc))
+            seen[url] = (got["status"], to_login, got["status"] == 200 and any(
                 same(norm(body, *echoed), cut, mark, mark_cut)
                 # Bodies cut at the limit all have its length, so only a
                 # whole page can be matched on size.
                 or html and not (cut or mark_cut) and abs(len(body) - size) < 16
                 for mark, size, mark_cut in controls))
-        status, soft = seen[url]
+        status, to_login, soft = seen[url]
         # Nothing is there: a claim that a file or page was found is only the
         # site's not found page.  What the page itself carries stays: input
         # it echoes back, or a key in it, is on the 404 page too.
@@ -2220,12 +2234,13 @@ def drop_soft_404(findings: list, base_url: str, allow_private: bool = False) ->
             # True, but of the page every missing address gets, so roll_up
             # can say that once instead of once per address.
             f = dict(f, answer="not_found")
-        elif status in PROTECTED:
-            # Sign in required or forbidden: the path is access controlled, so
-            # an engine calling it reachable found the control working, or a
-            # session expired page, not a served file.  A finding about what
-            # the page echoes or holds is kept; a bare "this path is here" is
-            # dropped, the same as a not found.
+        elif status in PROTECTED or to_login:
+            # Sign in required, forbidden, or redirected to a login page: the
+            # path is access controlled, so an engine calling it reachable
+            # found the control working, or a session expired page, not a
+            # served file.  A finding about what the page echoes or holds is
+            # kept; a bare "this path is here" is dropped, the same as a not
+            # found.
             if not about_content(f):
                 dropped += 1
                 continue
@@ -2294,6 +2309,55 @@ def soften_blocked_xss(findings: list, csp: str) -> tuple:
         text = f"{f.get('title') or ''} {f.get('cwe') or ''} {f.get('evidence') or ''}"
         if (f.get("tool") in ("dalfox", "wapiti", "nuclei", "nikto")
                 and XSS_WORDS.search(text)
+                and RANK.get(f.get("severity"), 0) > RANK.get("info")):
+            f = dict(f, severity="info", evidence=((f.get("evidence") or "")[:400] + note))
+            lowered += 1
+        out.append(f)
+    return out, lowered
+
+
+# Cross site request forgery findings, by name.  A form that carries no anti
+# CSRF token is the usual trigger.
+CSRF_WORDS = re.compile(r"\bcsrf\b|cross.site.request|CWE-352\b", re.I)
+# Cookie names that look like they carry a session, so SameSite on them matters.
+_SESSION_COOKIE = re.compile(r"sess|auth|token|sid|jwt|login|csrf", re.I)
+
+
+def _cookies_samesite(set_cookies: list) -> bool:
+    """Whether every session like cookie the site sets is SameSite Strict or
+    Lax, so a form on another site cannot send it.  False when there is no such
+    cookie, or any one lacks SameSite, so a real CSRF is never hidden."""
+    session_seen = False
+    for raw in set_cookies or []:
+        name = (raw.split("=", 1)[0] or "").strip()
+        if not _SESSION_COOKIE.search(name):
+            continue
+        session_seen = True
+        flags = {p.strip().lower() for p in raw.split(";")[1:]}
+        samesite = next((f.split("=", 1)[1].strip() for f in flags
+                         if f.startswith("samesite") and "=" in f), "")
+        if samesite not in ("strict", "lax"):
+            return False
+    return session_seen
+
+
+def soften_blocked_csrf(findings: list, set_cookies: list) -> tuple:
+    """Lower CSRF findings to informational when the site's session cookie is
+    SameSite, so a cross site form cannot carry it.  -> (findings, lowered).
+
+    Lowered, not dropped: SameSite Lax still lets a top level GET change state,
+    which is worth a look by hand, so the finding is kept, just not rated as a
+    working attack.
+    """
+    if not _cookies_samesite(set_cookies):
+        return findings, 0
+    note = ("  The site's session cookie is SameSite, so a form on another site "
+            "cannot send it, which is how this attack works.  Lowered to "
+            "informational: confirm by hand before acting on it.")
+    lowered, out = 0, []
+    for f in findings:
+        text = f"{f.get('title') or ''} {f.get('cwe') or ''} {f.get('evidence') or ''}"
+        if (f.get("tool") in ("wapiti", "nuclei", "nikto") and CSRF_WORDS.search(text)
                 and RANK.get(f.get("severity"), 0) > RANK.get("info")):
             f = dict(f, severity="info", evidence=((f.get("evidence") or "")[:400] + note))
             lowered += 1
