@@ -2100,6 +2100,33 @@ def _start_scan_proxy(session, host, upstream, workdir):
                             workdir=workdir)
 
 
+def _browser_dom(scan_id, url, opts, proxy) -> tuple:
+    """Load the page in a real browser, run its scripts, and read the JavaScript
+    it loaded.  -> (findings, an engines summary row).  Findings are a secret
+    hardcoded in client code or source exposed through a source map; both are
+    proof the page itself hands over, so there are no false positives here.  A
+    browser that cannot run is a skipped row, never a failed scan."""
+    from app.core import dom_scan, external_probe
+
+    with external_probe.via_proxy(proxy or ""):
+        collected = external_probe.browser_dom_collect(url, allow_private=opts["allow_private"])
+    name = "Headless DOM scan"
+    if not collected.get("ok"):
+        return [], {"tool": "dom", "name": name, "status": "skipped", "seconds": 0,
+                    "detail": collected.get("error") or "the browser gave no answer"}
+    try:
+        findings = dom_scan.scan(collected, url)
+    except Exception:  # noqa: BLE001 - the rest of the scan stands without it
+        log.exception("scan %s: the DOM scan failed to read the page", scan_id)
+        return [], {"tool": "dom", "name": name, "status": "skipped", "seconds": 0,
+                    "detail": "the page loaded but could not be read"}
+    loaded = len(collected.get("scripts") or []) + len(collected.get("inline") or [])
+    return findings, {
+        "tool": "dom", "name": name, "status": "ok", "seconds": 0,
+        "detail": (f"read {loaded} script{'s' if loaded != 1 else ''} the page loaded; "
+                   f"{len(findings)} finding{'s' if len(findings) != 1 else ''}")}
+
+
 def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> tuple:
     """Run the enabled curated rules in the chosen rulesets against the site.
 
@@ -2201,7 +2228,7 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
 
 
 def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
-    from app.core import dast_engines, external_auth, external_dast
+    from app.core import dast_engines, external_auth, external_dast, external_probe
     engines = []
     base = external_dast.scan(host, allow_private=opts["allow_private"])
     findings = [dict(f, tool="baseline") for f in base["findings"]]
@@ -2299,6 +2326,17 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
             if scan_proxy:
                 scan_proxy.stop()
             shutil.rmtree(workdir, ignore_errors=True)
+    # The headless DOM scan: load the page in a real browser, run its scripts,
+    # and read the JavaScript it loaded for a secret hardcoded in client code or
+    # source left exposed through a source map.  Both are proof, not a guess, so
+    # it runs on the deeper profiles when a browser is on hand.
+    if url and profile in ("thorough", "premium") and external_probe.playwright_python() \
+            and scan_id not in _stopping:
+        _update(scan_id, step="reading the page in a browser")
+        dom_findings, dom_row = _browser_dom(scan_id, url, opts, proxy)
+        findings += dom_findings
+        engines.append(dom_row)
+        _update(scan_id, engines=json.dumps(engines))
     # The premium curated rules: the enhanced, high fidelity checks.  They run
     # last, only on premium, and only against the company's own domains.  With
     # no rules enabled (the default) this does nothing.

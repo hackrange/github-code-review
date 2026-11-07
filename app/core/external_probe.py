@@ -1035,6 +1035,46 @@ def playwright_shot(urls: list, out_path: Path, allow_private: bool = False,
     return result
 
 
+DOM_SCRIPT = Path(__file__).with_name("dast_checks") / "browser_dom.py"
+
+
+def browser_dom_collect(url: str, allow_private: bool = False, timeout: int = 45) -> dict:
+    """Load the page in a real browser and bring back the JavaScript it ran.
+    -> {ok, url, scripts:[{url,text}], inline:[text], maps:[{url,text}], error}.
+    ok is False with a reason in error when the browser could not run."""
+    import json as _json
+
+    out = {"ok": False, "url": url, "scripts": [], "inline": [], "maps": [],
+           "error": "Playwright is not installed"}
+    py = playwright_python()
+    if not py or not DOM_SCRIPT.is_file():
+        return out
+    argv = [py, str(DOM_SCRIPT), url, "--user-agent", user_agent(), "--timeout", str(timeout)]
+    if allow_private:
+        argv.append("--allow-private")
+    if current_proxy():
+        argv += ["--proxy", current_proxy()]
+    scratch = Path(tempfile.mkdtemp(prefix="gcr-dom-"))
+    try:
+        with SHOT_GATE:
+            try:
+                proc = subprocess.run(argv, capture_output=True, text=True,
+                                      timeout=timeout + 30, cwd=scratch,
+                                      env={**os.environ, "HOME": str(Path.home())})
+            except subprocess.TimeoutExpired:
+                out["error"] = f"the browser took longer than {timeout + 30} seconds"
+                return out
+        try:
+            got = _json.loads((proc.stdout or "").strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            out["error"] = ("the browser gave no answer: "
+                            + ((proc.stderr or "").strip().splitlines() or [""])[-1][:160])
+            return out
+        return got
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def screenshot_urls(host: str, rec: dict) -> list:
     urls = []
     final = rec.get("final_url") or ""
