@@ -16,7 +16,7 @@
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and (body_contains(\"RewriteEngine\") or body_contains(\"Options \") or body_contains(\"<Directory\")) and body_differs(control)",
+    "differential": "status==200 and \"html\" not in header(\"content-type\") and (body_contains(\"RewriteEngine\") or body_contains(\"RewriteRule\") or body_contains(\"RewriteCond\") or body_contains(\"<Directory\") or body_contains(\"<Files\") or body_contains(\"AuthType \") or body_contains(\"Require all\") or body_contains(\"Order allow\")) and body_differs(control)",
     "retest": 2
   },
   "reproduce": "curl -s https://host/.htaccess",

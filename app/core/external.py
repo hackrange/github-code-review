@@ -2102,6 +2102,13 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                         "detail": f"left out {dropped} finding{'s' if dropped != 1 else ''} "
                                   "for paths that answer not found, or with the same "
                                   "page as one that cannot exist"})
+    csp = (base["telemetry"].get("headers") or {}).get("content-security-policy", "")
+    findings, lowered = soften_blocked_xss(findings, csp)
+    if lowered:
+        engines.append({"tool": "verify", "name": "CSP check", "status": "ok", "seconds": 0,
+                        "detail": f"lowered {lowered} reflected XSS finding"
+                                  f"{'s' if lowered != 1 else ''} to informational: the "
+                                  "site's content security policy blocks inline script"})
     findings = merge(roll_up(findings, url))
     stopped = scan_id in _stopping
     if url:
@@ -2125,6 +2132,10 @@ PATH_ENGINES = {"nikto", "nuclei", "ffuf"}
 MAX_VERIFY = 400
 SOFT_404_BODY = 65536
 NOT_THERE = (404, 410)
+# A path that answers with sign in required or forbidden is access controlled,
+# not exposed.  An engine that calls such a path a finding read a working
+# control, or a "your session has expired" page, not a served file.
+PROTECTED = (401, 403)
 REFLECTED = re.compile(r"xss|cross.site.script|reflect|crlf|header injection|response split"
                        r"|CWE-79\b|CWE-113\b", re.I)
 
@@ -2209,6 +2220,16 @@ def drop_soft_404(findings: list, base_url: str, allow_private: bool = False) ->
             # True, but of the page every missing address gets, so roll_up
             # can say that once instead of once per address.
             f = dict(f, answer="not_found")
+        elif status in PROTECTED:
+            # Sign in required or forbidden: the path is access controlled, so
+            # an engine calling it reachable found the control working, or a
+            # session expired page, not a served file.  A finding about what
+            # the page echoes or holds is kept; a bare "this path is here" is
+            # dropped, the same as a not found.
+            if not about_content(f):
+                dropped += 1
+                continue
+            f = dict(f, answer="protected")
         elif status:
             f = dict(f, answer="found")
         kept.append(f)
@@ -2220,6 +2241,64 @@ def about_content(f: dict) -> bool:
     there.  Such a finding is as true on a not found page as anywhere."""
     text = f"{f.get('title') or ''} {f.get('cwe') or ''} {f.get('evidence') or ''}"
     return bool(REFLECTED.search(text) or SECRET_WORDS.search(text))
+
+
+# Reflected cross site scripting that works by injecting an inline script or an
+# event handler.  A strong Content-Security-Policy stops those from running.
+XSS_WORDS = re.compile(r"\bxss\b|cross.site.script|CWE-79\b", re.I)
+# Script sources broad enough that an attacker can still load a script: a bare
+# scheme or a wildcard, which allow a script from anywhere on that scheme.
+_BROAD_SCRIPT_SRC = {"*", "http:", "https:", "data:", "blob:", "'unsafe-inline'"}
+
+
+def _csp_blocks_inline_script(csp: str) -> bool:
+    """Whether a Content-Security-Policy stops an injected inline script.
+
+    True only when script is governed (by script-src, or default-src when
+    there is no script-src), inline script is not allowed, and the allowed
+    sources are not opened up to a whole scheme or a wildcard.  A missing,
+    unsafe-inline, or wide open policy returns False, so a real reflected XSS
+    is never hidden by a weak policy.
+    """
+    directives = {}
+    for part in (csp or "").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        name, _, rest = part.partition(" ")
+        directives[name.lower()] = rest.lower().split()
+    src = directives.get("script-src")
+    if src is None:
+        src = directives.get("default-src")
+    if not src:
+        return False
+    return not any(token in _BROAD_SCRIPT_SRC for token in src)
+
+
+def soften_blocked_xss(findings: list, csp: str) -> tuple:
+    """Lower reflected XSS findings to informational when the site's policy
+    blocks inline script, with the reason.  -> (findings, how many lowered).
+
+    Lowered, not dropped: a policy does not stop DOM based XSS or a reflected
+    script that lands in an allowed source, so the finding is kept to verify
+    by hand, but it is no longer rated as if it ran.
+    """
+    if not _csp_blocks_inline_script(csp):
+        return findings, 0
+    note = ("  The site sends a Content-Security-Policy that does not allow "
+            "inline script, so an injected inline script or event handler will "
+            "not run.  Lowered to informational: confirm by hand that a script "
+            "source or a DOM sink makes it exploitable before acting on it.")
+    lowered, out = 0, []
+    for f in findings:
+        text = f"{f.get('title') or ''} {f.get('cwe') or ''} {f.get('evidence') or ''}"
+        if (f.get("tool") in ("dalfox", "wapiti", "nuclei", "nikto")
+                and XSS_WORDS.search(text)
+                and RANK.get(f.get("severity"), 0) > RANK.get("info")):
+            f = dict(f, severity="info", evidence=((f.get("evidence") or "")[:400] + note))
+            lowered += 1
+        out.append(f)
+    return out, lowered
 
 
 ROLL_UP_AT = 3
