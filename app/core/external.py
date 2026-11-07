@@ -1973,7 +1973,9 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
         entry = {"repository": name, "branch": branch, "routes": 0,
                  "host_in_code": [], "error": ""}
         try:
-            with recheck.branch_tip(connection, name, branch) as (root, why):
+            # Prefer a RAM backed checkout (/dev/shm): faster and never on disk.
+            # branch_tip falls back to the temp directory when RAM is tight.
+            with recheck.branch_tip(connection, name, branch, in_memory=True) as (root, why):
                 if root is None:
                     entry["error"] = why or "could not fetch it"
                 else:
