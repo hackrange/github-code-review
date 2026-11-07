@@ -508,7 +508,13 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
                                 break
                     out["status"] = resp.status_code
                     out["headers"] = {k.lower(): v for k, v in resp.headers.items()}
-                    out["set_cookies"] = resp.headers.get_list("set-cookie")
+                    # Accumulate across hops: a site that sets its session
+                    # cookie on the redirect to its login page, then does not
+                    # re-set it once the client already holds it, would leave
+                    # the final hop with none.  Keep every cookie the flow set.
+                    for ck in resp.headers.get_list("set-cookie"):
+                        if ck not in out["set_cookies"]:
+                            out["set_cookies"].append(ck)
                     out["body"] = body[:body_limit].decode(resp.encoding or "utf-8",
                                                            "replace")
                     out["final_url"] = current

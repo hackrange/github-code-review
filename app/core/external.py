@@ -2290,12 +2290,12 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                         "detail": f"lowered {lowered} reflected XSS finding"
                                   f"{'s' if lowered != 1 else ''} to informational: the "
                                   "site's content security policy blocks inline script"})
-    findings, csrf_low = soften_blocked_csrf(findings, base["telemetry"].get("set_cookies") or [])
-    if csrf_low:
+    findings, csrf_dropped = drop_samesite_csrf(findings, base["telemetry"].get("set_cookies") or [])
+    if csrf_dropped:
         engines.append({"tool": "verify", "name": "SameSite check", "status": "ok", "seconds": 0,
-                        "detail": f"lowered {csrf_low} CSRF finding"
-                                  f"{'s' if csrf_low != 1 else ''} to informational: the "
-                                  "site's session cookie is SameSite"})
+                        "detail": f"left out {csrf_dropped} CSRF finding"
+                                  f"{'s' if csrf_dropped != 1 else ''}: the site's session "
+                                  "cookie is SameSite, so a cross site form cannot carry it"})
     findings = merge(roll_up(findings, url))
     stopped = scan_id in _stopping
     if url:
@@ -2333,6 +2333,11 @@ PROTECTED = (401, 403)
 # or trailing slash redirect is left alone.
 _LOGIN_URL = re.compile(r"log[\-_]?in|sign[\-_]?in|/auth\b|/authentica|/sso\b|/oauth|"
                         r"/openid|/account/|/session|/idp/|saml|/login\.", re.I)
+# A claim that an access restriction was bypassed (wapiti's htaccess module and
+# the like).  On a path that a plain request already reads, there was no
+# restriction to get past, so the claim is empty.
+_WEAK_RESTRICTION = re.compile(r"bypassable|weak restriction|htaccess bypass|"
+                               r"restriction.{0,20}bypass|bypass.{0,20}restriction", re.I)
 REFLECTED = re.compile(r"xss|cross.site.script|reflect|crlf|header injection|response split"
                        r"|CWE-79\b|CWE-113\b", re.I)
 
@@ -2430,6 +2435,12 @@ def drop_soft_404(findings: list, base_url: str, allow_private: bool = False) ->
                 dropped += 1
                 continue
             f = dict(f, answer="protected")
+        elif status == 200 and _WEAK_RESTRICTION.search(
+                f"{f.get('title') or ''} {f.get('evidence') or ''}"):
+            # A bypass of an access restriction, but a plain request already
+            # reads the path, so there was no restriction to get past.
+            dropped += 1
+            continue
         elif status:
             f = dict(f, answer="found")
         kept.append(f)
@@ -2526,28 +2537,21 @@ def _cookies_samesite(set_cookies: list) -> bool:
     return session_seen
 
 
-def soften_blocked_csrf(findings: list, set_cookies: list) -> tuple:
-    """Lower CSRF findings to informational when the site's session cookie is
-    SameSite, so a cross site form cannot carry it.  -> (findings, lowered).
-
-    Lowered, not dropped: SameSite Lax still lets a top level GET change state,
-    which is worth a look by hand, so the finding is kept, just not rated as a
-    working attack.
-    """
+def drop_samesite_csrf(findings: list, set_cookies: list) -> tuple:
+    """Leave out CSRF findings when the site's session cookie is SameSite, so a
+    form on another site cannot carry it, which is the way the attack works.
+    -> (kept, dropped).  A heuristic engine finding with no request shown is not
+    worth keeping once the cookie already blocks it."""
     if not _cookies_samesite(set_cookies):
         return findings, 0
-    note = ("  The site's session cookie is SameSite, so a form on another site "
-            "cannot send it, which is how this attack works.  Lowered to "
-            "informational: confirm by hand before acting on it.")
-    lowered, out = 0, []
+    kept, dropped = [], 0
     for f in findings:
         text = f"{f.get('title') or ''} {f.get('cwe') or ''} {f.get('evidence') or ''}"
-        if (f.get("tool") in ("wapiti", "nuclei", "nikto") and CSRF_WORDS.search(text)
-                and RANK.get(f.get("severity"), 0) > RANK.get("info")):
-            f = dict(f, severity="info", evidence=((f.get("evidence") or "")[:400] + note))
-            lowered += 1
-        out.append(f)
-    return out, lowered
+        if f.get("tool") in ("wapiti", "nuclei", "nikto") and CSRF_WORDS.search(text):
+            dropped += 1
+            continue
+        kept.append(f)
+    return kept, dropped
 
 
 ROLL_UP_AT = 3
