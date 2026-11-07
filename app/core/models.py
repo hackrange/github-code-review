@@ -2331,6 +2331,12 @@ class ExternalAsset(Base):
     tls_days_left = Column(Integer)
     # ok, blank, waf, blocked, nobrowser, or empty when never tried.
     screenshot = Column(String(16), default="")
+    # Exposure from the two vantage check: open, whitelisted, unreachable or
+    # anomaly, with a sentence and when it was worked out.  Empty until the
+    # check has run.
+    exposure = Column(String(16), default="")
+    exposure_detail = Column(Text, default="")
+    exposure_at = Column(DateTime(timezone=True))
     # Telemetry fields somebody filled in by hand, as JSON {field: value}.
     # A value here wins over what the scan saw until it is cleared, so a
     # site the scanner cannot reach can still be described.

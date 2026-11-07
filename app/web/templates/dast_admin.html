@@ -307,11 +307,18 @@
             out of band checks off.</span></label>
 
         <div class="card-head" style="margin-top:1rem">Exposure check</div>
-        <label style="margin-top:.4rem">This scanner's allow listed IP
+        <label style="margin-top:.4rem">Which vantage is allow listed
+          <select name="whitelisted_vantage">
+            <option value="direct" {{ 'selected' if whitelisted_vantage != 'proxy' }}>This server's own IP</option>
+            <option value="proxy" {{ 'selected' if whitelisted_vantage == 'proxy' }}>The proxy</option>
+          </select>
+          <span class="faint small">Which address a target's allow list lets in.  The
+            exposure check reads the other one as the public view, so this works whether
+            the server or the proxy is the allow listed side.</span></label>
+        <label style="margin-top:.6rem">The allow listed IP, for reference
           <input type="text" name="whitelisted_ip" maxlength="60" value="{{ whitelisted_ip }}"
                  placeholder="203.0.113.10">
-          <span class="faint small">The public IP a target's allow list lets in,
-            shown for reference.  Optional.</span></label>
+          <span class="faint small">Shown for reference only.  Optional.</span></label>
         <label style="margin-top:.6rem">Non allow listed proxy (Squid)
           <input type="password" name="unwhitelisted_proxy" maxlength="1000" autocomplete="off"
                  placeholder="{{ 'saved, leave empty to keep' if has_exposure_proxy else 'http://proxy.host:3128 or http://user:password@proxy.host:3128' }}">

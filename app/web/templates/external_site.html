@@ -66,6 +66,35 @@
   </div>
 </div>
 
+{% if asset.exposure or has_proxy_shot %}
+<div class="card">
+  <div class="card-head">Exposure
+    {% if asset.exposure %}<span class="badge {{ {'open':'high','whitelisted':'ok','anomaly':'medium'}.get(asset.exposure,'info') }}">{{ exposures.get(asset.exposure, asset.exposure) }}</span>{% endif %}
+    {% if asset.exposure_at %}<span class="faint small" style="font-weight:400">, checked {{ asset.exposure_at | dt('%Y-%m-%d %H:%M') }}</span>{% endif %}</div>
+  <div class="card-body">
+    {% if asset.exposure_detail %}<p class="small">{{ asset.exposure_detail }}</p>{% endif %}
+    {% set direct_role = 'Public, non allow listed' if whitelisted_vantage == 'proxy' else 'Allow listed' %}
+    {% set proxy_role = 'Allow listed' if whitelisted_vantage == 'proxy' else 'Public, non allow listed' %}
+    <div class="flex" style="gap:1rem;flex-wrap:wrap;align-items:flex-start">
+      <div style="max-width:48%">
+        <div class="small faint">{{ direct_role }} (this server's IP)</div>
+        {% if asset.screenshot in ('ok','blank') or (asset.screenshot == 'waf' and has_shot) %}
+        <img class="shot-small" alt="This server's view of {{ asset.host }}"
+             src="{{ base }}/external/{{ asset.id }}/screenshot.png?v={{ asset.telemetry_at.timestamp() | int if asset.telemetry_at else 0 }}">
+        {% else %}<div class="shot-hero-none small">No page from this vantage.</div>{% endif %}
+      </div>
+      <div style="max-width:48%">
+        <div class="small faint">{{ proxy_role }} (through the proxy)</div>
+        {% if has_proxy_shot %}
+        <img class="shot-small" alt="Proxy view of {{ asset.host }}"
+             src="{{ base }}/external/{{ asset.id }}/screenshot-proxy.png?v={{ asset.exposure_at.timestamp() | int if asset.exposure_at else 0 }}">
+        {% else %}<div class="shot-hero-none small">No page from this vantage{% if asset.exposure == 'whitelisted' %}, which is why it reads Whitelisted{% endif %}.</div>{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="stats" data-live="site-stats">
   <div class="stat"><div class="n">{% if asset.grade and asset.grade != 'N/A' %}<span class="grade {{ asset.grade }}">{{ asset.grade }}</span>{% else %}&ndash;{% endif %}</div><div class="l">Web hygiene{% if asset.score %} ({{ asset.score }}){% endif %}</div></div>
   <div class="stat {{ 'bad' if asset.last_dast_severity in ('critical','high') else ('ok' if asset.last_dast_at and asset.last_dast_severity in ('', 'none') else '') }}"><div class="n" style="{{ 'font-size:1.1rem' if not asset.last_dast_at or asset.last_dast_severity in ('', 'none') }}">{% if not asset.last_dast_at %}never{% elif asset.last_dast_severity in ('', 'none') %}no findings{% else %}{{ asset.last_dast_severity }}{% endif %}</div><div class="l">Last dynamic scan{% if asset.last_dast_at %}, {{ asset.last_dast_at | dt('%Y-%m-%d') }}{% endif %}</div></div>

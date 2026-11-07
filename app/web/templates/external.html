@@ -69,6 +69,9 @@
   <div class="field"><label for="status">Status</label>
     <select id="status" name="status"><option value="">Any</option>
       {% for k, l in statuses.items() %}<option value="{{ k }}" {{ 'selected' if k == status }}>{{ l }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="exposure">Exposure</label>
+    <select id="exposure" name="exposure"><option value="">Any</option>
+      {% for k, l in exposures.items() %}<option value="{{ k }}" {{ 'selected' if k == exposure }}>{{ l }}</option>{% endfor %}</select></div>
   <div class="field"><label for="scope">Show</label>
     <select id="scope" name="scope"><option value="">Every site</option>
       {% for v, l in [('mapped','Mapped to a repository'),('unmapped','Not mapped'),('no-scan','No scan')] %}<option value="{{ v }}" {{ 'selected' if v == scope }}>{{ l }}</option>{% endfor %}</select></div>
@@ -140,6 +143,7 @@
               {% if r.tele.waf_block %}<div><span class="badge info">firewall block page</span></div>
               {% elif r.tele.bot_check %}<div><span class="badge medium" title="The CDN's bot check answers instead of the page.  Scans see the check unless this server is let through.">{{ r.tele.bot_check }} bot check</span></div>
               {% elif r.tele.origin_down %}<div><span class="badge medium" title="The CDN answered, but could not reach the site behind it">site down behind its CDN</span></div>{% endif %}
+              {% if a.exposure %}<div style="margin-top:.2rem"><a class="badge {{ {'open':'high','whitelisted':'ok','anomaly':'medium'}.get(a.exposure,'info') }}" href="{{ here }}?exposure={{ a.exposure }}" title="{{ a.exposure_detail }}">{{ exposures.get(a.exposure, a.exposure) }}</a></div>{% endif %}
               <div class="faint">read {{ a.telemetry_at | dt('%Y-%m-%d') }}</div>
             {% endif %}
             {% if a.telemetry_status == 'failed' %}<div class="faint" title="{{ a.telemetry_error }}">last read failed</div>{% endif %}</td>

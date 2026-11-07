@@ -98,6 +98,11 @@ def environments(db) -> dict:
 def default_environment(db) -> str:
     return next(iter(environments(db)))
 STATUSES = {"active": "Active", "obsolete": "Obsolete"}
+# The exposure a site shows from the two vantage check.  open means the non
+# allow listed side also reaches it, so it is public; whitelisted means only
+# the allow listed side does.
+EXPOSURES = {"open": "Open to the world", "whitelisted": "Whitelisted",
+             "unreachable": "Unreachable", "anomaly": "Reversed, check setup"}
 MAX_PICKS = 200
 MAX_BRANCHES = 300
 
@@ -165,6 +170,71 @@ def validate_proxy(echo_url: str, proxy: str, allow_private: bool = False) -> di
             "through": egress_ip(proxy, echo_url, allow_private)}
 
 
+def _serves_site(rec: dict) -> bool:
+    """Whether a probe reached the real site, not a firewall block, a bot check,
+    or nothing at all."""
+    from app.core import external_probe
+
+    if not rec or rec.get("error"):
+        return False
+    if rec.get("waf_block") or rec.get("bot_check"):
+        return False
+    return bool(rec.get("category") in external_probe.WEB_CATEGORIES and rec.get("status"))
+
+
+def _exposure_from(whitelisted_ok: bool, public_ok: bool) -> tuple:
+    """The posture and a sentence, from whether each vantage reached the site."""
+    if whitelisted_ok and public_ok:
+        return "open", ("The site answers the non allow listed vantage as well as the "
+                        "allow listed one, so anyone on the internet reaches it.")
+    if whitelisted_ok and not public_ok:
+        return "whitelisted", ("The site answers the allow listed vantage but turns the "
+                               "non allow listed one away, so its allow list is working.")
+    if public_ok and not whitelisted_ok:
+        return "anomaly", ("The non allow listed vantage reaches the site but the allow "
+                           "listed one does not, which is backwards.  Check which vantage "
+                           "is really allow listed.")
+    return "unreachable", ("Neither vantage reached the site, so it is down, or it blocks "
+                           "both of these addresses.")
+
+
+def run_exposure_check(asset_id: int, host: str, opts: dict, inside: dict) -> None:
+    """Load the site again from the proxy, then set the site's exposure from the
+    two vantages.  inside is the telemetry rec from the server's own IP.  Which
+    vantage counts as allow listed comes from the setting, since either the
+    server or the proxy may be the one a target lets in."""
+    from app.core import external_probe
+    from app.core import settings_store as s
+
+    with session_scope() as db:
+        proxy = exposure_proxy(db)
+        vantage = (s.get(db, "dast.whitelisted_vantage") or "direct").strip()
+    if not proxy:
+        return
+    out_path = shot_proxy_path(asset_id)
+    try:
+        with external_probe.via_proxy(proxy):
+            outside = external_probe.probe(host, shot_path=out_path, screenshots=True,
+                                           allow_private=opts["allow_private"])
+    except Exception as exc:  # noqa: BLE001 - a failure is an answer: not reached
+        log.warning("exposure probe for %s through the proxy failed: %s", asset_id, exc)
+        outside = {"error": str(exc)[:200]}
+    direct_ok, proxy_ok = _serves_site(inside), _serves_site(outside)
+    # Map the two transports to roles: the allow listed vantage and the public,
+    # non allow listed one.
+    if vantage == "proxy":
+        whitelisted_ok, public_ok = proxy_ok, direct_ok
+    else:
+        whitelisted_ok, public_ok = direct_ok, proxy_ok
+    posture, detail = _exposure_from(whitelisted_ok, public_ok)
+    with session_scope() as db:
+        asset = db.get(ExternalAsset, asset_id)
+        if asset is not None:
+            asset.exposure = posture
+            asset.exposure_detail = detail[:500]
+            asset.exposure_at = utcnow()
+
+
 def data_dir() -> Path:
     path = app_settings.data_dir / "external"
     path.mkdir(parents=True, exist_ok=True)
@@ -180,9 +250,15 @@ def thumb_path(asset_id: int) -> Path:
     return data_dir() / "shots" / f"{int(asset_id)}.thumb.jpg"
 
 
+def shot_proxy_path(asset_id: int) -> Path:
+    """The screenshot taken through the exposure proxy, the other vantage."""
+    return data_dir() / "shots" / f"{int(asset_id)}-proxy.png"
+
+
 def drop_shot(asset_id: int) -> None:
     shot_path(asset_id).unlink(missing_ok=True)
     thumb_path(asset_id).unlink(missing_ok=True)
+    shot_proxy_path(asset_id).unlink(missing_ok=True)
 
 
 def thumb_fresh(asset_id: int) -> bool:
@@ -1592,6 +1668,13 @@ def _telemetry(asset_id: int) -> None:
         if proxy:
             rec["proxied"] = True
         save_telemetry(asset_id, rec)
+        from app.core import settings_store as _s
+
+        with session_scope() as db:
+            do_exposure = (bool(_s.get(db, "dast.exposure_check"))
+                           and bool(exposure_proxy(db)))
+        if do_exposure and not why:
+            run_exposure_check(asset_id, host, opts, rec)
     except Exception as exc:  # noqa: BLE001 - never leave a row saying running
         log.exception("telemetry for %s failed", asset_id)
         with session_scope() as db:

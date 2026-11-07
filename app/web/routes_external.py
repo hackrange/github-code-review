@@ -146,7 +146,7 @@ PAGE_SIZES = [50, 100, 200, 500, 1000]
 @router.get("/external")
 def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
               grade: str = "", dast: str = "", risk: str = "", scope: str = "",
-              env: str = "", status: str = "",
+              env: str = "", status: str = "", exposure: str = "",
               page_no: str = Query("1", alias="page"), per_page: str = "",
               user: User = Depends(current_user)):
     """Every external site, newest problems first."""
@@ -191,6 +191,8 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
             if env and (a.environment or "") != env:
                 continue
             if status and (a.status or "active") != status:
+                continue
+            if exposure and (a.exposure or "") != exposure:
                 continue
             if q and q not in " ".join([a.host, a.application or "", a.ip or "",
                                         a.executive_owner or "", a.technical_owner or "",
@@ -243,7 +245,8 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
 
         filters = [(k, v) for k, v in (("q", q), ("tag", tag), ("app", app), ("grade", grade),
                                        ("dast", dast), ("risk", risk), ("scope", scope),
-                                       ("env", env), ("status", status)) if v]
+                                       ("env", env), ("status", status),
+                                       ("exposure", exposure)) if v]
         paging = {"page": page_no, "pages": pages, "size": size, "sizes": PAGE_SIZES,
                   "offset": offset, "matched": matched,
                   # Filters, and the size when it is not the default, so
@@ -279,8 +282,8 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                        auth_kinds=external_auth_mod.KINDS,
                        q=q, tag=tag, app=app, grade=grade, dast=dast, risk=risk,
                        scope=scope, all_tags=all_tags, apps=apps, opts=opts, paging=paging,
-                       env=env, status=status, environments=envs,
-                       statuses=external.STATUSES,
+                       env=env, status=status, exposure=exposure, environments=envs,
+                       statuses=external.STATUSES, exposures=external.EXPOSURES,
                        servers=servers,
                        running=sum(1 for a in assets if a.telemetry_status == "running"),
                        scanning=len(scanning), max_concurrent=external._slots.limit(),
@@ -665,7 +668,7 @@ def _safe_back(raw, asset_id: int, fallback: str) -> str:
 @router.get("/external/{asset_id}")
 def detail_page(asset_id: int, request: Request, scans: int = 1,
                 user: User = Depends(current_user)):
-    from app.core import ai, dast_engines
+    from app.core import ai, dast_engines, settings_store
 
     with session_scope() as db:
         _guard(db, user)
@@ -714,6 +717,9 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             auth_kinds=external_auth_mod.KINDS,
             site_profile=external.profile_for(asset), proxy_label=external.proxy_shown(asset),
             has_shot=external.shot_path(asset.id).is_file(),
+            exposures=external.EXPOSURES,
+            has_proxy_shot=external.shot_proxy_path(asset.id).is_file(),
+            whitelisted_vantage=settings_store.get(db, "dast.whitelisted_vantage") or "direct",
             schedules=[external_schedule.as_dict(x) for x in db.query(ExternalScanSchedule)
                        .filter_by(asset_id=asset.id).order_by(ExternalScanSchedule.id)],
             frequencies=external_schedule.FREQUENCIES, weekdays=external_schedule.WEEKDAYS,
@@ -742,6 +748,20 @@ def screenshot(asset_id: int, user: User = Depends(current_user)):
         _guard(db, user)
         _asset(db, asset_id)
     path = external.shot_path(asset_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No screenshot.")
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "private, max-age=300"})
+
+
+@router.get("/external/{asset_id}/screenshot-proxy.png")
+def screenshot_proxy(asset_id: int, user: User = Depends(current_user)):
+    """The second screenshot, taken through the exposure proxy, the other
+    vantage in the exposure check."""
+    with session_scope() as db:
+        _guard(db, user)
+        _asset(db, asset_id)
+    path = external.shot_proxy_path(asset_id)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="No screenshot.")
     return FileResponse(path, media_type="image/png",
@@ -1556,6 +1576,7 @@ def _rule_context(db, user):
                    available_rulesets=_available_rulesets(db),
                    oob_url=settings_store.get(db, "dast.oob_url") or "",
                    whitelisted_ip=settings_store.get(db, "dast.whitelisted_ip") or "",
+                   whitelisted_vantage=settings_store.get(db, "dast.whitelisted_vantage") or "direct",
                    ip_echo_url=settings_store.get(db, "dast.ip_echo_url") or "https://api.ipify.org",
                    exposure_check=bool(settings_store.get(db, "dast.exposure_check")),
                    has_exposure_proxy=bool((settings_store.get(db, "dast.unwhitelisted_proxy") or "").strip()),
@@ -1663,6 +1684,7 @@ async def save_dast_settings(request: Request, user: User = Depends(current_user
 
     oob = str(form.get("oob_url") or "").strip()[:500]
     whitelisted = str(form.get("whitelisted_ip") or "").strip()[:60]
+    vantage = "proxy" if str(form.get("whitelisted_vantage") or "") == "proxy" else "direct"
     echo = str(form.get("ip_echo_url") or "").strip()[:500]
     exposure = _checked(form, "exposure_check")
     proxy_typed = str(form.get("unwhitelisted_proxy") or "").strip()[:1000]
@@ -1676,6 +1698,7 @@ async def save_dast_settings(request: Request, user: User = Depends(current_user
         _guard(db, user)
         settings_store.set_value(db, "dast.oob_url", oob, user.username)
         settings_store.set_value(db, "dast.whitelisted_ip", whitelisted, user.username)
+        settings_store.set_value(db, "dast.whitelisted_vantage", vantage, user.username)
         settings_store.set_value(db, "dast.ip_echo_url",
                                  echo or "https://api.ipify.org", user.username)
         settings_store.set_value(db, "dast.exposure_check", exposure, user.username)

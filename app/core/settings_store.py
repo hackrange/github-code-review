@@ -397,6 +397,11 @@ DEFAULTS = {
                                 "This scanner's own public IP, the one a target's allow "
                                 "list lets in.  Shown for reference when the proxy is "
                                 "validated.  Optional."),
+    "dast.whitelisted_vantage": ("direct", False,
+                                "Which vantage a target's allow list lets in: direct for "
+                                "this server's own IP, or proxy when it is the proxy that "
+                                "is allow listed and the server is not.  The exposure "
+                                "check reads the other one as the public view."),
     "dast.unwhitelisted_proxy": ("", True,
                                 "A proxy that leaves from an IP the targets do not allow "
                                 "list, so a site can be seen as the public sees it.  A "
