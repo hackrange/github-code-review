@@ -388,6 +388,25 @@ DEFAULTS = {
                                 "can be made to fetch a URL will hit it here, which proves "
                                 "server side request forgery.  Leave empty to switch the "
                                 "out of band checks off; they are then skipped."),
+    "dast.exposure_check":     (False, False,
+                                "On a telemetry refresh, also load each site through the "
+                                "non allow listed proxy below and take a second "
+                                "screenshot, to tell a site that only its allow listed "
+                                "callers reach from one that is open to the world."),
+    "dast.whitelisted_ip":     ("", False,
+                                "This scanner's own public IP, the one a target's allow "
+                                "list lets in.  Shown for reference when the proxy is "
+                                "validated.  Optional."),
+    "dast.unwhitelisted_proxy": ("", True,
+                                "A proxy that leaves from an IP the targets do not allow "
+                                "list, so a site can be seen as the public sees it.  A "
+                                "Squid address such as http://proxy.host:3128, or "
+                                "http://user:password@proxy.host:3128 when it needs a "
+                                "sign in.  Held encrypted."),
+    "dast.ip_echo_url":        ("https://api.ipify.org", False,
+                                "A service that answers with the caller's IP, used by "
+                                "Validate proxy to show the address the proxy leaves "
+                                "from.  It must return the plain IP."),
 
     # ---- whose sites these are ----
     "web.company_domains":     ([], False,

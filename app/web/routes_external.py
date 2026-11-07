@@ -1555,6 +1555,10 @@ def _rule_context(db, user):
                    scan_profiles=saved, profile_rulesets=profile_rulesets,
                    available_rulesets=_available_rulesets(db),
                    oob_url=settings_store.get(db, "dast.oob_url") or "",
+                   whitelisted_ip=settings_store.get(db, "dast.whitelisted_ip") or "",
+                   ip_echo_url=settings_store.get(db, "dast.ip_echo_url") or "https://api.ipify.org",
+                   exposure_check=bool(settings_store.get(db, "dast.exposure_check")),
+                   has_exposure_proxy=bool((settings_store.get(db, "dast.unwhitelisted_proxy") or "").strip()),
                    drafts=drafts, drafting=any(d.status == "working" for d in drafts),
                    values=settings_store.all_values(db), ias=_ias_context(),
                    ai_on=ai.enabled(ai.config(db)))
@@ -1658,16 +1662,72 @@ async def save_dast_settings(request: Request, user: User = Depends(current_user
     from app.core import settings_store
 
     oob = str(form.get("oob_url") or "").strip()[:500]
-    if oob and not oob.startswith(("http://", "https://")):
-        return redirect(_back(back, "The callback address must start with http:// "
-                              "or https://, or be left empty.", "error"))
+    whitelisted = str(form.get("whitelisted_ip") or "").strip()[:60]
+    echo = str(form.get("ip_echo_url") or "").strip()[:500]
+    exposure = _checked(form, "exposure_check")
+    proxy_typed = str(form.get("unwhitelisted_proxy") or "").strip()[:1000]
+    proxy_clear = _checked(form, "proxy_clear")
+    for label, value in (("callback address", oob), ("IP echo service", echo),
+                         ("proxy address", proxy_typed)):
+        if value and not value.startswith(("http://", "https://")):
+            return redirect(_back(back, f"The {label} must start with http:// or "
+                                  "https://, or be left empty.", "error"))
     with session_scope() as db:
         _guard(db, user)
         settings_store.set_value(db, "dast.oob_url", oob, user.username)
+        settings_store.set_value(db, "dast.whitelisted_ip", whitelisted, user.username)
+        settings_store.set_value(db, "dast.ip_echo_url",
+                                 echo or "https://api.ipify.org", user.username)
+        settings_store.set_value(db, "dast.exposure_check", exposure, user.username)
+        if proxy_clear:
+            settings_store.set_value(db, "dast.unwhitelisted_proxy", "", user.username)
+        elif proxy_typed:
+            settings_store.set_value(db, "dast.unwhitelisted_proxy", proxy_typed, user.username)
         record(db, "dast.settings_saved", actor=user.username,
                detail="oob_url set" if oob else "oob_url cleared",
                source_ip=client_ip(request))
     return redirect(_back(back, "Saved DAST settings."))
+
+
+@router.post("/dast-admin/validate-proxy")
+async def validate_proxy(request: Request, user: User = Depends(current_user)):
+    """Show the egress IP this server presents directly and through the saved
+    non allow listed proxy, so an admin can confirm the proxy works and leaves
+    from a different address.  The network calls run off the event loop."""
+    from starlette.concurrency import run_in_threadpool
+
+    from app.core import settings_store
+
+    await check_csrf(request)
+    back = "/dast-admin#tab-settings"
+    with session_scope() as db:
+        _guard(db, user)
+        proxy = external.exposure_proxy(db)
+        echo = settings_store.get(db, "dast.ip_echo_url") or "https://api.ipify.org"
+        allow_private = external.options(db)["allow_private"]
+    if not proxy:
+        return redirect(_back(back, "Set and save the non allow listed proxy first.", "warn"))
+    got = await run_in_threadpool(external.validate_proxy, echo, proxy, allow_private)
+    direct, through = got["direct"], got["through"]
+    if direct["ok"] and through["ok"]:
+        if direct["ip"] == through["ip"]:
+            msg = (f"Direct egress IP {direct['ip']}.  Through the proxy {through['ip']}.  "
+                   "Warning: the proxy leaves from the same IP as this server, so it is "
+                   "not a different vantage.")
+            kind = "warn"
+        else:
+            msg = (f"Direct egress IP {direct['ip']}.  Through the proxy {through['ip']}.  "
+                   "The proxy leaves from a different IP, which is what the exposure "
+                   "check needs.")
+            kind = "ok"
+    elif direct["ok"]:
+        msg = f"Direct egress IP {direct['ip']}, but the proxy did not answer: {through['detail']}"
+        kind = "error"
+    else:
+        msg = (f"Could not read the egress IP.  Direct: {direct['detail']}.  "
+               f"Proxy: {through['detail']}")
+        kind = "error"
+    return redirect(_back(back, msg, kind))
 
 
 @router.post("/dast-admin/profiles")

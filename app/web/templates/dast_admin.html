@@ -305,8 +305,39 @@
             URL will hit it here, which proves server side request forgery.  It
             must be reachable from the sites you scan.  Leave empty to switch the
             out of band checks off.</span></label>
+
+        <div class="card-head" style="margin-top:1rem">Exposure check</div>
+        <label style="margin-top:.4rem">This scanner's allow listed IP
+          <input type="text" name="whitelisted_ip" maxlength="60" value="{{ whitelisted_ip }}"
+                 placeholder="203.0.113.10">
+          <span class="faint small">The public IP a target's allow list lets in,
+            shown for reference.  Optional.</span></label>
+        <label style="margin-top:.6rem">Non allow listed proxy (Squid)
+          <input type="password" name="unwhitelisted_proxy" maxlength="1000" autocomplete="off"
+                 placeholder="{{ 'saved, leave empty to keep' if has_exposure_proxy else 'http://proxy.host:3128 or http://user:password@proxy.host:3128' }}">
+          <span class="faint small">Leaves from an IP the targets do not allow list,
+            so a site can be seen the way the public sees it.  Basic auth goes in the
+            address as user:password@host.  Held encrypted.</span></label>
+        {% if has_exposure_proxy %}<label style="margin-top:.4rem" class="faint small">
+          <input type="checkbox" name="proxy_clear" value="1"> Remove the saved proxy</label>{% endif %}
+        <label style="margin-top:.6rem">IP echo service
+          <input type="url" name="ip_echo_url" maxlength="500" value="{{ ip_echo_url }}"
+                 placeholder="https://api.ipify.org">
+          <span class="faint small">Answers with the caller's IP, used by Validate
+            proxy to show the address the proxy leaves from.</span></label>
+        <label style="margin-top:.6rem">
+          <input type="checkbox" name="exposure_check" value="1" {{ 'checked' if exposure_check }}>
+          Compare each site from a non allow listed IP on refresh
+          <span class="faint small">Also loads each site through the proxy and takes a
+            second screenshot, to tell an allow listed site from one open to the
+            world.</span></label>
+
         <div style="margin-top:.5rem"><button class="btn primary" type="submit">Save</button></div>
       </form>
+      {% if has_exposure_proxy %}<form method="post" action="{{ base }}/dast-admin/validate-proxy" style="margin-top:.5rem">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn" type="submit">Validate proxy</button>
+        <span class="faint small">Shows the egress IP this server and the proxy each present.</span></form>{% endif %}
       <p class="faint small" style="margin-top:.8rem">More dynamic scanning
         settings will move here from the general Settings page over time.</p>
     </div>

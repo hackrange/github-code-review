@@ -128,6 +128,43 @@ def options(db) -> dict:
             "whitebox": bool(s.get(db, "external.whitebox"))}
 
 
+def exposure_proxy(db) -> str:
+    """The saved non allow listed proxy, decrypted, or empty."""
+    from app.core import settings_store as s
+
+    return (s.get(db, "dast.unwhitelisted_proxy") or "").strip()
+
+
+def egress_ip(proxy: str = "", echo_url: str = "", allow_private: bool = False) -> dict:
+    """Ask a service that echoes the caller's IP what address a request leaves
+    from, optionally through a proxy.  -> {ok, ip, detail}."""
+    import ipaddress
+
+    from app.core import external_probe
+
+    url = (echo_url or "https://api.ipify.org").strip()
+    try:
+        with external_probe.via_proxy(proxy or ""):
+            got = external_probe.fetch(url, allow_private=allow_private, body_limit=256)
+    except Exception as exc:  # noqa: BLE001 - every failure is an answer
+        return {"ok": False, "ip": "", "detail": f"{type(exc).__name__}: {str(exc)[:160]}"}
+    body = (got.get("body") or "").strip()
+    candidate = body.split()[0] if body else ""
+    try:
+        return {"ok": True, "ip": str(ipaddress.ip_address(candidate)), "detail": ""}
+    except ValueError:
+        detail = got.get("error") or (f"the service answered {got['status']}: {body[:80]}"
+                                      if got.get("status") else "no answer from the echo service")
+        return {"ok": False, "ip": "", "detail": detail}
+
+
+def validate_proxy(echo_url: str, proxy: str, allow_private: bool = False) -> dict:
+    """The egress IP this server shows directly, and the one the proxy shows.
+    -> {direct: {...}, through: {...}}."""
+    return {"direct": egress_ip("", echo_url, allow_private),
+            "through": egress_ip(proxy, echo_url, allow_private)}
+
+
 def data_dir() -> Path:
     path = app_settings.data_dir / "external"
     path.mkdir(parents=True, exist_ok=True)
