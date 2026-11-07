@@ -1,0 +1,33 @@
+{
+  "id": "access-control-h2-console-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "The H2 database console is exposed",
+  "summary": "The H2 web console is reachable.  It connects to a database and is a known path to code execution.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/h2-console/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"H2 Console\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/h2-console/",
+  "remediate": "Disable the H2 console in production.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "h2",
+    "java"
+  ]
+}

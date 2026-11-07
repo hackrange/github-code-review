@@ -1,0 +1,35 @@
+{
+  "id": "access-control-cors-origin-reflected",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "CORS reflects any origin with credentials",
+  "summary": "The site echoes any Origin into Access-Control-Allow-Origin and allows credentials, so a page on an attacker's site can read this site's authenticated responses.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/",
+        "headers": {
+          "Origin": "https://gcr-cors-probe.invalid"
+        }
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "header(\"access-control-allow-origin\") == \"https://gcr-cors-probe.invalid\" and header(\"access-control-allow-credentials\") == \"true\"",
+    "retest": 2
+  },
+  "reproduce": "curl -s -i https://host/ -H 'Origin: https://gcr-cors-probe.invalid'",
+  "remediate": "Do not reflect the Origin.  Allow only a fixed allow list, and never with credentials for a wildcard.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-942",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "cors"
+  ]
+}

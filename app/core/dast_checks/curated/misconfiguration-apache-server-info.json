@@ -3,8 +3,8 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
-  "title": "Apache server-info is exposed",
-  "summary": "mod_info reveals the full server configuration and loaded modules.",
+  "title": "Apache mod_info is exposed",
+  "summary": "The server info page lists the server configuration and loaded modules.",
   "needs": [],
   "probe": [
     {
@@ -20,7 +20,7 @@
     "retest": 2
   },
   "reproduce": "curl -s https://host/server-info",
-  "remediate": "Disable mod_info, or restrict /server-info to localhost.",
+  "remediate": "Restrict mod_info to localhost, or turn it off.",
   "references": [],
   "mappings": {
     "cwe": "CWE-200",

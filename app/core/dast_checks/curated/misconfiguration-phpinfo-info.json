@@ -2,9 +2,9 @@
   "id": "misconfiguration-phpinfo-info",
   "class": "misconfiguration",
   "safety": "read",
-  "severity_floor": "medium",
+  "severity_floor": "high",
   "title": "A phpinfo page is served (/info.php)",
-  "summary": "A phpinfo page leaks the full PHP configuration, paths, and loaded modules.",
+  "summary": "phpinfo reveals the full PHP configuration, absolute paths, loaded modules, environment variables and more.",
   "needs": [],
   "probe": [
     {
@@ -16,11 +16,11 @@
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and (body_contains(\"phpinfo()\") or body_contains(\"PHP Version\")) and body_differs(control)",
+    "differential": "status==200 and body_contains(\"phpinfo()\") and body_contains(\"PHP Version\") and body_differs(control)",
     "retest": 2
   },
   "reproduce": "curl -s https://host/info.php",
-  "remediate": "Delete phpinfo pages from the web root.",
+  "remediate": "Remove the phpinfo file from the web root.",
   "references": [],
   "mappings": {
     "cwe": "CWE-200",

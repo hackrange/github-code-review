@@ -1,0 +1,32 @@
+{
+  "id": "access-control-jenkins-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A Jenkins server is exposed",
+  "summary": "A Jenkins server answers here and reveals its version in a header.  Exposed Jenkins is a frequent path to code execution.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "header(\"x-jenkins\") != \"\"",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/",
+  "remediate": "Put Jenkins behind authentication and off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "jenkins"
+  ]
+}

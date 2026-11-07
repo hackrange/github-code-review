@@ -1,0 +1,32 @@
+{
+  "id": "access-control-docker-api-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "critical",
+  "title": "The Docker engine API is reachable",
+  "summary": "The Docker remote API answers unauthenticated, which is control of the host: an attacker can start a container that mounts the disk.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/version"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"ApiVersion\") and body_contains(\"GoVersion\") and body_contains(\"Os\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/version",
+  "remediate": "Never expose the Docker API; bind it to a local socket with TLS and auth.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "docker"
+  ]
+}

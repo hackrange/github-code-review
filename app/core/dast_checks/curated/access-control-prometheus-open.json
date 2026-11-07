@@ -1,0 +1,32 @@
+{
+  "id": "access-control-prometheus-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Prometheus is reachable without signing in",
+  "summary": "Prometheus answers unauthenticated, which exposes metrics and the targets and internal addresses it scrapes.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/-/healthy"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Prometheus Server is Healthy\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/-/healthy",
+  "remediate": "Put Prometheus behind authentication.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "prometheus"
+  ]
+}

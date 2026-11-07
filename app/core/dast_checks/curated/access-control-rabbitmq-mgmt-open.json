@@ -1,0 +1,32 @@
+{
+  "id": "access-control-rabbitmq-mgmt-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "RabbitMQ management API is reachable without signing in",
+  "summary": "The RabbitMQ management API answers unauthenticated, which exposes queues, users and virtual hosts.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/overview"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"rabbitmq_version\") or body_contains(\"management_version\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/api/overview",
+  "remediate": "Require authentication on the management plugin.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "rabbitmq"
+  ]
+}

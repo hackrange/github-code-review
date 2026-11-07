@@ -1,0 +1,32 @@
+{
+  "id": "access-control-elasticsearch-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "critical",
+  "title": "Elasticsearch is reachable without signing in",
+  "summary": "The Elasticsearch HTTP API answers unauthenticated, which exposes and lets an attacker read or change the indexed data.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"You Know, for Search\") or (body_contains(\"cluster_name\") and body_contains(\"cluster_uuid\"))) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/",
+  "remediate": "Put Elasticsearch behind authentication and off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "elastic"
+  ]
+}

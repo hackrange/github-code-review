@@ -1,0 +1,32 @@
+{
+  "id": "access-control-couchdb-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "CouchDB is reachable without signing in",
+  "summary": "The CouchDB HTTP API answers unauthenticated at the root, a direct path to the stored data.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"couchdb\") and body_contains(\"Welcome\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/",
+  "remediate": "Require authentication and restrict the network.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "couchdb"
+  ]
+}

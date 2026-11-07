@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-actuator-heapdump",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "critical",
+  "title": "Spring Boot actuator heap dump is downloadable",
+  "summary": "The /actuator/heapdump endpoint returns a full memory dump of the running application, which carries live secrets, tokens and session data.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/actuator/heapdump"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"JAVA PROFILE\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/actuator/heapdump",
+  "remediate": "Disable the heapdump endpoint; never expose it.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "spring",
+    "actuator"
+  ]
+}

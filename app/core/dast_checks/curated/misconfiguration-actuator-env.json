@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-actuator-env",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Spring Boot actuator env is exposed",
+  "summary": "The /actuator/env endpoint lists every configuration property, including database URLs, credentials and keys.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/actuator/env"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"propertySources\") and body_contains(\"activeProfiles\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/actuator/env",
+  "remediate": "Secure the actuator endpoints, or do not expose them in production.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "spring",
+    "actuator"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-apache-server-status",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Apache mod_status is exposed",
+  "summary": "The server status page lists active requests, client addresses and the URLs being served, which leaks traffic and internal paths.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/server-status"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Apache Server Status\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/server-status",
+  "remediate": "Restrict mod_status to localhost, or turn it off.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "apache"
+  ]
+}
