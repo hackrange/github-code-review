@@ -70,7 +70,7 @@
 <div class="card">
   <div class="card-head">Exposure
     {% if asset.exposure %}<span class="badge {{ {'open':'high','whitelisted':'ok','anomaly':'medium'}.get(asset.exposure,'info') }}">{{ exposures.get(asset.exposure, asset.exposure) }}</span>{% endif %}
-    {% if asset.exposure_at %}<span class="faint small" style="font-weight:400">, checked {{ asset.exposure_at | dt('%Y-%m-%d %H:%M') }}</span>{% endif %}</div>
+    <span class="faint small" style="font-weight:400">{{ tele.final_url or ('https://' ~ asset.host ~ '/') }}{% if asset.exposure_at %}, checked {{ asset.exposure_at | dt('%Y-%m-%d %H:%M') }}{% endif %}</span></div>
   <div class="card-body">
     {% if asset.exposure_detail %}<p class="small">{{ asset.exposure_detail }}</p>{% endif %}
     {% set wl_is_direct = whitelisted_vantage != 'proxy' %}
@@ -78,8 +78,7 @@
     {% set direct_img = base ~ '/external/' ~ asset.id ~ '/screenshot.png?v=' ~ (asset.telemetry_at.timestamp() | int if asset.telemetry_at else 0) %}
     {% set proxy_img = base ~ '/external/' ~ asset.id ~ '/screenshot-proxy.png?v=' ~ (asset.exposure_at.timestamp() | int if asset.exposure_at else 0) %}
     {% if asset.exposure == 'open' %}
-      <div class="small faint" style="margin-bottom:.3rem">Both the allow listed and the public vantage see the same page, so it is shown once.</div>
-      {% if direct_has %}<img class="shot-small" alt="Screenshot of {{ asset.host }}" src="{{ direct_img }}">{% endif %}
+      <div class="small faint">Both the allow listed and the public vantage reach the same page, so the screenshot above is that page.  It is not shown again here.</div>
     {% elif asset.exposure in ('whitelisted', 'anomaly') %}
       {% set wl_img = direct_img if wl_is_direct else proxy_img %}
       {% set wl_has = direct_has if wl_is_direct else has_proxy_shot %}
