@@ -1,0 +1,35 @@
+{
+  "id": "access-control-graphql-present-api",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "info",
+  "title": "GraphQL endpoint present, introspection disabled (/api/graphql)",
+  "summary": "A GraphQL endpoint answers here and explicitly refuses introspection. This is good inventory: the service is in use and hardened against schema disclosure. No action is needed beyond keeping it off.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/graphql",
+        "query": {
+          "query": "{__schema{queryType{name}}}"
+        }
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"introspection\") and body_contains(\"errors\")",
+    "retest": 1
+  },
+  "reproduce": "curl -s 'https://host/api/graphql?query=%7B__schema%7BqueryType%7Bname%7D%7D%7D'  # the body says introspection is not allowed",
+  "remediate": "No action needed. Introspection is already off. Keep it off in production.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "API8:2023"
+  },
+  "rulesets": [
+    "graphql"
+  ]
+}

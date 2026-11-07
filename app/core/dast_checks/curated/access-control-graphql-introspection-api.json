@@ -19,7 +19,7 @@
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and (body_contains(\"queryType\") or body_contains(\"__schema\"))",
+    "differential": "status==200 and body_contains(\"queryType\") and not body_contains(\"errors\")",
     "retest": 2
   },
   "reproduce": "curl -s 'https://host/api/graphql?query=%7B__schema%7BqueryType%7Bname%7D%7D%7D'",
