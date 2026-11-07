@@ -34,7 +34,8 @@
   * { box-sizing: border-box; }
   body { font-family: "DejaVu Sans", sans-serif; font-size: 9.5pt;
          line-height: 1.55; color: var(--ink); margin: 0; }
-  h1 { font-size: 24pt; line-height: 1.15; margin: 0 0 .35rem; font-weight: 700; }
+  h1 { font-size: 20pt; line-height: 1.2; margin: 0 0 .35rem; font-weight: 700;
+       overflow-wrap: anywhere; word-break: break-word; }
   h2 { font-size: 13pt; margin: 7mm 0 .5rem; font-weight: 700; color: var(--navy);
        padding-bottom: .3rem; border-bottom: 1.5pt solid var(--navy); break-after: avoid; }
   h3 { font-size: 10.5pt; margin: 5mm 0 .35rem; font-weight: 700; color: var(--navy);
@@ -116,6 +117,7 @@
     <div><span class="k">Report date</span>{{ issued_at }}</div>
     {% if finished %}<div><span class="k">Scan date</span>{{ finished.strftime('%B %d, %Y').replace(' 0', ' ') }}</div>{% endif %}
     <div><span class="k">Profile</span>{{ profile or 'dynamic' }}</div>
+    <div><span class="k">Scanner</span>{% if scan.provider == 'insightappsec' %}Rapid7 InsightAppSec{% else %}Git Code Review{% endif %}</div>
     {% if footer_text %}<div><span class="k">Classification</span>{{ footer_text }}</div>{% endif %}
   </div>
 </div>
@@ -128,6 +130,7 @@
   {% if asset.executive_owner %}<tr><td class="k">Executive owner</td><td>{{ asset.executive_owner }}</td></tr>{% endif %}
   {% if asset.technical_owner %}<tr><td class="k">Technical owner</td><td>{{ asset.technical_owner }}</td></tr>{% endif %}
   <tr><td class="k">Scan</td><td>Number {{ scan.id }}, the {{ profile or 'dynamic' }} profile, run by {{ view.server }}{% if scan.recorded_by %} for {{ scan.recorded_by }}{% endif %}</td></tr>
+  {% if scan.provider == 'insightappsec' %}<tr><td class="k">Source</td><td>{{ scan.note or 'Imported from a Rapid7 InsightAppSec scan.  The findings are Rapid7 InsightAppSec results.' }}</td></tr>{% endif %}
   <tr><td class="k">Signed in</td><td>{% if scan.authenticated %}Yes, with {{ {'header':'a header','cookie':'a session cookie','form':'a form login'}.get(scan.auth_kind, 'a sign in') }}{% else %}No, public site only{% endif %}</td></tr>
   {% if view.coverage and view.coverage.answered is defined %}<tr><td class="k">URI paths</td><td>{{ view.coverage.reachable | thousands }} reachable, meaning each answered with a real page (HTTP 200).  {{ view.coverage.answered | thousands }} addresses answered in all.</td></tr>{% endif %}
   {% if started %}<tr><td class="k">Started</td><td>{{ started.strftime('%Y-%m-%d %H:%M') }} UTC</td></tr>{% endif %}
