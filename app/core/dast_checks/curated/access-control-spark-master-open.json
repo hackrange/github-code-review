@@ -1,0 +1,32 @@
+{
+  "id": "access-control-spark-master-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "An Apache Spark master is reachable",
+  "summary": "The Spark master answers unauthenticated, which lists applications and workers and can be made to submit a job.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/json/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"activeapps\") and body_contains(\"workers\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/json/",
+  "remediate": "Require authentication on the Spark master and keep it off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "spark"
+  ]
+}

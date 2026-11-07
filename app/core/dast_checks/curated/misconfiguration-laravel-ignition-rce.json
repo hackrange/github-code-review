@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-laravel-ignition-rce",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "critical",
+  "title": "Laravel Ignition debug mode is exposed",
+  "summary": "The Ignition debug endpoint answers and reports it can run commands, the condition behind CVE-2021-3129, remote code execution.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/_ignition/health-check"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and \"html\" not in header(\"content-type\") and body_contains(\"can_execute_commands\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/_ignition/health-check",
+  "remediate": "Turn debug mode off in production and update laravel-ignition.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-489",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "laravel",
+    "php"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "access-control-hadoop-yarn-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A Hadoop YARN ResourceManager is reachable",
+  "summary": "The YARN ResourceManager API answers unauthenticated.  It can be made to run a job, a known path to code execution on the cluster.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/ws/v1/cluster/info"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"hadoopVersion\") and body_contains(\"clusterInfo\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/ws/v1/cluster/info",
+  "remediate": "Enable authentication on YARN and keep it off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "hadoop"
+  ]
+}

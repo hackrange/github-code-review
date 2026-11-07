@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-terraform-state-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "critical",
+  "title": "A Terraform state file is served",
+  "summary": "The Terraform state is downloadable.  It records the infrastructure and commonly holds secrets in plain text.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/terraform.tfstate"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"terraform_version\") and body_contains(\"resources\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/terraform.tfstate",
+  "remediate": "Keep state in a secured backend, never in the web root; rotate any secret it held.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "cloud",
+    "terraform"
+  ]
+}

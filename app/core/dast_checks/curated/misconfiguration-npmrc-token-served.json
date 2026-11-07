@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-npmrc-token-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "An .npmrc with an auth token is served",
+  "summary": "The npm config is downloadable and carries an auth token for a package registry.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.npmrc"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and \"html\" not in header(\"content-type\") and body_contains(\"_authToken\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.npmrc",
+  "remediate": "Remove the file from the web root and rotate the token.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-522",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "secrets",
+    "npm"
+  ]
+}

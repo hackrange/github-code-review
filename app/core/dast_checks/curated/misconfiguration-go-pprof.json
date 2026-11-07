@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-go-pprof",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "The Go pprof debug endpoint is exposed",
+  "summary": "The Go profiling endpoint is reachable, which returns memory and goroutine dumps that leak internals and can be abused to exhaust the server.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/debug/pprof/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Types of profiles available\") and body_contains(\"goroutine\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/debug/pprof/",
+  "remediate": "Do not expose pprof; bind it to localhost or require authentication.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "golang"
+  ]
+}

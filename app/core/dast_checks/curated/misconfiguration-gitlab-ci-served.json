@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-gitlab-ci-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "low",
+  "title": "A .gitlab-ci.yml is served",
+  "summary": "The CI pipeline definition is downloadable, which reveals the build, the deploy steps and sometimes variable names.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.gitlab-ci.yml"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and \"html\" not in header(\"content-type\") and body_contains(\"stages:\") and body_contains(\"script:\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.gitlab-ci.yml",
+  "remediate": "Block dotfiles at the web server.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "ci"
+  ]
+}

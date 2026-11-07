@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-laravel-telescope",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Laravel Telescope is exposed",
+  "summary": "The Telescope debugger is reachable, which shows requests, queries, and the data passing through the app.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/telescope/requests"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Telescope\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/telescope/requests",
+  "remediate": "Restrict Telescope to local, or do not install it in production.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-489",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "laravel",
+    "php"
+  ]
+}

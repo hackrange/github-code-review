@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-rails-info-routes",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Rails route listing is exposed",
+  "summary": "The Rails routes page is reachable, which maps every route and its controller action for an attacker.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/rails/info/routes"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Helper\") and body_contains(\"Controller#Action\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/rails/info/routes",
+  "remediate": "This page is only meant for development; make sure the app runs in production mode.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "rails"
+  ]
+}

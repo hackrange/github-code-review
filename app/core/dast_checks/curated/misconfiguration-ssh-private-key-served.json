@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-ssh-private-key-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "critical",
+  "title": "An SSH private key is served",
+  "summary": "A private key is downloadable, which lets an attacker sign in as its owner.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.ssh/id_rsa"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and \"html\" not in header(\"content-type\") and body_contains(\"-----BEGIN\") and body_contains(\"PRIVATE\") and body_contains(\" KEY-----\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.ssh/id_rsa",
+  "remediate": "Remove the key from the web root and rotate it.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-522",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "secrets"
+  ]
+}

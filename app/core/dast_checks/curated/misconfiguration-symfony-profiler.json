@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-symfony-profiler",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "The Symfony profiler is exposed",
+  "summary": "The Symfony web profiler is reachable, which exposes requests, configuration and sometimes secrets.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/_profiler"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Symfony Profiler\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/_profiler",
+  "remediate": "Disable the profiler in production.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-489",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "symfony",
+    "php"
+  ]
+}
