@@ -1,0 +1,47 @@
+{
+  "id": "authentication-jwt-signature-not-verified",
+  "class": "authentication",
+  "safety": "read",
+  "severity_floor": "critical",
+  "title": "JWT signature is not verified (alg:none / stripped)",
+  "summary": "The signed in JSON Web Token is accepted with its algorithm set to none or its signature removed, so anyone can mint a token for any account.  This is a full authentication bypass.",
+  "needs": [
+    "session"
+  ],
+  "probe": [
+    {
+      "jwt": {
+        "paths": [
+          "/api/me",
+          "/api/user",
+          "/api/account",
+          "/api/profile",
+          "/me",
+          "/account",
+          "/api/v1/me",
+          "/api/users/me"
+        ],
+        "forge": [
+          "alg_none",
+          "strip"
+        ]
+      }
+    }
+  ],
+  "confirm": {
+    "control": "The signed out view of the same endpoint, which must differ from the signed in one.",
+    "differential": "status==200 and same(response, authed) and differ(response, anon)",
+    "retest": 2
+  },
+  "reproduce": "Take the session JWT, set its header alg to \"none\" and drop the signature (keep the dot), and request an authenticated endpoint with it.  A signed in response means the signature is not checked.",
+  "remediate": "Reject alg:none and any algorithm the server did not issue; always verify the signature with the expected key.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-347",
+    "owasp": "A07:2021"
+  },
+  "rulesets": [
+    "jwt",
+    "auth"
+  ]
+}

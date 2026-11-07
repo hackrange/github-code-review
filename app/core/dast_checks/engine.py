@@ -22,6 +22,10 @@ was compared against, how to reproduce it by hand, and how to fix it.
 from __future__ import annotations
 
 import ast
+import base64
+import hashlib
+import hmac
+import json
 import re
 import secrets
 import time
@@ -307,6 +311,17 @@ def run_rule(spec: dict, ctx: dict) -> dict:
             out["status"], out["detail"] = "error", f"{type(exc).__name__}: {exc}"[:200]
         return out
 
+    # A rule with a jwt step forges a variant of the signed in token and checks
+    # the server still accepts it: its own path, reads only.
+    if any(isinstance(s, dict) and s.get("jwt") for s in spec.get("probe") or []):
+        try:
+            out["findings"] = _run_jwt(spec, ctx, domains, budget)
+        except Refused as exc:
+            out["status"], out["detail"] = "refused", str(exc)
+        except Exception as exc:  # noqa: BLE001
+            out["status"], out["detail"] = "error", f"{type(exc).__name__}: {exc}"[:200]
+        return out
+
     client = Client(base_url, domains, spec["safety"], budget,
                     allow_private=bool(ctx.get("allow_private")),
                     headers=ctx.get("headers"))
@@ -375,6 +390,125 @@ def _b_objects(client_b: Client, base_url: str, code_routes) -> list:
         if _OBJECT_PATH.search(route) and route not in out:
             out.append(route)
     return out[:MAX_ROUTES]
+
+
+# Common weak signing secrets for the HS256 re-sign test.  A short, high signal
+# list: a hit means the secret is guessable, not a brute force.
+WEAK_JWT_SECRETS = ["secret", "password", "changeme", "123456", "key", "jwt",
+                    "admin", "test", "secretkey", "your-256-bit-secret",
+                    "your_jwt_secret", "supersecret", "token", "s3cr3t",
+                    "jwtsecret", "qwerty", "P@ssw0rd"]
+_JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*")
+
+
+def _b64url_dec(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _b64url_enc(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode("ascii")
+
+
+def _find_jwt(headers: dict):
+    """The first JWT carried in the session, as (header name, value, token)."""
+    for name, value in (headers or {}).items():
+        for m in _JWT_RE.finditer(str(value)):
+            tok = m.group(0)
+            try:
+                head = json.loads(_b64url_dec(tok.split(".")[0]))
+            except Exception:  # noqa: BLE001 - not a real JWT, keep looking
+                continue
+            if isinstance(head, dict) and "alg" in head:
+                return name, value, tok
+    return None
+
+
+def _forge_jwt(tok: str, mode: str, secret: str = "") -> str:
+    """A variant of the token: the signature stripped, the algorithm set to
+    none, or the token re-signed with a guessed secret.  The claims are left
+    exactly as they were, so this proves the signature is not checked, it does
+    not forge a new identity."""
+    head_b, payload_b, _sig = tok.split(".")
+    head = json.loads(_b64url_dec(head_b))
+    if mode == "strip":
+        return f"{head_b}.{payload_b}."
+    if mode == "alg_none":
+        head["alg"] = "none"
+        return f"{_b64url_enc(json.dumps(head, separators=(',', ':')).encode())}.{payload_b}."
+    if mode == "weak_secret":
+        head["alg"] = "HS256"
+        new_head = _b64url_enc(json.dumps(head, separators=(",", ":")).encode())
+        sig = hmac.new(secret.encode(), f"{new_head}.{payload_b}".encode(), hashlib.sha256).digest()
+        return f"{new_head}.{payload_b}.{_b64url_enc(sig)}"
+    return tok
+
+
+def _run_jwt(spec: dict, ctx: dict, domains, budget: Budget) -> list:
+    """Forge a variant of the signed in session's JWT and check the server still
+    accepts it.  -> findings.  Reads only, claims unchanged.
+
+    The finding stands only when the forged token gets the signed in response
+    and the signed out visitor does not, so a public page or a rejected forgery
+    both stay silent.
+    """
+    base_url = ctx.get("base_url") or ""
+    allow_private = bool(ctx.get("allow_private"))
+    headers = ctx.get("headers") or {}
+    found = _find_jwt(headers)
+    if not found:
+        return []   # the session carries no JWT, so there is nothing to forge
+    name, value, tok = found
+    step = next((s.get("jwt") for s in spec.get("probe") or []
+                 if isinstance(s, dict) and s.get("jwt")), {})
+    paths = step.get("paths") or ([step["path"]] if step.get("path") else ["/"])
+    modes = [m for m in (step.get("forge") or ["alg_none", "strip"])
+             if m in ("alg_none", "strip", "weak_secret")]
+
+    authed = Client(base_url, domains, "read", budget, allow_private, headers)
+    anon = Client(base_url, domains, "read", budget, allow_private, None)
+    confirm = spec.get("confirm") or {}
+    differential = confirm.get("differential") or "False"
+    retest = int(confirm.get("retest") or 1)
+    said = {"alg_none": "an alg:none token", "strip": "a token with its signature stripped",
+            "weak_secret": "a token re-signed with a guessed secret"}
+
+    for path in paths[:8]:
+        resp_authed = authed.request("GET", path)
+        # The endpoint must really be behind the session; the differential then
+        # confirms, per attempt, that the forgery got the signed in response and
+        # the signed out one did not, so a public page stays silent.
+        if resp_authed.get("status") != 200:
+            continue
+        resp_anon = anon.request("GET", path)
+        for mode in modes:
+            for secret in (WEAK_JWT_SECRETS if mode == "weak_secret" else [""]):
+                try:
+                    forged = _forge_jwt(tok, mode, secret)
+                except Exception:  # noqa: BLE001 - a malformed token, skip this mode
+                    break
+                forged_headers = dict(headers)
+                forged_headers[name] = value.replace(tok, forged)
+                client = Client(base_url, domains, "read", budget, allow_private, forged_headers)
+                confirmations, resp = 0, None
+                for _attempt in range(retest):
+                    resp = client.request("GET", path)
+                    env = _env_for(resp, {}, False,
+                                   saved={"authed": resp_authed, "anon": resp_anon})
+                    if evaluate(differential, env):
+                        confirmations += 1
+                    else:
+                        break
+                if confirmations == retest and confirmations > 0:
+                    f = _finding(spec, client, resp, path)
+                    how = (f"a token re-signed with the weak secret '{secret}'"
+                           if mode == "weak_secret" else said.get(mode, mode))
+                    f["evidence"] = (
+                        f"The signed in session's JWT was replaced with {how}, its claims "
+                        f"unchanged, and the server returned the signed in response at {path} "
+                        "all the same, so it is not verifying the token's signature.  The "
+                        "signed out visitor is turned away.")[:800]
+                    return [f]
+    return []
 
 
 def _run_two_account(spec: dict, ctx: dict, domains, budget: Budget) -> list:
