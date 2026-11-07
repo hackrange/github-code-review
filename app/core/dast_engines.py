@@ -77,6 +77,14 @@ SEVERITIES = ["critical", "high", "medium", "low", "info"]
 
 ENGINE_HOME = Path(os.environ.get("GCR_DAST_HOME", "/opt/gcr/engines"))
 WORDLIST = Path(__file__).resolve().parents[2] / "config" / "dast" / "web-content.txt"
+# The deeper profiles get a much larger list; quick keeps the short one.
+WORDLIST_LARGE = Path(__file__).resolve().parents[2] / "config" / "dast" / "web-content-large.txt"
+
+
+def ffuf_wordlist(profile: str) -> Path:
+    if profile in ("thorough", "premium") and WORDLIST_LARGE.is_file():
+        return WORDLIST_LARGE
+    return WORDLIST
 TEMPLATES = Path(os.environ.get("GCR_NUCLEI_TEMPLATES",
                                 str(Path.home() / ".cache" / "nuclei-templates")))
 
@@ -241,7 +249,7 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
                  "--skip-mining-dom", "--user-agent", _ua()], report)
     if tool == "ffuf":
         report = workdir / "ffuf.json"
-        return ([exe, "-u", url.rstrip("/") + "/FUZZ", "-w", str(WORDLIST),
+        return ([exe, "-u", url.rstrip("/") + "/FUZZ", "-w", str(ffuf_wordlist(profile)),
                  "-of", "json", "-o", str(report), "-mc", "200,301,302,401,403",
                  "-fs", "0", "-ac", "-t", "20", "-rate", "40", "-timeout", "10",
                  "-maxtime", "240", "-s", "-H", f"User-Agent: {_ua()}"], report)
@@ -298,7 +306,7 @@ def run_engine(tool: str, url: str, host: str, profile: str, workdir: Path,
     if not binary(tool):
         out["detail"] = "not installed on this server"
         return out
-    if tool == "ffuf" and not WORDLIST.is_file():
+    if tool == "ffuf" and not ffuf_wordlist(profile).is_file():
         out["detail"] = "the content discovery word list is missing"
         return out
     engine_dir = workdir / tool
