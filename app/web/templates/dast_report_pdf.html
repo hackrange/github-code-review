@@ -251,7 +251,7 @@
     {% if f.decision and f.decision.kind == 'exception' %}<tr><td class="k">Exception</td><td>Accepted until {{ f.decision.expires[:10] }} by {{ f.decision.by }}.  {{ f.decision.reason | sentence_spaced }}  Not counted toward the grade.</td></tr>{% endif %}
     {% if f.ai_verdict %}<tr><td class="k">Enhanced review</td><td>{{ f.ai_verdict | replace('_', ' ') }}{% if f.ai_why %}.  {{ f.ai_why | sentence_spaced }}{% endif %}{% if f.ai_sast %}  Matches code finding {{ f.ai_sast }}.{% endif %}</td></tr>{% endif %}
   </table>
-  {% if f.evidence %}<div class="label"><strong>Evidence</strong></div><pre>{{ f.evidence }}</pre>{% endif %}
+  {% if f.evidence %}<div class="label"><strong>{{ 'Proof' if f.likelihood and f.likelihood >= 4 else 'Evidence' }}</strong></div><pre>{{ f.evidence }}</pre>{% endif %}
   {% if f.repro.command %}
   <div style="margin-top:2mm"><strong>To see it again</strong></div>
   <pre>{{ f.repro.command }}</pre>

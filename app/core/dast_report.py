@@ -333,7 +333,6 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
     from app.core import dast_risk
 
     dast_risk.annotate(findings, getattr(asset, "exposure", "") or "")
-    risk_matrix = dast_risk.matrix(findings)
     # Code sinks from the mapped repositories, split by whether the scan reached
     # the route they sit behind.  Reachable ones are leads to prove; the rest
     # are context to review, not dynamic bugs.
@@ -343,6 +342,9 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
         code_sinks = []
     reachable_sinks = [s for s in code_sinks if s.get("reachable")]
     context_sinks = [s for s in code_sinks if not s.get("reachable")]
+    # A finding a reachable sink corroborates is confirmed by code and scan both.
+    dast_risk.corroborate(findings, reachable_sinks)
+    risk_matrix = dast_risk.matrix(findings)
     from app.core.external_decisions import counted as _counted
 
     by_sev = {s: sum(1 for f in findings if f.get("severity") == s and _counted(f))

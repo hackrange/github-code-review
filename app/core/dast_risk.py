@@ -13,6 +13,7 @@ risk        a cell on the 5x5 matrix: critical / high / medium / low
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 LIKELIHOOD_LABEL = {1: "Rare", 2: "Unlikely", 3: "Possible", 4: "Likely",
                     5: "Confirmed"}
@@ -95,6 +96,44 @@ def breachability(f: dict, exposure: str = "") -> tuple:
 def cell(lk: int, br: int) -> str:
     """The risk cell for a likelihood and breachability."""
     return _TABLE.get(max(1, min(5, lk)), {}).get(max(1, min(5, br)), "low")
+
+
+# A code sink type and the dynamic finding it would corroborate.
+_SINK_FINDING = {
+    "sql-injection": re.compile(r"sql\s*inj|\bsqli\b|CWE-?89\b", re.I),
+    "command-injection": re.compile(r"command inj|\brce\b|code exec|os command|CWE-?(?:78|94|77)\b", re.I),
+    "deserialization": re.compile(r"deserial|CWE-?502\b", re.I),
+    "template-injection": re.compile(r"\bssti\b|template inj|CWE-?1336\b", re.I),
+    "xss-sink": re.compile(r"\bxss\b|cross.site.script|CWE-?79\b", re.I),
+    "path-traversal": re.compile(r"path travers|directory travers|local file|\blfi\b|CWE-?(?:22|98)\b", re.I),
+}
+
+
+def corroborate(findings: list, reachable_sinks: list) -> int:
+    """Raise a finding to confirmed when a reachable code sink of the matching
+    kind sits on the same route: the code does the dangerous thing and the scan
+    reached it, which is the strongest evidence there is.  -> how many."""
+    by_route = {}
+    for s in reachable_sinks or []:
+        by_route.setdefault(s.get("reached_route") or "", set()).add(s.get("type"))
+    raised = 0
+    for f in findings:
+        types = by_route.get(urlparse(str(f.get("url") or "")).path)
+        if not types:
+            continue
+        text = f"{f.get('title') or ''} {f.get('cwe') or ''} {f.get('evidence') or ''}"
+        matched = [t for t in sorted(types)
+                   if _SINK_FINDING.get(t) and _SINK_FINDING[t].search(text)]
+        if matched and f.get("likelihood", 0) < 5:
+            f["likelihood"] = 5
+            f["likelihood_label"] = LIKELIHOOD_LABEL[5]
+            f["sink_confirmed"] = True
+            f["risk"] = cell(5, f.get("breachability", 3))
+            f["risk_basis"] = ((f.get("risk_basis") or "")
+                               + f"  Corroborated by a code sink ({', '.join(matched)}) "
+                               "on the same reachable route.")
+            raised += 1
+    return raised
 
 
 def annotate(findings: list, exposure: str = "") -> list:
