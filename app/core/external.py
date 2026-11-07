@@ -3545,9 +3545,46 @@ def _spent(cfg, answers: list) -> dict:
     return total
 
 
+def _evfp(f: dict) -> str:
+    """A fingerprint of what the model would read, so an unchanged finding can
+    reuse the verdict it already got instead of being sent again."""
+    import hashlib
+
+    basis = f"{f.get('evidence') or ''}|{f.get('severity') or ''}|{f.get('title') or ''}"
+    return hashlib.md5(basis.encode("utf-8", "replace")).hexdigest()[:12]
+
+
+def _prior_verdicts(db, asset_id: int, scan_id: int) -> dict:
+    """The AI verdicts from this site's last reviewed scan, by finding key, so a
+    finding that has not changed reuses its verdict and is not sent again."""
+    from app.core.external_decisions import finding_key
+
+    prev = (db.query(ExternalDastScan)
+            .filter(ExternalDastScan.asset_id == asset_id,
+                    ExternalDastScan.id != scan_id,
+                    ExternalDastScan.ai_status == "done")
+            .order_by(ExternalDastScan.id.desc()).first())
+    if prev is None:
+        return {}
+    out = {}
+    for f in findings_of(prev):
+        if f.get("ai_verdict"):
+            out[f.get("key") or finding_key(f)] = {
+                "verdict": f["ai_verdict"], "why": f.get("ai_why", ""),
+                "sast": f.get("ai_sast", ""), "evfp": _evfp(f)}
+    return out
+
+
 def triage(scan_id: int, actor: str = "") -> None:
-    """Ask the model to sort one scan's findings.  Runs in the caller's thread."""
+    """Ask the model to sort one scan's findings.  Runs in the caller's thread.
+
+    Guardrails so the model is a bounded advisor, not the scanner: it is only
+    ever sent findings that passed the deterministic filters; a finding
+    unchanged since the last scan reuses its verdict without a call; and no more
+    than the cap go to the model, highest risk first, so a noisy scan cannot run
+    up a bill."""
     from app.core import ai
+    from app.core import settings_store as settings_mod
 
     with session_scope() as db:
         cfg = ai.config(db)
@@ -3586,10 +3623,28 @@ def triage(scan_id: int, actor: str = "") -> None:
             if links:
                 sast = _sast_lines(sast_findings(db, [l["full_name"] for l in links], 60, who))
         host = asset.host
+        cap = max(1, int(settings_mod.get(db, "dast.ai_max_findings") or 40))
+        prior = _prior_verdicts(db, scan.asset_id, scan_id)
+    # Reuse a verdict for any finding unchanged since the last reviewed scan.
+    reused = 0
+    for f in findings:
+        pv = prior.get(f["key"])
+        if pv and pv["evfp"] == _evfp(f):
+            f["ai_verdict"], f["ai_why"], f["ai_sast"] = pv["verdict"], pv["why"], pv["sast"]
+            f["ai_cached"] = True
+            reused += 1
+    # Of the rest, send only the cap, highest severity first; the overflow keeps
+    # its computed risk and is marked not reviewed.
+    to_send = sorted((f for f in findings if not f.get("ai_cached")),
+                     key=lambda f: RANK.get(f.get("severity"), 0), reverse=True)
+    capped = len(to_send) - cap
+    for f in to_send[cap:]:
+        f["ai_note"] = "not reviewed by the model: over the per scan cap"
+    to_send = to_send[:cap]
     answers, verdicts, summaries, priorities, unreadable = [], {}, [], [], 0
     chunk = 120
-    for start in range(0, max(1, len(findings)), chunk):
-        part = findings[start:start + chunk]
+    for start in range(0, max(1, len(to_send)), chunk):
+        part = to_send[start:start + chunk]
         if not part:
             break
         prompt = json.dumps({
@@ -3619,7 +3674,10 @@ def triage(scan_id: int, actor: str = "") -> None:
             if isinstance(v, dict) and v.get("id"):
                 verdicts[str(v["id"])] = v
     spent = _spent(cfg, answers)
-    ok = any(a["ok"] for a in answers) and (summaries or verdicts)
+    # A pass that only reused verdicts made no call, and that is a success, not
+    # a failure.
+    ok = (any(a["ok"] for a in answers) and (summaries or verdicts)) or (
+        not answers and reused > 0)
     for f in all_findings:
         v = verdicts.get(str(f.get("id") or f["key"])) or verdicts.get(f["key"])
         if v:
@@ -3642,6 +3700,7 @@ def triage(scan_id: int, actor: str = "") -> None:
         scan.ai_summary = json.dumps({
             "removed": removed, "tidied": (before or {}).get("tidied") if isinstance(before, dict) else None,
             "summary": " ".join(summaries)[:4000], "priorities": priorities[:8],
+            "reused": reused, "capped": max(0, capped),
             "model": next((a.get("model") for a in answers if a.get("model")), ""),
             "error": "" if ok else next(
                 (a["error"] for a in answers if a.get("error")),

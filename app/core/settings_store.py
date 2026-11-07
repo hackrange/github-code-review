@@ -408,6 +408,12 @@ DEFAULTS = {
                                 "Squid address such as http://proxy.host:3128, or "
                                 "http://user:password@proxy.host:3128 when it needs a "
                                 "sign in.  Held encrypted."),
+    "dast.ai_max_findings":    (40, False,
+                                "The most findings one scan sends to the model for review.  "
+                                "The rest keep their computed risk and are marked not "
+                                "reviewed, so a noisy scan cannot run up a large bill.  The "
+                                "model is only ever sent findings that passed the "
+                                "deterministic filters, highest risk first."),
     "dast.ip_echo_url":        ("https://api.ipify.org", False,
                                 "A service that answers with the caller's IP, used by "
                                 "Validate proxy to show the address the proxy leaves "
