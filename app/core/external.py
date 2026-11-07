@@ -2092,15 +2092,18 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
     from app.core.models import DastRule, ExternalAsset
 
     specs, domains = [], []
+    excluded = invalid = 0
     second_headers = None
     with session_scope() as db:
         for row in db.query(DastRule).filter(DastRule.enabled.is_(True)).all():
             if not profiles.selected(row.rule_class, row.rulesets, rulesets):
-                continue   # not in a ruleset this profile runs
+                excluded += 1   # enabled, but not in a ruleset this profile runs
+                continue
             try:
                 specs.append(spec_mod.validate(json.loads(row.spec or "{}")))
             except (ValueError, spec_mod.SpecError):
-                continue   # a bad stored rule is skipped, never run
+                invalid += 1   # a bad stored rule is skipped, never run
+                continue
         domains = scope.company_domains(
             settings_mod.get(db, "web.company_domains") or [])
         oob = callback.for_scan(db)
@@ -2133,8 +2136,11 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
            "code_routes": list(wb.get("routes") or []),
            "headers": headers or None, "second_headers": second_headers,
            "budget": 60, "oob": oob}
+    from collections import Counter
+
     started = time.monotonic()
     findings, ran, skipped, confirmed = [], 0, 0, 0
+    skip_reasons = Counter()
     for spec in specs:
         if scan_id in _stopping:
             break
@@ -2145,13 +2151,27 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
             confirmed += len(result["findings"])
         elif result["status"] == "skipped":
             skipped += 1
+            skip_reasons[result.get("detail") or "a prerequisite was not met"] += 1
         else:
             log.info("curated rule %s: %s - %s", spec.get("id"),
                      result["status"], result.get("detail"))
     row["seconds"] = int(time.monotonic() - started)
-    row["detail"] = (f"{ran} rule{'' if ran == 1 else 's'} ran, "
-                     f"{confirmed} finding{'' if confirmed == 1 else 's'}, "
-                     f"{skipped} skipped")
+    detail = (f"{ran} rule{'' if ran == 1 else 's'} ran, "
+              f"{confirmed} finding{'' if confirmed == 1 else 's'}, "
+              f"{skipped} skipped")
+    # Say why they skipped, grouped, so an admin can see what to set up.
+    if skip_reasons:
+        detail += " (" + "; ".join(f"{n} {reason}" for reason, n
+                                   in skip_reasons.most_common()) + ")"
+    notes = []
+    if excluded:
+        notes.append(f"{excluded} enabled rule{'' if excluded == 1 else 's'} "
+                     "not in this profile's rulesets")
+    if invalid:
+        notes.append(f"{invalid} could not be read")
+    if notes:
+        detail += ".  " + "; ".join(notes)
+    row["detail"] = detail
     return findings, row
 
 
