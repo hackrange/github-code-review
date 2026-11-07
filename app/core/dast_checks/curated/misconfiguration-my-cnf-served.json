@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-my-cnf-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A MySQL client config is served (/.my.cnf)",
+  "summary": "The MySQL client config is downloadable, which commonly carries the database user and password in plain text.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.my.cnf"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"[client]\") and body_contains(\"password\") and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.my.cnf",
+  "remediate": "Remove the file from the web root and rotate the database credentials.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-522",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "secrets",
+    "mysql"
+  ]
+}

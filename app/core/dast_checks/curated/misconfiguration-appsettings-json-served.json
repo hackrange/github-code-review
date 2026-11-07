@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-appsettings-json-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A .NET appsettings.json is served",
+  "summary": "The application settings file is downloadable, which names the connection strings and other configuration the app runs with.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/appsettings.json"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"ConnectionStrings\") and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/appsettings.json",
+  "remediate": "Block config files at the web server, and rotate any secrets the file named.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-538",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "dotnet"
+  ]
+}

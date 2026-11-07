@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-composer-auth-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A Composer auth.json is served",
+  "summary": "The Composer auth file is downloadable, which carries the registry tokens and HTTP credentials it authenticates with.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/auth.json"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"http-basic\") or body_contains(\"github-oauth\") or body_contains(\"gitlab-token\")) and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/auth.json",
+  "remediate": "Remove the file from the web root and rotate the tokens.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-522",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "php",
+    "composer"
+  ]
+}

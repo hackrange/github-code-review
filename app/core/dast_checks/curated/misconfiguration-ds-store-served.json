@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-ds-store-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "low",
+  "title": "A .DS_Store file is served",
+  "summary": "A .DS_Store file is downloadable, which lists the names of the files in its directory and reveals the layout of the site.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.DS_Store"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Bud1\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.DS_Store",
+  "remediate": "Remove .DS_Store files from the web root and block them at the web server.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-538",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "apache"
+  ]
+}

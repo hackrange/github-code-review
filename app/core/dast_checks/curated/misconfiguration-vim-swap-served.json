@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-vim-swap-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A Vim swap file is served (/.index.php.swp)",
+  "summary": "A Vim swap file is downloadable, which carries a copy of the source being edited and can be recovered to the original.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.index.php.swp"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"b0VIM\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.index.php.swp",
+  "remediate": "Remove the swap file from the web root and block .swp at the web server.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-538",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "php",
+    "apache"
+  ]
+}

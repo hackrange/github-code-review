@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-laravel-log-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A Laravel log is served (/storage/logs/laravel.log)",
+  "summary": "The application log is downloadable, which carries stack traces, query values and other data from live requests.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/storage/logs/laravel.log"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"production.ERROR\") or body_contains(\"local.ERROR\") or body_contains(\"stacktrace\")) and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/storage/logs/laravel.log",
+  "remediate": "Keep the storage directory out of the web root.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-532",
+    "owasp": "A09:2021"
+  },
+  "rulesets": [
+    "laravel",
+    "php"
+  ]
+}

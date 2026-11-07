@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-netrc-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A .netrc credentials file is served",
+  "summary": "The .netrc file is downloadable, which carries the login and password it uses for other machines in plain text.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.netrc"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"machine\") and body_contains(\"password\") and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.netrc",
+  "remediate": "Remove the file from the web root and rotate the credentials.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-522",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "secrets"
+  ]
+}

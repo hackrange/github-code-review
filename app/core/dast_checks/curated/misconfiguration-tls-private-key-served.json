@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-tls-private-key-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "critical",
+  "title": "A TLS private key is served (/server.key)",
+  "summary": "A private key is downloadable, which lets an attacker impersonate the site's certificate.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/server.key"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"-----BEGIN\") and body_contains(\"PRIVATE\") and body_contains(\" KEY-----\") and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/server.key",
+  "remediate": "Remove the key from the web root and reissue the certificate.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-522",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "secrets",
+    "tls"
+  ]
+}

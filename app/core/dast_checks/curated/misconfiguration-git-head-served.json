@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-git-head-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A .git/HEAD file is served",
+  "summary": "The git HEAD is downloadable, which proves the .git directory is exposed and the source history can be rebuilt.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.git/HEAD"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"ref:\") and body_contains(\"refs/\") and \"html\" not in header(\"content-type\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.git/HEAD",
+  "remediate": "Block the .git directory at the web server, or deploy without it.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-538",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "git",
+    "apache"
+  ]
+}

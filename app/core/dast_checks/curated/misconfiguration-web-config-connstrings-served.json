@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-web-config-connstrings-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "An IIS web.config with connection strings is served",
+  "summary": "The web.config is downloadable and carries connection strings, which commonly include the database user and password.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/web.config"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"<connectionStrings\") and body_contains(\"connectionString=\") and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/web.config",
+  "remediate": "Return web.config to its default of not being served, and rotate the database credentials.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-538",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "dotnet",
+    "iis"
+  ]
+}
