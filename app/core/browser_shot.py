@@ -47,6 +47,58 @@ Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
 window.chrome = window.chrome || {runtime: {}};
 """
 
+# Many marketing and login templates hide the page behind a full screen
+# preloader and reveal the content with scroll animations (WOW, AOS and the
+# like).  A single non scrolling capture then photographs a flat loading
+# screen, which reads as blank.  Before the picture, switch the animations
+# off, show whatever they were holding back, and drop the preloader curtain.
+UNVEIL_CSS = """
+*, *::before, *::after {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+.wow, .animated, [data-wow-delay], [data-wow-duration], [data-animate],
+[data-aos], .aos-init, .fadeIn, .fadeInUp, .fadeInDown, .fadeInLeft,
+.fadeInRight {
+  visibility: visible !important;
+  opacity: 1 !important;
+  transform: none !important;
+}
+.preloader, #preloader, .page-preloader, .page-loader, #page-loader,
+.pageloader, .pageload, .loader-wrapper, .loading-overlay, .spinner-wrapper,
+.preloader-wrap, .site-preloader, .preloader-overlay, .page-loading {
+  display: none !important;
+}
+"""
+
+
+def settle_for_shot(page, deadline) -> None:
+    """Make a page that hides behind a preloader and scroll animations show
+    itself, so the picture is the page and not a flat loading screen.  Every
+    step is optional: a strict style policy may refuse the stylesheet, and a
+    page mid navigation may refuse the scroll.  None of it must stop the shot.
+    """
+    if time.monotonic() > deadline - 2:
+        return
+    try:
+        page.add_style_tag(content=UNVEIL_CSS)
+    except Exception:  # noqa: BLE001 - a strict style CSP may refuse it
+        pass
+    try:
+        page.evaluate("() => { const d = document.documentElement;"
+                      " window.scrollTo(0, Math.max(d.scrollHeight,"
+                      " (document.body || d).scrollHeight)); }")
+        page.wait_for_timeout(min(400, max(0, int((deadline - time.monotonic() - 2) * 1000))))
+        page.evaluate("() => window.scrollTo(0, 0)")
+    except Exception:  # noqa: BLE001 - scrolling is a help, not a requirement
+        pass
+    try:
+        page.wait_for_timeout(min(400, max(0, int((deadline - time.monotonic() - 1) * 1000))))
+    except Exception:  # noqa: BLE001
+        pass
+
 
 def bot_check(html: str) -> str:
     if len(html or "") > 30000:
@@ -117,6 +169,7 @@ def main() -> int:
             ctx = browser.new_context(user_agent=args.user_agent,
                                       viewport={"width": 1280, "height": 800},
                                       locale="en-US", timezone_id="America/New_York",
+                                      reduced_motion="reduce",
                                       ignore_https_errors=True)
             ctx.add_init_script(HIDE_AUTOMATION)
             if not args.allow_private:
@@ -160,6 +213,7 @@ def main() -> int:
             out["navigations"] = moves["n"]
             out["title"] = (page.title() or "")[:200]
             out["url"] = page.url
+            settle_for_shot(page, deadline)
             page.screenshot(path=args.out, full_page=False)
             out["ok"] = True
             browser.close()
