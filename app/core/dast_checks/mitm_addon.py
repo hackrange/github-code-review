@@ -11,6 +11,11 @@ request they make:
     link or a redirect off the target cannot touch anything but the sites the
     scan is allowed to reach
 
+It also tallies the requests it forwards, so the scan can report how many
+requests each tool actually sent (the proxy is the one place that sees them
+all).  The count is written to the file named by GCR_MITM_COUNT, which the
+parent reads between engines to attribute the count to each tool.
+
 It runs inside the DAST virtual environment's python, which does not have the
 app on its path, so it imports only mitmproxy and the standard library, and
 takes its settings from the environment the parent set.
@@ -25,6 +30,10 @@ _AUTH = json.loads(os.environ.get("GCR_MITM_AUTH", "{}") or "{}")
 _HOSTS = [h.lower().strip().rstrip(".") for h in
           json.loads(os.environ.get("GCR_MITM_HOSTS", "[]") or "[]") if h]
 _ENFORCE = os.environ.get("GCR_MITM_SCOPE", "1") == "1"
+_COUNT_PATH = os.environ.get("GCR_MITM_COUNT", "")
+
+_sent = 0        # requests forwarded to a target: the attacks the tools sent
+_blocked = 0     # requests refused for being out of scope
 
 
 def _in_scope(host: str) -> bool:
@@ -37,12 +46,27 @@ def _in_scope(host: str) -> bool:
     return False
 
 
+def _write_count() -> None:
+    if not _COUNT_PATH:
+        return
+    try:
+        with open(_COUNT_PATH, "w") as fh:
+            json.dump({"sent": _sent, "blocked": _blocked}, fh)
+    except OSError:
+        pass   # the count is telemetry; never let it affect the scan
+
+
 def request(flow: http.HTTPFlow) -> None:
+    global _sent, _blocked
     host = flow.request.pretty_host
     if _ENFORCE and _HOSTS and not _in_scope(host):
+        _blocked += 1
+        _write_count()
         flow.response = http.Response.make(
             403, b"blocked: out of the scan's scope\n",
             {"Content-Type": "text/plain"})
         return
     for name, value in _AUTH.items():
         flow.request.headers[str(name)] = str(value)
+    _sent += 1
+    _write_count()

@@ -48,9 +48,20 @@ def _free_port() -> int:
 class Handle:
     """A running scan proxy.  url is what the engines are pointed at."""
 
-    def __init__(self, url: str, proc: subprocess.Popen):
+    def __init__(self, url: str, proc: subprocess.Popen, count_path: Path = None):
         self.url = url
         self._proc = proc
+        self.count_path = count_path
+
+    def count(self) -> int:
+        """Requests the proxy has forwarded to a target so far (the attacks the
+        tools have sent).  0 before the first request or if it cannot be read."""
+        if not self.count_path:
+            return 0
+        try:
+            return int(json.loads(Path(self.count_path).read_text()).get("sent", 0))
+        except (OSError, ValueError, TypeError):
+            return 0
 
     def stop(self) -> None:
         try:
@@ -75,6 +86,7 @@ def start(auth_headers: dict, hosts: list, upstream: str = "",
     port = _free_port()
     confdir = Path(workdir or "/tmp") / "mitm"
     confdir.mkdir(parents=True, exist_ok=True)
+    count_path = confdir / "requests.count"
     argv = [exe, "--listen-host", "127.0.0.1", "--listen-port", str(port),
             "-s", str(_ADDON), "--ssl-insecure", "-q",
             "--set", "flow_detail=0", "--set", f"confdir={confdir}"]
@@ -83,7 +95,8 @@ def start(auth_headers: dict, hosts: list, upstream: str = "",
     env = dict(os.environ,
                GCR_MITM_AUTH=json.dumps(auth_headers or {}),
                GCR_MITM_HOSTS=json.dumps([h for h in (hosts or []) if h]),
-               GCR_MITM_SCOPE="1")
+               GCR_MITM_SCOPE="1",
+               GCR_MITM_COUNT=str(count_path))
     try:
         proc = subprocess.Popen(argv, env=env,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -97,7 +110,7 @@ def start(auth_headers: dict, hosts: list, upstream: str = "",
             return None
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.3):
-                return Handle(url, proc)
+                return Handle(url, proc, count_path)
         except OSError:
             time.sleep(0.2)
     try:

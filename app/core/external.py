@@ -2282,6 +2282,7 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
         workdir = app_settings.work_dir / "dast" / str(scan_id)
         workdir.mkdir(parents=True, exist_ok=True)
         scan_proxy = _start_scan_proxy(session, host, proxy, workdir)
+        proxy_total = 0
         if scan_proxy:
             engines.append({"tool": "scan-proxy", "name": "Scan proxy", "status": "ok",
                             "seconds": 0, "detail": "the engines run through a local proxy "
@@ -2308,9 +2309,17 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                 # testssl reads the site's own TLS, so it must reach it directly,
                 # not through the proxy that terminates TLS with its own cert.
                 tool_proxy = proxy if tool == "testssl" else engine_proxy
+                before = scan_proxy.count() if scan_proxy else 0
                 result = dast_engines.run_engine(tool, url, host, profile, workdir,
                                                  scan_id, paths=extra, auth_args=args,
                                                  proxy=tool_proxy)
+                # How many requests this tool actually sent, counted at the proxy
+                # (the one place that sees them all).  testssl goes direct, so it
+                # is not counted here.
+                if scan_proxy and tool != "testssl":
+                    sent = max(0, scan_proxy.count() - before)
+                    result["requests"] = sent
+                    proxy_total += sent
                 if session:
                     result["signed_in"] = bool(args)
                 if tool == "ffuf":
@@ -2324,6 +2333,16 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                 _update(scan_id, engines=json.dumps(engines))
         finally:
             if scan_proxy:
+                for e in engines:
+                    if e.get("tool") == "scan-proxy":
+                        e["requests"] = proxy_total
+                        e["detail"] = ("the engines ran through a local proxy that signs "
+                                       "each request in and refuses any host out of scope; "
+                                       f"it forwarded {proxy_total:,} request"
+                                       f"{'s' if proxy_total != 1 else ''} to the target "
+                                       "(the attacks the tools sent)")
+                        break
+                _update(scan_id, engines=json.dumps(engines))
                 scan_proxy.stop()
             shutil.rmtree(workdir, ignore_errors=True)
     # The headless DOM scan: load the page in a real browser, run its scripts,
