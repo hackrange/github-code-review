@@ -1,0 +1,33 @@
+{
+  "id": "access-control-weblogic-console-exposed",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "An Oracle WebLogic console is exposed",
+  "summary": "The WebLogic admin console is reachable.  WebLogic has a long run of remote code execution flaws.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/console/login/LoginForm.jsp"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"WebLogic Server\") or body_contains(\"Oracle WebLogic\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/console/login/LoginForm.jsp",
+  "remediate": "Keep the console off the public internet and WebLogic patched.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "weblogic",
+    "java"
+  ]
+}

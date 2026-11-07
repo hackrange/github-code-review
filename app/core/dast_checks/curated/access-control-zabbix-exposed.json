@@ -1,0 +1,32 @@
+{
+  "id": "access-control-zabbix-exposed",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A Zabbix interface is exposed",
+  "summary": "The Zabbix web interface is reachable, which is monitoring with a history of authentication and SQL flaws.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/zabbix/index.php"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Zabbix\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/zabbix/index.php",
+  "remediate": "Restrict the interface to trusted addresses and keep Zabbix updated.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "zabbix"
+  ]
+}

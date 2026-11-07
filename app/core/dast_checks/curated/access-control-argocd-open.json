@@ -1,0 +1,33 @@
+{
+  "id": "access-control-argocd-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "An Argo CD API answers unauthenticated",
+  "summary": "The Argo CD API returns its version without a sign in, which usually means the GitOps controller is exposed.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/version"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"BuildDate\") and body_contains(\"GitCommit\") and body_contains(\"Version\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/api/version",
+  "remediate": "Require authentication on Argo CD and keep it off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "argocd",
+    "kubernetes"
+  ]
+}

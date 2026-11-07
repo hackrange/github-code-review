@@ -1,0 +1,32 @@
+{
+  "id": "access-control-coldfusion-admin-exposed",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "The ColdFusion Administrator is exposed",
+  "summary": "The ColdFusion admin console is reachable.  It has a long history of authentication bypass and remote code execution.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/CFIDE/administrator/enter.cfm"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"ColdFusion Administrator\") or body_contains(\"CFIDE\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/CFIDE/administrator/enter.cfm",
+  "remediate": "Restrict the admin console to trusted addresses and keep ColdFusion updated.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "coldfusion"
+  ]
+}

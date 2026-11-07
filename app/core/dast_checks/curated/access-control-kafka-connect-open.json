@@ -1,0 +1,32 @@
+{
+  "id": "access-control-kafka-connect-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A Kafka Connect REST API is reachable",
+  "summary": "The Kafka Connect API answers unauthenticated.  It can be made to load a connector, a known path to code execution.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"kafka_cluster_id\") and body_contains(\"version\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/",
+  "remediate": "Require authentication on the Connect REST API and keep it off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "kafka"
+  ]
+}

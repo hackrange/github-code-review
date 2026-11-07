@@ -1,0 +1,32 @@
+{
+  "id": "access-control-nacos-exposed",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "An Alibaba Nacos console is exposed",
+  "summary": "The Nacos console is reachable.  Nacos has a known authentication bypass that opens its configuration and user store.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/nacos/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Nacos\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/nacos/",
+  "remediate": "Restrict Nacos to trusted addresses and keep it updated.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "nacos"
+  ]
+}

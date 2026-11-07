@@ -1,0 +1,32 @@
+{
+  "id": "access-control-flink-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "An Apache Flink dashboard is reachable",
+  "summary": "The Flink REST API answers unauthenticated.  Flink can be made to run a job, a known path to code execution on the cluster.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/config"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"flink-version\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/config",
+  "remediate": "Put Flink behind authentication and keep it off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "flink"
+  ]
+}

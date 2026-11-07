@@ -1,0 +1,32 @@
+{
+  "id": "access-control-traefik-api-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A Traefik API is reachable",
+  "summary": "The Traefik API answers unauthenticated, which lists the routers, services and middlewares, mapping the internal network.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/rawdata"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"routers\") and body_contains(\"services\") and body_contains(\"middlewares\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/api/rawdata",
+  "remediate": "Do not expose the Traefik API; require authentication.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "traefik"
+  ]
+}
