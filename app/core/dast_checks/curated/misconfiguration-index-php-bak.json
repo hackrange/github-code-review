@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-index-php-bak",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A PHP source backup is served (/index.php.bak)",
+  "summary": "A backup of a PHP file is downloadable as source rather than run, which reveals the application code.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/index.php.bak"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"<?php\") and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/index.php.bak",
+  "remediate": "Remove the backup from the web root and block .bak at the web server.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-540",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "php"
+  ]
+}

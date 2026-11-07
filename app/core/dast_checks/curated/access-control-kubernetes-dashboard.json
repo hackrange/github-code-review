@@ -1,0 +1,32 @@
+{
+  "id": "access-control-kubernetes-dashboard",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A Kubernetes dashboard is exposed",
+  "summary": "The Kubernetes dashboard answers here, which commonly leads to control of the cluster when it is reachable without authentication.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Kubernetes Dashboard\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/",
+  "remediate": "Put the dashboard behind authentication and off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "kubernetes"
+  ]
+}

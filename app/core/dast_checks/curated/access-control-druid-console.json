@@ -1,0 +1,32 @@
+{
+  "id": "access-control-druid-console",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "An Apache Druid console is exposed",
+  "summary": "The Apache Druid console answers here without signing in, which lets its data and queries be reached.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/druid/index.html"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Apache Druid\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/druid/index.html",
+  "remediate": "Put the Druid console behind authentication and off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "druid"
+  ]
+}

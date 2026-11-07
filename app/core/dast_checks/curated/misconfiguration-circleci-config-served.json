@@ -1,0 +1,29 @@
+{
+  "id": "misconfiguration-circleci-config-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "low",
+  "title": "A CircleCI config is served (/.circleci/config.yml)",
+  "summary": "The CI config is downloadable, which names the build steps, services and sometimes the paths and context the pipeline runs with.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.circleci/config.yml"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"jobs:\") and body_contains(\"version:\") and \"html\" not in header(\"content-type\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.circleci/config.yml",
+  "remediate": "Keep CI config out of the web root.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-538",
+    "owasp": "A05:2021"
+  }
+}

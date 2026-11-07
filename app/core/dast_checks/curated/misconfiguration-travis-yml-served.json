@@ -1,0 +1,29 @@
+{
+  "id": "misconfiguration-travis-yml-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "low",
+  "title": "A Travis CI config is served (/.travis.yml)",
+  "summary": "The CI config is downloadable, which names the build steps and environment the pipeline runs with.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.travis.yml"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"language:\") and (body_contains(\"script:\") or body_contains(\"install:\")) and \"html\" not in header(\"content-type\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.travis.yml",
+  "remediate": "Keep CI config out of the web root.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-538",
+    "owasp": "A05:2021"
+  }
+}

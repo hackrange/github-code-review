@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-aspnet-trace-axd",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "ASP.NET tracing is exposed (/trace.axd)",
+  "summary": "The ASP.NET trace handler answers here, which shows the details of recent requests including headers, cookies and session values.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/trace.axd"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Application Trace\") and body_contains(\"Request Details\") and body_contains(\"Trace Information\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/trace.axd",
+  "remediate": "Turn tracing off in production, and never leave trace.axd reachable.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "dotnet",
+    "iis"
+  ]
+}

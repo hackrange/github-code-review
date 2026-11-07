@@ -1,0 +1,33 @@
+{
+  "id": "access-control-vault-unsealed",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A HashiCorp Vault is exposed and unsealed",
+  "summary": "A Vault health endpoint answers here and reports the vault unsealed, which means its secrets can be read over the network.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/v1/sys/health"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"\\\"sealed\\\":false\") or body_contains(\"\\\"sealed\\\": false\")) and (body_contains(\"cluster_name\") or body_contains(\"\\\"initialized\\\"\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/v1/sys/health",
+  "remediate": "Put Vault behind the network boundary it is meant to sit behind, and review whether it should be reachable here at all.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "vault",
+    "secrets"
+  ]
+}

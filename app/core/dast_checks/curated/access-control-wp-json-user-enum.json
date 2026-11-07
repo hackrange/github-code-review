@@ -1,0 +1,32 @@
+{
+  "id": "access-control-wp-json-user-enum",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "WordPress user accounts are listed through the REST API",
+  "summary": "The WordPress REST users endpoint returns the account list, which names the users and their login slugs to anyone without signing in.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/wp-json/wp/v2/users"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and \"json\" in header(\"content-type\") and body_contains(\"\\\"slug\\\"\") and body_contains(\"\\\"id\\\"\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/wp-json/wp/v2/users",
+  "remediate": "Restrict the REST users endpoint, or require authentication for it.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "wordpress"
+  ]
+}

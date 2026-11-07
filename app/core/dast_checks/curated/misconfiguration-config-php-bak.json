@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-config-php-bak",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A PHP config backup is served (/config.php.bak)",
+  "summary": "A backup of a PHP config file is downloadable as source, which commonly carries the database credentials and application secrets in plain text.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/config.php.bak"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"<?php\") and (body_contains(\"password\") or body_contains(\"DB_\") or body_contains(\"DATABASE\")) and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/config.php.bak",
+  "remediate": "Remove the backup from the web root and rotate any secrets it carried.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-538",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "php"
+  ]
+}

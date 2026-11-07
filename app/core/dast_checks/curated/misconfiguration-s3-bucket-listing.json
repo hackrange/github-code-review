@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-s3-bucket-listing",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "An object storage bucket lists its contents",
+  "summary": "The site returns a bucket listing, which means the storage behind it is public and every object key can be read.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"<ListBucketResult\") and body_contains(\"<Key>\") and body_differs(control) and not body_contains(\"<html\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/",
+  "remediate": "Make the bucket private and serve it through an application that checks access.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-538",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "cloud",
+    "aws"
+  ]
+}
