@@ -63,6 +63,32 @@ ROUTE_PATTERNS = [
 
 _PARAM = re.compile(r"\{[^}/]*\}|<[^>/]*>|:[A-Za-z_]\w*|\*\*?|\(\?[^)]*\)")
 
+MAX_SINKS = 200
+# High signal dangerous patterns, tagged by type.  These are not a SAST engine:
+# they mark where code does something a dynamic test wants aimed at it.  The
+# reachability of the route in the same file decides whether a sink matters or
+# is only context, so a loose match that is not reachable costs nothing.
+SINK_PATTERNS = [
+    ("sql-injection", re.compile(
+        r"\b(?:execute|executeQuery|query|rawQuery|prepare|mysqli_query|pg_query)\s*\("
+        r"[^)\n]{0,160}?(?:\+|%[sd]?|\$\{|\bf[\"']|\.format\(|\|\|)", re.I)),
+    ("command-injection", re.compile(
+        r"\b(?:os\.system|subprocess\.(?:call|run|Popen)|child_process\.exec(?:Sync)?|"
+        r"Runtime\.getRuntime\(\)\.exec|ProcessBuilder|shell_exec|passthru|\bpopen|"
+        r"\bsystem|\beval|\bexec)\s*\(", re.I)),
+    ("deserialization", re.compile(
+        r"\b(?:pickle\.loads|yaml\.load\s*\((?![^)\n]*Safe)|unserialize|"
+        r"ObjectInputStream|readObject|Marshal\.load|cPickle\.loads)\b", re.I)),
+    ("template-injection", re.compile(
+        r"\b(?:render_template_string|Template\s*\([^)\n]*\)\.render|Handlebars\.compile)\b", re.I)),
+    ("xss-sink", re.compile(
+        r"\b(?:innerHTML\s*=|outerHTML\s*=|document\.write|insertAdjacentHTML|"
+        r"dangerouslySetInnerHTML|v-html)\b", re.I)),
+    ("path-traversal", re.compile(
+        r"\b(?:open|readFile(?:Sync)?|sendFile|include(?:_once)?|require(?:_once)?|"
+        r"file_get_contents|fopen)\s*\([^)\n]{0,120}?(?:\+|\$\{|\breq\.|request\.|params|\binput|\.\.\/)", re.I)),
+]
+
 
 def _clean_route(raw: str) -> str:
     """A route as a path that can be requested.  Parameters become 1."""
@@ -106,9 +132,21 @@ def _openapi_paths(text: str, name: str) -> list:
     return out
 
 
+def _sinks_in(text: str, rel: str, file_routes: list) -> list:
+    """Dangerous patterns in one file, each tagged with the routes that file
+    declares (its reachability decides later whether the sink matters)."""
+    out = []
+    for kind, pattern in SINK_PATTERNS:
+        for m in pattern.finditer(text):
+            line = text.count("\n", 0, m.start()) + 1
+            out.append({"file": rel, "line": line, "type": kind,
+                        "routes": file_routes[:8]})
+    return out
+
+
 def read(root: Path, host: str = "") -> dict:
-    """-> {routes: [path], host_files: [file], files: read, frameworks: [...]}"""
-    routes, host_files, read_count = [], [], 0
+    """-> {routes: [path], sinks: [...], host_files: [file], files: read}"""
+    routes, sinks, host_files, read_count = [], [], [], 0
     host_re = re.compile(r"(?<![A-Za-z0-9.-])" + re.escape(host.lower()) + r"(?![A-Za-z0-9-])",
                          re.I) if host else None
     for dirpath, dirnames, filenames in os.walk(root):
@@ -133,19 +171,27 @@ def read(root: Path, host: str = "") -> dict:
             rel = str(path.relative_to(root)).replace(os.sep, "/")
             if host_re is not None and len(host_files) < 10 and host_re.search(text):
                 host_files.append(rel)
+            file_routes = []
             if path.suffix.lower() in (".json", ".yaml", ".yml"):
                 for p in _openapi_paths(text, filename):
                     cleaned = _clean_route(p)
-                    if cleaned and cleaned not in routes:
-                        routes.append(cleaned)
+                    if cleaned:
+                        file_routes.append(cleaned)
+                        if cleaned not in routes:
+                            routes.append(cleaned)
                 if path.suffix.lower() == ".json":
                     continue
             for pattern in ROUTE_PATTERNS:
                 for m in pattern.finditer(text):
                     cleaned = _clean_route(m.group("p"))
-                    if cleaned and cleaned != "/" and cleaned not in routes:
-                        routes.append(cleaned)
-            if len(routes) >= MAX_ROUTES * 2:
+                    if cleaned and cleaned != "/":
+                        if cleaned not in file_routes:
+                            file_routes.append(cleaned)
+                        if cleaned not in routes:
+                            routes.append(cleaned)
+            if len(sinks) < MAX_SINKS:
+                sinks += _sinks_in(text, rel, file_routes)
+            if len(routes) >= MAX_ROUTES * 2 and len(sinks) >= MAX_SINKS:
                 break
-    return {"routes": routes[:MAX_ROUTES], "host_files": host_files,
-            "files": read_count}
+    return {"routes": routes[:MAX_ROUTES], "sinks": sinks[:MAX_SINKS],
+            "host_files": host_files, "files": read_count}

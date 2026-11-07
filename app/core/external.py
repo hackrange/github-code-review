@@ -110,6 +110,7 @@ MAX_BRANCHES = 300
 # it counts without anybody saying so.  Below this it is a suggestion.
 LINK_THRESHOLD = 60
 MAX_WHITEBOX_REPOS = 3
+MAX_WHITEBOX_SINKS = 300
 MAX_FINDINGS = 3000
 
 
@@ -1964,7 +1965,7 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
             for branch in (l.get("branches") or [l["repo"].default_branch or ""]):
                 plan.append((l["repo"].id, l["full_name"], l["repo"].connection or "", branch))
         plan = plan[:MAX_WHITEBOX_REPOS]
-    out = {"repos": [], "routes": [], "by_repo": {}}
+    out = {"repos": [], "routes": [], "by_repo": {}, "sinks": []}
     for repo_id, name, connection, branch in plan:
         if scan_id in _stopping:
             break
@@ -1984,6 +1985,9 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
                     for route in got["routes"]:
                         if route not in out["routes"]:
                             out["routes"].append(route)
+                    for sink in got.get("sinks") or []:
+                        if len(out["sinks"]) < MAX_WHITEBOX_SINKS:
+                            out["sinks"].append(dict(sink, repository=name))
         except Exception as exc:  # noqa: BLE001 - the scan carries on without it
             entry["error"] = f"{type(exc).__name__}: {exc}"[:200]
         out["repos"].append(entry)
@@ -2685,9 +2689,28 @@ def _paths_and_code(scan_id, asset_id, url, seen, findings, wb, opts, stopped) -
         dast_paths.verify(records, controls, fetch, first)
     paths = {"control": {p: c["status"] for p, c in controls.items()},
              "paths": records, "counts": dast_paths.counts(records)}
+    sinks = _correlate_sinks(wb.get("sinks") or [], records)
     _update(scan_id, paths=json.dumps(paths), paths_count=paths["counts"]["answered"],
-            paths_real=paths["counts"]["reachable"], code_matches=json.dumps(
+            paths_real=paths["counts"]["reachable"],
+            code_sinks=json.dumps(sinks), code_matches=json.dumps(
         _code_matches(asset_id, records, index, names)))
+
+
+def _correlate_sinks(sinks: list, records: list) -> list:
+    """Mark each code sink reachable when the dynamic scan reached one of the
+    routes its file declares.  A reachable sink is a lead worth proving; one
+    that is not reachable is context, a thing to look at, not a dynamic bug."""
+    reached = {r["p"] for r in records if r.get("r") is True}
+    out = []
+    for s in sinks:
+        hit = sorted(set(s.get("routes") or []) & reached)
+        out.append({"file": s.get("file"), "line": s.get("line"),
+                    "type": s.get("type"), "repository": s.get("repository", ""),
+                    "routes": (s.get("routes") or [])[:4],
+                    "reachable": bool(hit), "reached_route": hit[0] if hit else ""})
+    # Reachable ones first, then by type, so the report leads with what matters.
+    out.sort(key=lambda s: (not s["reachable"], s["type"], s["file"]))
+    return out
 
 
 def code_index(db, extra: dict = None):

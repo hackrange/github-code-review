@@ -262,6 +262,37 @@
 </div>
 {% endfor %}
 
+{% if reachable_sinks or context_sinks %}
+<h2 class="new-page">5.  Code and the scan</h2>
+<p class="faint">{{ "Dangerous patterns read from the mapped code, split by whether the scan reached the route they sit behind.  Reachable means a dynamic test can get to that code, so it is a lead worth proving.  The rest is context: a thing to look at by hand, not a dynamic finding." | sentence_spaced }}</p>
+{% if reachable_sinks %}
+<h3>5.1  Reached by the scan (leads to prove)</h3>
+<table>
+  <thead><tr><th>Type</th><th>Where</th><th>Reached route</th></tr></thead>
+  <tbody>
+  {% for s in reachable_sinks %}
+    <tr><td><span class="badge r-high">{{ s.type }}</span></td>
+      <td class="mono">{{ s.repository }} {{ s.file }}:{{ s.line }}</td>
+      <td class="mono">{{ s.reached_route }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% if context_sinks %}
+<h3>5.2  Areas to review (not reached by the scan)</h3>
+<p class="faint">{{ "Not confirmed, and not counted toward the grade.  These are leads for a code review, not proven bugs, because the scan could not reach them from the outside." | sentence_spaced }}</p>
+<table>
+  <thead><tr><th>Type</th><th>Where</th></tr></thead>
+  <tbody>
+  {% for s in context_sinks[:60] %}
+    <tr><td>{{ s.type }}</td><td class="mono">{{ s.repository }} {{ s.file }}:{{ s.line }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if context_sinks | length > 60 %}<p class="faint">{{ context_sinks | length - 60 }} more not shown.</p>{% endif %}
+{% endif %}
+{% endif %}
+
 <h2 class="new-page">Appendix A.  The scan underneath</h2>
 <table>
   <tr><td class="k">Scan number</td><td>{{ scan.id }}</td></tr>

@@ -2608,6 +2608,9 @@ class ExternalDastScan(Base):
     # Both JSON, and only for a scan run here.
     paths = Column(LONG_JSON, default="")
     code_matches = Column(LONG_JSON, default="")
+    # Dangerous code sinks from the mapped repositories, each marked reachable
+    # by the dynamic scan or not, for the risk read and the areas to review.
+    code_sinks = Column(LONG_JSON, default="")
     # The two counts out of paths, so a list of sites does not read every
     # scan's paths to say how big each one is: every path with an answer,
     # and the ones that were reachable (a 200 that was a real page).

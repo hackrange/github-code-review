@@ -334,6 +334,15 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
 
     dast_risk.annotate(findings, getattr(asset, "exposure", "") or "")
     risk_matrix = dast_risk.matrix(findings)
+    # Code sinks from the mapped repositories, split by whether the scan reached
+    # the route they sit behind.  Reachable ones are leads to prove; the rest
+    # are context to review, not dynamic bugs.
+    try:
+        code_sinks = json.loads(scan.code_sinks or "[]") or []
+    except (ValueError, TypeError):
+        code_sinks = []
+    reachable_sinks = [s for s in code_sinks if s.get("reachable")]
+    context_sinks = [s for s in code_sinks if not s.get("reachable")]
     from app.core.external_decisions import counted as _counted
 
     by_sev = {s: sum(1 for f in findings if f.get("severity") == s and _counted(f))
@@ -416,6 +425,7 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
         "asset": asset, "scan": scan, "view": view, "findings": findings,
         "overall": overall, "by_sev": by_sev, "categories": categories,
         "risk_matrix": risk_matrix,
+        "reachable_sinks": reachable_sinks, "context_sinks": context_sinks,
         "heat_max": heat_max, "triaged": triaged, "ai_summary": ai_summary,
         "narrative": narrative(asset.host, view, overall, by_sev, triaged, profile_words),
         "top": [f for f in findings if f.get("severity") in ("critical", "high")
