@@ -254,13 +254,18 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
                  "--forms", "--smart", "--level", "2", "--risk", "2",
                  "--output-dir", str(out), "--disable-coloring"], out)
     if tool == "dalfox":
-        report = workdir / "dalfox.json"
+        report = workdir / "dalfox.jsonl"
         # Every address with a query string is a parameter to try.  Without
         # them dalfox only has the front page, which usually has none.
         targets = workdir / "dalfox-targets.txt"
         with_params = [u for u in _same_site(url, paths) if "?" in u]
         targets.write_text("\n".join([url] + with_params[:200]) + "\n")
-        return ([exe, "scan", str(targets), "-f", "json", "-o", str(report), "-S",
+        # jsonl with --stream-findings writes each finding to the file as it is
+        # found, not one report at the end.  dalfox has no whole-run time limit,
+        # so our timeout can stop it mid run; streaming means what it had already
+        # found is in the file and is read, instead of being thrown away.
+        return ([exe, "scan", str(targets), "-f", "jsonl", "-o", str(report),
+                 "--stream-findings", "-S",
                  "--workers", "10", "--timeout", "10", "--scan-timeout", "1500",
                  "--skip-mining-dom", "--user-agent", _ua()], report)
     if tool == "ffuf":
@@ -547,14 +552,35 @@ def parse_sqlmap(report: Path, url: str):
 
 
 def parse_dalfox(report: Path, url: str):
-    data = _read_json(report)
-    if data is None:
+    if not report.is_file():
         return None
-    rows = data.get("findings") if isinstance(data, dict) else data
+    # dalfox streams one finding per line (jsonl).  Read it line by line so a
+    # run stopped by the timeout is still read from whatever it had written.  A
+    # whole-file json report (array, or {"findings": [...]}) is still handled.
+    rows = []
+    for line in report.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(item, list):
+            rows.extend(item)
+        elif isinstance(item, dict) and isinstance(item.get("findings"), list):
+            rows.extend(item["findings"])
+        elif isinstance(item, dict):
+            rows.append(item)
     out = []
     for row in rows or []:
+        if not isinstance(row, dict):
+            continue
         kind = row.get("type")
-        if kind == "I":
+        # The stream opens with a {"meta": ...} record and may carry other non
+        # finding lines; a real finding always names its type.  No type, or the
+        # informational type, is not a vulnerability to report.
+        if not kind or kind == "I":
             continue
         sev = str(row.get("severity") or "").lower()
         if kind == "R":
