@@ -167,6 +167,23 @@
 </table>
 <p class="faint">Each category is graded on its own findings.  The overall grade caps any one category at 25 points.</p>
 
+<h3>2.4  Risk matrix</h3>
+<p class="faint">{{ "Each finding placed by how likely it is real and reachable against what a successful exploit would yield, weighted by how exposed the site is.  This is risk, not a compliance count." | sentence_spaced }}</p>
+<table class="heat">
+  <thead><tr><th style="text-align:left">Impact \ Likelihood</th>
+    {% for c in risk_matrix.columns %}<th class="c">{{ c }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for row in risk_matrix.rows %}
+    <tr><td class="name">{{ row.label }}</td>
+      {% for cell in row.cells %}
+      <td class="{% if cell.n %}r-{{ cell.risk }}{% endif %}">{{ cell.n or '' }}</td>
+      {% endfor %}</tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="faint">Worst risk: <span class="badge r-{{ risk_matrix.worst }}">{{ risk_matrix.worst | upper }}</span>&nbsp;
+  {{ risk_matrix.counts.critical }} critical, {{ risk_matrix.counts.high }} high, {{ risk_matrix.counts.medium }} medium, {{ risk_matrix.counts.low }} low by risk.</p>
+
 <h2 class="new-page">3.  Scope and method</h2>
 <h3>3.1  In scope</h3>
 <table>
@@ -223,6 +240,9 @@
     <tr><td class="k">Severity</td><td><span class="badge r-{{ f.severity }}">{{ f.severity | upper }}</span>
       {% if triaged and f.counted == 0 %} <span class="soft">Not counted: the enhanced review judged it a likely false positive.</span>
       {% elif triaged and f.counted < 1 %} <span class="soft">Counted at half: the enhanced review wants a person to check it.</span>{% endif %}</td></tr>
+    {% if f.risk %}<tr><td class="k">Risk</td><td><span class="badge r-{{ f.risk }}">{{ f.risk | upper }}</span>
+      &nbsp;Likelihood {{ f.likelihood_label }}, impact {{ f.breachability_label }}.
+      {% if f.risk_basis %}<span class="soft">{{ f.risk_basis | sentence_spaced }}</span>{% endif %}</td></tr>{% endif %}
     <tr><td class="k">OWASP Top 10</td><td>{{ f.owasp }}  {{ f.owasp_name }}</td></tr>
     {% if f.cwe %}<tr><td class="k">CWE</td><td>{{ f.cwe }}</td></tr>{% endif %}
     {% if f.url %}<tr><td class="k">Location</td><td class="mono">{{ f.url }}</td></tr>{% endif %}

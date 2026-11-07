@@ -329,6 +329,11 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
                         if cwe else "")
         findings.append(f)
     overall = score(findings, triaged)
+    # Risk, deterministic: likelihood x breachability, weighted by exposure.
+    from app.core import dast_risk
+
+    dast_risk.annotate(findings, getattr(asset, "exposure", "") or "")
+    risk_matrix = dast_risk.matrix(findings)
     from app.core.external_decisions import counted as _counted
 
     by_sev = {s: sum(1 for f in findings if f.get("severity") == s and _counted(f))
@@ -410,6 +415,7 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
     return {
         "asset": asset, "scan": scan, "view": view, "findings": findings,
         "overall": overall, "by_sev": by_sev, "categories": categories,
+        "risk_matrix": risk_matrix,
         "heat_max": heat_max, "triaged": triaged, "ai_summary": ai_summary,
         "narrative": narrative(asset.host, view, overall, by_sev, triaged, profile_words),
         "top": [f for f in findings if f.get("severity") in ("critical", "high")
