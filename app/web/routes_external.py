@@ -870,6 +870,36 @@ async def refresh_one(asset_id: int, request: Request, user: User = Depends(curr
                                                    "refreshes until it is done."))
 
 
+@router.post("/external/{asset_id}/test-signin")
+async def signin_test(asset_id: int, request: Request, user: User = Depends(current_user)):
+    """Sign in now with the saved account(s) so an admin can confirm they work
+    before a scan relies on them.  The second account is tested here too, which
+    a scan signs in with silently and never surfaces.  The live logins run off
+    the event loop so a slow site cannot stall other requests."""
+    from starlette.concurrency import run_in_threadpool
+
+    await check_csrf(request)
+    with session_scope() as db:
+        _guard(db, user)
+        asset = _asset(db, asset_id)
+        allow_private = external.options(db)["allow_private"]
+        slots = {"a": external_auth_mod.load(asset, "a"),
+                 "b": external_auth_mod.load(asset, "b")}
+    if not slots["a"].get("kind") and not slots["b"].get("kind"):
+        return redirect(_back(f"/external/{asset_id}",
+                              "No sign in is set for this site, so there is nothing to test.",
+                              "warn"))
+    results = await run_in_threadpool(external_auth_mod.test_signin, slots, allow_private)
+    parts, failed = [], False
+    for r in results:
+        if not r["configured"]:
+            continue
+        parts.append(f"{r['label']} ({r['kind_name'].lower()}): {r['detail']}")
+        failed = failed or not r["ok"]
+    return redirect(_back(f"/external/{asset_id}", "Sign in test.  " + "  ".join(parts),
+                          "warn" if failed else "ok"))
+
+
 @router.post("/external/{asset_id}/repos")
 async def link_repo(asset_id: int, request: Request, user: User = Depends(current_user)):
     """Link a repository by name, or confirm, hide or forget a found one."""

@@ -346,6 +346,39 @@ def session_for(data: dict, allow_private: bool = False) -> dict:
     return out
 
 
+def test_signin(slots: dict, allow_private: bool = False) -> list:
+    """Sign in now with each configured account, so an administrator can
+    confirm it works before a scan leans on it.  slots is {"a": data, "b":
+    data} from load().  -> a list of {slot, label, kind, kind_name,
+    configured, live, ok, detail}, in order.
+
+    A form login is signed in for real against the site.  A header or cookie
+    is reported as saved, since there is nothing here to sign into; it is sent
+    to the engines as given.  The second account's result is here too, which a
+    scan runs silently and never shows.
+    """
+    labels = {"a": "Account A", "b": "Account B (compare account)"}
+    out = []
+    for slot in ("a", "b"):
+        data = slots.get(slot) or {}
+        kind = data.get("kind", "")
+        row = {"slot": slot, "label": labels[slot], "kind": kind,
+               "kind_name": KINDS.get(kind, kind), "configured": bool(kind),
+               "live": kind == "form", "ok": False, "detail": ""}
+        if not kind:
+            out.append(row)
+            continue
+        if kind == "form":
+            sess = session_for(data, allow_private)
+            row["ok"], row["detail"] = sess["ok"], sess["detail"]
+        else:
+            row["ok"] = True
+            row["detail"] = ("saved and sent to the engines as given; there is "
+                             "nothing to sign into from here, so it is not tested live")
+        out.append(row)
+    return out
+
+
 def engine_args(tool: str, session: dict) -> list:
     """The command line options that sign an engine in.  [] when it cannot."""
     if not session or not session.get("kind"):

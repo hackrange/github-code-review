@@ -99,8 +99,17 @@
             {%- if auth.username %}, {{ auth.username }} at <span class="mono">{{ auth.login_url }}</span>{% endif %}
             <div class="faint small">The secret is saved encrypted and never shown.  Set {{ auth.set_at[:10] if auth.set_at else '' }}{% if auth.set_by %} by {{ auth.set_by }}{% endif %}.</div>
           {% else %}<span class="faint">none, scans see only the public site</span>{% endif %}</td></tr>
+        {% if auth_b and auth_b.kind %}<tr><th>Second account</th><td>{{ auth_b.kind_name }}
+            {%- if auth_b.username %}, {{ auth_b.username }} at <span class="mono">{{ auth_b.login_url }}</span>{% endif %}
+            <div class="faint small">The compare account that unlocks the two account access checks.  Saved encrypted.  Set {{ auth_b.set_at[:10] if auth_b.set_at else '' }}{% if auth_b.set_by %} by {{ auth_b.set_by }}{% endif %}.</div></td></tr>{% endif %}
         {% if asset.notes %}<tr><th>Comments</th><td class="small" style="white-space:pre-wrap">{{ asset.notes }}</td></tr>{% endif %}
       </tbody></table>
+      {% if (auth and auth.kind) or (auth_b and auth_b.kind) %}
+      <form method="post" action="{{ base }}/external/{{ asset.id }}/test-signin" style="margin-top:.6rem">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn sm" type="submit">Test sign in</button>
+        <span class="faint small">Signs in now and reports whether each account works.  A form login is tried live against the site.</span></form>
+      {% endif %}
       <form method="post" action="{{ base }}/external/{{ asset.id }}/delete" data-confirm="Remove {{ asset.host }} and every scan recorded against it?" style="margin-top:.6rem">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="btn sm danger" type="submit">Remove this site</button></form>
