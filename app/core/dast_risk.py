@@ -136,6 +136,13 @@ def corroborate(findings: list, reachable_sinks: list) -> int:
     return raised
 
 
+# A finding that is neither confirmed nor in a dangerous class is not raised
+# above its own severity by exposure alone: a low issue stays low risk.
+_RISK_ORDER = ["low", "medium", "high", "critical"]
+_SEV_RISK_CAP = {"critical": "critical", "high": "high", "medium": "medium",
+                 "low": "low", "info": "low", "none": "low"}
+
+
 def annotate(findings: list, exposure: str = "") -> list:
     """Add likelihood, breachability, risk and a basis to each finding, in place."""
     for f in findings:
@@ -145,9 +152,20 @@ def annotate(findings: list, exposure: str = "") -> list:
         f["breachability"] = br
         f["likelihood_label"] = LIKELIHOOD_LABEL[lk]
         f["breachability_label"] = IMPACT_LABEL[br]
-        f["risk"] = cell(lk, br)
-        f["risk_basis"] = (f"Likelihood {LIKELIHOOD_LABEL[lk]} ({lk_why}).  "
-                           f"Impact {IMPACT_LABEL[br]} ({br_why}).")
+        risk = cell(lk, br)
+        basis = (f"Likelihood {LIKELIHOOD_LABEL[lk]} ({lk_why}).  "
+                 f"Impact {IMPACT_LABEL[br]} ({br_why}).")
+        text = f"{f.get('title') or ''} {f.get('cwe') or ''} {f.get('evidence') or ''}"
+        dangerous = bool(_RCE.search(text) or _ACCESS.search(text) or _INJECT.search(text))
+        if lk < 4 and not dangerous:
+            cap = _SEV_RISK_CAP.get(f.get("severity"), "medium")
+            if _RISK_ORDER.index(risk) > _RISK_ORDER.index(cap):
+                basis += (f"  Held at {cap}: a {f.get('severity') or 'low'} finding that "
+                          "is not confirmed and not a dangerous class is not raised above "
+                          "its severity by exposure alone.")
+                risk = cap
+        f["risk"] = risk
+        f["risk_basis"] = basis
     return findings
 
 
