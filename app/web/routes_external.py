@@ -1343,6 +1343,13 @@ async def scan_action(asset_id: int, scan_id: int, action: str, request: Request
         problem = external.start_triage(scan_id, user.username)
         message, kind = (problem, "error") if problem else ("Asking the model.  This page "
                                                             "refreshes until it answers.", "ok")
+    elif action == "ias_pull":
+        from starlette.concurrency import run_in_threadpool
+
+        # Pulling the detail makes several Rapid7 API calls, so it runs off the
+        # event loop, not in this async handler.
+        ok, message = await run_in_threadpool(external.pull_ias_detail, scan_id)
+        kind = "ok" if ok else "error"
     else:
         raise HTTPException(status_code=404, detail=NOT_FOUND)
     with session_scope() as db:

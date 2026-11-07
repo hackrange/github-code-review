@@ -292,10 +292,14 @@ def narrative(host: str, view: dict, overall: dict, by_sev: dict, triaged: bool,
 
 
 def available(scan) -> bool:
-    """Only a scan this server ran has a report here.  A DAST server's scan
-    has that server's own report, and a recorded one has only what was
-    recorded, which is not enough to stand behind as a report."""
-    return scan is not None and scan.source == "builtin" and scan.status == "done"
+    """A finished scan with its findings here has a report here: one this
+    server ran, or an InsightAppSec scan whose detail has been pulled in.  A
+    counts-only scan has nothing to report on, and a recorded one has only
+    what was recorded, which is not enough to stand behind as a report."""
+    if scan is None or scan.status != "done" or getattr(scan, "summary_only", False):
+        return False
+    return scan.source == "builtin" or (scan.source == "remote"
+                                        and scan.provider == "insightappsec")
 
 
 def build(db, asset, scan, user=None, organization: str = "") -> dict:

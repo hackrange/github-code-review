@@ -3490,29 +3490,100 @@ def _ias_import_one(ias, region: str, key: str, asset_id: int, scan: dict, confi
 
 def _ias_store(ias, region: str, key: str, scan_id: int, vulns: list, result_url: str,
                when=None, cache: dict = None, client=None) -> None:
-    """A finished Rapid7 scan onto its row.  A few findings are kept whole.
-    Past that only the counts are kept, and the detail stays in Rapid7, so
-    this database does not fill up with what Rapid7 already holds."""
-    if len(vulns) <= ias.DETAIL_LIMIT:
-        found = ias.describe(region, key, vulns, cache=cache, client=client)
-        finish(scan_id, merge(found), when=when, result_url=result_url)
-        return
-    roll = ias.counts(vulns)
+    """A finished Rapid7 scan onto its row.  The site's most recent few scans
+    keep their full findings, so their detail, a PDF report and AI triage all
+    work here.  Older scans keep only their counts, so this database does not
+    hold the whole history in full."""
+    when = when or utcnow()
     with session_scope() as db:
         scan = db.get(ExternalDastScan, scan_id)
         if scan is None:
             return
-        scan.findings = ""
-        scan.summary_only = True
-        scan.status = "done"
-        scan.error = ""
-        scan.step = ""
-        scan.scanned_at = when or utcnow()
-        scan.result_url = (result_url or "")[:1000]
-        for sev in SEVERITIES:
-            setattr(scan, sev, roll[sev])
-        scan.severity = roll["severity"]
-        touch_asset(db, scan)
+        asset_id = scan.asset_id
+        keep = ias.detail_scans(db)
+        # This row is not "done" yet, so it is not in the count of scans newer
+        # than it.  Only the site's own InsightAppSec scans count.
+        newer = (db.query(ExternalDastScan)
+                 .filter(ExternalDastScan.asset_id == asset_id,
+                         ExternalDastScan.provider == ias.PROVIDER,
+                         ExternalDastScan.status == "done",
+                         ExternalDastScan.id != scan_id,
+                         ExternalDastScan.scanned_at.isnot(None),
+                         ExternalDastScan.scanned_at > when).count())
+    if keep > 0 and newer < keep:
+        found = ias.describe(region, key, vulns, cache=cache, client=client)
+        finish(scan_id, merge(found), when=when, result_url=result_url)
+        with session_scope() as db:
+            scan = db.get(ExternalDastScan, scan_id)
+            if scan is not None:
+                scan.summary_only = False
+    else:
+        roll = ias.counts(vulns)
+        with session_scope() as db:
+            scan = db.get(ExternalDastScan, scan_id)
+            if scan is None:
+                return
+            scan.findings = ""
+            scan.summary_only = True
+            scan.status = "done"
+            scan.error = ""
+            scan.step = ""
+            scan.scanned_at = when
+            scan.result_url = (result_url or "")[:1000]
+            for sev in SEVERITIES:
+                setattr(scan, sev, roll[sev])
+            scan.severity = roll["severity"]
+            touch_asset(db, scan)
+    with session_scope() as db:
+        _ias_prune(db, asset_id, keep)
+
+
+def _ias_prune(db, asset_id: int, keep: int) -> None:
+    """Keep full findings on only the site's newest `keep` InsightAppSec scans;
+    roll older detailed ones back to counts (their counts stay on the row), so
+    the detail kept here stays bounded to the most recent scans."""
+    scans = (db.query(ExternalDastScan)
+             .filter(ExternalDastScan.asset_id == asset_id,
+                     ExternalDastScan.provider == "insightappsec",
+                     ExternalDastScan.status == "done")
+             .order_by(ExternalDastScan.scanned_at.desc()).all())
+    for scan in scans[max(0, keep):]:
+        if not scan.summary_only and scan.findings:
+            scan.findings = ""
+            scan.summary_only = True
+
+
+def pull_ias_detail(scan_id: int) -> tuple:
+    """Pull a counts-only InsightAppSec scan's full findings from Rapid7 and
+    store them on the row, so its detail, a PDF report and AI triage all work
+    here without signing in to Rapid7.  -> (ok, message).  Slow (API calls), so
+    the caller runs it off the event loop."""
+    from app.core import insightappsec as ias
+
+    with session_scope() as db:
+        scan = db.get(ExternalDastScan, scan_id)
+        if scan is None:
+            return False, "No such scan."
+        if scan.provider != ias.PROVIDER or not scan.remote_id:
+            return False, "This is not an InsightAppSec scan."
+        if scan.status not in ("done", "failed"):
+            return False, "Wait for the scan to finish."
+        remote_id, result_url, when = scan.remote_id, scan.result_url, scan.scanned_at
+        cfg = ias.config(db)
+    if not cfg["ready"]:
+        return False, "InsightAppSec is turned off, so its results cannot be pulled."
+    try:
+        vulns = ias.scan_vulns(cfg["region"], cfg["key"], remote_id)
+        found = ias.describe(cfg["region"], cfg["key"], vulns)
+    except ias.IASError as exc:
+        return False, f"InsightAppSec: {exc}"[:200]
+    finish(scan_id, merge(found), when=when, result_url=result_url)
+    with session_scope() as db:
+        scan = db.get(ExternalDastScan, scan_id)
+        if scan is not None:
+            scan.summary_only = False
+    n = len(found)
+    return True, f"Pulled {n} finding{'' if n == 1 else 's'} from InsightAppSec."
 
 
 def start_ias_import() -> bool:

@@ -510,9 +510,30 @@ def new_cache() -> dict:
 # Rapid7 review statuses that mean it is not a finding at all.  Left out of
 # what comes in, since a scan kept as counts has no row to mark here.
 NOT_FINDINGS = {"FALSE_POSITIVE", "DUPLICATE"}
-# A scan with more findings than this keeps only its counts here.  The
-# detail stays in Rapid7, a link away.
-DETAIL_LIMIT = 5
+# Full findings are pulled in and kept for a site's most recent few Rapid7
+# scans, so their detail, a PDF report and AI triage all work here without
+# signing in to Rapid7.  Older scans keep only their counts, so this database
+# does not hold the whole history in full.  The count is per site and tunable.
+RECENT_DETAIL = 5
+
+
+def detail_scans(db=None) -> int:
+    """How many of a site's most recent Rapid7 scans keep their full findings
+    here.  Setting ias.recent_detail overrides the default; 0 keeps none."""
+    from app.core import settings_store as store
+    from app.core.db import session_scope
+
+    def read(session):
+        try:
+            n = int(store.get(session, "ias.recent_detail"))
+        except (TypeError, ValueError):
+            return RECENT_DETAIL
+        return max(0, min(n, 100))
+
+    if db is not None:
+        return read(db)
+    with session_scope() as session:
+        return read(session)
 
 
 def scan_vulns(region: str, key: str, scan_id: str, client=None) -> list:
