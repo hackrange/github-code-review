@@ -1,0 +1,33 @@
+{
+  "id": "access-control-docker-registry-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A Docker registry is reachable without signing in",
+  "summary": "The Docker registry v2 API answers unauthenticated, which lets an attacker list, pull and push the container images.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/v2/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and header(\"docker-distribution-api-version\") != \"\"",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/v2/",
+  "remediate": "Require authentication on the registry and keep it off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "docker",
+    "registry"
+  ]
+}

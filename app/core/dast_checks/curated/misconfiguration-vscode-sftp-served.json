@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-vscode-sftp-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A VS Code sftp.json with credentials is served",
+  "summary": "The editor's SFTP deploy config is downloadable and commonly carries the host, user and password of the deploy target.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.vscode/sftp.json"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"host\") and body_contains(\"username\") and body_contains(\"password\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.vscode/sftp.json",
+  "remediate": "Block dotfiles at the web server and rotate the deploy credentials.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-522",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "secrets"
+  ]
+}

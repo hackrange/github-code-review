@@ -1,0 +1,33 @@
+{
+  "id": "access-control-harbor-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A Harbor registry answers unauthenticated",
+  "summary": "The Harbor system info endpoint answers without a sign in, which reveals the registry and its configuration.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/v2.0/systeminfo"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and (body_contains(\"harbor_version\") or body_contains(\"registry_url\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/api/v2.0/systeminfo",
+  "remediate": "Require authentication on Harbor and keep it off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "harbor",
+    "registry"
+  ]
+}

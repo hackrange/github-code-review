@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-spring-gateway-routes",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Spring Cloud Gateway routes are exposed",
+  "summary": "The gateway actuator lists its routes, which maps the internal services it forwards to and can be changed when writable.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/actuator/gateway/routes"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"route_id\") and body_contains(\"predicate\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/actuator/gateway/routes",
+  "remediate": "Secure the actuator endpoints in production.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "spring",
+    "actuator"
+  ]
+}

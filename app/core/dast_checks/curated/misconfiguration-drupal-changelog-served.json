@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-drupal-changelog-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "low",
+  "title": "The Drupal CHANGELOG is served",
+  "summary": "The Drupal changelog is downloadable, which names the exact version so known issues can be looked up.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/CHANGELOG.txt"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and \"html\" not in header(\"content-type\") and body_contains(\"Drupal\") and body_contains(\"Changelog\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/CHANGELOG.txt",
+  "remediate": "Remove the changelog from the web root.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "drupal",
+    "php"
+  ]
+}

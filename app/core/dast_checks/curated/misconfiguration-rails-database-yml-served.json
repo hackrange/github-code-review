@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-rails-database-yml-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A Rails database.yml is served",
+  "summary": "The Rails database configuration is downloadable, which names the database and commonly carries its credentials.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/config/database.yml"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and \"html\" not in header(\"content-type\") and body_contains(\"adapter:\") and (body_contains(\"password:\") or body_contains(\"username:\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/config/database.yml",
+  "remediate": "Block config files at the web server and rotate the database credentials.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-522",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "rails"
+  ]
+}

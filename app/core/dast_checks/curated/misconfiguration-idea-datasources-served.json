@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-idea-datasources-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A JetBrains dataSources.xml is served",
+  "summary": "The IDE data sources file is downloadable, which names the databases the project connects to and their JDBC URLs.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.idea/dataSources.xml"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"data-source\") and body_contains(\"jdbc\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.idea/dataSources.xml",
+  "remediate": "Block the .idea directory at the web server.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "secrets"
+  ]
+}

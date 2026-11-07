@@ -1,0 +1,32 @@
+{
+  "id": "access-control-jupyter-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A Jupyter server is reachable without a token",
+  "summary": "The Jupyter API answers unauthenticated, which is an interactive python shell on the server, a direct path to code execution.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/status"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"last_activity\") and body_contains(\"kernels\") and body_contains(\"connections\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/api/status",
+  "remediate": "Require a token or password on Jupyter and keep it off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "jupyter"
+  ]
+}

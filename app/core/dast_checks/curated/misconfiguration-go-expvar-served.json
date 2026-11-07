@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-go-expvar-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "The Go expvar debug endpoint is exposed",
+  "summary": "The Go expvar endpoint is reachable, which returns the command line and memory statistics of the running process.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/debug/vars"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"cmdline\") and body_contains(\"memstats\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/debug/vars",
+  "remediate": "Do not expose expvar; bind it to localhost or require authentication.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "golang"
+  ]
+}

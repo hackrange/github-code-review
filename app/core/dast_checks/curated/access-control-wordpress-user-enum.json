@@ -1,0 +1,33 @@
+{
+  "id": "access-control-wordpress-user-enum",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "WordPress user names are listed over the REST API",
+  "summary": "The WordPress users endpoint answers unauthenticated and returns the account names and login slugs, which seeds a password attack.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/wp-json/wp/v2/users"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"slug\") and body_contains(\"name\") and body_contains(\"id\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/wp-json/wp/v2/users",
+  "remediate": "Restrict the users endpoint, or disable the REST API for anonymous callers.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "wordpress",
+    "php"
+  ]
+}

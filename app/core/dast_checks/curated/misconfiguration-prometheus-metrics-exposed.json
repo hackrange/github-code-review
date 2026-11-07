@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-prometheus-metrics-exposed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "low",
+  "title": "A Prometheus metrics endpoint is public",
+  "summary": "The metrics endpoint answers unauthenticated, which leaks internal paths, counts and sometimes versions.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/metrics"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and \"html\" not in header(\"content-type\") and body_contains(\"# HELP\") and body_contains(\"# TYPE\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/metrics",
+  "remediate": "Put the metrics endpoint behind authentication or an allow list.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "prometheus",
+    "metrics"
+  ]
+}

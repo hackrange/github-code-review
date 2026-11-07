@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-sql-dump-dump-served",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A SQL database dump is served (/dump.sql)",
+  "summary": "A database dump is downloadable, which hands over the data and the schema.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/dump.sql"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and \"html\" not in header(\"content-type\") and (body_contains(\"CREATE TABLE\") or body_contains(\"INSERT INTO\") or body_contains(\"-- MySQL dump\") or body_contains(\"DROP TABLE\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/dump.sql",
+  "remediate": "Remove the dump from the web root and rotate any secret it held.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "secrets",
+    "database"
+  ]
+}
