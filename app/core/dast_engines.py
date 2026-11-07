@@ -212,8 +212,12 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
     if tool == "nikto":
         report = workdir / "nikto.json"
         flags = "x6" if profile == "quick" else ("x6789ab" if profile in ("thorough", "premium") else "x69")
+        # A small pause between requests.  Without it nikto opens handshakes as
+        # fast as it can, which a firewall in front of the site reads as a
+        # flood: it drops the TLS connections, nikto hits its error limit in a
+        # second and gives up.  Paced, it runs its whole suite within maxtime.
         return ([exe, "-h", url, "-output", str(report), "-Format", "json",
-                 "-ask", "no", "-nointeractive", "-Tuning", flags,
+                 "-ask", "no", "-nointeractive", "-Pause", "0.3", "-Tuning", flags,
                  "-maxtime", "3000s", "-useragent", _ua()], report)
     if tool == "wapiti":
         report = workdir / "wapiti.json"
