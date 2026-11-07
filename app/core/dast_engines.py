@@ -200,10 +200,22 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
         report = workdir / "nuclei.jsonl"
         targets = workdir / "nuclei-targets.txt"
         targets.write_text("\n".join([url] + _same_site(url, paths)[:50]) + "\n")
-        argv = [exe, "-list", str(targets), "-jsonl-export", str(report),
+        # -o with -jsonl writes each finding to the file the moment it is found,
+        # not -jsonl-export, which only writes the whole set when nuclei finishes.
+        # nuclei has no run-time limit of its own, so our timeout kills it mid
+        # run; with the export flag every finding it had found was lost, with -o
+        # the file already holds them and the parser reads the partial file.
+        # Concurrency and rate: nuclei runs -c templates at once, capped at -rl
+        # requests a second.  The old 25/50 left the 60 minute budget spent long
+        # before the template set was through.  The engines go through the local
+        # proxy, which pools the upstream connections, so a higher rate does not
+        # hit the target with the raw handshake burst a direct tool would; with
+        # the site's own rate limiting off and the scanner allow listed, 50/150
+        # covers far more of the set in the same window.
+        argv = [exe, "-list", str(targets), "-o", str(report), "-jsonl",
                 "-disable-update-check", "-no-color", "-silent",
                 "-severity", "info,low,medium,high,critical", "-tags", tags,
-                "-rl", "50", "-c", "25", "-timeout", "10", "-retries", "1",
+                "-rl", "150", "-c", "50", "-timeout", "10", "-retries", "1",
                 "-H", f"User-Agent: {_ua()}"]
         templates = _nuclei_templates(workdir, -1)
         if templates:
