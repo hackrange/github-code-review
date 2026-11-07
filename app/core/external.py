@@ -2079,6 +2079,25 @@ def _session_headers(sess: dict) -> dict:
     return out
 
 
+def _start_scan_proxy(session, host, upstream, workdir):
+    """A local mitmproxy for the engine run, or None.  It signs every engine's
+    requests in and refuses any host out of scope.  Off in settings, not
+    installed, or failed to start -> None, and the engines run direct."""
+    from app.core import dast_proxy
+    from app.core import settings_store as s
+    from app.core.dast_checks import scope
+
+    with session_scope() as db:
+        on = s.get(db, "dast.scan_proxy")
+        on = True if on is None else bool(on)
+        domains = scope.company_domains(s.get(db, "web.company_domains") or [])
+    if not on:
+        return None
+    hosts = list(dict.fromkeys([host] + [d for d in domains if d]))
+    return dast_proxy.start(_session_headers(session), hosts, upstream=upstream or "",
+                            workdir=workdir)
+
+
 def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> tuple:
     """Run the enabled curated rules in the chosen rulesets against the site.
 
@@ -2233,6 +2252,13 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
     if url and plan:
         workdir = app_settings.work_dir / "dast" / str(scan_id)
         workdir.mkdir(parents=True, exist_ok=True)
+        scan_proxy = _start_scan_proxy(session, host, proxy, workdir)
+        if scan_proxy:
+            engines.append({"tool": "scan-proxy", "name": "Scan proxy", "status": "ok",
+                            "seconds": 0, "detail": "the engines run through a local proxy "
+                            "that signs each request in and refuses any host out of scope"})
+            _update(scan_id, engines=json.dumps(engines))
+        engine_proxy = scan_proxy.url if scan_proxy else proxy
         try:
             # Links on the front page, then the routes from the code.
             extra = dast_engines.links_in(url, base["telemetry"].get("body_sample") or "")
@@ -2250,9 +2276,12 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                 _update(scan_id, step=f"running {dast_engines.ENGINE_NAMES[tool]}")
                 args = external_auth.engine_args(tool, session) \
                     if tool in external_auth.SIGNS_IN else []
+                # testssl reads the site's own TLS, so it must reach it directly,
+                # not through the proxy that terminates TLS with its own cert.
+                tool_proxy = proxy if tool == "testssl" else engine_proxy
                 result = dast_engines.run_engine(tool, url, host, profile, workdir,
                                                  scan_id, paths=extra, auth_args=args,
-                                                 proxy=proxy)
+                                                 proxy=tool_proxy)
                 if session:
                     result["signed_in"] = bool(args)
                 if tool == "ffuf":
@@ -2265,6 +2294,8 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                 engines.append(result)
                 _update(scan_id, engines=json.dumps(engines))
         finally:
+            if scan_proxy:
+                scan_proxy.stop()
             shutil.rmtree(workdir, ignore_errors=True)
     # The premium curated rules: the enhanced, high fidelity checks.  They run
     # last, only on premium, and only against the company's own domains.  With

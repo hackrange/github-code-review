@@ -1575,6 +1575,7 @@ def _rule_context(db, user):
                    scan_profiles=saved, profile_rulesets=profile_rulesets,
                    available_rulesets=_available_rulesets(db),
                    oob_url=settings_store.get(db, "dast.oob_url") or "",
+                   scan_proxy_on=bool(settings_store.get(db, "dast.scan_proxy")),
                    whitelisted_ip=settings_store.get(db, "dast.whitelisted_ip") or "",
                    whitelisted_vantage=settings_store.get(db, "dast.whitelisted_vantage") or "direct",
                    ip_echo_url=settings_store.get(db, "dast.ip_echo_url") or "https://api.ipify.org",
@@ -1687,6 +1688,7 @@ async def save_dast_settings(request: Request, user: User = Depends(current_user
     vantage = "proxy" if str(form.get("whitelisted_vantage") or "") == "proxy" else "direct"
     echo = str(form.get("ip_echo_url") or "").strip()[:500]
     exposure = _checked(form, "exposure_check")
+    scan_proxy_on = _checked(form, "scan_proxy")
     proxy_typed = str(form.get("unwhitelisted_proxy") or "").strip()[:1000]
     proxy_clear = _checked(form, "proxy_clear")
     for label, value in (("callback address", oob), ("IP echo service", echo),
@@ -1697,6 +1699,7 @@ async def save_dast_settings(request: Request, user: User = Depends(current_user
     with session_scope() as db:
         _guard(db, user)
         settings_store.set_value(db, "dast.oob_url", oob, user.username)
+        settings_store.set_value(db, "dast.scan_proxy", scan_proxy_on, user.username)
         settings_store.set_value(db, "dast.whitelisted_ip", whitelisted, user.username)
         settings_store.set_value(db, "dast.whitelisted_vantage", vantage, user.username)
         settings_store.set_value(db, "dast.ip_echo_url",

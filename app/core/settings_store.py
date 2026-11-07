@@ -388,6 +388,11 @@ DEFAULTS = {
                                 "can be made to fetch a URL will hit it here, which proves "
                                 "server side request forgery.  Leave empty to switch the "
                                 "out of band checks off; they are then skipped."),
+    "dast.scan_proxy":         (True, False,
+                                "Run the scanning engines through a local proxy for each "
+                                "scan, so every engine signs in with the site's session "
+                                "and no engine can reach a host the scan is not scoped to.  "
+                                "On by default; off makes the engines go direct."),
     "dast.exposure_check":     (False, False,
                                 "On a telemetry refresh, also load each site through the "
                                 "non allow listed proxy below and take a second "

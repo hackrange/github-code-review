@@ -306,6 +306,14 @@
             must be reachable from the sites you scan.  Leave empty to switch the
             out of band checks off.</span></label>
 
+        <label style="margin-top:.8rem">
+          <input type="checkbox" name="scan_proxy" value="1" {{ 'checked' if scan_proxy_on }}>
+          Run the engines through a local sign in proxy
+          <span class="faint small">Each scan starts a local proxy the engines run through,
+            so every engine signs in with the site's session and none can reach a host the
+            scan is not scoped to.  On by default.  testssl always reads the site's TLS
+            directly.</span></label>
+
         <div class="card-head" style="margin-top:1rem">Exposure check</div>
         <label style="margin-top:.4rem">Which vantage is allow listed
           <select name="whitelisted_vantage">
