@@ -1,0 +1,32 @@
+{
+  "id": "misconfiguration-graphiql-exposed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "low",
+  "title": "The GraphiQL explorer is exposed",
+  "summary": "The GraphiQL in browser explorer is served, which hands anyone an interactive client for the GraphQL API.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/graphiql"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"GraphiQL\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/graphiql",
+  "remediate": "Do not serve GraphiQL in production, or require authentication.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "graphql"
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "access-control-consul-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "HashiCorp Consul is reachable without signing in",
+  "summary": "The Consul agent API answers unauthenticated, which exposes the service catalog and the key value store and can change them.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/v1/agent/self"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Config\") and body_contains(\"Datacenter\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/v1/agent/self",
+  "remediate": "Enable Consul ACLs and keep the API off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "consul"
+  ]
+}

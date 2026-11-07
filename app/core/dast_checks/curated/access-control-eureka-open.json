@@ -1,0 +1,33 @@
+{
+  "id": "access-control-eureka-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "A Eureka service registry is reachable",
+  "summary": "The Eureka registry answers unauthenticated, which lists the internal services, their hosts and ports, mapping the internal network.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/eureka/apps"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"applications\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/eureka/apps",
+  "remediate": "Require authentication on the registry and keep it off the public internet.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "eureka",
+    "spring"
+  ]
+}

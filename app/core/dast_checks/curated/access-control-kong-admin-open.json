@@ -1,0 +1,32 @@
+{
+  "id": "access-control-kong-admin-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "The Kong admin API is reachable",
+  "summary": "The Kong admin API answers unauthenticated, which is full control of the gateway: its routes, services and plugins.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"plugins\") and body_contains(\"available_on_server\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/",
+  "remediate": "Never expose the Kong admin API; bind it to localhost or require authentication.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "kong"
+  ]
+}

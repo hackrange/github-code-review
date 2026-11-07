@@ -1,0 +1,33 @@
+{
+  "id": "misconfiguration-actuator-index",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Spring Boot actuator index is exposed",
+  "summary": "The /actuator index lists every management endpoint the application exposes, which maps the way into env, heap dumps and more.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/actuator"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and \"json\" in header(\"content-type\") and body_contains(\"_links\") and body_contains(\"self\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/actuator",
+  "remediate": "Secure the actuator endpoints, or do not expose them in production.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "spring",
+    "actuator"
+  ]
+}

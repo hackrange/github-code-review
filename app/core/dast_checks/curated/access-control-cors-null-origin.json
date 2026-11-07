@@ -1,0 +1,35 @@
+{
+  "id": "access-control-cors-null-origin",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "CORS trusts the null origin with credentials",
+  "summary": "The site echoes a null Origin into Access-Control-Allow-Origin and allows credentials.  A sandboxed page, such as one from a data URI or a restricted iframe, sends a null origin and can then read this site's authenticated responses.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/",
+        "headers": {
+          "Origin": "null"
+        }
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "header(\"access-control-allow-origin\") == \"null\" and header(\"access-control-allow-credentials\") == \"true\"",
+    "retest": 2
+  },
+  "reproduce": "curl -s -i https://host/ -H 'Origin: null'",
+  "remediate": "Do not trust the null origin.  Allow only a fixed origin list, never with credentials for null or a wildcard.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-942",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "cors"
+  ]
+}

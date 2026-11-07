@@ -3,8 +3,8 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
-  "title": "Spring actuator /actuator/threaddump is exposed",
-  "summary": "A Spring Boot actuator endpoint is open to the internet and reveals how the application is wired and configured.",
+  "title": "Spring Boot actuator thread dump is exposed",
+  "summary": "The /actuator/threaddump endpoint returns every thread and its stack, which leaks internal class and method names and sometimes data in flight.",
   "needs": [],
   "probe": [
     {
@@ -16,18 +16,18 @@
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_contains(\"threadName\") and body_differs(control)",
+    "differential": "status==200 and \"json\" in header(\"content-type\") and body_contains(\"threads\") and body_contains(\"stackTrace\") and body_differs(control)",
     "retest": 2
   },
   "reproduce": "curl -s https://host/actuator/threaddump",
-  "remediate": "Lock the actuator endpoints down to an internal network or require authentication (management.endpoints.web.exposure).",
+  "remediate": "Secure the actuator endpoints in production.",
   "references": [],
   "mappings": {
     "cwe": "CWE-200",
     "owasp": "A05:2021"
   },
   "rulesets": [
-    "java",
-    "spring"
+    "spring",
+    "actuator"
   ]
 }

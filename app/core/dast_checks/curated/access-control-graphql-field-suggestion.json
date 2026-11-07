@@ -1,0 +1,35 @@
+{
+  "id": "access-control-graphql-field-suggestion",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "GraphQL leaks its schema through field suggestions",
+  "summary": "With introspection off, the API still answers an unknown field with a suggestion of the real one, so the schema can be rebuilt a field at a time.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/graphql",
+        "query": {
+          "query": "{aaaa}"
+        }
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"Did you mean\") and body_contains(\"Cannot query field\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s 'https://host/graphql?query=%7Baaaa%7D'",
+  "remediate": "Turn field suggestions off in production as well as introspection.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "graphql"
+  ]
+}
