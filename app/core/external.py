@@ -198,12 +198,51 @@ def _exposure_from(whitelisted_ok: bool, public_ok: bool) -> tuple:
                            "both of these addresses.")
 
 
+def _probe_through(proxy: str, host: str, allow_private: bool) -> dict:
+    """A light look at a site from the proxy's vantage: fetch the front page to
+    see whether the real site answers.  It skips the port scan and TLS work,
+    which an HTTP proxy does not carry anyway.  -> a small telemetry-like rec."""
+    from app.core import external_probe
+
+    rec = {"status": 0, "category": "none", "waf_block": False, "bot_check": "",
+           "error": "", "final_url": f"https://{host}/"}
+    got = {"status": 0, "error": "no answer", "body": "", "final_url": ""}
+    for scheme in ("https", "http"):
+        try:
+            with external_probe.via_proxy(proxy):
+                got = external_probe.fetch(f"{scheme}://{host}/", allow_private=allow_private)
+        except Exception as exc:  # noqa: BLE001 - a failure is an answer: not reached
+            got = {"status": 0, "error": f"{type(exc).__name__}: {str(exc)[:160]}",
+                   "body": "", "final_url": ""}
+        if got.get("status"):
+            break
+    rec["status"] = got.get("status", 0)
+    rec["error"] = got.get("error", "")
+    rec["final_url"] = got.get("final_url") or f"https://{host}/"
+    body = got.get("body") or ""
+    rec["category"] = external_probe.classify(rec["status"], bool(rec["status"]))
+    if rec["category"] in external_probe.WEB_CATEGORIES:
+        rec["waf_block"] = external_probe.detect_waf_block(body, rec["status"])
+        rec["bot_check"] = external_probe.bot_check(body, rec["status"])
+    return rec
+
+
+def _proxy_screenshot(proxy: str, url: str, out_path: Path, allow_private: bool) -> None:
+    """Photograph the site through the proxy, for the public view."""
+    from app.core import external_probe
+
+    try:
+        with external_probe.via_proxy(proxy):
+            external_probe.playwright_shot([url], out_path, allow_private)
+    except Exception:  # noqa: BLE001 - the posture stands without the picture
+        log.warning("exposure screenshot through the proxy failed", exc_info=True)
+
+
 def run_exposure_check(asset_id: int, host: str, opts: dict, inside: dict) -> None:
     """Load the site again from the proxy, then set the site's exposure from the
     two vantages.  inside is the telemetry rec from the server's own IP.  Which
     vantage counts as allow listed comes from the setting, since either the
     server or the proxy may be the one a target lets in."""
-    from app.core import external_probe
     from app.core import settings_store as s
 
     with session_scope() as db:
@@ -211,15 +250,17 @@ def run_exposure_check(asset_id: int, host: str, opts: dict, inside: dict) -> No
         vantage = (s.get(db, "dast.whitelisted_vantage") or "direct").strip()
     if not proxy:
         return
-    out_path = shot_proxy_path(asset_id)
-    try:
-        with external_probe.via_proxy(proxy):
-            outside = external_probe.probe(host, shot_path=out_path, screenshots=True,
-                                           allow_private=opts["allow_private"])
-    except Exception as exc:  # noqa: BLE001 - a failure is an answer: not reached
-        log.warning("exposure probe for %s through the proxy failed: %s", asset_id, exc)
-        outside = {"error": str(exc)[:200]}
+    outside = _probe_through(proxy, host, opts["allow_private"])
     direct_ok, proxy_ok = _serves_site(inside), _serves_site(outside)
+    # A second picture only earns its place when the proxy reached the site but
+    # the server's own view did not.  When both see it (open to the world) the
+    # direct picture already shows it, so there is no need for two; when the
+    # proxy is turned away there is nothing to show.
+    if opts.get("screenshots") and proxy_ok and not direct_ok:
+        _proxy_screenshot(proxy, outside["final_url"], shot_proxy_path(asset_id),
+                          opts["allow_private"])
+    else:
+        shot_proxy_path(asset_id).unlink(missing_ok=True)
     # Map the two transports to roles: the allow listed vantage and the public,
     # non allow listed one.
     if vantage == "proxy":

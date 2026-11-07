@@ -73,24 +73,31 @@
     {% if asset.exposure_at %}<span class="faint small" style="font-weight:400">, checked {{ asset.exposure_at | dt('%Y-%m-%d %H:%M') }}</span>{% endif %}</div>
   <div class="card-body">
     {% if asset.exposure_detail %}<p class="small">{{ asset.exposure_detail }}</p>{% endif %}
-    {% set direct_role = 'Public, non allow listed' if whitelisted_vantage == 'proxy' else 'Allow listed' %}
-    {% set proxy_role = 'Allow listed' if whitelisted_vantage == 'proxy' else 'Public, non allow listed' %}
-    <div class="flex" style="gap:1rem;flex-wrap:wrap;align-items:flex-start">
-      <div style="max-width:48%">
-        <div class="small faint">{{ direct_role }} (this server's IP)</div>
-        {% if asset.screenshot in ('ok','blank') or (asset.screenshot == 'waf' and has_shot) %}
-        <img class="shot-small" alt="This server's view of {{ asset.host }}"
-             src="{{ base }}/external/{{ asset.id }}/screenshot.png?v={{ asset.telemetry_at.timestamp() | int if asset.telemetry_at else 0 }}">
-        {% else %}<div class="shot-hero-none small">No page from this vantage.</div>{% endif %}
+    {% set wl_is_direct = whitelisted_vantage != 'proxy' %}
+    {% set direct_has = asset.screenshot in ('ok', 'blank') or (asset.screenshot == 'waf' and has_shot) %}
+    {% set direct_img = base ~ '/external/' ~ asset.id ~ '/screenshot.png?v=' ~ (asset.telemetry_at.timestamp() | int if asset.telemetry_at else 0) %}
+    {% set proxy_img = base ~ '/external/' ~ asset.id ~ '/screenshot-proxy.png?v=' ~ (asset.exposure_at.timestamp() | int if asset.exposure_at else 0) %}
+    {% if asset.exposure == 'open' %}
+      <div class="small faint" style="margin-bottom:.3rem">Both the allow listed and the public vantage see the same page, so it is shown once.</div>
+      {% if direct_has %}<img class="shot-small" alt="Screenshot of {{ asset.host }}" src="{{ direct_img }}">{% endif %}
+    {% elif asset.exposure in ('whitelisted', 'anomaly') %}
+      {% set wl_img = direct_img if wl_is_direct else proxy_img %}
+      {% set wl_has = direct_has if wl_is_direct else has_proxy_shot %}
+      {% set pub_img = proxy_img if wl_is_direct else direct_img %}
+      {% set pub_has = has_proxy_shot if wl_is_direct else direct_has %}
+      <div class="flex" style="gap:1rem;flex-wrap:wrap;align-items:flex-start">
+        <div style="max-width:48%">
+          <div class="small faint">Allow listed</div>
+          {% if wl_has %}<img class="shot-small" alt="Allow listed view of {{ asset.host }}" src="{{ wl_img }}">
+          {% else %}<div class="shot-hero-none small">No page from this vantage.</div>{% endif %}
+        </div>
+        <div style="max-width:48%">
+          <div class="small faint">Public, non allow listed</div>
+          {% if pub_has %}<img class="shot-small" alt="Public view of {{ asset.host }}" src="{{ pub_img }}">
+          {% else %}<div class="shot-hero-none small">No page from this vantage.</div>{% endif %}
+        </div>
       </div>
-      <div style="max-width:48%">
-        <div class="small faint">{{ proxy_role }} (through the proxy)</div>
-        {% if has_proxy_shot %}
-        <img class="shot-small" alt="Proxy view of {{ asset.host }}"
-             src="{{ base }}/external/{{ asset.id }}/screenshot-proxy.png?v={{ asset.exposure_at.timestamp() | int if asset.exposure_at else 0 }}">
-        {% else %}<div class="shot-hero-none small">No page from this vantage{% if asset.exposure == 'whitelisted' %}, which is why it reads Whitelisted{% endif %}.</div>{% endif %}
-      </div>
-    </div>
+    {% endif %}
   </div>
 </div>
 {% endif %}
