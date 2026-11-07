@@ -2293,9 +2293,13 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
         triage(scan_id)
 
 
-# Engines that report a path because it answered, which a site that serves
-# its home page for every address answers every time.
-PATH_ENGINES = {"nikto", "nuclei", "ffuf"}
+# Engines whose URL findings are re-checked against the live response.  The
+# path discovery ones (nikto, nuclei, ffuf) report a path because it answered,
+# which a site that serves its home page for every address answers every time.
+# Wapiti is here too: its form and header findings (CSRF, CSP, htaccess and the
+# like) are moot when the URL is access controlled, a not found, or a redirect
+# to a login, so they are dropped the same way.
+PATH_ENGINES = {"nikto", "nuclei", "ffuf", "wapiti"}
 MAX_VERIFY = 400
 SOFT_404_BODY = 65536
 NOT_THERE = (404, 410)
