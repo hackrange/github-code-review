@@ -971,10 +971,13 @@ def playwright_python() -> str:
 
 
 def playwright_shot(urls: list, out_path: Path, allow_private: bool = False,
-                    timeout: int = 45) -> dict:
+                    timeout: int = 45, headers: dict = None) -> dict:
     """Load the page in a real browser engine, through any bot check, and
     photograph it.  -> {status, detail, title, url, bot_check, bot_check_seen}
-    status is ok, blank, or failed when it could not run at all."""
+    status is ok, blank, or failed when it could not run at all.  headers, when
+    given, sign the browser in as one account (passed through the environment,
+    never the command line, so a session cookie does not show in the process
+    list)."""
     import json as _json
 
     py = playwright_python()
@@ -984,6 +987,10 @@ def playwright_shot(urls: list, out_path: Path, allow_private: bool = False,
         return result
     out_path.parent.mkdir(parents=True, exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix="gcr-pw-"))
+    shot_env = {**os.environ, "HOME": str(Path.home())}
+    if headers:
+        shot_env["GCR_SHOT_HEADERS"] = _json.dumps(
+            {str(k): str(v) for k, v in headers.items()})
     try:
         for url in urls[:2]:
             tmp = scratch / "shot.png"
@@ -998,7 +1005,7 @@ def playwright_shot(urls: list, out_path: Path, allow_private: bool = False,
                 try:
                     proc = subprocess.run(argv, capture_output=True, text=True,
                                           timeout=timeout + 30, cwd=scratch,
-                                          env={**os.environ, "HOME": str(Path.home())})
+                                          env=shot_env)
                 except subprocess.TimeoutExpired:
                     result["detail"] = f"the browser took longer than {timeout + 30} seconds"
                     continue

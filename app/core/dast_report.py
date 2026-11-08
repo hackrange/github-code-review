@@ -331,6 +331,16 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
         cwe = re.search(r"CWE-?(\d+)", str(f.get("cwe") or ""), re.I)
         f["cwe_url"] = (f"https://cwe.mitre.org/data/definitions/{cwe.group(1)}.html"
                         if cwe else "")
+        # Proof pictures, if any, read in as data so the PDF carries them.
+        import base64
+        proof = f.get("proof") or {}
+        for who, slot in (("a", "proof_img_a"), ("b", "proof_img_b")):
+            name = proof.get(who) if isinstance(proof, dict) else None
+            if name:
+                p = external.proof_path(scan.id, name)
+                if p.is_file() and 0 < p.stat().st_size < 3_000_000:
+                    f[slot] = ("data:image/png;base64,"
+                               + base64.b64encode(p.read_bytes()).decode())
         findings.append(f)
     overall = score(findings, triaged)
     # Risk, deterministic: likelihood x breachability, weighted by exposure.

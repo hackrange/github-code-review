@@ -255,6 +255,14 @@
     {% if f.ai_verdict %}<tr><td class="k">Enhanced review</td><td>{{ f.ai_verdict | replace('_', ' ') }}{% if f.ai_why %}.  {{ f.ai_why | sentence_spaced }}{% endif %}{% if f.ai_sast %}  Matches code finding {{ f.ai_sast }}.{% endif %}</td></tr>{% endif %}
   </table>
   {% if f.evidence %}<div class="label"><strong>{{ 'Proof' if f.likelihood and f.likelihood >= 4 else 'Evidence' }}</strong></div><pre>{{ f.evidence }}</pre>{% endif %}
+  {% if f.proof_img_a or f.proof_img_b %}
+  <div style="margin-top:2mm"><strong>Proof: what each account sees</strong></div>
+  <p class="faint">Compare the two.  If both accounts see the same object, access crossed between them; if the accounts are meant to share it, it is expected and can be marked a false positive.</p>
+  <table style="width:100%"><tr>
+    {% if f.proof_img_a %}<td style="width:50%;vertical-align:top;padding-right:2mm"><div class="faint">First account</div><img src="{{ f.proof_img_a }}" style="width:100%;border:.5pt solid var(--rule)"></td>{% endif %}
+    {% if f.proof_img_b %}<td style="width:50%;vertical-align:top"><div class="faint">Second account</div><img src="{{ f.proof_img_b }}" style="width:100%;border:.5pt solid var(--rule)"></td>{% endif %}
+  </tr></table>
+  {% endif %}
   {% if f.repro.command %}
   <div style="margin-top:2mm"><strong>To see it again</strong></div>
   <pre>{{ f.repro.command }}</pre>

@@ -36,12 +36,15 @@ def load() -> list:
 
 
 def sync(db) -> dict:
-    """Add new curated rules and refresh untouched ones.  -> counts."""
+    """Add new curated rules, refresh untouched ones, and retire a shipped rule
+    that has been dropped from the set.  -> counts."""
     from app.core.models import DastRule
 
     have = {r.rule_id: r for r in db.query(DastRule).all()}
-    added = refreshed = 0
-    for s in load():
+    rules = load()
+    shipped = {s["id"] for s in rules}
+    added = refreshed = retired = 0
+    for s in rules:
         body = json.dumps(s, ensure_ascii=False)
         rulesets = json.dumps(s.get("rulesets") or [], ensure_ascii=False)
         row = have.get(s["id"])
@@ -60,4 +63,12 @@ def sync(db) -> dict:
             row.spec = body
             row.rulesets = rulesets
             refreshed += 1
-    return {"added": added, "refreshed": refreshed}
+    # A curated rule that is no longer shipped (dropped because it could not be
+    # made high fidelity) is turned off, so it stops firing.  It is only
+    # disabled, never deleted, and only when it was an untouched shipped rule.
+    for rid, row in have.items():
+        if (row.origin == "curated" and (row.version or 1) == 1
+                and rid not in shipped and row.enabled):
+            row.enabled = False
+            retired += 1
+    return {"added": added, "refreshed": refreshed, "retired": retired}

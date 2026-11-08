@@ -299,6 +299,50 @@ def shot_proxy_path(asset_id: int) -> Path:
 
 def drop_shot(asset_id: int) -> None:
     shot_path(asset_id).unlink(missing_ok=True)
+
+
+def proof_path(scan_id: int, name: str) -> Path:
+    """A proof screenshot for a finding on a scan.  name is like <hash>-a.png."""
+    safe = re.sub(r"[^a-z0-9.\-]", "", str(name).lower())[:80]
+    return data_dir() / "proof" / str(int(scan_id)) / safe
+
+
+def _attach_proof_shots(scan_id, findings, a_headers, b_headers, opts) -> int:
+    """For each cross account finding, photograph the object as the first
+    account and again as the second, so a person can compare what each one
+    sees and judge whether the access is really broken.  -> how many were
+    captured.  Best effort: no browser here, or a picture that will not take,
+    just leaves the finding without one.  A scan is never failed over a picture.
+    """
+    import hashlib
+
+    from app.core import external_probe
+    if not external_probe.playwright_python() or not (a_headers and b_headers):
+        return 0
+    done = 0
+    for f in findings:
+        if f.get("proof_kind") != "two_account" or done >= 6:
+            continue
+        url = f.get("proof_url") or f.get("url")
+        if not url:
+            continue
+        key = hashlib.sha1((str(f.get("rule_id") or "") + "|" + url).encode()).hexdigest()[:16]
+        shots = {}
+        for who, hdrs in (("a", a_headers), ("b", b_headers)):
+            name = f"{key}-{who}.png"
+            dest = proof_path(scan_id, name)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                res = external_probe.playwright_shot(
+                    [url], dest, allow_private=opts["allow_private"], timeout=30, headers=hdrs)
+            except Exception:  # noqa: BLE001 - a picture never breaks the scan
+                res = {"status": "failed"}
+            if res.get("status") in ("ok", "blank") and dest.is_file() and dest.stat().st_size:
+                shots[who] = name
+        if shots:
+            f["proof"] = shots
+            done += 1
+    return done
     thumb_path(asset_id).unlink(missing_ok=True)
     shot_proxy_path(asset_id).unlink(missing_ok=True)
 
@@ -2208,6 +2252,12 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
             log.info("curated rule %s: %s - %s", spec.get("id"),
                      result["status"], result.get("detail"))
     row["seconds"] = int(time.monotonic() - started)
+    # Proof pictures for the cross account findings: what the first account sees
+    # at the object, and what the second does, so a person can compare them.
+    if second_headers and scan_id not in _stopping \
+            and any(f.get("proof_kind") == "two_account" for f in findings):
+        _update(scan_id, step="capturing proof screenshots")
+        _attach_proof_shots(scan_id, findings, headers, second_headers, opts)
     detail = (f"{ran} rule{'' if ran == 1 else 's'} ran, "
               f"{confirmed} finding{'' if confirmed == 1 else 's'}, "
               f"{skipped} skipped")

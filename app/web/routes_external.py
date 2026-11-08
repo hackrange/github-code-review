@@ -1215,6 +1215,20 @@ def _decide_bulk(asset_id, scan_id, form, request, user, here):
     return redirect(_back(here, note))
 
 
+@router.get("/external/{asset_id}/scans/{scan_id}/proof/{name}")
+def scan_proof(asset_id: int, scan_id: int, name: str, user: User = Depends(current_user)):
+    """A finding's proof screenshot (for example what one account sees)."""
+    with session_scope() as db:
+        _guard(db, user)
+        _asset(db, asset_id)
+        _scan(db, asset_id, scan_id)   # 404s if the scan is not this site's
+    path = external.proof_path(scan_id, name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No such image.")
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "private, max-age=86400"})
+
+
 @router.get("/external/{asset_id}/scans/{scan_id}/report.pdf")
 def scan_report(asset_id: int, scan_id: int, request: Request,
                 user: User = Depends(current_user)):

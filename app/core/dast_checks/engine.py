@@ -548,6 +548,11 @@ def _run_two_account(spec: dict, ctx: dict, domains, budget: Budget) -> list:
             f = _finding(spec, a, resp_a, url)
             f["evidence"] = _two_account_evidence(url, resp_a, resp_b, resp_anon)
             f["reproduce"] = _two_account_reproduce(url)
+            # The proof is two pictures: what each account sees at this address,
+            # captured later with each account's session.  proof_url is what to
+            # photograph (the object), proof_kind says how to read it.
+            f["proof_kind"] = "two_account"
+            f["proof_url"] = url
             findings.append(f)
             break   # one solid finding per rule
     return findings
@@ -583,7 +588,11 @@ def _two_account_evidence(url, resp_a, resp_b, resp_anon) -> str:
                     + (", so the page is not simply public." if an_st != 200
                        else ", so a signed out visitor sees it too."))
     bits.append("Confirmed and re-tested.")
-    return " ".join(bits)[:800]
+    bits.append("Validate this before acting on it: if the two accounts are meant "
+                "to share this access, for example a read only auditor role that "
+                "can see everything, it is expected; re-categorise its severity or "
+                "mark it a false positive.")
+    return " ".join(bits)[:1100]
 
 
 def _run_probe(spec: dict, client: Client, route: str, oob_value: str) -> dict:

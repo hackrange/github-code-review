@@ -192,6 +192,12 @@
         <td><strong>{{ f.title }}</strong>{% if f.cwe %} <span class="faint small mono">{{ f.cwe }}</span>{% endif %}
           {% if f.evidence %}<div class="small mono faint" style="white-space:pre-wrap;word-break:break-word">{{ f.evidence }}</div>{% endif %}
           {% if f.reproduce %}<details class="small"><summary>How to reproduce</summary><div class="mono" style="white-space:pre-wrap;word-break:break-word">{{ f.reproduce }}</div></details>{% endif %}
+          {% if f.proof and (f.proof.a or f.proof.b) %}<details class="small" open><summary>Proof: what each account sees</summary>
+            <div class="faint" style="margin:.2rem 0">Compare the two.  If both accounts see the same object, access crossed between them; if the accounts are meant to share it, it is expected and can be marked a false positive.</div>
+            <div class="flex" style="gap:.8rem;flex-wrap:wrap;align-items:flex-start">
+              {% if f.proof.a %}<div style="max-width:48%"><div class="faint">First account</div><img class="shot-small" alt="What the first account sees" src="{{ base }}/external/{{ asset.id }}/scans/{{ scan.id }}/proof/{{ f.proof.a }}"></div>{% endif %}
+              {% if f.proof.b %}<div style="max-width:48%"><div class="faint">Second account</div><img class="shot-small" alt="What the second account sees" src="{{ base }}/external/{{ asset.id }}/scans/{{ scan.id }}/proof/{{ f.proof.b }}"></div>{% endif %}
+            </div></details>{% endif %}
           {% if f.remediation %}<details class="small"><summary>How to fix</summary>{{ f.remediation }}</details>{% endif %}
           {% if f.ai_why %}<div class="small"><span class="badge ai">AI</span> {{ f.ai_why }}{% if f.ai_sast %} <span class="mono">{{ f.ai_sast }}</span>{% endif %}</div>{% endif %}
           {% if f.reference %}<div class="small faint">{{ f.reference }}</div>{% endif %}</td>

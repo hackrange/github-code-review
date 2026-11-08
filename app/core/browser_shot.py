@@ -171,6 +171,15 @@ def main() -> int:
                                       locale="en-US", timezone_id="America/New_York",
                                       reduced_motion="reduce",
                                       ignore_https_errors=True)
+            # A session to photograph the page as, read from the environment, not
+            # the command line, so the cookie or token never shows in the process
+            # list.  It signs the browser in as one account for a proof picture.
+            try:
+                extra = json.loads(os.environ.get("GCR_SHOT_HEADERS", "{}") or "{}")
+                if isinstance(extra, dict) and extra:
+                    ctx.set_extra_http_headers({str(k): str(v) for k, v in extra.items()})
+            except Exception:  # noqa: BLE001 - a bad header set just means no session
+                pass
             ctx.add_init_script(HIDE_AUTOMATION)
             if not args.allow_private:
                 ctx.route("**/*", lambda route: route.continue_()
