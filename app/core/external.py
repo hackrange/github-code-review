@@ -3753,7 +3753,11 @@ needs_review.  A finding about an exposed secret stays whatever you say.
 
 2) Write "why" as a short risk narrative for an engineer, three to five \
 sentences, in this order:
- - what can go wrong: what an attacker gains if the finding is real;
+ - what can go wrong: what an attacker gains if the finding is real, and, when \
+the finding would expose the data the app holds, what that breach means in real \
+terms using ONLY the consequence provided in data_the_app_holds (for example SOX \
+fines, breach notification, customer and reputational loss); name no consequence \
+that was not provided;
  - how an abuser attacks it: the concrete steps against THIS finding, at this url;
  - how likely it is to lead to a breach: reason from the site's exposure (open \
 to the world raises it, allow listed lowers it), the attack surface and \
@@ -3921,14 +3925,18 @@ def triage(scan_id: int, actor: str = "") -> None:
         host = asset.host
         exposure = (getattr(asset, "exposure", "") or "")
         exposure_detail = (getattr(asset, "exposure_detail", "") or "")
+        from app.core import data_classification
+
+        data_profile = data_classification.profile_for_asset(db, asset)
         cap = max(1, int(settings_mod.get(db, "dast.ai_max_findings") or 40))
         prior = _prior_verdicts(db, scan.asset_id, scan_id)
-    # Deterministic risk (likelihood x breachability, weighted by exposure) and
-    # the verified real world precedent for each weakness class, computed before
-    # the model is asked, so it reasons from these facts rather than its memory.
+    # Deterministic risk (likelihood x breachability, weighted by exposure and by
+    # the data the app holds) and the verified real world precedent for each
+    # weakness class, computed before the model is asked, so it reasons from
+    # these facts rather than its memory.
     from app.core import dast_precedent, dast_risk
 
-    dast_risk.annotate(all_findings, exposure)
+    dast_risk.annotate(all_findings, exposure, data_profile["classes"])
     dast_precedent.annotate(all_findings)
     # Reuse a verdict for any finding unchanged since the last reviewed scan.
     reused = 0
@@ -3960,6 +3968,11 @@ def triage(scan_id: int, actor: str = "") -> None:
                             "whitelisted means only from allow listed networks; "
                             "unknown means the exposure check did not run"),
                 "detail": _clean(exposure_detail)[:200],
+            },
+            "data_the_app_holds": {
+                "classes": data_profile["labels"],
+                "consequence_if_breached": data_profile["consequence"],
+                "source": "derived from the code repositories linked to this site",
             },
             "dast_findings": [{"id": f.get("id") or f["key"], "tool": f.get("tool"),
                                "severity": f.get("severity"), "title": _clean(f.get("title")),

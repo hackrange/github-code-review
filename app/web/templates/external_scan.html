@@ -48,6 +48,11 @@
 {% endif %}
 </div>
 
+{% if data_profile and data_profile.classes %}
+<div class="notice info"><div><strong>Data this app likely holds:</strong>
+  {% for lbl in data_profile.labels %}<span class="badge pending">{{ lbl }}</span> {% endfor %}
+  <span class="faint small">{{ data_profile.basis }}  This raises the impact of a breach here.</span></div></div>
+{% endif %}
 <div class="stats" data-live="scan-stats">
   <div class="stat {{ 'bad' if view.severity in ('critical','high') else ('ok' if scan.status == 'done' and view.severity in ('', 'none') else '') }}"><div class="n" style="{{ 'font-size:1.1rem' if view.severity in ('', 'none') }}">{% if scan.status != 'done' %}&ndash;{% elif view.severity in ('', 'none') %}no findings{% else %}{{ view.severity }}{% endif %}</div><div class="l">Worst found</div></div>
   {% for level in ['critical','high','medium','low','info'] %}

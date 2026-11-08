@@ -140,6 +140,12 @@
 
 <h2>2.  Executive summary</h2>
 {% for paragraph in narrative %}<p>{{ paragraph | sentence_spaced }}</p>{% endfor %}
+{% if data_profile and data_profile.classes %}
+<p><strong>What this application holds.</strong>  From the code behind this site it handles
+  {{ data_profile.labels | join(', ') }}.  {{ data_profile.consequence | sentence_spaced }}
+  The findings below weigh this in: a weakness that reaches this data is a larger breach than
+  the same weakness on a site that holds none.</p>
+{% endif %}
 {% if ai_summary and (ai_summary.summary or ai_summary.withheld or ai_summary.withheld_dast) %}
 <h3>2.1  What the enhanced review found</h3>
 {% if ai_summary.summary %}<p>{{ ai_summary.summary | sentence_spaced }}</p>

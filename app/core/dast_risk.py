@@ -65,8 +65,9 @@ def likelihood(f: dict) -> tuple:
     return base, why
 
 
-def breachability(f: dict, exposure: str = "") -> tuple:
-    """1..5 and a short basis: what a hit yields, weighted by exposure."""
+def breachability(f: dict, exposure: str = "", data_classes=None) -> tuple:
+    """1..5 and a short basis: what a hit yields, weighted by exposure and by
+    the kind of data the application holds."""
     text = f"{f.get('title') or ''} {f.get('cwe') or ''} {f.get('evidence') or ''}"
     reasons = []
     if _RCE.search(text):
@@ -90,6 +91,13 @@ def breachability(f: dict, exposure: str = "") -> tuple:
     if _SENSITIVE_URL.search(str(f.get("url") or "")):
         impact = min(5, impact + 1)
         reasons.append("a sensitive endpoint")
+    if data_classes:
+        from app.core import data_classification
+
+        bump, why = data_classification.impact_bump(data_classes)
+        if bump:
+            impact = min(5, impact + bump)
+            reasons.append(why)
     return impact, "; ".join(reasons)
 
 
@@ -143,11 +151,11 @@ _SEV_RISK_CAP = {"critical": "critical", "high": "high", "medium": "medium",
                  "low": "low", "info": "low", "none": "low"}
 
 
-def annotate(findings: list, exposure: str = "") -> list:
+def annotate(findings: list, exposure: str = "", data_classes=None) -> list:
     """Add likelihood, breachability, risk and a basis to each finding, in place."""
     for f in findings:
         lk, lk_why = likelihood(f)
-        br, br_why = breachability(f, exposure)
+        br, br_why = breachability(f, exposure, data_classes)
         f["likelihood"] = lk
         f["breachability"] = br
         f["likelihood_label"] = LIKELIHOOD_LABEL[lk]

@@ -1285,9 +1285,10 @@ def scan_page(asset_id: int, scan_id: int, request: Request, sev: str = "",
         findings = view["findings"]
         # Verified real world precedent per weakness class, from the vetted table,
         # so a finding shows its factual comparable case even before AI triage.
-        from app.core import dast_precedent
+        from app.core import data_classification, dast_precedent
 
         dast_precedent.annotate(findings)
+        data_profile = data_classification.profile_for_asset(db, asset)
         removed = external.removed_of(scan)
         if isinstance(view["ai"].get("summary"), dict):
             view["ai"]["summary"] = external.scrub_dast_review(view["ai"]["summary"], findings,
@@ -1307,6 +1308,7 @@ def scan_page(asset_id: int, scan_id: int, request: Request, sev: str = "",
         scope = (_dast_paths.scoping(_dast_paths.load(scan.paths).get("paths") or [])
                  if scan.paths_count is not None else None)
         context.update(active_page="external", asset=asset, scan=scan, view=view,
+                       data_profile=data_profile,
                        scope=scope, blocked_text=_dast_paths.blocked_text(scope or {}),
                        code=external.code_behind(db, user, scan, asset),
                        findings=findings, sev=sev, verdict=verdict, decided=decided,

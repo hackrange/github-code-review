@@ -343,10 +343,13 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
                                + base64.b64encode(p.read_bytes()).decode())
         findings.append(f)
     overall = score(findings, triaged)
-    # Risk, deterministic: likelihood x breachability, weighted by exposure.
-    from app.core import dast_precedent, dast_risk
+    # Risk, deterministic: likelihood x breachability, weighted by exposure and
+    # by the data the app holds (derived from the code linked to this site).
+    from app.core import data_classification, dast_precedent, dast_risk
 
-    dast_risk.annotate(findings, getattr(asset, "exposure", "") or "")
+    data_profile = data_classification.profile_for_asset(db, asset)
+    dast_risk.annotate(findings, getattr(asset, "exposure", "") or "",
+                       data_profile["classes"])
     # The verified real world precedent for each weakness class, from the vetted
     # table, so the report shows a factual comparable case even with no AI triage.
     dast_precedent.annotate(findings)
@@ -443,7 +446,7 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
     return {
         "asset": asset, "scan": scan, "view": view, "findings": findings,
         "overall": overall, "by_sev": by_sev, "categories": categories,
-        "risk_matrix": risk_matrix,
+        "risk_matrix": risk_matrix, "data_profile": data_profile,
         "reachable_sinks": reachable_sinks, "context_sinks": context_sinks,
         "heat_max": heat_max, "triaged": triaged, "ai_summary": ai_summary,
         "narrative": narrative(asset.host, view, overall, by_sev, triaged, profile_words),
