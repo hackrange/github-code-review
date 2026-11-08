@@ -391,6 +391,18 @@
             sign in and engines go through it; DNS, ports and TLS are read directly.</span></label>
         {% if proxy_label %}<label class="check"><input type="checkbox" name="proxy_clear" value="1"><span>Remove the proxy</span></label>{% endif %}
       </details>
+      <details class="hand-fields" {{ 'open' if asset.engine_timeouts }}>
+        <summary><strong>Engine time limits</strong> <span class="faint small">minutes each scan engine may run on this site.  Blank uses the default.</span></summary>
+        <input type="hidden" name="with_timeouts" value="1">
+        <div class="flex" style="gap:.6rem;flex-wrap:wrap;align-items:flex-end">
+          {% for name in engine_timeout_engines %}
+          <label style="flex:0 0 auto">{{ name }}<br>
+            <input type="number" name="timeout_{{ name }}" min="1" max="480" style="width:5.5rem"
+                   value="{{ engine_timeouts.get(name, '') }}" placeholder="{{ engine_timeout_defaults.get(name) }}"></label>
+          {% endfor %}
+        </div>
+        <span class="faint small">The placeholder is the default in minutes.  Raising a limit lets an engine (for example nuclei) cover more of its checks before it is stopped; nikto and wapiti are told to finish a little before the limit so they still write their report.</span>
+      </details>
       <details class="hand-fields" {{ 'open' if auth }}>
         <summary><strong>Scan sign in</strong> <span class="faint small">so the engines see what a signed in user sees.  Saved encrypted; a secret left empty keeps the saved one.</span></summary>
         <input type="hidden" name="with_auth" value="1">

@@ -2290,6 +2290,50 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
     return findings, row
 
 
+def engine_timeouts_for(asset_id: int) -> dict:
+    """Per engine minute overrides set on a site, {engine: minutes}.  A bad or
+    non positive value is dropped, so the default is used for that engine."""
+    with session_scope() as db:
+        asset = db.get(ExternalAsset, asset_id)
+        raw = getattr(asset, "engine_timeouts", "") if asset else ""
+    try:
+        got = json.loads(raw or "{}")
+    except (ValueError, TypeError):
+        return {}
+    out = {}
+    for name, value in (got or {}).items():
+        try:
+            minutes = int(value)
+        except (TypeError, ValueError):
+            continue
+        if minutes > 0 and str(name) in TIMEOUT_ENGINES:
+            out[str(name)] = minutes
+    return out
+
+
+# The engines a site may set its own run time for.
+TIMEOUT_ENGINES = ("nuclei", "nikto", "ffuf", "wapiti", "sqlmap", "dalfox")
+
+
+def set_engine_timeouts(asset, values: dict) -> None:
+    """Save the per engine minute overrides on a site from a {engine: minutes}
+    map; an engine with a blank or zero value is left at the default."""
+    from app.core import dast_engines
+
+    clean = {}
+    for name in TIMEOUT_ENGINES:
+        raw = (values or {}).get(name)
+        if raw in (None, ""):
+            continue
+        try:
+            minutes = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if minutes > 0:
+            clean[name] = min(minutes, dast_engines.MAX_TIMEOUT // 60)
+    asset.engine_timeouts = json.dumps(clean) if clean else ""
+
+
 def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
     from app.core import dast_engines, external_auth, external_dast, external_probe
     engines = []
@@ -2356,6 +2400,7 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
             # Links on the front page, then the routes from the code.
             extra = dast_engines.links_in(url, base["telemetry"].get("body_sample") or "")
             extra += [r for r in routes if r not in extra]
+            timeouts = engine_timeouts_for(asset_id)
             for tool in plan:
                 if scan_id in _stopping:
                     engines.append({"tool": tool, "name": dast_engines.ENGINE_NAMES[tool],
@@ -2373,9 +2418,10 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                 # not through the proxy that terminates TLS with its own cert.
                 tool_proxy = proxy if tool == "testssl" else engine_proxy
                 before = scan_proxy.count() if scan_proxy else 0
-                result = dast_engines.run_engine(tool, url, host, profile, workdir,
-                                                 scan_id, paths=extra, auth_args=args,
-                                                 proxy=tool_proxy)
+                result = dast_engines.run_engine(
+                    tool, url, host, profile, workdir, scan_id, paths=extra,
+                    auth_args=args, proxy=tool_proxy,
+                    timeout=dast_engines.effective_timeout(tool, timeouts))
                 # How many requests this tool actually sent, counted at the proxy
                 # (the one place that sees them all).  testssl goes direct, so it
                 # is not counted here.

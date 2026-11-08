@@ -72,6 +72,23 @@ TIMEOUTS = {
     "testssl": 900, "nuclei": 3600, "nikto": 3600, "wapiti": 4 * 3600,
     "sqlmap": 2 * 3600, "dalfox": 1800, "ffuf": 300,
 }
+# The longest a site may set an engine to run.  A ceiling, so a typo cannot
+# leave an engine running for days.
+MAX_TIMEOUT = 8 * 3600
+
+
+def effective_timeout(tool: str, overrides: dict = None) -> int:
+    """How long this engine may run, in seconds.  A per site override (given in
+    minutes) wins over the default, clamped to a sane floor and ceiling."""
+    base = TIMEOUTS.get(tool, 1800)
+    if overrides and tool in (overrides or {}):
+        try:
+            mins = int(overrides[tool])
+        except (TypeError, ValueError):
+            return base
+        if mins > 0:
+            return max(60, min(mins * 60, MAX_TIMEOUT))
+    return base
 
 SEVERITIES = ["critical", "high", "medium", "low", "info"]
 
@@ -183,8 +200,11 @@ def _nuclei_templates(workdir: Path, scan_id: int) -> str:
 
 
 def command(tool: str, url: str, host: str, profile: str, workdir: Path,
-            paths: list = None) -> tuple:
-    """-> (argv, report file) for one engine.  Ported from nextgen-dast."""
+            paths: list = None, hard: int = None) -> tuple:
+    """-> (argv, report file) for one engine.  hard is how long the engine is
+    allowed to run before it is killed; nikto and wapiti are told to stop a
+    little before that so they still write their report."""
+    hard = int(hard or TIMEOUTS.get(tool, 1800))
     exe = binary(tool)
     if tool == "testssl":
         report = workdir / "testssl.json"
@@ -230,7 +250,7 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
         # second and gives up.  Paced, it runs its whole suite within maxtime.
         return ([exe, "-h", url, "-output", str(report), "-Format", "json",
                  "-ask", "no", "-nointeractive", "-Pause", "0.3", "-Tuning", flags,
-                 "-maxtime", "3000s", "-useragent", _ua()], report)
+                 "-maxtime", f"{max(300, hard - 600)}s", "-useragent", _ua()], report)
     if tool == "wapiti":
         report = workdir / "wapiti.json"
         modules = ("sql,timesql,xss,permanentxss,ssrf,xxe,exec,file,csrf,"
@@ -240,7 +260,7 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
         argv = [exe, "-u", url, "-f", "json", "-o", str(report),
                 "--flush-session", "--verbose", "0", "--scope", "subdomain",
                 "-m", modules, "--max-attack-time", "1800",
-                "--max-scan-time", str(TIMEOUTS["wapiti"] - 300), "-A", _ua(),
+                "--max-scan-time", str(max(600, hard - 300)), "-A", _ua(),
                 "--store-session", str(workdir / "wapiti-session"),
                 "--store-config", str(workdir / "wapiti-config")]
         # Routes from the code and paths found by ffuf, as extra places to
@@ -315,7 +335,7 @@ def proxy_args(tool: str, proxy: str) -> list:
 
 def run_engine(tool: str, url: str, host: str, profile: str, workdir: Path,
                scan_id: int, paths: list = None, auth_args: list = None,
-               proxy: str = "") -> dict:
+               proxy: str = "", timeout: int = None) -> dict:
     """Run one engine and read its report.
 
     -> {tool, status, seconds, findings, detail, paths}
@@ -332,13 +352,14 @@ def run_engine(tool: str, url: str, host: str, profile: str, workdir: Path,
         return out
     engine_dir = workdir / tool
     engine_dir.mkdir(parents=True, exist_ok=True)
+    hard = int(timeout) if timeout else TIMEOUTS[tool]
     try:
-        argv, report = command(tool, url, host, profile, engine_dir, paths)
+        argv, report = command(tool, url, host, profile, engine_dir, paths, hard=hard)
         argv = list(argv) + list(auth_args or []) + proxy_args(tool, proxy)
     except Exception as exc:  # noqa: BLE001
         out.update(status="failed", detail=f"{type(exc).__name__}: {exc}"[:300])
         return out
-    code, tail = _run(argv, TIMEOUTS[tool], engine_dir, scan_id)
+    code, tail = _run(argv, hard, engine_dir, scan_id)
     out["seconds"] = int(time.monotonic() - started)
     try:
         parsed = PARSERS[tool](report, url)
@@ -349,7 +370,7 @@ def run_engine(tool: str, url: str, host: str, profile: str, workdir: Path,
         parsed, out["paths"] = parsed
     if code is None:
         out["status"] = "timeout"
-        out["detail"] = f"stopped after {TIMEOUTS[tool] // 60} minutes"
+        out["detail"] = f"stopped after {hard // 60} minutes"
     elif code < 0 or code == -15 or code == 143:
         out["status"] = "stopped"
         out["detail"] = "stopped"

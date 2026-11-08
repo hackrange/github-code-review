@@ -733,6 +733,10 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             scan_profiles=db.query(DastScanProfile).order_by(DastScanProfile.name).all(),
             plans=dast_engines.PLANS, engines=dast_engines.installed(),
             engine_names=dast_engines.ENGINE_NAMES,
+            engine_timeout_engines=external.TIMEOUT_ENGINES,
+            engine_timeouts=external.engine_timeouts_for(asset.id),
+            engine_timeout_defaults={n: dast_engines.TIMEOUTS[n] // 60
+                                     for n in external.TIMEOUT_ENGINES},
             ai_ready=not ai.missing(ai.config(db)), review=review, busy=busy,
             port_names=__import__("app.core.external_probe", fromlist=["x"]).PORT_NAMES,
             categories=__import__("app.core.external_probe", fromlist=["x"]).CATEGORY_NAMES,
@@ -846,6 +850,10 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
                            detail="second account: "
                            + external_auth.KINDS.get(asset.auth_kind_b, "")[:80],
                            source_ip=client_ip(request))
+            if form.get("with_timeouts"):
+                external.set_engine_timeouts(
+                    asset, {name: form.get(f"timeout_{name}")
+                            for name in external.TIMEOUT_ENGINES})
         except ValueError as exc:
             db.rollback()
             return redirect(_back(here, str(exc), "error"))

@@ -2310,6 +2310,11 @@ class ExternalAsset(Base):
     # The scan profile a scan of this site starts with when nobody picks one.
     # Empty means the product's default, quick.
     default_profile = Column(String(16), default="")
+    # How long each scan engine may run on this site, {engine: minutes}, as
+    # JSON.  Empty, or an engine left out, means the product default.  For a big
+    # site where an engine keeps hitting its default limit, this lets it run
+    # longer without changing the default for every site.
+    engine_timeouts = Column(LONG_JSON, default="")
     # The Rapid7 InsightAppSec scan config this site is scanned with, when
     # that integration is on.  A scan there always runs from a config made in
     # Rapid7, which holds the start address, the attack template, the engine
