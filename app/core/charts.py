@@ -171,6 +171,93 @@ def stacked_area(points: list, width: int = 960, height: int = 260,
     }
 
 
+def risk_line(points: list, width: int = 720, height: int = 240,
+              pad_left: int = 40, pad_right: int = 16,
+              pad_top: int = 34, pad_bottom: int = 38) -> dict:
+    """-> a single risk line over a run of scans, already positioned.
+
+    One point per scan, left to right oldest to newest, joined by a line.  Each
+    point carries the scan's id so the page can print it as a small bubble and
+    link it, and the point's worst severity so the dot takes that color.  The
+    bubbles are staggered above and below the line in turn, so a run of close
+    scans does not stack their numbers on top of each other.
+
+    A single scan is drawn as one dot in the middle, not an invisible point,
+    because one reading is a reasonable thing to be looking at.
+
+    Each point needs: value (the weighted risk, higher is worse), id, label (a
+    short x-axis date), date (a full hover date), worst (a severity name or
+    "none"), counts (a severity->n dict), grade (a letter or None).
+    """
+    if not points:
+        return {"empty": True, "width": width, "height": height}
+
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_top - pad_bottom
+
+    values = [max(0, int(p.get("value") or 0)) for p in points]
+    top = _nice_ceiling(max(values) if values else 0)
+    count = len(points)
+
+    def x_at(index):
+        if count == 1:
+            return pad_left + plot_w / 2.0
+        return pad_left + (plot_w * index / (count - 1.0))
+
+    def y_at(value):
+        return pad_top + plot_h - (plot_h * min(value, top) / float(top))
+
+    grid = []
+    for step in range(GRID_STEPS + 1):
+        value = top * step // GRID_STEPS
+        grid.append({"value": value, "y": round(y_at(value), 1)})
+
+    line = " ".join("%.1f,%.1f" % (x_at(i), y_at(values[i])) for i in range(count))
+
+    marks = []
+    for i, point in enumerate(points):
+        x, y = x_at(i), y_at(values[i])
+        label = str(point.get("id") or "")
+        bubble_w = round(len(label) * 6.6 + 12, 1)
+        # Centre the bubble on the point, then keep it inside the frame so the
+        # first and last ones are not clipped at the edges.
+        bx = x - bubble_w / 2.0
+        bx = max(2.0, min(bx, width - bubble_w - 2.0))
+        above = (i % 2 == 0)             # alternate sides to cut overlap
+        by = (y - 26) if above else (y + 8)
+        by = max(2.0, min(by, height - 18.0))
+        marks.append({
+            "x": round(x, 1), "y": round(y, 1),
+            "id": point.get("id"), "value": values[i],
+            "worst": point.get("worst") or "none",
+            "date": point.get("date", ""), "grade": point.get("grade"),
+            "counts": point.get("counts", {}), "label": label,
+            "bubble_x": round(bx, 1), "bubble_y": round(by, 1),
+            "bubble_w": bubble_w, "text_x": round(bx + bubble_w / 2.0, 1),
+            "text_y": round(by + 11.5, 1),
+        })
+
+    every = max(1, count // 8)
+    wanted = [i for i in range(count) if i % every == 0]
+    if count > 1:
+        if wanted and (count - 1 - wanted[-1]) <= max(1, every // 2):
+            wanted.pop()
+        wanted.append(count - 1)
+    labels = []
+    for i in sorted(set(wanted)):
+        anchor = "start" if i == 0 else "end" if i == count - 1 else "middle"
+        labels.append({"x": round(x_at(i), 1), "anchor": anchor,
+                       "text": points[i].get("label", "")})
+
+    return {
+        "empty": False, "width": width, "height": height,
+        "pad_left": pad_left, "pad_top": pad_top,
+        "plot_w": plot_w, "plot_h": plot_h, "top": top,
+        "line": line, "grid": grid, "marks": marks, "labels": labels,
+        "first": values[0], "last": values[-1], "change": values[-1] - values[0],
+    }
+
+
 def heat_levels(rows: list, key: str = "total") -> list:
     """Add a 0 to 4 shade to each row, by where it sits against the busiest.
 

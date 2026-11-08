@@ -753,6 +753,28 @@ table.audit-detail td { padding: .2rem 0; font-size: .9rem; }
 .chart .boundary { stroke: var(--text-faint); stroke-width: 1;
   stroke-dasharray: 3 3; }
 
+/* The risk trend: one line per telemetry source, a dot per scan colored by its
+   worst finding, and a small bubble carrying the scan id above each point. */
+.risk-trend { margin-bottom: .6rem; }
+.risk-trend + .risk-trend { border-top: 1px solid var(--border);
+  padding-top: .5rem; }
+.risk-trend-title { font-weight: 600; font-size: .9rem; margin: .1rem 0 0 .15rem; }
+.risk-trend-note { margin: .15rem .25rem 0; }
+.chart .riskline { fill: none; stroke: var(--info); stroke-width: 2;
+  stroke-linejoin: round; stroke-linecap: round; }
+.chart .dot { stroke: var(--bg); stroke-width: 1.5; }
+.chart .dot.band-critical { fill: var(--bad); opacity: 1; }
+.chart .dot.band-high     { fill: var(--bad); opacity: .72; }
+.chart .dot.band-medium   { fill: var(--warn); opacity: 1; }
+.chart .dot.band-low      { fill: var(--info); opacity: 1; }
+.chart .dot.band-info     { fill: var(--text-faint); opacity: 1; }
+.chart .dot.band-clean    { fill: var(--ok); opacity: 1; }
+.chart a:hover .dot { stroke: var(--text); }
+.chart .bubble { fill: var(--bg); stroke: var(--border-strong); stroke-width: 1; }
+.chart a:hover .bubble { stroke: var(--info); }
+.chart .bubble-text { fill: var(--text-soft); font-size: 10px; font-weight: 600; }
+.chart a:hover .bubble-text { fill: var(--info); }
+
 .legend { display: flex; flex-wrap: wrap; gap: .35rem 1rem;
   padding: .6rem 1rem 0; font-size: .76rem; color: var(--text-soft); }
 .legend .key { display: inline-flex; align-items: center; gap: .35rem; }

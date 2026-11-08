@@ -230,6 +230,47 @@
       </div>
     </div>
 
+    <div class="card" data-live="site-risk-trend">
+      <div class="card-head">Risk trend
+        <span class="faint small" style="font-weight:400">one line per telemetry source, higher is worse</span></div>
+      {% if risk_trends %}
+      <div class="card-body">
+        {% for t in risk_trends %}
+        {% set c = t.chart %}
+        <div class="risk-trend">
+          <div class="risk-trend-title">{{ t.label }}
+            <span class="faint small" style="font-weight:400">{{ c.last }} now{% if c.marks|length > 1 %}, {{ c.change if c.change >= 0 else -c.change }} {{ 'higher' if c.change > 0 else ('lower' if c.change < 0 else 'unchanged') }} than the first of {{ t.count }} scans{% else %}, {{ t.count }} scan{% endif %}</span></div>
+          <div class="chart-wrap">
+            <svg class="chart risk-chart" viewBox="0 0 {{ c.width }} {{ c.height }}"
+                 preserveAspectRatio="xMidYMid meet" role="img"
+                 aria-label="Risk trend for {{ t.label }}">
+              {% for line in c.grid %}
+              <line class="grid" x1="{{ c.pad_left }}" y1="{{ line.y }}" x2="{{ c.width - 12 }}" y2="{{ line.y }}"/>
+              <text class="axis" x="{{ c.pad_left - 6 }}" y="{{ line.y + 4 }}" text-anchor="end">{{ line.value }}</text>
+              {% endfor %}
+              {% if c.marks|length > 1 %}
+              <polyline class="riskline" points="{{ c.line }}"/>
+              {% endif %}
+              {% for m in c.marks %}
+              <a href="{{ base }}/external/{{ asset.id }}/scans/{{ m.id }}">
+                <title>Scan {{ m.id }}{% if m.date %} &middot; {{ m.date }}{% endif %} &middot; risk {{ m.value }}{% for sev in ['critical','high','medium','low','info'] %}{% if m.counts[sev] %} &middot; {{ m.counts[sev] }} {{ sev }}{% endif %}{% endfor %}</title>
+                <circle class="dot band-{{ m.worst if m.worst != 'none' else 'clean' }}" cx="{{ m.x }}" cy="{{ m.y }}" r="4"/>
+                <rect class="bubble" x="{{ m.bubble_x }}" y="{{ m.bubble_y }}" width="{{ m.bubble_w }}" height="16" rx="8"/>
+                <text class="bubble-text" x="{{ m.text_x }}" y="{{ m.text_y }}" text-anchor="middle">{{ m.label }}</text>
+              </a>
+              {% endfor %}
+              {% for label in c.labels %}
+              <text class="axis" x="{{ label.x }}" y="{{ c.height - 8 }}" text-anchor="{{ label.anchor }}">{{ label.text }}</text>
+              {% endfor %}
+            </svg>
+          </div>
+        </div>
+        {% endfor %}
+        <div class="faint small risk-trend-note">Each point is one finished scan, oldest on the left.  Risk weighs findings by severity: critical 25, high 12, medium 5, low 2.  The number in each bubble is the scan id; click a point to open that scan.  A dot takes the color of the scan's worst finding.</div>
+      </div>
+      {% else %}<div class="empty">No finished scan yet, so there is nothing to trend.</div>{% endif %}
+    </div>
+
     <div class="card" data-live="site-scans">
       <div class="card-head">Dynamic scans
         {% if scan_total %}<span class="faint small" style="font-weight:400">{{ scan_total }} in all, newest first</span>{% endif %}</div>

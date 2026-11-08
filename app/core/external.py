@@ -1709,6 +1709,83 @@ def findings_of(scan: ExternalDastScan) -> list:
         return []
 
 
+# The telemetry sources a site's scans can come from, grouped for the risk
+# trend.  The key decides which scans share a chart; the label titles it.
+_SOURCE_ORDER = {"builtin": 0, "insightappsec": 1, "remote": 2, "recorded": 3}
+
+
+def _scan_source(scan: ExternalDastScan) -> tuple:
+    """(group key, shown label) for one scan's telemetry source.  Rapid7 scans
+    come in as source "remote" with the InsightAppSec provider, so they are
+    split off from any other remote server by the provider."""
+    if (scan.provider or "") == "insightappsec":
+        return "insightappsec", "Rapid7 InsightAppSec"
+    if scan.source == "builtin":
+        return "builtin", "Built-in DAST"
+    if scan.source == "remote":
+        return "remote", (scan.server_name or "DAST server")
+    if scan.source == "recorded":
+        return "recorded", "Recorded"
+    return (scan.source or "other"), SCAN_SOURCES.get(
+        scan.source, (scan.source or "Other").title())
+
+
+def scan_risk_value(scan: ExternalDastScan) -> int:
+    """One weighted risk number from a scan's severity counts, so every scan -
+    a full built-in report, a counts-only InsightAppSec import, a recorded one
+    - lands on the same scale.  The weights are the report's own per-finding
+    demerits, so a point here means what a point in the grade means: higher is
+    worse."""
+    from app.core.dast_report import DEMERIT
+
+    return sum(DEMERIT.get(s, 0) * (getattr(scan, s) or 0) for s in SEVERITIES)
+
+
+def _scan_when_ts(scan: ExternalDastScan) -> float:
+    """A sortable timestamp for a scan, by its own date then when it started,
+    tolerant of a naive datetime coming back from SQLite."""
+    when = scan.scanned_at or scan.started_at
+    if when is None:
+        return 0.0
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.timestamp()
+
+
+def risk_trends(db, asset_id: int) -> list:
+    """One risk-over-time line per telemetry source for a site.  A site scanned
+    by both the built-in DAST and Rapid7 gets two charts, one each: the two
+    measure different things and must not be drawn as a single line.  Only
+    finished scans carry final counts, so only those become points."""
+    from app.core import charts
+
+    scans = (db.query(ExternalDastScan)
+             .filter(ExternalDastScan.asset_id == asset_id,
+                     ExternalDastScan.status == "done")
+             .all())
+    groups: dict = {}
+    for s in scans:
+        key, label = _scan_source(s)
+        groups.setdefault(key, {"label": label, "scans": []})["scans"].append(s)
+    out = []
+    for key in sorted(groups, key=lambda k: (_SOURCE_ORDER.get(k, 9), k)):
+        g = groups[key]
+        ordered = sorted(g["scans"], key=lambda s: (_scan_when_ts(s), s.id))
+        points = []
+        for s in ordered:
+            when = s.scanned_at or s.started_at
+            points.append({
+                "value": scan_risk_value(s), "id": s.id,
+                "label": when.strftime("%d %b") if when else "",
+                "date": when.strftime("%Y-%m-%d %H:%M") if when else "",
+                "worst": s.severity or "none",
+                "counts": {sev: getattr(s, sev) or 0 for sev in SEVERITIES},
+            })
+        out.append({"key": key, "label": g["label"],
+                    "count": len(points), "chart": charts.risk_line(points)})
+    return out
+
+
 def _iso(value):
     if value is None:
         return None
