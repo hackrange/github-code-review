@@ -155,6 +155,36 @@ def _linked_repos(db, asset):
             .filter(ExternalAssetRepo.asset_id == asset.id).all())
 
 
+def _diagram_text(db, repo_full_name: str) -> str:
+    """The words in a repository's architecture diagram that say what it handles:
+    its summary, the names and details of its nodes, and its flows.  Empty when
+    there is no diagram.  This is how 'you can estimate from the diagrams' is
+    met: the model already wrote what the app does, and this reads it."""
+    import json
+
+    from app.core.models import RepoDiagram
+
+    row = (db.query(RepoDiagram)
+           .filter(RepoDiagram.repository == repo_full_name).one_or_none())
+    if not row or not row.graph:
+        return ""
+    try:
+        g = json.loads(row.graph)
+    except Exception:  # noqa: BLE001 - a half written diagram is just no signal
+        return ""
+    if not isinstance(g, dict):
+        return ""
+    parts = [str(g.get("title") or ""), str(g.get("summary") or "")]
+    for n in (g.get("nodes") or [])[:40]:
+        if isinstance(n, dict):
+            parts += [str(n.get("label") or ""), str(n.get("detail") or ""),
+                      str(n.get("kind") or "")]
+    for fl in (g.get("flows") or [])[:8]:
+        if isinstance(fl, dict):
+            parts += [str(fl.get("name") or ""), str(fl.get("description") or "")]
+    return " ".join(p for p in parts if p)
+
+
 def profile_for_asset(db, asset) -> dict:
     """Derive the data profile of a DAST asset from the code linked to it.
 
@@ -166,7 +196,8 @@ def profile_for_asset(db, asset) -> dict:
     """
     classes, from_repos = set(), []
     for r in _linked_repos(db, asset):
-        text = " ".join([r.sensitivity or "", r.application_name or "", r.name or ""])
+        text = " ".join([r.sensitivity or "", r.application_name or "", r.name or "",
+                         _diagram_text(db, r.full_name)])
         found = classify(text)
         if found:
             classes |= found

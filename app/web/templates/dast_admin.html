@@ -90,12 +90,20 @@
   </div>
   {% endif %}
 
+  {% if groups %}
+  <div class="rule-group-controls" style="margin:.4rem 0 .2rem">
+    <button class="btn sm" type="button" data-rules-toggle="expand">Expand all</button>
+    <button class="btn sm" type="button" data-rules-toggle="collapse">Collapse all</button>
+    <span class="faint small">Sections start collapsed.</span>
+  </div>
+  {% endif %}
+
   {% for cls, group in groups.items() %}
-  <div class="card">
-    <div class="card-head">
+  <details class="card rule-group">
+    <summary class="card-head" style="cursor:pointer;list-style:revert">
       <span class="head-text">{{ group.label }}</span>
       <span class="faint small">{{ group.rules | length }} rule{{ '' if group.rules | length == 1 else 's' }}</span>
-    </div>
+    </summary>
     <div class="card-body">
       {% if group.rules %}
       <form method="post" action="{{ base }}/dast-admin/rules/bulk" class="small">
@@ -138,7 +146,7 @@
       </form>
       {% else %}<div class="empty">No rules in this class yet.</div>{% endif %}
     </div>
-  </div>
+  </details>
   {% endfor %}
 </section>
 

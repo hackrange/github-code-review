@@ -71,6 +71,17 @@
       function (cb) { cb.checked = chosen.indexOf(cb.value) !== -1; });
   });
 
+  // Expand or collapse every curated-rule class section at once.  The sections
+  // are <details> and start collapsed, so a long list is quiet until opened.
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("[data-rules-toggle]") : null;
+    if (!b) { return; }
+    var open = b.getAttribute("data-rules-toggle") === "expand";
+    Array.prototype.forEach.call(
+      document.querySelectorAll("details.rule-group"),
+      function (d) { d.open = open; });
+  });
+
   // While a rule is being drafted in the background, refresh so it appears
   // under Drafted rules when it is ready, without losing the current tab.
   if (nav && nav.getAttribute("data-drafting") === "1") {

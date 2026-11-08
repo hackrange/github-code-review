@@ -1,0 +1,37 @@
+{
+  "id": "injection-oracle-ebs-reflected-xss",
+  "class": "injection",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Oracle E-Business Suite reflects a script payload (XSS)",
+  "summary": "An Oracle E-Business Suite page echoes a query parameter into the HTML without encoding it, so a crafted link runs script in the visitor's session. That can steal the session or act as the user. The check sends a harmless marker and confirms it comes back unencoded.",
+  "needs": [],
+  "candidate_paths": [
+    "/OA_HTML/jtfLOVInProcess.jsp?AAA=AAAAAAAAAA'\"><svg/onload=alert(2)>",
+    "/OA_HTML/oksAutoRenewalHelp.jsp?thanks='\"><svg/onload=alert(2)>",
+    "/OA_HTML/ieuiMeetingErrorDisplay.jsp?ErrCode='\"><svg/onload=alert(2)>"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "{route}"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and a page that reflects the marker is told apart from a soft 404.",
+    "differential": "status == 200 and \"text/html\" in header(\"content-type\") and body_contains(\"<svg/onload=alert(2)>\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/OA_HTML/jtfLOVInProcess.jsp?AAA=AAAAAAAAAA%27%22%3E%3Csvg/onload=alert(2)%3E' and check the body echoes back <svg/onload=alert(2)> unencoded in an HTML response. Also try oksAutoRenewalHelp.jsp?thanks= and ieuiMeetingErrorDisplay.jsp?ErrCode= with the same marker. Unencoded reflection means the parameter is a cross site scripting sink.",
+  "remediate": "Patch Oracle E-Business Suite to a release that encodes these parameters, and block the affected OA_HTML pages with the Allowed Resources (URL Firewall) framework if they are not needed. Output encode any reflected value.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-79",
+    "owasp": "A03:2021"
+  },
+  "rulesets": [
+    "oracle-ebs"
+  ]
+}
