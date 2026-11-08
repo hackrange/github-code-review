@@ -1,0 +1,34 @@
+{
+  "id": "misconfiguration-spring-actuator-exposed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Spring Boot Actuator is exposed, leaking configuration and secrets",
+  "summary": "A Spring Boot Actuator endpoint is answering without a login. The env and configprops endpoints print the application's configuration, which usually includes database passwords, API keys and other secrets, and the heapdump endpoint hands over a full memory dump that carries every secret the process holds. An outsider who reaches these reads the credentials and can often move on to take over the service. This check only reports it when the response is an actuator payload, not a plain page.",
+  "needs": [],
+  "candidate_paths": [
+    "/actuator",
+    "/actuator/env",
+    "/actuator/configprops",
+    "/actuator/beans",
+    "/actuator/mappings",
+    "/api/actuator",
+    "/api/actuator/env"
+  ],
+  "probe": [
+    { "request": { "method": "GET", "path": "{route}" } }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and an actuator payload is told apart from a soft 404 or a catch-all page.",
+    "differential": "status == 200 and ((body_contains(\"\\\"propertySources\\\"\") and body_contains(\"\\\"activeProfiles\\\"\")) or (body_contains(\"\\\"_links\\\"\") and body_contains(\"\\\"heapdump\\\"\")) or (body_contains(\"\\\"_links\\\"\") and body_contains(\"\\\"self\\\"\") and body_contains(\"\\\"env\\\"\")) or (body_contains(\"\\\"contexts\\\"\") and body_contains(\"\\\"beans\\\"\"))) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/actuator' and read the JSON: an exposed actuator answers with a \"_links\" list that names env, configprops, beans and often heapdump.  Then curl -sk 'https://host/actuator/env' for the configuration (look for \"propertySources\" and \"activeProfiles\"), where database passwords and API keys usually sit.  If 'https://host/actuator/heapdump' downloads a file, the whole process memory, with every secret in it, is readable.",
+  "remediate": "Do not expose actuator to the internet.  Set management.endpoints.web.exposure.include to only the endpoints you need (health and info at most), put the management port behind the firewall or on a separate internal interface, and require authentication on the actuator path.  Rotate any secret that env, configprops or heapdump could have shown, since they must be assumed read.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": ["spring-boot"]
+}
