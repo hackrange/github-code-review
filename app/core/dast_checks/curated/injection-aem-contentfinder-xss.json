@@ -1,0 +1,25 @@
+{
+  "id": "injection-aem-contentfinder-xss",
+  "class": "injection",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Adobe AEM reflects a script payload (ContentFinder XSS)",
+  "summary": "The AEM ContentFinder suggestions endpoint echoes a query parameter into its response without encoding it, so a crafted link runs script in the visitor's session. The check sends a harmless marker and confirms it comes back unencoded.",
+  "needs": [],
+  "candidate_paths": [
+    "/bin/wcm/contentfinder/connector/suggestions.json?query_term=path%3a/&pre=%3Csvg/onload%3Dalert(1)%3E&post=x"
+  ],
+  "probe": [
+    { "request": { "method": "GET", "path": "{route}" } }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and a page that reflects the marker is told apart from it.",
+    "differential": "status == 200 and body_contains(\"<svg/onload=alert(1)>\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/bin/wcm/contentfinder/connector/suggestions.json?query_term=path:/&pre=%3Csvg/onload=alert(1)%3E&post=x' and check the response echoes <svg/onload=alert(1)> unencoded. Unencoded reflection means the parameter is a cross site scripting sink.",
+  "remediate": "Patch AEM and block the ContentFinder endpoints at the dispatcher if they are not needed. Output encode any reflected value. Follow Adobe's AEM dispatcher security checklist.",
+  "references": [],
+  "mappings": { "cwe": "CWE-79", "owasp": "A03:2021" },
+  "rulesets": ["aem"]
+}

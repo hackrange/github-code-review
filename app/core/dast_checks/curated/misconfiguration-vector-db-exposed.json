@@ -1,0 +1,28 @@
+{
+  "id": "misconfiguration-vector-db-exposed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "A vector database is exposed without authentication",
+  "summary": "A vector database (Chroma, Qdrant or Weaviate) is answering without a login. These stores hold the embeddings that encode the organization's documents, so an outsider who reaches it can read the whole knowledge base and write poisoned vectors that steer the AI's answers. The major vector databases ship with no authentication by default.",
+  "needs": [],
+  "candidate_paths": [
+    "/api/v1/heartbeat",
+    "/api/v2/heartbeat",
+    "/collections",
+    "/v1/meta"
+  ],
+  "probe": [
+    { "request": { "method": "GET", "path": "{route}" } }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and the database response is told apart from a soft 404.",
+    "differential": "status == 200 and (body_contains(\"nanosecond heartbeat\") or (body_contains(\"\\\"status\\\":\\\"ok\\\"\") and body_contains(\"\\\"collections\\\"\")) or (body_contains(\"\\\"hostname\\\"\") and body_contains(\"\\\"modules\\\"\"))) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/api/v1/heartbeat' (Chroma answers with a nanosecond heartbeat), 'https://host/collections' (Qdrant answers status ok with its collections), or 'https://host/v1/meta' (Weaviate answers with its hostname and modules). If any answers without a login, the vector store is open to anyone.",
+  "remediate": "Turn on authentication (an API key for Qdrant, Chroma's token auth, Weaviate's API key or OIDC), bind the database to localhost or a trusted range, and firewall its port off the internet. Treat the embedded corpus as readable and poisonable until it is closed.",
+  "references": [],
+  "mappings": { "cwe": "CWE-306", "owasp": "A05:2021" },
+  "rulesets": ["vector-db"]
+}

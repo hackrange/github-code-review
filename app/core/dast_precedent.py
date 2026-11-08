@@ -174,9 +174,25 @@ PRECEDENTS = [
                      "critical AEM patches.",
     },
     {
+        "key": "vector-db-exposure",
+        "match": re.compile(r"vector (data)?base|chromadb|\bchroma\b|qdrant|weaviate|"
+                            r"embeddings|nanosecond heartbeat", re.I),
+        "ref": "CWE-306; OWASP A05:2021",
+        "abuse": "An attacker reads the stored embeddings, which encode the "
+                 "organization's documents, exfiltrating the knowledge base, and "
+                 "writes poisoned vectors so the AI built on it returns attacker "
+                 "chosen content.",
+        "precedent": "Unauthenticated Chroma, Qdrant and Weaviate instances are "
+                     "routinely found exposed on the internet; the major vector "
+                     "stores default to no authentication, so the embedded corpus "
+                     "and the retrieval answers built on it are open to read and "
+                     "to poison.",
+    },
+    {
         "key": "ai-tool-exposure",
         "match": re.compile(r"open (self-)?registration|registrationenabled|librechat|"
-                            r"ollama|open webui|llmjack|exposed ai|model api key", re.I),
+                            r"ollama|open webui|llmjack|exposed ai|model api key|"
+                            r"jupyter|notebook server", re.I),
         "ref": "CWE-1188; LLMjacking (Sysdig, 2024)",
         "abuse": "An attacker reaches the exposed AI tool, creates an account or uses an "
                  "open endpoint, and runs their own work on the organization's paid model "

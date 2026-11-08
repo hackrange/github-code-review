@@ -1,0 +1,28 @@
+{
+  "id": "misconfiguration-jupyter-exposed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Jupyter notebook server is exposed without a token",
+  "summary": "A Jupyter server is answering its authenticated API without a token or password, so anyone who can reach it can open a notebook, run code and read files on the host.  An open Jupyter server is arbitrary code execution on the machine it runs on.",
+  "needs": [],
+  "candidate_paths": [
+    "/api/contents",
+    "/api/contents/",
+    "/api/kernelspecs",
+    "/api/sessions"
+  ],
+  "probe": [
+    { "request": { "method": "GET", "path": "{route}" } }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and an open API response is told apart from a soft 404.",
+    "differential": "status == 200 and (body_contains(\"\\\"kernelspecs\\\"\") or (body_contains(\"\\\"type\\\":\\\"directory\\\"\") and body_contains(\"\\\"writable\\\"\")) or body_contains(\"\\\"execution_state\\\"\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/api/contents' (or /api/kernelspecs) with no token.  A token protected server answers 403; an open one answers 200 with the contents listing (type directory, writable) or the kernel specs.  Either means the server runs code for anyone who can reach it.",
+  "remediate": "Set a strong token or password, bind the server to localhost or a trusted range (c.NotebookApp.ip and c.NotebookApp.token), and firewall it off the internet.  Never run a notebook server open to the network.",
+  "references": [],
+  "mappings": { "cwe": "CWE-306", "owasp": "A05:2021" },
+  "rulesets": ["jupyter"]
+}
