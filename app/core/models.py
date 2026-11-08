@@ -151,6 +151,11 @@ class User(Base):
     # from then on a different subject carrying the same name is refused rather
     # than inheriting the account and its role.  Empty on local accounts.
     oidc_subject = Column(String(255), default="", index=True)
+    # The issuer the subject belongs to.  A subject is only unique within its
+    # issuer, so the account is matched on the pair: changing the trusted
+    # provider cannot make a new provider's matching subject land on an old
+    # account.  Empty on local accounts and on accounts bound before this.
+    oidc_issuer = Column(String(255), default="")
 
     # Hold the role against the provider.
     #

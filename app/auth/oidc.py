@@ -187,6 +187,7 @@ async def complete_login(code: str, state: str, source_ip: str = "",
 
     return {
         "subject": claims.get("sub"),
+        "issuer": claims.get("iss", ""),
         "username": (claims.get("preferred_username") or claims.get("email")
                      or claims.get("sub")),
         "email": claims.get("email", ""),
@@ -313,16 +314,17 @@ def sync_user(session, profile: dict) -> User:
     if not username:
         raise OIDCError("the provider did not tell us who you are")
     subject = (profile.get("subject") or "").strip()
+    issuer = (profile.get("issuer") or "").strip()
 
-    # Who this is comes from the provider's immutable subject, not the name,
-    # which the provider can rename or reuse.  Match on the subject first; the
-    # account follows it even if the name changed.  Fall back to the name only
-    # to adopt an account that has no subject recorded yet (the first sign in
-    # after this landed), or when no subject was sent at all.
+    # Who this is comes from the provider's immutable subject, within its issuer,
+    # not the name, which the provider can rename or reuse.  Match on the pair
+    # first; the account follows it even if the name changed.  Fall back to the
+    # name only to adopt an account that has no subject recorded yet (the first
+    # sign in after this landed), or when no subject was sent at all.
     user = None
-    if subject:
+    if subject and issuer:
         user = (session.query(User)
-                .filter(User.oidc_subject == subject,
+                .filter(User.oidc_subject == subject, User.oidc_issuer == issuer,
                         User.source == AuthSource.OIDC).one_or_none())
     by_name = session.query(User).filter(User.username == username).one_or_none()
     matched_by_name = user is None
@@ -344,11 +346,14 @@ def sync_user(session, profile: dict) -> User:
             f"there is already a local account called {username}. "
             "An administrator needs to sort that out.")
 
-    # The name matched an SSO account already bound to a different subject: a
-    # different identity wearing the same name.  Refuse, so one person's name
-    # can never inherit another's account, access or pinned role.
+    # The name matched an SSO account already bound to a different identity (a
+    # different subject, or the same subject from a different issuer): a
+    # different person wearing the same name.  Refuse, so one person's name can
+    # never inherit another's account, access or pinned role.
     if (subject and matched_by_name and user is not None
-            and (user.oidc_subject or "") and user.oidc_subject != subject):
+            and (user.oidc_subject or user.oidc_issuer)
+            and (user.oidc_subject != subject
+                 or (user.oidc_issuer or "") != issuer)):
         raise OIDCError(
             "that name belongs to a different single sign on identity. "
             "An administrator needs to sort that out.")
@@ -373,10 +378,11 @@ def sync_user(session, profile: dict) -> User:
         user = User(username=username, source=AuthSource.OIDC)
         session.add(user)
 
-    # Record the subject the first time we see it (trust on first use), so every
-    # later sign in is matched on it and a colliding name is refused above.
-    if subject and not (user.oidc_subject or ""):
+    # Record the identity the first time we see it (trust on first use), so
+    # every later sign in is matched on it and a colliding name is refused above.
+    if subject and issuer and not (user.oidc_subject or ""):
         user.oidc_subject = subject
+        user.oidc_issuer = issuer
 
     user.email = (profile.get("email") or "")[:255]
     user.display_name = (profile.get("full_name") or "")[:255]

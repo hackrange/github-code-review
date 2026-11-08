@@ -101,7 +101,7 @@ class Client:
         started = time.monotonic()
         got = external_probe.fetch(url, method=method, headers=sent,
                                    allow_private=self.allow_private, body=body,
-                                   follow=follow)
+                                   follow=follow, allowed_domains=self.domains)
         got["seconds"] = time.monotonic() - started
         got.setdefault("body", "")
         return got

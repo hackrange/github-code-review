@@ -473,7 +473,7 @@ def _read_cert(info: dict, der: bytes) -> None:
 def fetch(url: str, method: str = "GET", headers: dict = None,
           follow: bool = True, allow_private: bool = False,
           body_limit: int = BODY_LIMIT, timeout: float = HTTP_TIMEOUT,
-          body: str = None) -> dict:
+          body: str = None, allowed_domains=None) -> dict:
     """One request, the way a browser would make it.
 
     -> {status, url, final_url, headers, set_cookies, body, redirects, error}
@@ -481,6 +481,13 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
     Redirects are followed by hand, at most five, and every hop is checked
     against private addresses unless those are allowed, so a site cannot
     bounce this server into the network it sits in.
+
+    Credentials never ride a redirect to another place.  Any Authorization,
+    Cookie or custom header the caller set is dropped the moment a redirect
+    changes the host or downgrades https to http, so a site that answers with a
+    redirect to somewhere else cannot collect the session the scan signed in
+    with.  When allowed_domains is given, a redirect off those domains is not
+    followed at all, so a scan cannot be bounced out of its own scope.
 
     body is the raw request content for a POST, such as a JSON GraphQL query.
     It is dropped if a redirect turns the request into a GET, so a body never
@@ -496,6 +503,14 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
     sent.setdefault("User-Agent", user_agent())
     sent.setdefault("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
     content = body.encode("utf-8") if isinstance(body, str) else body
+    # The request's own origin, and the headers that are safe to carry anywhere.
+    # Everything else the caller set (Authorization, Cookie, API keys) belongs
+    # only to this origin and is dropped if a redirect leaves it.
+    _start = urlparse(url)
+    start_host = (_start.hostname or "").lower()
+    start_https = _start.scheme == "https"
+    safe_headers = {"User-Agent": sent.get("User-Agent", user_agent()),
+                    "Accept": sent.get("Accept", "*/*")}
     try:
         proxy = current_proxy()
         with httpx.Client(verify=False, timeout=timeout, follow_redirects=False,
@@ -527,7 +542,24 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
                     out["final_url"] = current
                     location = resp.headers.get("location")
                     if follow and location and 300 <= resp.status_code < 400:
-                        current = urljoin(current, location)
+                        nxt = urljoin(current, location)
+                        nxt_parsed = urlparse(nxt)
+                        nxt_host = (nxt_parsed.hostname or "").lower()
+                        # Do not follow a redirect out of the allowed scope, so a
+                        # scan stays on the company's own sites.
+                        if allowed_domains is not None:
+                            from app.core.dast_checks import scope
+                            if not scope.allowed(nxt_host, allowed_domains):
+                                out["redirects"].append(nxt)
+                                return out
+                        # Drop credentials the moment the origin changes or the
+                        # connection downgrades to http: they belong to the first
+                        # origin only and must not be handed to another host.
+                        if (nxt_host != start_host
+                                or (start_https and nxt_parsed.scheme == "http")):
+                            sent = dict(safe_headers)
+                            content = None
+                        current = nxt
                         out["redirects"].append(current)
                         if method == "POST":
                             method = "GET"
