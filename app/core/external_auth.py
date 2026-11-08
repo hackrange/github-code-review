@@ -76,7 +76,8 @@ def describe(asset, slot: str = "a") -> dict:
     set_at = getattr(asset, at_attr, None)
     out = {"kind": data["kind"], "kind_name": KINDS.get(data["kind"], data["kind"]),
            "set_by": getattr(asset, by_attr, "") or "",
-           "set_at": set_at.isoformat() if set_at else None}
+           "set_at": set_at.isoformat() if set_at else None,
+           "intent": data.get("intent", "")}
     if data["kind"] == "header":
         out["header_name"] = data.get("header_name", "")
     elif data["kind"] == "cookie":
@@ -157,6 +158,16 @@ def save(asset, kind: str, values: dict, actor: str, parent_domain: str = "",
                 raise ValueError(f"{what} is the name of the form field, such as email.")
             if field:
                 data[key] = field
+    # What this login is meant to be able to do, and not do.  Free text, not a
+    # secret: it is the intended authorization policy for the account, which the
+    # compare checks and the review weigh a cross account read against.  Kept
+    # across a change of sign in kind, since it describes the account, not how
+    # it signs in.
+    prior = load(asset, slot)
+    new_intent = str(values.get("intent") or "").strip()[:2000]
+    intent = new_intent or prior.get("intent", "")
+    if intent:
+        data["intent"] = intent
     setattr(asset, kind_attr, kind)
     setattr(asset, data_attr, _encrypt(data))
     setattr(asset, by_attr, (actor or "")[:120])

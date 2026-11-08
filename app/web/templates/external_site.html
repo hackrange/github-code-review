@@ -428,6 +428,10 @@
           <label>User name field <input type="text" name="auth_username_field" maxlength="100" value="{{ auth.username_field if auth and auth.username_field else '' }}" placeholder="found on the page"></label>
           <label>Password field <input type="text" name="auth_password_field" maxlength="100" value="{{ auth.password_field if auth and auth.password_field else '' }}" placeholder="found on the page"></label>
         </div>
+        <label>What this login should and should not do
+          <textarea name="auth_intent" rows="2" maxlength="2000"
+            placeholder="e.g. a standard user: should see only its own orders and profile; should not see other customers or any admin page.">{{ auth.intent if auth and auth.intent else '' }}</textarea>
+          <span class="faint small">Optional.  Used by the compare checks and the AI review to tell a real access violation from expected, shared access.</span></label>
         <div class="faint small">Use a test account.  A signed in scan can change what that user can change.</div>
       </details>
       <details class="hand-fields" {{ 'open' if auth_b }}>
@@ -455,6 +459,10 @@
           <label>User name field <input type="text" name="auth_b_username_field" maxlength="100" value="{{ auth_b.username_field if auth_b and auth_b.username_field else '' }}" placeholder="found on the page"></label>
           <label>Password field <input type="text" name="auth_b_password_field" maxlength="100" value="{{ auth_b.password_field if auth_b and auth_b.password_field else '' }}" placeholder="found on the page"></label>
         </div>
+        <label>What the second account should and should not do
+          <textarea name="auth_b_intent" rows="2" maxlength="2000"
+            placeholder="e.g. a read-only auditor: may view all records but must not edit; or a different standard user that owns different data than the first.">{{ auth_b.intent if auth_b and auth_b.intent else '' }}</textarea>
+          <span class="faint small">The compare checks and the AI review weigh a cross-account read against this, so an auditor that is meant to see everything is not reported as a bug.</span></label>
         <div class="faint small">Use a second test account that owns different data than the first.  That is what lets the compare checks prove one account can reach the other's objects.</div>
       </details>
       <details class="hand-fields">

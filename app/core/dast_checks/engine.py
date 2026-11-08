@@ -604,7 +604,14 @@ def _run_two_account(spec: dict, ctx: dict, domains, budget: Budget) -> list:
                 break
         if confirmations == retest and confirmations > 0 and resp_a is not None:
             f = _finding(spec, a, resp_a, url)
-            f["evidence"] = _two_account_evidence(url, resp_a, resp_b, resp_anon)
+            intent_a = str(ctx.get("intent_a") or "")
+            intent_b = str(ctx.get("intent_b") or "")
+            if intent_a:
+                f["intent_a"] = intent_a
+            if intent_b:
+                f["intent_b"] = intent_b
+            f["evidence"] = _two_account_evidence(url, resp_a, resp_b, resp_anon,
+                                                  intent_a, intent_b)
             f["reproduce"] = _two_account_reproduce(url)
             # The proof is two pictures: what each account sees at this address,
             # captured later with each account's session.  proof_url is what to
@@ -626,7 +633,7 @@ def _two_account_reproduce(url) -> str:
             f"(it is turned away).  This is how the finding was confirmed.")
 
 
-def _two_account_evidence(url, resp_a, resp_b, resp_anon) -> str:
+def _two_account_evidence(url, resp_a, resp_b, resp_anon, intent_a="", intent_b="") -> str:
     """Spell out what the two account check actually saw, so the finding is
     specific: the address, the status each account got, whether the first
     account saw the same page as the second, and whether a signed out visitor
@@ -646,11 +653,22 @@ def _two_account_evidence(url, resp_a, resp_b, resp_anon) -> str:
                     + (", so the page is not simply public." if an_st != 200
                        else ", so a signed out visitor sees it too."))
     bits.append("Confirmed and re-tested.")
-    bits.append("Validate this before acting on it: if the two accounts are meant "
-                "to share this access, for example a read only auditor role that "
-                "can see everything, it is expected; re-categorise its severity or "
-                "mark it a false positive.")
-    return " ".join(bits)[:1100]
+    if intent_a or intent_b:
+        if intent_a:
+            bits.append(f"The first account is described as: {intent_a}")
+        if intent_b:
+            bits.append(f"The second account is described as: {intent_b}")
+        bits.append("Judge the finding against those descriptions: if the first "
+                    "account reaching this object is within what it is meant to do "
+                    "(for example a read only auditor that may see everything), it "
+                    "is expected, so re-categorise it or mark it a false positive; "
+                    "if it is not, it is a real broken access control.")
+    else:
+        bits.append("Validate this before acting on it: if the two accounts are "
+                    "meant to share this access, for example a read only auditor "
+                    "role that can see everything, it is expected; re-categorise "
+                    "its severity or mark it a false positive.")
+    return " ".join(bits)[:1600]
 
 
 # Alias labels for the amplification probe.  Valid GraphQL names, ours so they

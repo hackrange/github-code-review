@@ -489,12 +489,12 @@ def _bulk_changes(form) -> dict:
         changes["auth"] = (str(form.get("auth_kind") or ""), {
             key: form.get(f"auth_{key}") or "" for key in (
                 "header_name", "header_value", "cookie", "login_url", "username",
-                "password", "username_field", "password_field")})
+                "password", "username_field", "password_field", "intent")})
     if on("auth_b"):
         changes["auth_b"] = (str(form.get("auth_b_kind") or ""), {
             key: form.get(f"auth_b_{key}") or "" for key in (
                 "header_name", "header_value", "cookie", "login_url", "username",
-                "password", "username_field", "password_field")})
+                "password", "username_field", "password_field", "intent")})
     if on("repositories"):
         changes["repositories"] = (str(form.get("repositories_mode") or "add"),
                                    external.parse_picks(form.getlist("pick")))

@@ -2244,6 +2244,10 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
            "code_routes": list(wb.get("routes") or []),
            "headers": headers or None, "second_headers": second_headers,
            "reauth_a": reauth_a, "reauth_b": reauth_b,
+           # What each account is meant to be able to do, so a cross account read
+           # can be judged against the intended policy, not just reported.
+           "intent_a": (auth_a or {}).get("intent", ""),
+           "intent_b": (auth_b or {}).get("intent", ""),
            "budget": 60, "oob": oob}
     from collections import Counter
 
@@ -3766,6 +3770,15 @@ header advice, reflected input that is encoded, and template matches on a soft \
 results, so use it only when the evidence shows it is noise.  When unsure, say \
 needs_review.  A finding about an exposed secret stays whatever you say.
 
+For a cross account, broken access finding, judge it against what each account \
+is meant to do (account_a_is_meant_to and account_b_is_meant_to, when given): \
+if the first account reaching the second account's object is within its stated \
+role, for example a read only auditor that may see everything, call it \
+likely_false_positive and say which part of the stated role makes it expected; \
+if reaching that object is outside its stated role, it is likely_real, a true \
+broken access control.  With no stated role, say needs_review and that a person \
+must confirm the intended access.
+
 2) Write "why" as a short risk narrative for an engineer, three to five \
 sentences, in this order:
  - what can go wrong: what an attacker gains if the finding is real, and, when \
@@ -3992,8 +4005,10 @@ def triage(scan_id: int, actor: str = "") -> None:
             "dast_findings": [{"id": f.get("id") or f["key"], "tool": f.get("tool"),
                                "severity": f.get("severity"), "title": _clean(f.get("title")),
                                "url": _clean(f.get("url"))[:300],
-                               "evidence": _clean(f.get("evidence"))[:300],
+                               "evidence": _clean(f.get("evidence"))[:600],
                                "cwe": f.get("cwe"),
+                               "account_a_is_meant_to": f.get("intent_a") or "",
+                               "account_b_is_meant_to": f.get("intent_b") or "",
                                "computed_likelihood": f.get("likelihood_label"),
                                "computed_impact": f.get("breachability_label"),
                                "computed_risk": f.get("risk"),
