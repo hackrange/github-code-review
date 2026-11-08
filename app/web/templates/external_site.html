@@ -266,7 +266,7 @@
           </div>
         </div>
         {% endfor %}
-        <div class="faint small risk-trend-note">Each point is one finished scan, oldest on the left.  Risk weighs findings by severity: critical 25, high 12, medium 5, low 2.  The number in each bubble is the scan id; click a point to open that scan.  A dot takes the color of the scan's worst finding.</div>
+        <div class="faint small risk-trend-note">Each point is one finished scan, oldest on the left.  Risk weighs findings by severity: critical 25, high 12, medium 5, low 2.  The number in each bubble is that scan's risk; click a point to open the scan behind it.  A dot takes the color of the scan's worst finding.</div>
       </div>
       {% else %}<div class="empty">No finished scan yet, so there is nothing to trend.</div>{% endif %}
     </div>

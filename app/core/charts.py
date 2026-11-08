@@ -217,7 +217,10 @@ def risk_line(points: list, width: int = 720, height: int = 240,
     marks = []
     for i, point in enumerate(points):
         x, y = x_at(i), y_at(values[i])
-        label = str(point.get("id") or "")
+        # The bubble shows the risk value itself, so the trend reads without
+        # tracing back to the axis; the scan it belongs to is still the link
+        # and is named in the point's hover title.
+        label = str(values[i])
         bubble_w = round(len(label) * 6.6 + 12, 1)
         # Centre the bubble on the point, then keep it inside the frame so the
         # first and last ones are not clipped at the edges.
