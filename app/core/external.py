@@ -2009,6 +2009,8 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
             for branch in (l.get("branches") or [l["repo"].default_branch or ""]):
                 plan.append((l["repo"].id, l["full_name"], l["repo"].connection or "", branch))
         plan = plan[:MAX_WHITEBOX_REPOS]
+        adhoc = {"git": asset.adhoc_git_url or "", "archive": asset.adhoc_archive or "",
+                 "asset_id": asset_id} if asset is not None else {}
     out = {"repos": [], "routes": [], "by_repo": {}, "sinks": []}
     for repo_id, name, connection, branch in plan:
         if scan_id in _stopping:
@@ -2046,6 +2048,32 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
                 if row is None:
                     db.add(ExternalAssetRepo(asset_id=asset_id, repository_id=repo_id,
                                              source="code", added_by="scan"))
+    # An ad-hoc code source the person pointed at this site: a git URL or an
+    # uploaded archive, read the same way, when the code is not a mapped repo.
+    if (adhoc.get("git") or adhoc.get("archive")) and scan_id not in _stopping:
+        from app.core import dast_adhoc
+
+        label = (adhoc.get("git") or f"uploaded {adhoc.get('archive')} archive")[:200]
+        _update(scan_id, step="reading the ad-hoc code source")
+        entry = {"repository": f"ad-hoc: {label}", "branch": "", "routes": 0,
+                 "host_in_code": [], "error": ""}
+        try:
+            with dast_adhoc.checkout(adhoc) as (root, why):
+                if root is None:
+                    entry["error"] = why or "could not read it"
+                else:
+                    got = dast_whitebox.read(root, host)
+                    entry["routes"] = len(got["routes"])
+                    entry["host_in_code"] = got["host_files"]
+                    for route in got["routes"]:
+                        if route not in out["routes"]:
+                            out["routes"].append(route)
+                    for sink in got.get("sinks") or []:
+                        if len(out["sinks"]) < MAX_WHITEBOX_SINKS:
+                            out["sinks"].append(dict(sink, repository=label))
+        except Exception as exc:  # noqa: BLE001 - the scan carries on without it
+            entry["error"] = f"{type(exc).__name__}: {exc}"[:200]
+        out["repos"].append(entry)
     out["routes"] = out["routes"][:300]
     return out
 

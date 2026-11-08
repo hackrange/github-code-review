@@ -2315,6 +2315,12 @@ class ExternalAsset(Base):
     # site where an engine keeps hitting its default limit, this lets it run
     # longer without changing the default for every site.
     engine_timeouts = Column(LONG_JSON, default="")
+    # An ad-hoc code source for the whitebox read, when the code behind this
+    # site is not one of the scanned repositories: a git URL to clone, or an
+    # uploaded archive (adhoc_archive holds its kind, zip or tgz; the file is in
+    # the data volume).  Used only when set.
+    adhoc_git_url = Column(String(1024), default="")
+    adhoc_archive = Column(String(16), default="")
     # The Rapid7 InsightAppSec scan config this site is scanned with, when
     # that integration is on.  A scan there always runs from a config made in
     # Rapid7, which holds the start address, the attack template, the engine

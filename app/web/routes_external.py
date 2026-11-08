@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.core import external, rbac
+from app.core import dast_adhoc as dast_adhoc_mod
 from app.core import external_auth as external_auth_mod
 from app.core import external_schedule
 from app.core.models import ExternalScanSchedule
@@ -714,6 +715,7 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             fields=external.fields_of(asset), security_headers=external.SECURITY_HEADERS,
             auth=external_auth_mod.describe(asset),
             auth_b=external_auth_mod.describe(asset, "b"),
+            adhoc=dast_adhoc_mod.describe(asset),
             auth_kinds=external_auth_mod.KINDS,
             site_profile=external.profile_for(asset), proxy_label=external.proxy_shown(asset),
             has_shot=external.shot_path(asset.id).is_file(),
@@ -828,7 +830,8 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
                 external_auth.save(asset, form.get("auth_kind") or "", {
                     key: form.get(f"auth_{key}") or "" for key in (
                         "header_name", "header_value", "cookie", "login_url",
-                        "username", "password", "username_field", "password_field")},
+                        "username", "password", "username_field", "password_field",
+                        "intent")},
                     user.username, asset.parent_domain)
                 if (asset.auth_kind or "") != before_kind or any(
                         form.get(f"auth_{k}") for k in ("header_value", "cookie", "password")):
@@ -842,7 +845,8 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
                 external_auth.save(asset, form.get("auth_b_kind") or "", {
                     key: form.get(f"auth_b_{key}") or "" for key in (
                         "header_name", "header_value", "cookie", "login_url",
-                        "username", "password", "username_field", "password_field")},
+                        "username", "password", "username_field", "password_field",
+                        "intent")},
                     user.username, asset.parent_domain, slot="b")
                 if (asset.auth_kind_b or "") != before_b or any(
                         form.get(f"auth_b_{k}") for k in ("header_value", "cookie", "password")):
@@ -854,6 +858,24 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
                 external.set_engine_timeouts(
                     asset, {name: form.get(f"timeout_{name}")
                             for name in external.TIMEOUT_ENGINES})
+            if form.get("with_adhoc"):
+                from app.core import dast_adhoc
+
+                if _checked(form, "adhoc_clear"):
+                    dast_adhoc.clear_archive(asset.id)
+                    asset.adhoc_git_url = ""
+                    asset.adhoc_archive = ""
+                else:
+                    upload = form.get("adhoc_archive")
+                    git = str(form.get("adhoc_git_url") or "").strip()
+                    if upload is not None and getattr(upload, "filename", ""):
+                        asset.adhoc_archive = await dast_adhoc.save_upload(asset.id, upload)
+                        asset.adhoc_git_url = ""
+                    elif git:
+                        asset.adhoc_git_url = dast_adhoc.validate_git_url(git)
+                        if asset.adhoc_git_url:
+                            dast_adhoc.clear_archive(asset.id)
+                            asset.adhoc_archive = ""
         except ValueError as exc:
             db.rollback()
             return redirect(_back(here, str(exc), "error"))

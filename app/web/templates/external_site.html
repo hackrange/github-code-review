@@ -369,7 +369,7 @@
 {% endif %}
 
 <div class="modal-backdrop" id="edit-modal" hidden>
-  <div class="modal wide"><form method="post" action="{{ base }}/external/{{ asset.id }}/edit">
+  <div class="modal wide"><form method="post" action="{{ base }}/external/{{ asset.id }}/edit" enctype="multipart/form-data">
     <div class="modal-head">Edit {{ asset.host }} <button type="button" class="modal-close" data-close-modal>&times;</button></div>
     <div class="modal-body">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -464,6 +464,18 @@
             placeholder="e.g. a read-only auditor: may view all records but must not edit; or a different standard user that owns different data than the first.">{{ auth_b.intent if auth_b and auth_b.intent else '' }}</textarea>
           <span class="faint small">The compare checks and the AI review weigh a cross-account read against this, so an auditor that is meant to see everything is not reported as a bug.</span></label>
         <div class="faint small">Use a second test account that owns different data than the first.  That is what lets the compare checks prove one account can reach the other's objects.</div>
+      </details>
+      <details class="hand-fields" {{ 'open' if adhoc }}>
+        <summary><strong>Ad-hoc code source</strong> <span class="faint small">point the scan at the code behind this site when it is not one of the scanned repositories, so the routes and sinks still guide the scan.  Optional.</span></summary>
+        <input type="hidden" name="with_adhoc" value="1">
+        {% if adhoc %}<div class="small" style="margin:.3rem 0">Now using: <span class="mono">{{ adhoc.label }}</span>
+          <label class="check" style="display:inline-block;margin-left:.5rem"><input type="checkbox" name="adhoc_clear" value="1"> clear it</label></div>{% endif %}
+        <label>Public git URL to clone
+          <input type="url" name="adhoc_git_url" maxlength="1000" value="{{ adhoc.git_url if adhoc else '' }}" placeholder="https://github.com/org/repo.git">
+          <span class="faint small">An https URL to a public host, with no user name or password in it.</span></label>
+        <label>or upload a repository archive
+          <input type="file" name="adhoc_archive" accept=".zip,.tar.gz,.tgz">
+          <span class="faint small">A .zip or .tar.gz of the code, up to 200 MB.  Use this for private or internal code.  An upload replaces the git URL.</span></label>
       </details>
       <details class="hand-fields">
         <summary><strong>Telemetry by hand</strong> <span class="faint small">for a site the scan cannot reach, or to correct it.  A value here wins over the scan's until it is cleared.</span></summary>
