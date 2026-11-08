@@ -1,0 +1,32 @@
+{
+  "id": "access-control-graphql-batch-amplification",
+  "class": "access-control",
+  "safety": "neutral",
+  "neutral_justification": "Sends GraphQL only: an introspection read of the schema, a login mutation with made up credentials for an account that cannot exist (at a reserved example.invalid address), and an anonymous account-exists query about a made up address. It authenticates nobody, writes nothing, and touches no real account.",
+  "severity_floor": "high",
+  "title": "GraphQL endpoint allows request amplification (/graphql)",
+  "summary": "The endpoint lets one request carry many aliased operations, so a single POST becomes many login attempts. That bypasses per request login rate limiting and WAF counting, and combined with the account-exists oracle it makes credential guessing practical from the open internet.",
+  "needs": [],
+  "probe": [
+    {
+      "graphql": {
+        "path": "/graphql"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A single, un-aliased query, so the normal single-operation answer is known. The handler fires only when the server runs every aliased operation in one request, which a single query cannot show.",
+    "differential": "status_in(200, 400)",
+    "retest": 2
+  },
+  "reproduce": "Dump the mutations with an introspection POST, then send one POST that aliases generateCustomerToken three times with made up credentials and confirm all three run in the single response.",
+  "remediate": "Turn introspection off in production, cap query complexity and the number of aliased operations per request (this kills the amplification), rate limit generateCustomerToken and isEmailAvailable by IP at the edge, and make isEmailAvailable return a generic answer so it stops being an account-exists oracle.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-770",
+    "owasp": "API4:2023"
+  },
+  "rulesets": [
+    "graphql"
+  ]
+}

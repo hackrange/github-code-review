@@ -2194,23 +2194,31 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
                               "Send certificate warnings to")
         put("external.cert_alert_to", "" if cert_to == "-" else cert_to[:500])
 
-        from app.core import insightappsec as _ias
+        # InsightAppSec is configured on the DAST admin Integrations tab, which
+        # posts to its own handler.  This general settings form does not carry
+        # the InsightAppSec fields, so writing them here from an absent checkbox
+        # would turn the integration off, and blank its key, every single time
+        # the page is saved for something unrelated.  Only touch these when the
+        # form actually submitted them.
+        ias_on = False
+        if any(str(k).startswith("ias.") for k in form.keys()):
+            from app.core import insightappsec as _ias
 
-        region = text("ias.region", 10).lower() or "us"
-        if region not in _ias.REGIONS:
-            raise HTTPException(status_code=400,
-                                detail="Pick an Insight platform region for InsightAppSec.")
-        put("ias.region", region)
-        put("ias.api_key", str(form.get("ias.api_key", "")).strip()[:500])
-        put("ias.max_concurrent", clean_int(form.get("ias.max_concurrent", 2) or 2,
-                                            "InsightAppSec scans at once", low=1, high=20))
-        ias_on = _checked(form, "ias.enabled")
-        if ias_on and not store.get(db, "ias.api_key") and not str(
-                form.get("ias.api_key", "")).strip():
-            raise HTTPException(status_code=400, detail=(
-                "Give the InsightAppSec API key before turning it on.  The setup "
-                "guide on the Integrations tab says how to make one."))
-        put("ias.enabled", ias_on)
+            region = text("ias.region", 10).lower() or "us"
+            if region not in _ias.REGIONS:
+                raise HTTPException(status_code=400,
+                                    detail="Pick an Insight platform region for InsightAppSec.")
+            put("ias.region", region)
+            put("ias.api_key", str(form.get("ias.api_key", "")).strip()[:500])
+            put("ias.max_concurrent", clean_int(form.get("ias.max_concurrent", 2) or 2,
+                                                "InsightAppSec scans at once", low=1, high=20))
+            ias_on = _checked(form, "ias.enabled")
+            if ias_on and not store.get(db, "ias.api_key") and not str(
+                    form.get("ias.api_key", "")).strip():
+                raise HTTPException(status_code=400, detail=(
+                    "Give the InsightAppSec API key before turning it on.  The setup "
+                    "guide on the Integrations tab says how to make one."))
+            put("ias.enabled", ias_on)
 
         put("security.force_https", _checked(form, "security.force_https"))
         put("security.trusted_proxies", _csv_list(text("security.trusted_proxies")))

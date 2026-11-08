@@ -472,7 +472,8 @@ def _read_cert(info: dict, der: bytes) -> None:
 
 def fetch(url: str, method: str = "GET", headers: dict = None,
           follow: bool = True, allow_private: bool = False,
-          body_limit: int = BODY_LIMIT, timeout: float = HTTP_TIMEOUT) -> dict:
+          body_limit: int = BODY_LIMIT, timeout: float = HTTP_TIMEOUT,
+          body: str = None) -> dict:
     """One request, the way a browser would make it.
 
     -> {status, url, final_url, headers, set_cookies, body, redirects, error}
@@ -480,6 +481,10 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
     Redirects are followed by hand, at most five, and every hop is checked
     against private addresses unless those are allowed, so a site cannot
     bounce this server into the network it sits in.
+
+    body is the raw request content for a POST, such as a JSON GraphQL query.
+    It is dropped if a redirect turns the request into a GET, so a body never
+    rides along to a different method or place.
     """
     import httpx
     from urllib.parse import urljoin, urlparse
@@ -490,6 +495,7 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
     sent = dict(headers or {})
     sent.setdefault("User-Agent", user_agent())
     sent.setdefault("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+    content = body.encode("utf-8") if isinstance(body, str) else body
     try:
         proxy = current_proxy()
         with httpx.Client(verify=False, timeout=timeout, follow_redirects=False,
@@ -499,7 +505,8 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
                 if not allow_private and not _host_is_public(host):
                     out["error"] = f"{host} resolves to a private address, not followed"
                     return out
-                with client.stream(method, current, headers=sent) as resp:
+                with client.stream(method, current, headers=sent,
+                                   content=content) as resp:
                     body = b""
                     if method != "HEAD":
                         for chunk in resp.iter_bytes():
@@ -524,6 +531,7 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
                         out["redirects"].append(current)
                         if method == "POST":
                             method = "GET"
+                            content = None
                         continue
                 return out
     except Exception as exc:  # noqa: BLE001 - no answer is a result

@@ -81,7 +81,7 @@ class Client:
         return method in spec_mod.ALL_METHODS
 
     def request(self, method: str, path: str, query: dict = None,
-                headers: dict = None) -> dict:
+                headers: dict = None, body: str = None) -> dict:
         from app.core import external_probe
 
         method = (method or "GET").upper()
@@ -100,7 +100,7 @@ class Client:
         sent.update(headers or {})
         started = time.monotonic()
         got = external_probe.fetch(url, method=method, headers=sent,
-                                   allow_private=self.allow_private)
+                                   allow_private=self.allow_private, body=body)
         got["seconds"] = time.monotonic() - started
         got.setdefault("body", "")
         return got
@@ -331,6 +331,20 @@ def run_rule(spec: dict, ctx: dict) -> dict:
     if any(isinstance(s, dict) and s.get("jwt") for s in spec.get("probe") or []):
         try:
             out["findings"] = _run_jwt(spec, ctx, domains, budget)
+        except Refused as exc:
+            out["status"], out["detail"] = "refused", str(exc)
+        except Exception as exc:  # noqa: BLE001
+            out["status"], out["detail"] = "error", f"{type(exc).__name__}: {exc}"[:200]
+        return out
+
+    # A GraphQL rule drives its own probe: it reads the schema, then proves the
+    # endpoint lets one request carry many aliased operations, which turns a
+    # single POST into many login attempts.  POST with a JSON body, made up
+    # credentials for an account that cannot exist, so it authenticates nobody
+    # and changes nothing.
+    if any(isinstance(s, dict) and s.get("graphql") for s in spec.get("probe") or []):
+        try:
+            out["findings"] = _run_graphql(spec, ctx, domains, budget)
         except Refused as exc:
             out["status"], out["detail"] = "refused", str(exc)
         except Exception as exc:  # noqa: BLE001
@@ -632,6 +646,256 @@ def _two_account_evidence(url, resp_a, resp_b, resp_anon) -> str:
                 "can see everything, it is expected; re-categorise its severity or "
                 "mark it a false positive.")
     return " ".join(bits)[:1100]
+
+
+# Alias labels for the amplification probe.  Valid GraphQL names, ours so they
+# cannot collide with a real field.
+_GQL_LABELS = ["gcr0", "gcr1", "gcr2"]
+
+
+def _gql_post(client: Client, path: str, query: str) -> dict:
+    """One GraphQL request: POST the query as JSON, the way a client would."""
+    return client.request(
+        "POST", path, body=json.dumps({"query": query}),
+        headers={"Content-Type": "application/json", "Accept": "application/json"})
+
+
+def _gql_json(resp: dict):
+    try:
+        return json.loads((resp or {}).get("body") or "")
+    except Exception:  # noqa: BLE001 - a non JSON answer is just not GraphQL
+        return None
+
+
+def _gql_is_graphql(resp: dict) -> bool:
+    """True when the endpoint answers like GraphQL, so a non GraphQL 200 that
+    happens to sit at /graphql never leads anywhere."""
+    data = _gql_json(resp)
+    if isinstance(data, dict) and ("data" in data or "errors" in data):
+        return True
+    body = ((resp or {}).get("body") or "").lower()
+    return ("must provide query" in body or "syntax error" in body
+            or "graphql" in body and "query" in body)
+
+
+def _gql_alias_hits(resp: dict, labels) -> int:
+    """How many of the aliased operations the server actually ran.
+
+    An executed alias shows up either as a key in data or, for a failed login,
+    as the path of its own error.  Counting these is how the amplification is
+    proved: three in, three run, so one request made three attempts.
+    """
+    data = _gql_json(resp)
+    body = (resp or {}).get("body") or ""
+    if not isinstance(data, dict):
+        return sum(1 for lbl in labels if f'"{lbl}"' in body)
+    d = data.get("data") if isinstance(data.get("data"), dict) else {}
+    errs = data.get("errors") if isinstance(data.get("errors"), list) else []
+    hits = 0
+    for lbl in labels:
+        if lbl in d:
+            hits += 1
+        elif any(isinstance(e, dict) and lbl in (e.get("path") or []) for e in errs):
+            hits += 1
+    return hits
+
+
+def _gql_schema_names(client: Client, path: str):
+    """The query and mutation field names the schema advertises, when
+    introspection is on.  Empty lists when it is off."""
+    q = "{__schema{queryType{fields{name}} mutationType{fields{name}}}}"
+    data = _gql_json(_gql_post(client, path, q))
+    queries, mutations = [], []
+    try:
+        sch = data["data"]["__schema"]
+        queries = [f["name"] for f in (sch.get("queryType") or {}).get("fields") or []]
+        mutations = [f["name"] for f in (sch.get("mutationType") or {}).get("fields") or []]
+    except Exception:  # noqa: BLE001 - introspection off or a different shape
+        pass
+    return queries, mutations
+
+
+def _run_graphql(spec: dict, ctx: dict, domains, budget: Budget) -> list:
+    """Read the schema, then prove request amplification.  -> findings.
+
+    Non destructive: it reads the schema, it tries a login mutation with made
+    up credentials for an account that cannot exist, and it asks an anonymous
+    account-exists oracle about a made up address.  Nothing is written and no
+    real account is touched.  The finding fires only when the server runs every
+    aliased operation in one request, which is the amplification itself.
+    """
+    base_url = ctx.get("base_url") or ""
+    allow_private = bool(ctx.get("allow_private"))
+    step = next((s.get("graphql") for s in spec.get("probe") or []
+                 if isinstance(s, dict) and s.get("graphql")), {}) or {}
+    path = str(step.get("path") or "/graphql")
+    client = Client(base_url, domains, spec.get("safety", "neutral"), budget,
+                    allow_private, ctx.get("headers"))
+    retest = max(1, int((spec.get("confirm") or {}).get("retest") or 1))
+
+    # Is this really GraphQL, and is introspection on?
+    intro = _gql_post(client, path, "{__schema{queryType{name}}}")
+    if not _gql_is_graphql(intro):
+        return []
+    body0 = intro.get("body") or ""
+    introspection_on = (intro.get("status") == 200 and "queryType" in body0
+                        and '"errors"' not in body0)
+
+    queries, mutations = ([], [])
+    if introspection_on:
+        queries, mutations = _gql_schema_names(client, path)
+    has_token = "generateCustomerToken" in mutations
+    has_oracle = "isEmailAvailable" in queries
+
+    # Does the account-exists oracle answer an anonymous caller?  Harmless: a
+    # made up address at a reserved domain no account can own.  Self gating: if
+    # the field does not exist the server just says so, and this stays false.
+    probe_email = f"gcr-{secrets.token_hex(4)}@example.invalid"
+    oq = _gql_post(client, path,
+                   '{gcr0:isEmailAvailable(email:"%s"){is_email_available}}' % probe_email)
+    oracle_live = (oq.get("status") == 200
+                   and "is_email_available" in (oq.get("body") or ""))
+    has_oracle = has_oracle or oracle_live
+
+    def amp_confirmed(build):
+        resp = None
+        for _ in range(retest):
+            resp = build()
+            if (resp.get("status") in (200, 400)
+                    and _gql_alias_hits(resp, _GQL_LABELS) == len(_GQL_LABELS)):
+                continue
+            return False, resp
+        return True, resp
+
+    def login_query():
+        parts = []
+        for lbl in _GQL_LABELS:
+            em = f"gcr-{secrets.token_hex(5)}@example.invalid"
+            pw = f"gcr-not-a-real-password-{secrets.token_hex(5)}"
+            parts.append('%s: generateCustomerToken(email:"%s", password:"%s"){token}'
+                         % (lbl, em, pw))
+        return _gql_post(client, path, "mutation{ %s }" % " ".join(parts))
+
+    def generic_query():
+        parts = ["%s: __typename" % lbl for lbl in _GQL_LABELS]
+        return _gql_post(client, path, "{ %s }" % " ".join(parts))
+
+    # The login mutation is the serious case: a single request becomes many
+    # password guesses.  Self gating: if the field does not exist the aliases do
+    # not run and nothing fires.  Otherwise fall back to proving the generic
+    # aliasing primitive, which still amplifies any field.
+    login_amp, login_resp = amp_confirmed(login_query)
+    generic_amp, generic_resp = (False, None)
+    if not login_amp:
+        generic_amp, generic_resp = amp_confirmed(generic_query)
+
+    if login_amp:
+        severity, amp_resp = "high", login_resp
+    elif generic_amp and introspection_on:
+        severity, amp_resp = "medium", generic_resp
+    else:
+        return []
+
+    f = _finding(spec, client, amp_resp or intro, path)
+    f["severity"] = severity
+    if login_amp:
+        f["title"] = f"GraphQL turns one request into many login attempts ({path})"
+    f["evidence"] = _graphql_evidence(path, introspection_on, mutations, has_token,
+                                      has_oracle, oracle_live, login_amp)
+    f["reproduce"] = _graphql_reproduce(base_url, path, login_amp, has_oracle)
+    return [f]
+
+
+def _graphql_evidence(path, introspection_on, mutations, has_token, has_oracle,
+                      oracle_live, login_amp) -> str:
+    """Spell out the chain the scan actually walked, strongest fact first, then
+    the escalation table so the severity is justified by what was seen."""
+    bits = []
+    if introspection_on:
+        bits.append(f"The endpoint at {path} is GraphQL and introspection is on, "
+                    f"so anyone can read the whole schema: every type, field and "
+                    f"mutation.")
+        if mutations:
+            count = f"{len(mutations)} mutation" + ("" if len(mutations) == 1 else "s")
+            named = ", including generateCustomerToken (the login mutation)" if has_token else ""
+            bits.append(f"It advertises {count}{named}.")
+    else:
+        bits.append(f"The endpoint at {path} is GraphQL.")
+    if login_amp:
+        bits.append("Amplification confirmed: one POST carried three aliased "
+                    "generateCustomerToken operations and the server ran all "
+                    "three in that single request, returning three separate "
+                    "results.  So one request is three login attempts, and at "
+                    "scale the per request login rate limit and WAF counting are "
+                    "bypassed.")
+    else:
+        bits.append("Amplification confirmed: one request carried three aliased "
+                    "operations and the server ran all three, so a single request "
+                    "can be multiplied into many.  No login mutation was confirmed "
+                    "here, so this is the amplification primitive on its own.")
+    if oracle_live:
+        bits.append("The isEmailAvailable oracle answered an anonymous request, "
+                    "so which customer emails exist can be enumerated without "
+                    "signing in, then fed into the amplified guessing.")
+    elif has_oracle:
+        bits.append("The schema also exposes isEmailAvailable, an account exists "
+                    "oracle.")
+    bits.append("")
+    bits.append("Why this is serious, each primitive alone then chained:")
+    bits.append("  Introspection on (schema readable)        info")
+    if has_oracle:
+        bits.append("  isEmailAvailable account enumeration       medium")
+    if login_amp:
+        bits.append("  Aliasing bypasses login rate limiting     high")
+        bits.append("  Chained, on a site open to the world      account takeover, customer PII")
+    else:
+        bits.append("  Aliasing multiplies any field per request medium (brute force, resource exhaustion)")
+    bits.append("")
+    bits.append("Validate before acting: if this endpoint is not reachable from "
+                "the internet, or the amplified fields are rate limited at the "
+                "edge in production, re-categorise it or mark it a false "
+                "positive.  Staging hosts sometimes relax these.")
+    return "\n".join(bits)[:1800]
+
+
+def _graphql_reproduce(base_url, path, login_amp, has_oracle) -> str:
+    """The curls a developer runs to see it, strongest first.  Made up
+    credentials and a reserved address, so running them attacks nobody."""
+    from urllib.parse import urljoin
+    url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
+    steps = ["Three requests, strongest first.  Run them from outside the "
+             "company network.  The credentials below are made up on purpose.",
+             "",
+             "1) Dump the write surface (every mutation an anonymous caller can reach):",
+             f"curl -s '{url}' -H 'Content-Type: application/json' \\",
+             "  -d '{\"query\":\"{ __schema { mutationType { fields { name } } } }\"}' "
+             "| python3 -m json.tool",
+             ""]
+    if login_amp:
+        steps += [
+            "2) Prove amplification: one POST is three login attempts.  All three "
+            "run, so a single request becomes N password guesses the login rate "
+            "limit never sees (keep it at three, this is proof, not an attack):",
+            f"curl -s '{url}' -H 'Content-Type: application/json' \\",
+            "  -d '{\"query\":\"mutation { a: generateCustomerToken(email:\\\"poc@example.invalid\\\",password:\\\"wrong1\\\"){token} "
+            "b: generateCustomerToken(email:\\\"poc@example.invalid\\\",password:\\\"wrong2\\\"){token} "
+            "c: generateCustomerToken(email:\\\"poc@example.invalid\\\",password:\\\"wrong3\\\"){token} }\"}' "
+            "| python3 -m json.tool"]
+    else:
+        steps += [
+            "2) Prove amplification: one POST carries three aliased operations and "
+            "all three run, so any field can be multiplied in a single request:",
+            f"curl -s '{url}' -H 'Content-Type: application/json' \\",
+            "  -d '{\"query\":\"{ a: __typename b: __typename c: __typename }\"}' "
+            "| python3 -m json.tool"]
+    if has_oracle:
+        steps += [
+            "",
+            "3) Enumerate which accounts exist (anonymous), to aim step 2:",
+            f"curl -s '{url}' -H 'Content-Type: application/json' \\",
+            "  -d '{\"query\":\"{ isEmailAvailable(email:\\\"known@customer.com\\\"){ is_email_available } }\"}' "
+            "| python3 -m json.tool"]
+    return "\n".join(steps)
 
 
 def _run_probe(spec: dict, client: Client, route: str, oob_value: str) -> dict:
