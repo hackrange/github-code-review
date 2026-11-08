@@ -1,0 +1,34 @@
+{
+  "id": "business-logic-host-header-injection",
+  "class": "business-logic",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "The site trusts an attacker's Host header",
+  "summary": "The site takes the Host header from the request and uses it to build links or redirects, instead of its own configured name. An attacker who sets the Host can poison a password reset email so its link points at their site, or poison a shared cache. The check sends a made-up host and sees it come back.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/",
+        "headers": {
+          "Host": "canary-host-injection.example"
+        },
+        "follow": false
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A normal request with the site's own Host, so the made-up host coming back is clearly a reflection of the attacker's value.",
+    "differential": "reflected(\"canary-host-injection.example\") or \"canary-host-injection.example\" in header(\"location\")",
+    "retest": 2
+  },
+  "reproduce": "curl -sk -i 'https://host/' -H 'Host: canary-host-injection.example' and check whether canary-host-injection.example comes back in the response body or in a Location header. If it does, the site is building links or redirects from the attacker-controlled Host, which enables password reset poisoning.",
+  "remediate": "Build absolute links and redirects from a fixed, configured host name, not from the Host header. Reject requests whose Host is not an expected value at the web tier.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-644",
+    "owasp": "A03:2021"
+  },
+  "rulesets": []
+}

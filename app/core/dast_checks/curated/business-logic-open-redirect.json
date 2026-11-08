@@ -1,0 +1,41 @@
+{
+  "id": "business-logic-open-redirect",
+  "class": "business-logic",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Open redirect sends visitors to any site",
+  "summary": "A redirect parameter sends the visitor wherever its value points, including an outside site. Attackers use that to make a phishing link look like it belongs to this company, and to steal OAuth tokens by redirecting the sign-in response to a site they control.",
+  "needs": [],
+  "candidate_paths": [
+    "/?next=https://canary-openredirect.example/",
+    "/?url=https://canary-openredirect.example/",
+    "/?redirect=https://canary-openredirect.example/",
+    "/?return=https://canary-openredirect.example/",
+    "/?returnUrl=https://canary-openredirect.example/",
+    "/?dest=https://canary-openredirect.example/",
+    "/login?next=https://canary-openredirect.example/",
+    "/logout?next=https://canary-openredirect.example/"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "{route}",
+        "follow": false
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and a real redirect to the foreign host is told apart from it.",
+    "differential": "status_in(301, 302, 303, 307, 308) and \"canary-openredirect.example\" in header(\"location\")",
+    "retest": 2
+  },
+  "reproduce": "curl -sk -i 'https://host/?next=https://canary-openredirect.example/' and check the response is a 30x whose Location header points at canary-openredirect.example. Try the other parameter names (url, redirect, return, returnUrl, dest) and the login and logout paths. A redirect to an outside host means the parameter is an open redirect.",
+  "remediate": "Do not redirect to a location taken from the request. Allow only relative paths, or an explicit allow list of hosts, and reject or ignore an absolute URL to another site.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-601",
+    "owasp": "A01:2021"
+  },
+  "rulesets": []
+}

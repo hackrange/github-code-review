@@ -123,6 +123,42 @@ PRECEDENTS = [
                      "sites.",
     },
     {
+        "key": "cors",
+        "match": re.compile(r"\bcors\b|cross.origin resource sharing|"
+                            r"access-control-allow-origin|CWE-?942\b", re.I),
+        "ref": "CWE-942; OWASP A05:2021",
+        "abuse": "A malicious site that a signed-in user visits makes a credentialed "
+                 "cross-origin request to this site and reads the authenticated "
+                 "response, taking the user's own data.",
+        "precedent": "A permissive CORS policy that reflects any origin with "
+                     "credentials is a well documented cause of cross-origin data "
+                     "theft, recognised in OWASP guidance and reported in many "
+                     "public disclosures.",
+    },
+    {
+        "key": "open-redirect",
+        "match": re.compile(r"open redirect|unvalidated redirect|CWE-?601\b", re.I),
+        "ref": "CWE-601; OWASP A01:2021",
+        "abuse": "The attacker crafts a link on this trusted site that bounces the "
+                 "visitor to a site they control, for phishing or to capture an "
+                 "OAuth token from a sign-in response.",
+        "precedent": "Open redirects are a standard phishing and OAuth token theft "
+                     "technique, documented in the OWASP Top 10 and used repeatedly "
+                     "against sign-in flows.",
+    },
+    {
+        "key": "host-header-injection",
+        "match": re.compile(r"host header|host injection|password reset poison|"
+                            r"cache poison|CWE-?644\b", re.I),
+        "ref": "CWE-644",
+        "abuse": "The attacker sets the Host header so the site builds a password "
+                 "reset link, or a cached page, that points at the attacker's "
+                 "server, then waits for a victim to use it.",
+        "precedent": "Host header injection that poisons password reset emails and "
+                     "web caches is a documented technique, described by security "
+                     "researchers and in OWASP guidance.",
+    },
+    {
         "key": "data-exposure",
         "match": re.compile(r"directory listing|directory index|exposed backup|"
                             r"\.bak\b|\.sql\b|open to the world|publicly readable|"

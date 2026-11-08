@@ -81,7 +81,7 @@ class Client:
         return method in spec_mod.ALL_METHODS
 
     def request(self, method: str, path: str, query: dict = None,
-                headers: dict = None, body: str = None) -> dict:
+                headers: dict = None, body: str = None, follow: bool = True) -> dict:
         from app.core import external_probe
 
         method = (method or "GET").upper()
@@ -100,7 +100,8 @@ class Client:
         sent.update(headers or {})
         started = time.monotonic()
         got = external_probe.fetch(url, method=method, headers=sent,
-                                   allow_private=self.allow_private, body=body)
+                                   allow_private=self.allow_private, body=body,
+                                   follow=follow)
         got["seconds"] = time.monotonic() - started
         got.setdefault("body", "")
         return got
@@ -916,7 +917,8 @@ def _run_probe(spec: dict, client: Client, route: str, oob_value: str) -> dict:
         query = {k: _expand(str(v), route, oob_value)
                  for k, v in (req.get("query") or {}).items()}
         last = client.request(req.get("method") or "GET", path, query=query,
-                              headers=req.get("headers") or {})
+                              headers=req.get("headers") or {},
+                              follow=bool(req.get("follow", True)))
     return last
 
 
