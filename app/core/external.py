@@ -3036,6 +3036,11 @@ def code_behind(db, user, scan: ExternalDastScan, asset: ExternalAsset) -> dict:
         if rid not in visible:
             continue
         link = links.get(rid) or {}
+        # A repository un-pinned since the scan is no longer linked, so it drops
+        # out of here at once: the code section then shows straight away that it
+        # is gone, which is the plain sign that the un-pin took.
+        if not link.get("linked"):
+            continue
         src = link.get("source") or ""
         total = int(l.get("routes_total") or 0)
         reached = int(l.get("routes_reached") or 0)
