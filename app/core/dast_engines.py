@@ -263,10 +263,24 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
                 "--max-scan-time", str(max(600, hard - 300)), "-A", _ua(),
                 "--store-session", str(workdir / "wapiti-session"),
                 "--store-config", str(workdir / "wapiti-config")]
+        # Keep the crawler out of the endless, low value URL spaces an online
+        # store generates, so it spends its time on real pages instead.
+        excludes = _crawl_excludes(url)
+        for bad in excludes:
+            argv += ["-x", bad]
         # Routes from the code and paths found by ffuf, as extra places to
-        # start crawling from.  The crawler cannot reach an unlinked route.
-        for extra in _same_site(url, paths)[:60]:
+        # start crawling from.  The crawler cannot reach an unlinked route.  A
+        # discovered path that is itself one of the excluded traps is dropped,
+        # so it is never handed back in as a starting point.
+        trap_prefixes = [bad[:-1] for bad in excludes]  # drop the trailing '*'
+        seeded = 0
+        for extra in _same_site(url, paths):
+            if any(extra.startswith(px) for px in trap_prefixes):
+                continue
             argv += ["-s", extra]
+            seeded += 1
+            if seeded >= 60:
+                break
         return argv, report
     if tool == "sqlmap":
         out = workdir / "sqlmap"
@@ -308,6 +322,40 @@ def _same_site(url: str, paths) -> list:
         if parsed.scheme == base.scheme and parsed.netloc == base.netloc and item not in out:
             out.append(item)
     return out
+
+
+# URL spaces an online store, Magento above all, builds one of per product, so
+# a crawler never reaches the end of them, together with the ones that throw
+# the scanner's own session away.  None is real attack surface: the add to cart
+# and login "referer" links only re encode the page you came from, so the same
+# product turns into a different URL on every page it is listed on; the review
+# post address needs a signed in session; and logout just ends the session the
+# scan is using.  Left in, wapiti spends its whole budget walking thousands of
+# near identical links.  Measured against a populated Magento catalog that was
+# four hours, cut to minutes once these were excluded, while every real page is
+# still crawled.  A site that is not Magento serves none of these paths, so the
+# patterns match nothing and are safe to pass every time.  Each is a full
+# address ending in a wildcard, because wapiti matches an exclude against the
+# whole URL from start to end.
+_CRAWL_TRAPS = (
+    "/checkout/cart/add/*",
+    "/checkout/cart/delete/*",
+    "/review/product/post/*",
+    "/customer/account/login/referer/*",
+    "/customer/account/logout*",
+    "/customer/section/load*",
+    "/wishlist/*",
+    "/catalog/product_compare/*",
+)
+
+
+def _crawl_excludes(url: str) -> list:
+    """Absolute wildcard URLs for the crawl traps above, rooted at the target."""
+    from urllib.parse import urlparse
+
+    p = urlparse(url)
+    base = f"{p.scheme}://{p.netloc}"
+    return [base + tail for tail in _CRAWL_TRAPS]
 
 
 def links_in(url: str, body: str) -> list:
