@@ -1,0 +1,27 @@
+{
+  "id": "misconfiguration-aem-dev-consoles-exposed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Adobe AEM developer consoles are exposed",
+  "summary": "An AEM developer console is reachable without signing in: CRXDE Lite, the CRX Package Manager or the Content Explorer. These give a browser into the whole content repository and its packages, which an attacker uses to read and map everything the site holds.",
+  "needs": [],
+  "candidate_paths": [
+    "/crx/de/index.jsp",
+    "/crx/packmgr/index.jsp",
+    "/crx/explorer/browser/index.jsp"
+  ],
+  "probe": [
+    { "request": { "method": "GET", "path": "{route}" } }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and the console page is told apart from a soft 404.",
+    "differential": "status == 200 and (body_contains(\"CRXDE Lite\") or body_contains(\"CRX Package Manager\") or body_contains(\"Content Explorer\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/crx/de/index.jsp' (and /crx/packmgr/index.jsp) and check the page loads a console: CRXDE Lite, CRX Package Manager or Content Explorer in the body. If it does, the developer tools are reachable without authentication.",
+  "remediate": "Block /crx, /system/console and the other developer paths at the dispatcher so they return 404 from the public site, and keep them to the author tier behind authentication. Follow Adobe's AEM dispatcher security checklist.",
+  "references": [],
+  "mappings": { "cwe": "CWE-284", "owasp": "A05:2021" },
+  "rulesets": ["aem"]
+}

@@ -159,6 +159,21 @@ PRECEDENTS = [
                      "researchers and in OWASP guidance.",
     },
     {
+        "key": "aem-exposure",
+        "match": re.compile(r"\baem\b|adobe experience manager|querybuilder|"
+                            r"jcr:primarytype|crxde|defaultget|felix console|"
+                            r"/crx/|/system/console", re.I),
+        "ref": "CWE-200; OWASP A05:2021",
+        "abuse": "An attacker queries the content repository or opens a developer console "
+                 "with no login, reading internal pages, user and group lists and "
+                 "configuration, and from the OSGi console can reach code execution.",
+        "precedent": "Misconfigured Adobe Experience Manager dispatchers have repeatedly "
+                     "exposed internal repository content to unauthenticated visitors; "
+                     "researchers have pulled megabytes of internal data from open "
+                     "QueryBuilder and default GET servlet endpoints, and Adobe has issued "
+                     "critical AEM patches.",
+    },
+    {
         "key": "ai-tool-exposure",
         "match": re.compile(r"open (self-)?registration|registrationenabled|librechat|"
                             r"ollama|open webui|llmjack|exposed ai|model api key", re.I),

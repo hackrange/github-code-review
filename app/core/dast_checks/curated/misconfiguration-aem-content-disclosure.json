@@ -1,0 +1,31 @@
+{
+  "id": "misconfiguration-aem-content-disclosure",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Adobe AEM leaks repository content (DefaultGetServlet)",
+  "summary": "Adobe Experience Manager is serving its content repository as JSON to anyone, through the default GET servlet. An unauthenticated visitor can read internal pages, user and group nodes and configuration by adding a .json selector to a path, which is how large amounts of internal data get pulled from an AEM site.",
+  "needs": [],
+  "candidate_paths": [
+    "/.json",
+    "/.1.json",
+    "/etc.json",
+    "/var.json",
+    "/apps.json",
+    "/home.json",
+    "/.children.json"
+  ],
+  "probe": [
+    { "request": { "method": "GET", "path": "{route}" } }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and the JSON content dump is told apart from a soft 404.",
+    "differential": "status == 200 and body_contains(\"jcr:primaryType\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/.json' (and /etc.json, /.1.json, /home.json) and check the response is JSON containing jcr:primaryType, which is a node of the AEM content repository. If it returns, the default GET servlet is exposing content to anyone.",
+  "remediate": "Block these paths and selectors at the dispatcher so they return 404: the .json, .1.json and .children.json selectors on repository paths, and the obfuscated variants. Follow Adobe's AEM dispatcher security checklist.",
+  "references": [],
+  "mappings": { "cwe": "CWE-200", "owasp": "A05:2021" },
+  "rulesets": ["aem"]
+}

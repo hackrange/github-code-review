@@ -1,0 +1,27 @@
+{
+  "id": "misconfiguration-aem-querybuilder-exposed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Adobe AEM QueryBuilder servlet is exposed",
+  "summary": "The AEM QueryBuilder JSON servlet answers an unauthenticated visitor, so anyone who can reach the site can query the whole content repository, including user and group nodes. It is a common way to pull internal content out of an AEM site and it bypasses many dispatcher filters.",
+  "needs": [],
+  "candidate_paths": [
+    "/bin/querybuilder.json",
+    "///bin///querybuilder.json",
+    "/bin/querybuilder.json.1.json"
+  ],
+  "probe": [
+    { "request": { "method": "GET", "path": "{route}" } }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and the query result is told apart from a soft 404.",
+    "differential": "status == 200 and body_contains(\"\\\"hits\\\"\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/bin/querybuilder.json' and check the response is JSON with a hits array. If it answers, the QueryBuilder servlet is open and the whole repository can be queried, for example /bin/querybuilder.json?path=/home/users&type=rep:User.",
+  "remediate": "Deny /bin/querybuilder* at the dispatcher so it returns 404, including the obfuscated and double-slash variants. Follow Adobe's AEM dispatcher security checklist.",
+  "references": [],
+  "mappings": { "cwe": "CWE-200", "owasp": "A05:2021" },
+  "rulesets": ["aem"]
+}

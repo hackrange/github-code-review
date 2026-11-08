@@ -1,0 +1,22 @@
+{
+  "id": "misconfiguration-aem-felix-console-exposed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Adobe AEM Felix console is exposed without authentication",
+  "summary": "The AEM OSGi (Felix) management console answers without a login. It lists and controls the bundles the server runs, which is full administrative reach over the application and a path to code execution.",
+  "needs": [],
+  "probe": [
+    { "request": { "method": "GET", "path": "/system/console/bundles" } }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and the console page is told apart from a soft 404.",
+    "differential": "status == 200 and body_contains(\"Web Console - Bundles\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/system/console/bundles' with no credentials and check the body contains 'Web Console - Bundles'. If it does, the OSGi management console is open to anyone.",
+  "remediate": "Block /system/console at the dispatcher so it returns 404 from the public site, and never expose the OSGi console on an internet facing tier. Change the default admin password. Follow Adobe's AEM dispatcher security checklist.",
+  "references": [],
+  "mappings": { "cwe": "CWE-284", "owasp": "A05:2021" },
+  "rulesets": ["aem"]
+}

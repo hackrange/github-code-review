@@ -1,0 +1,22 @@
+{
+  "id": "misconfiguration-magento-version-disclosed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "low",
+  "title": "Magento discloses its version",
+  "summary": "The Magento version endpoint returns the platform edition and version to anyone. On its own this is low, but it tells an attacker which version the store runs, which is the first thing they use to pick a matching exploit, so it matters most on a store that is behind on patches.",
+  "needs": [],
+  "probe": [
+    { "request": { "method": "GET", "path": "/magento_version" } }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and the version line is told apart from a soft 404.",
+    "differential": "status == 200 and body_contains(\"Magento/\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/magento_version' and check the body is a line like 'Magento/2.4 (Community)'. If it returns, the store is disclosing its version.",
+  "remediate": "Disable the version endpoint: php bin/magento module:disable Magento_Version, or block /magento_version at the web tier. Keep the platform patched.",
+  "references": [],
+  "mappings": { "cwe": "CWE-200", "owasp": "A05:2021" },
+  "rulesets": ["magento"]
+}
