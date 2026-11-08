@@ -355,9 +355,13 @@ def run_rule(spec: dict, ctx: dict) -> dict:
                     allow_private=bool(ctx.get("allow_private")),
                     headers=ctx.get("headers"))
 
-    # A rule with {route} in its probe is aimed at the discovered routes; a
-    # fixed-path rule is run once, not repeated against every route.
-    if _uses_route(spec):
+    # A rule with {route} in its probe is aimed somewhere: at a fixed list the
+    # rule itself carries (candidate_paths, for a check with several known paths
+    # to try, firing on the first that confirms), or at the discovered routes.
+    # A rule with no {route} is run once against its fixed path.
+    if _uses_route(spec) and spec.get("candidate_paths"):
+        routes = [str(p) for p in spec["candidate_paths"]][:MAX_ROUTES]
+    elif _uses_route(spec):
         routes = list(ctx.get("code_routes") or [])[:MAX_ROUTES]
     else:
         routes = [""]
