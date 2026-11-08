@@ -1898,8 +1898,11 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
             exclusions_here = [r for r in exclusions_store.covering(db, row)
                                if r.id in mine]
 
+        from app.core import external as external_mod
+
         context = _shared(db, user)
         context.update(active_page="findings", f=row, waiver=waiver,
+                       dast_confirmed=external_mod.dast_confirmations_for(db, row),
                        exclusions_here=exclusions_here,
                        can_revoke=rbac.can(user, "waiver.revoke"),
                        host_name=host_name,

@@ -4104,6 +4104,60 @@ def removed_of(scan: ExternalDastScan) -> list:
         if isinstance(summary, dict) else []
 
 
+def dast_confirmations_for(db, finding) -> list:
+    """Live dynamic findings that point back at one code (SAST) finding.
+
+    A DAST finding names the code finding it matches in ai_sast (the GCR id).
+    When one does, and it was not dismissed, a dynamic scan has shown this exact
+    code weakness is reachable on a running site: it is not only in the code, it
+    is exploitable now.  -> a short list to show on the finding and to warn on
+    before it is waived.  Looks only at the newest done scan of each site linked
+    to the finding's repository, so it is a couple of queries, not a sweep.
+    """
+    from app.core import dast_risk, external_decisions
+    from app.core.models import ExternalAssetRepo, Repository
+
+    vid = (getattr(finding, "vuln_id", "") or "")
+    repo = (getattr(finding, "repository", "") or "")
+    if not vid or not repo:
+        return []
+    repo_row = (db.query(Repository)
+                .filter(Repository.full_name == repo).one_or_none())
+    if repo_row is None:
+        return []
+    asset_ids = [r.asset_id for r in db.query(ExternalAssetRepo)
+                 .filter(ExternalAssetRepo.repository_id == repo_row.id).all()]
+    out = []
+    for aid in asset_ids:
+        scan = (db.query(ExternalDastScan)
+                .filter(ExternalDastScan.asset_id == aid,
+                        ExternalDastScan.status == "done")
+                .order_by(ExternalDastScan.id.desc()).first())
+        if scan is None:
+            continue
+        asset = db.get(ExternalAsset, aid)
+        found = external_decisions.apply(findings_of(scan),
+                                         external_decisions.for_asset(db, aid),
+                                         scan_id=scan.id)
+        for f in found:
+            if vid not in str(f.get("ai_sast") or ""):
+                continue
+            if f.get("ai_verdict") == "likely_false_positive":
+                continue
+            if (f.get("decision") or {}).get("kind") == "false_positive":
+                continue
+            lk = int(f.get("likelihood") or 0)
+            out.append({
+                "host": asset.host if asset else "",
+                "asset_id": aid, "scan_id": scan.id,
+                "title": f.get("title") or "", "severity": f.get("severity") or "",
+                "likelihood": lk,
+                "likelihood_label": dast_risk.LIKELIHOOD_LABEL.get(lk, ""),
+                "verdict": f.get("ai_verdict") or "", "url": f.get("url") or "",
+                "when": scan.scanned_at or scan.started_at})
+    return out
+
+
 def restore_removed(db, scan: ExternalDastScan, key: str, actor: str) -> dict:
     """Put a finding the model took out back on the scan.  -> the finding,
     or {} when it was not taken out."""

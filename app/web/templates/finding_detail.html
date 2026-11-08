@@ -294,6 +294,24 @@
   </div>
 </div>
 
+{% if dast_confirmed %}
+<div class="notice bad" id="dast-confirmed">
+  <div><strong>Confirmed live by dynamic testing.</strong>
+    A dynamic scan reached this exact weakness on a running site, so it is not only in the code, it is exploitable now.
+    {% for d in dast_confirmed %}
+    <div class="small" style="margin-top:.3rem">
+      <span class="badge {{ d.severity }}">{{ d.severity }}</span>
+      on <a href="{{ base }}/external/{{ d.asset_id }}/scans/{{ d.scan_id }}">{{ d.host }}</a>
+      {%- if d.title %} &mdash; {{ d.title }}{% endif %}
+      {%- if d.likelihood_label %} <span class="faint">({{ d.likelihood_label }})</span>{% endif %}
+      {%- if d.when %} <span class="faint">on {{ d.when | dt('%Y-%m-%d') }}</span>{% endif %}
+    </div>
+    {% endfor %}
+    <div class="small faint" style="margin-top:.3rem">Weigh this before writing an exception: a waiver here accepts a risk a scanner has already proven is reachable, not a theoretical one.</div>
+  </div>
+</div>
+{% endif %}
+
 {% if report_fp %}
 <div class="notice warn">
   {% set others = report_fp.awaiting | length - 1 %}
@@ -1326,6 +1344,14 @@
         <button type="button" class="modal-close" data-close-modal>&times;</button></div>
       <div class="modal-body">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% if dast_confirmed %}
+        <div class="notice bad" style="margin-bottom:.6rem">
+          <strong>A dynamic scan confirmed this is live.</strong>
+          It was reached on {{ dast_confirmed[0].host }}{% if dast_confirmed | length > 1 %} and {{ dast_confirmed | length - 1 }} other site{{ '' if dast_confirmed | length - 1 == 1 else 's' }}{% endif %}.
+          Waiving it accepts a proven, exploitable risk, not a theoretical one.
+          {%- if f.kind.value != 'credential' %}  "Not in scope: this code does not get deployed" does not apply here, because the scan reached it on a running site.{% endif %}
+        </div>
+        {% endif %}
         {% if f.kind.value != 'credential' %}
         {# Not offered on a credential.  A key works whether or not the code
            it sits in is ever deployed. #}
