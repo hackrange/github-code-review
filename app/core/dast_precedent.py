@@ -159,6 +159,18 @@ PRECEDENTS = [
                      "researchers and in OWASP guidance.",
     },
     {
+        "key": "ai-tool-exposure",
+        "match": re.compile(r"open (self-)?registration|registrationenabled|librechat|"
+                            r"ollama|open webui|llmjack|exposed ai|model api key", re.I),
+        "ref": "CWE-1188; LLMjacking (Sysdig, 2024)",
+        "abuse": "An attacker reaches the exposed AI tool, creates an account or uses an "
+                 "open endpoint, and runs their own work on the organization's paid model "
+                 "credentials, and keeps the account as a foothold.",
+        "precedent": "Attackers actively hunt exposed self-hosted AI services to run their "
+                     "own usage on the owner's cloud model credentials; the technique was "
+                     "documented as LLMjacking by security researchers in 2024.",
+    },
+    {
         "key": "data-exposure",
         "match": re.compile(r"directory listing|directory index|exposed backup|"
                             r"\.bak\b|\.sql\b|open to the world|publicly readable|"

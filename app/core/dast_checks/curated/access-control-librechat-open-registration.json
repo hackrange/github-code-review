@@ -1,0 +1,32 @@
+{
+  "id": "access-control-librechat-open-registration",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "LibreChat allows open self-registration",
+  "summary": "This LibreChat instance returns registrationEnabled true from its public config, so anyone who can reach it can create an account. On a self-hosted AI tool that means a stranger can sign in and run their own work on the organization's paid model API keys, and use the account as a foothold.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/config"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and the config response is told apart from it.",
+    "differential": "status == 200 and body_contains(\"passwordResetEnabled\") and body_contains(\"\\\"registrationEnabled\\\":true\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/api/config' and read the JSON: passwordResetEnabled confirms it is LibreChat, and \"registrationEnabled\":true means anyone can self-register.  Open the register page and create an account to confirm.  Validate whether open registration is intended here; a public instance may want it, an internal one does not.",
+  "remediate": "If self-registration is not intended, turn it off (set ALLOW_REGISTRATION to false), restrict allowedDomains to the company's email domains, and put the instance behind single sign on or the gateway so only staff can reach it.  Rotate the model API keys if strangers may have used them.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-1188",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "librechat"
+  ]
+}
