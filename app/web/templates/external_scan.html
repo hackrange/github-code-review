@@ -112,7 +112,7 @@
     {% if unlikely %}
     <div class="notice warn" style="margin-bottom:.5rem">
       <div><strong>Pinned, but maybe not behind this subdomain.</strong>
-        The scan reached none of the routes these repositories declare, and the site's host is not written in their code, so they may be pinned to <span class="mono">{{ asset.host }}</span> by mistake.  Confirm with the owner before un-pinning; developers do not always know which sites their code powers.</div>
+        The scan reached none of the routes these repositories declare, and the site's host is not written in their code, so they may be linked to <span class="mono">{{ asset.host }}</span> by mistake.  Un-pinning stops this repository being linked to the site, by hand or by the automatic matching, until someone pins it again; confirm with the owner first, since developers do not always know which sites their code powers.</div>
       {% for l in unlikely %}
       <div class="small" style="margin-top:.3rem">
         <span class="mono">{{ l.full_name }}</span>
@@ -120,10 +120,10 @@
         <form method="post" action="{{ base }}/external/{{ asset.id }}/repos" style="display:inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="repository" value="{{ l.full_name }}">
-          <input type="hidden" name="action" value="forget">
+          <input type="hidden" name="action" value="hide">
           <input type="hidden" name="back" value="/external/{{ asset.id }}/scans/{{ scan.id }}">
           <button class="btn sm" type="submit"
-                  data-confirm="Un-pin {{ l.full_name }} from {{ asset.host }}?  It goes back to being worked out automatically.">Un-pin</button>
+                  data-confirm="Un-pin {{ l.full_name }} from {{ asset.host }}?  It will not be linked to this site again, by hand or automatically, until someone pins it back.">Un-pin</button>
         </form>
       </div>
       {% endfor %}
