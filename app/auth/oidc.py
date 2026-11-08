@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import secrets
@@ -92,7 +93,7 @@ def _cleanup_pending() -> None:
         _pending.pop(state, None)
 
 
-async def begin_login(source_ip: str = "") -> str:
+async def begin_login(source_ip: str = "", browser: str = "") -> str:
     """Start a login and give back the URL to send the browser to.
 
     Two things get made here and both matter.
@@ -113,7 +114,7 @@ async def begin_login(source_ip: str = "") -> str:
 
     _cleanup_pending()
     _pending[state] = {"verifier": verifier, "created": time.time(),
-                       "source_ip": source_ip}
+                       "source_ip": source_ip, "browser": browser}
 
     params = {
         "response_type": "code",
@@ -127,7 +128,8 @@ async def begin_login(source_ip: str = "") -> str:
     return f"{doc['authorization_endpoint']}?{urlencode(params)}"
 
 
-async def complete_login(code: str, state: str, source_ip: str = "") -> dict:
+async def complete_login(code: str, state: str, source_ip: str = "",
+                         browser: str = "") -> dict:
     """Finish the login.  Swap the code for tokens and check the id_token."""
     pending = _pending.pop(state, None)
     if not pending:
@@ -135,6 +137,15 @@ async def complete_login(code: str, state: str, source_ip: str = "") -> dict:
                         "long. Try again.")
     if time.time() - pending["created"] > _PENDING_TTL:
         raise OIDCError("that sign in took too long, start again")
+    # Bind the flow to the browser that started it.  The state alone travels in
+    # the URL, so a stolen or planted callback could sign a victim into the
+    # attacker's account (login CSRF).  The browser nonce was set as a cookie at
+    # the start and is not in the URL, so a callback opened in another browser,
+    # even with a valid state and code, is refused.
+    if pending.get("browser") and not hmac.compare_digest(
+            str(pending.get("browser")), str(browser or "")):
+        raise OIDCError("that sign in was started in a different browser. "
+                        "Start again here.")
 
     doc = await get_discovery()
 
@@ -301,8 +312,22 @@ def sync_user(session, profile: dict) -> User:
     username = (profile.get("username") or "").strip().lower()
     if not username:
         raise OIDCError("the provider did not tell us who you are")
+    subject = (profile.get("subject") or "").strip()
 
-    user = session.query(User).filter(User.username == username).one_or_none()
+    # Who this is comes from the provider's immutable subject, not the name,
+    # which the provider can rename or reuse.  Match on the subject first; the
+    # account follows it even if the name changed.  Fall back to the name only
+    # to adopt an account that has no subject recorded yet (the first sign in
+    # after this landed), or when no subject was sent at all.
+    user = None
+    if subject:
+        user = (session.query(User)
+                .filter(User.oidc_subject == subject,
+                        User.source == AuthSource.OIDC).one_or_none())
+    by_name = session.query(User).filter(User.username == username).one_or_none()
+    matched_by_name = user is None
+    if user is None:
+        user = by_name
 
     # Turned off here stays off, whatever the provider says.  Signing in used
     # to clear the flag, so disabling an SSO account lasted until that person
@@ -317,6 +342,15 @@ def sync_user(session, profile: dict) -> User:
         # quietly turning a password account into an SSO one.
         raise OIDCError(
             f"there is already a local account called {username}. "
+            "An administrator needs to sort that out.")
+
+    # The name matched an SSO account already bound to a different subject: a
+    # different identity wearing the same name.  Refuse, so one person's name
+    # can never inherit another's account, access or pinned role.
+    if (subject and matched_by_name and user is not None
+            and (user.oidc_subject or "") and user.oidc_subject != subject):
+        raise OIDCError(
+            "that name belongs to a different single sign on identity. "
             "An administrator needs to sort that out.")
 
     # Whose account this is has to be known before the role is decided, because
@@ -338,6 +372,11 @@ def sync_user(session, profile: dict) -> User:
     if user is None:
         user = User(username=username, source=AuthSource.OIDC)
         session.add(user)
+
+    # Record the subject the first time we see it (trust on first use), so every
+    # later sign in is matched on it and a colliding name is refused above.
+    if subject and not (user.oidc_subject or ""):
+        user.oidc_subject = subject
 
     user.email = (profile.get("email") or "")[:255]
     user.display_name = (profile.get("full_name") or "")[:255]

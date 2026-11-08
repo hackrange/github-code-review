@@ -145,6 +145,13 @@ class User(Base):
     role = Column(Enum(UserRole), nullable=False, default=UserRole.READER)
     source = Column(Enum(AuthSource), nullable=False, default=AuthSource.LOCAL)
 
+    # The immutable identity of an SSO account: the provider's subject claim.
+    # The account is matched on this, not on the user name, which the provider
+    # can rename or reuse.  Recorded the first time an account signs in, and
+    # from then on a different subject carrying the same name is refused rather
+    # than inheriting the account and its role.  Empty on local accounts.
+    oidc_subject = Column(String(255), default="", index=True)
+
     # Hold the role against the provider.
     #
     # The provider owns the role, which is right while it sends group names.

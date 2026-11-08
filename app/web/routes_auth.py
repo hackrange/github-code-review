@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
@@ -26,6 +27,9 @@ from app.web.security import (
 
 log = logging.getLogger("gcr.auth.routes")
 router = APIRouter()
+
+# The cookie that binds an OIDC flow to the browser that began it.
+OIDC_FLOW_COOKIE = "gcr_oidc_flow"
 
 
 def _set_session_cookie(response, token: str) -> None:
@@ -265,14 +269,22 @@ async def oidc_start(request: Request):
         return page(request, "login.html", stage="password", auth=live.auth_config(),
                     error="Single sign on is not set up here.")
 
+    # A nonce that stays in a cookie on this browser and never travels in the
+    # URL, so the callback can tell the browser that started the flow from one
+    # a victim was handed (login CSRF).
+    browser = secrets.token_urlsafe(24)
     try:
-        url = await oidc.begin_login(client_ip(request))
+        url = await oidc.begin_login(client_ip(request), browser)
     except oidc.OIDCError as exc:
         log.warning("could not start an oidc login: %s", exc)
         return page(request, "login.html", stage="password", auth=live.auth_config(),
                     error=str(exc))
 
-    return RedirectResponse(url, status_code=303)
+    response = RedirectResponse(url, status_code=303)
+    response.set_cookie(OIDC_FLOW_COOKIE, browser, max_age=600, httponly=True,
+                        secure=live.force_https(), samesite="lax",
+                        path=settings.base_path or "/")
+    return response
 
 
 @router.get("/auth/callback")
@@ -297,8 +309,9 @@ async def oidc_callback(request: Request):
                     error="That callback was missing something. Try again.")
 
     ip = client_ip(request)
+    browser = request.cookies.get(OIDC_FLOW_COOKIE, "")
     try:
-        profile = await oidc.complete_login(code, state, ip)
+        profile = await oidc.complete_login(code, state, ip, browser)
     except oidc.OIDCError as exc:
         log.warning("oidc sign in failed from %s: %s", ip, exc)
         with session_scope() as db:
@@ -327,4 +340,5 @@ async def oidc_callback(request: Request):
     response = landing(request)
     _set_session_cookie(response, token)
     issue_csrf(response, new_csrf_token())
+    response.delete_cookie(OIDC_FLOW_COOKIE, path=settings.base_path or "/")
     return response

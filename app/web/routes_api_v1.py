@@ -21,6 +21,7 @@ temporary directory, looked at, and deleted.  Nothing is kept.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import logging
@@ -343,10 +344,16 @@ async def review(request: Request,
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(raw)
 
-        completed = subprocess.run(
-            [str(GHSCAN), "review", workdir, "--only", only, "--fail-on", "none"],
-            capture_output=True, text=True, timeout=REVIEW_TIMEOUT,
-            env={**os.environ, "GHSCAN_LOG_LEVEL": "warn"})
+        # Run the scanner off the event loop.  It is a blocking subprocess, and
+        # this is the one web worker: calling it inline would freeze every other
+        # request, including sign in and the health check, for the whole scan.
+        # run_in_threadpool also bounds how many run at once to the thread pool.
+        completed = await run_in_threadpool(
+            functools.partial(
+                subprocess.run,
+                [str(GHSCAN), "review", workdir, "--only", only, "--fail-on", "none"],
+                capture_output=True, text=True, timeout=REVIEW_TIMEOUT,
+                env={**os.environ, "GHSCAN_LOG_LEVEL": "warn"}))
 
         if completed.returncode not in (0, 3) or not completed.stdout.strip():
             tail = (completed.stderr or "").strip().splitlines()[-3:]

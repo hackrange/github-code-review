@@ -162,8 +162,17 @@ def make_recovery_codes() -> tuple:
     for _ in range(RECOVERY_CODE_COUNT):
         raw = secrets.token_hex(5)
         plain.append(f"{raw[:5]}-{raw[5:]}")
-    hashes = [hashlib.sha256(c.encode()).hexdigest() for c in plain]
+    # Hash the code the way check_totp normalises what is typed (spaces and the
+    # hyphen removed), so a code entered with or without its hyphen verifies.
+    # Hashing the displayed form here while check_totp strips the hyphen before
+    # checking meant no recovery code ever matched.
+    hashes = [hashlib.sha256(_canon_recovery(c).encode()).hexdigest() for c in plain]
     return plain, hashes
+
+
+def _canon_recovery(code: str) -> str:
+    """The one form a recovery code is hashed and checked in."""
+    return (code or "").strip().replace(" ", "").replace("-", "")
 
 
 def _consume_recovery_code(user: User, code: str) -> bool:
@@ -175,9 +184,15 @@ def _consume_recovery_code(user: User, code: str) -> bool:
     if not stored:
         return False
 
-    candidate = hashlib.sha256(code.encode()).hexdigest()
+    # The code arrives already normalised (check_totp strips spaces and the
+    # hyphen).  Match the canonical hash, and also the older form that hashed
+    # the hyphenated code, so codes issued before the fix still work.
+    candidates = {hashlib.sha256(code.encode()).hexdigest()}
+    if len(code) == 10 and code.isalnum():
+        legacy = f"{code[:5]}-{code[5:]}"
+        candidates.add(hashlib.sha256(legacy.encode()).hexdigest())
     for held in list(stored):
-        if hmac.compare_digest(held, candidate):
+        if any(hmac.compare_digest(held, c) for c in candidates):
             stored.remove(held)
             user.recovery_hashes = json.dumps(stored)
             return True
