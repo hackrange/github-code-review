@@ -1,0 +1,39 @@
+{
+  "id": "misconfiguration-mulesoft-api-console-exposed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "MuleSoft APIkit console is exposed",
+  "summary": "A MuleSoft APIkit application is serving its auto-generated API Console to anyone. The console publishes the whole API definition, every resource, method, parameter and schema, and lets a visitor call the API from the browser. It is meant for development and should be off in production.",
+  "needs": [],
+  "candidate_paths": [
+    "/console/",
+    "/console",
+    "/api/console/",
+    "/console/index.html",
+    "/api-console/"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "{route}"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and the console page is told apart from a soft 404.",
+    "differential": "status == 200 and \"text/html\" in header(\"content-type\") and body_contains(\"api-console-app\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/console/' and look for the MuleSoft API Console page: an HTTP 200 HTML response whose body carries the api-console-app element that boots the console. If present, the full API definition is published and callable. Try /console, /api/console/, /api-console/ as well, since the console path is set per application.",
+  "remediate": "Turn the APIkit console off in production: set the system property apikit.console.disabled=true, or remove the console flow from the application, and block the console path at the gateway. Keep it to non-production environments.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "mulesoft"
+  ]
+}
