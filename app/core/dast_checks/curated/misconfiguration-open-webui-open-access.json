@@ -1,0 +1,22 @@
+{
+  "id": "misconfiguration-open-webui-open-access",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Open WebUI lets anyone in (open signup or no authentication)",
+  "summary": "This Open WebUI instance reports from its public config that signup is open, or that authentication is turned off entirely.  Either way a stranger who can reach it can use the AI, which runs on the organization's model keys or hardware, and keep an account as a foothold.",
+  "needs": [],
+  "probe": [
+    { "request": { "method": "GET", "path": "/api/config" } }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and the config response is told apart from a soft 404.",
+    "differential": "status == 200 and body_contains(\"enable_login_form\") and body_contains(\"enable_signup\") and (body_contains(\"\\\"auth\\\":false\") or body_contains(\"\\\"enable_signup\\\":true\")) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/api/config' and read the JSON features: enable_login_form and enable_signup confirm it is Open WebUI.  \"auth\":false means authentication is off; \"enable_signup\":true means anyone can register.  Either way the instance is open.",
+  "remediate": "Turn signup off (ENABLE_SIGNUP false, or Enable New Sign Ups in the admin panel) and keep authentication on (WEBUI_AUTH true).  Put the instance behind single sign on or the gateway so only staff reach it, and rotate the model keys if strangers may have used them.",
+  "references": [],
+  "mappings": { "cwe": "CWE-1188", "owasp": "A05:2021" },
+  "rulesets": ["open-webui"]
+}

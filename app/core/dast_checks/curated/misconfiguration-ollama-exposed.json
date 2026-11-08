@@ -1,0 +1,26 @@
+{
+  "id": "misconfiguration-ollama-exposed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Ollama API is exposed without authentication",
+  "summary": "An Ollama server is answering without any login.  Ollama has no built-in authentication, so anyone who can reach it can run its models on the organization's hardware, pull and register models, and read what is installed.  Exposed Ollama servers are actively taken over to run attackers' work on someone else's compute.",
+  "needs": [],
+  "candidate_paths": [
+    "/",
+    "/api/tags"
+  ],
+  "probe": [
+    { "request": { "method": "GET", "path": "{route}" } }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known and the Ollama response is told apart from a soft 404.",
+    "differential": "status == 200 and (body_contains(\"Ollama is running\") or (body_contains(\"\\\"models\\\"\") and body_contains(\"\\\"digest\\\"\"))) and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -sk 'https://host/' (it answers 'Ollama is running') or 'https://host/api/tags' (it lists the installed models as JSON).  If either answers without a login, the Ollama API is open to anyone.",
+  "remediate": "Bind Ollama to 127.0.0.1, firewall its port (11434 by default) off the internet, and put any remote access behind an authenticated reverse proxy or VPN.  Treat the models and the host as reachable by strangers until it is closed.",
+  "references": [],
+  "mappings": { "cwe": "CWE-306", "owasp": "A05:2021" },
+  "rulesets": ["ollama"]
+}
