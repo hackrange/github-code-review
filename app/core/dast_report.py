@@ -302,6 +302,29 @@ def available(scan) -> bool:
                                         and scan.provider == "insightappsec")
 
 
+def _sast_by_type(db, asset, user) -> dict:
+    """Open code (SAST) findings behind this site, grouped by the dynamic sink
+    type they correspond to, as {type: [GCR id, ...]}.  The weakness type is
+    read from the finding's rule, title and description with the same patterns
+    the risk engine uses, so a reachable code sink can be matched to the exact
+    code finding it came from."""
+    from app.core import dast_risk, external
+    from app.core.models import ExternalAssetRepo, Repository
+
+    names = [r.full_name for r in db.query(Repository)
+             .join(ExternalAssetRepo, ExternalAssetRepo.repository_id == Repository.id)
+             .filter(ExternalAssetRepo.asset_id == asset.id).all()]
+    if not names:
+        return {}
+    out = {}
+    for s in external.sast_findings(db, names, 300, user):
+        text = f"{s.rule or ''} {s.title or ''} {s.description or ''}"
+        for typ, rx in dast_risk._SINK_FINDING.items():
+            if rx.search(text):
+                out.setdefault(typ, []).append(s.vuln_id)
+    return out
+
+
 def build(db, asset, scan, user=None, organization: str = "") -> dict:
     """Everything the template needs for one scan."""
     from app.core import dast_engines, external
@@ -362,8 +385,12 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
         code_sinks = []
     reachable_sinks = [s for s in code_sinks if s.get("reachable")]
     context_sinks = [s for s in code_sinks if not s.get("reachable")]
+    # Real SAST findings behind this site, grouped by the weakness type they are,
+    # so a corroboration can name the exact code finding (its GCR id), not just
+    # say "a code sink".  That is the SAST telemetry driving a positive match.
+    sast_by_type = _sast_by_type(db, asset, user)
     # A finding a reachable sink corroborates is confirmed by code and scan both.
-    dast_risk.corroborate(findings, reachable_sinks)
+    dast_risk.corroborate(findings, reachable_sinks, sast_by_type)
     risk_matrix = dast_risk.matrix(findings)
     from app.core.external_decisions import counted as _counted
 

@@ -117,10 +117,15 @@ _SINK_FINDING = {
 }
 
 
-def corroborate(findings: list, reachable_sinks: list) -> int:
+def corroborate(findings: list, reachable_sinks: list, sast_by_type: dict = None) -> int:
     """Raise a finding to confirmed when a reachable code sink of the matching
     kind sits on the same route: the code does the dangerous thing and the scan
-    reached it, which is the strongest evidence there is.  -> how many."""
+    reached it, which is the strongest evidence there is.  -> how many.
+
+    sast_by_type maps a sink type to the ids of the real code findings of that
+    type, so a match can name the exact code finding (ai_sast) and the link
+    shows on both the dynamic report and the code finding."""
+    sast_by_type = sast_by_type or {}
     by_route = {}
     for s in reachable_sinks or []:
         by_route.setdefault(s.get("reached_route") or "", set()).add(s.get("type"))
@@ -132,7 +137,16 @@ def corroborate(findings: list, reachable_sinks: list) -> int:
         text = f"{f.get('title') or ''} {f.get('cwe') or ''} {f.get('evidence') or ''}"
         matched = [t for t in sorted(types)
                    if _SINK_FINDING.get(t) and _SINK_FINDING[t].search(text)]
-        if matched and f.get("likelihood", 0) < 5:
+        if not matched:
+            continue
+        # Name the exact code finding the sink came from, when one of that type
+        # is known, so the two way link is explicit and not only the AI's.
+        if not f.get("ai_sast"):
+            for t in matched:
+                if sast_by_type.get(t):
+                    f["ai_sast"] = sast_by_type[t][0]
+                    break
+        if f.get("likelihood", 0) < 5:
             f["likelihood"] = 5
             f["likelihood_label"] = LIKELIHOOD_LABEL[5]
             f["sink_confirmed"] = True
