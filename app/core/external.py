@@ -2998,8 +2998,23 @@ def code_behind(db, user, scan: ExternalDastScan, asset: ExternalAsset) -> dict:
         out.append(dict(c, full_name=repo.full_name, linked=bool(link.get("linked")),
                         link_source=link.get("source") or "",
                         link_reasons=link.get("reasons") or []))
-    linked = [dict(l, full_name=visible[l["repo_id"]].full_name)
-              for l in data.get("linked") or [] if l.get("repo_id") in visible]
+    linked = []
+    for l in data.get("linked") or []:
+        rid = l.get("repo_id")
+        if rid not in visible:
+            continue
+        link = links.get(rid) or {}
+        src = link.get("source") or ""
+        total = int(l.get("routes_total") or 0)
+        reached = int(l.get("routes_reached") or 0)
+        # A repository pinned to this subdomain that declares routes none of
+        # which the scan reached, and whose link is not from the host being
+        # written in its code, is probably not what powers this site.  Flag it
+        # so somebody can un-pin it: developers often do not know which sites
+        # their code serves, so the mapping drifts and nobody corrects it.
+        unlikely = total > 0 and reached == 0 and src != "code"
+        linked.append(dict(l, full_name=visible[rid].full_name, source=src,
+                           unlikely=unlikely))
     return {"counts": paths.get("counts") or {}, "control": paths.get("control") or {},
             "candidates": out, "linked": linked, "indexed": data.get("indexed", 0),
             "at": data.get("at", ""), "has_paths": bool(paths.get("paths"))}
