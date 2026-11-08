@@ -601,9 +601,10 @@ _FFUF_INTERESTING = re.compile(
 
 
 def parse_ffuf(report: Path, url: str):
-    """Paths it found.  Only the ones whose names mean something become
-    findings, and as info: a path existing is a lead, not a problem.  Every
-    path is handed on to nuclei."""
+    """Paths it found.  Only the ones whose names mean something AND that are
+    actually served become findings, and as info: a path existing is a lead,
+    not a problem.  A 401 or 403 means the path is protected, not exposed, so
+    it is not a finding, only coverage.  Every path is handed on to nuclei."""
     data = _read_json(report)
     if data is None:
         return None
@@ -611,10 +612,14 @@ def parse_ffuf(report: Path, url: str):
     for row in data.get("results") or []:
         found = row.get("url") or ""
         paths.append(found)
+        status = int(row.get("status") or 0)
         word = (row.get("input") or {}).get("FUZZ", "")
-        if _FFUF_INTERESTING.search(word):
+        # Only a page the server actually serves (a 200) is a lead worth
+        # reporting.  A 401/403 is the server refusing it, a 3xx is a redirect
+        # away from it; none of those is an exposed file.
+        if _FFUF_INTERESTING.search(word) and status in (200, 206):
             out.append(_finding("ffuf", f"Found {word}", "info", found,
-                                f"HTTP {row.get('status')}, {row.get('length')} bytes",
+                                f"HTTP {status}, {row.get('length')} bytes",
                                 "Check this path is meant to be public."))
     return out, paths
 

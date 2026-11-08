@@ -545,9 +545,45 @@ def _run_two_account(spec: dict, ctx: dict, domains, budget: Budget) -> list:
             else:
                 break
         if confirmations == retest and confirmations > 0:
-            findings.append(_finding(spec, a, resp_a, url))
+            f = _finding(spec, a, resp_a, url)
+            f["evidence"] = _two_account_evidence(url, resp_a, resp_b, resp_anon)
+            f["reproduce"] = _two_account_reproduce(url)
+            findings.append(f)
             break   # one solid finding per rule
     return findings
+
+
+def _two_account_reproduce(url) -> str:
+    """How the finding was reached, with the real address: fetch it as each
+    account and signed out, and compare the pages."""
+    return (f"Fetch {url} three ways and compare the responses: signed in as the "
+            f"second account (it returns the object, so the object is the second "
+            f"account's), signed in as the first account (it returns the same page, "
+            f"so the first account read the second account's data), and signed out "
+            f"(it is turned away).  This is how the finding was confirmed.")
+
+
+def _two_account_evidence(url, resp_a, resp_b, resp_anon) -> str:
+    """Spell out what the two account check actually saw, so the finding is
+    specific: the address, the status each account got, whether the first
+    account saw the same page as the second, and whether a signed out visitor
+    was turned away.  These are the facts the differential fired on."""
+    a_st = (resp_a or {}).get("status")
+    b_st = (resp_b or {}).get("status")
+    an_st = (resp_anon or {}).get("status")
+    same_body = (resp_a and resp_b
+                 and _normalize(resp_a.get("body") or "") == _normalize(resp_b.get("body") or ""))
+    bits = [f"The address {url} was found in the second account's own pages.",
+            f"Signed in as the first account it answered HTTP {a_st}, and the second "
+            f"account's own session got HTTP {b_st}"
+            + ("; both accounts saw the same page, so the first account read the "
+               "second account's data" if same_body else "") + "."]
+    if resp_anon is not None:
+        bits.append(f"A signed out request got HTTP {an_st}"
+                    + (", so the page is not simply public." if an_st != 200
+                       else ", so a signed out visitor sees it too."))
+    bits.append("Confirmed and re-tested.")
+    return " ".join(bits)[:800]
 
 
 def _run_probe(spec: dict, client: Client, route: str, oob_value: str) -> dict:
