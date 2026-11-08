@@ -246,6 +246,8 @@
     {% if f.risk %}<tr><td class="k">Risk</td><td><span class="badge r-{{ f.risk }}">{{ f.risk | upper }}</span>
       &nbsp;Likelihood {{ f.likelihood_label }}, impact {{ f.breachability_label }}.
       {% if f.risk_basis %}<span class="soft">{{ f.risk_basis | sentence_spaced }}</span>{% endif %}</td></tr>{% endif %}
+    {% if f.abuse %}<tr><td class="k">How it is abused</td><td>{{ f.abuse | sentence_spaced }}</td></tr>{% endif %}
+    {% if f.precedent %}<tr><td class="k">Real-world precedent</td><td>{{ f.precedent | sentence_spaced }}  <span class="soft">({{ f.precedent_ref }})</span></td></tr>{% endif %}
     <tr><td class="k">OWASP Top 10</td><td>{{ f.owasp }}  {{ f.owasp_name }}</td></tr>
     {% if f.cwe %}<tr><td class="k">CWE</td><td>{{ f.cwe }}</td></tr>{% endif %}
     {% if f.url %}<tr><td class="k">Location</td><td class="mono">{{ f.url }}</td></tr>{% endif %}

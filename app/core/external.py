@@ -3738,26 +3738,52 @@ _PAYLOADS = re.compile(r"(?:\.\./|\.\.\\|%2e%2e|/etc/(?:passwd|shadow|hosts)|"
 
 TRIAGE_SYSTEM = """You review the results of a dynamic application security scan \
 (DAST) of one public web site.  You also get the open static analysis (SAST) \
-findings from the source code repositories believed to be behind the site.
+findings from the code behind the site, the site's exposure from a two vantage \
+check, and, for each finding, a deterministic risk score and, when the weakness \
+is a known class, a VERIFIED real world precedent.
 
-For each DAST finding decide: likely_real, likely_false_positive, or \
-needs_review.  Scanners report many false positives: version banners that are \
-patched, generic header advice, reflected input that is encoded, and template \
-matches on a soft 404 page.  When a SAST finding in the code supports a DAST \
-finding (same weakness, same route or parameter), say so; that raises \
-confidence a great deal.
+For each DAST finding do two things.
 
-A finding you call likely_false_positive is taken out of the results, so use \
-it only when the evidence shows it is noise.  When unsure, say needs_review.  \
-A finding about an exposed secret stays whatever you say, so judge it anyway.
+1) Decide a verdict: likely_real, likely_false_positive, or needs_review.  \
+Scanners report many false positives: version banners that are patched, generic \
+header advice, reflected input that is encoded, and template matches on a soft \
+404 page.  A finding you call likely_false_positive is taken out of the \
+results, so use it only when the evidence shows it is noise.  When unsure, say \
+needs_review.  A finding about an exposed secret stays whatever you say.
 
-Do not change severities.  Do not invent findings.
+2) Write "why" as a short risk narrative for an engineer, three to five \
+sentences, in this order:
+ - what can go wrong: what an attacker gains if the finding is real;
+ - how an abuser attacks it: the concrete steps against THIS finding, at this url;
+ - how likely it is to lead to a breach: reason from the site's exposure (open \
+to the world raises it, allow listed lowers it), the attack surface and \
+reachability (a sensitive or unauthenticated endpoint, a path reachable with no \
+session), any compensating control visible in the evidence (authentication \
+required, input encoded, a patch already applied), and the fact that modern \
+attackers automate discovery and exploitation at scale, increasingly with AI \
+assistance, so an internet reachable and easily automated weakness (enumeration, \
+guessing, injection, or an exposed secret that bots scrape within minutes) is \
+more likely to be reached than its manual difficulty suggests.
+
+FACTS ONLY.  This is a hard rule, never break it:
+ - Use ONLY the verified real world precedent provided with the finding.  Never \
+invent or recall a CVE number, a company, a breach size, a date or a statistic.  \
+If no precedent is provided, describe the mechanism and name no incident.
+ - A precedent is a comparable case, not this site's fate.  Do not say this site \
+was breached or will be.
+ - Do not overstate.  If the exposure is allow listed, or a compensating control \
+is present, say plainly that the likelihood is lower, and why.
+ - Keep the severities and the deterministic risk as given.  Explain them; do \
+not override them.  Do not invent findings.
+
+When a SAST finding in the code supports a DAST finding (same weakness, same \
+route or parameter), say so; that raises confidence a great deal.
 
 Answer with JSON only, in this shape:
 {"summary": "three to five sentences for an engineer, plain US English",
- "verdicts": [{"id": "finding id", "verdict": "likely_real", "why": "one sentence",
+ "verdicts": [{"id": "finding id", "verdict": "likely_real", "why": "the risk narrative",
    "sast": "matching SAST finding id or empty"}],
- "priorities": ["the three things to fix first, one sentence each"]}
+ "priorities": ["the three things to fix first, worst risk first, one sentence each"]}
 
 Whenever you mention a SAST finding, give its id (GCR- and twelve characters).  \
 Whenever the summary or a priority is about a DAST finding, give its id in \
@@ -3893,8 +3919,17 @@ def triage(scan_id: int, actor: str = "") -> None:
             if links:
                 sast = _sast_lines(sast_findings(db, [l["full_name"] for l in links], 60, who))
         host = asset.host
+        exposure = (getattr(asset, "exposure", "") or "")
+        exposure_detail = (getattr(asset, "exposure_detail", "") or "")
         cap = max(1, int(settings_mod.get(db, "dast.ai_max_findings") or 40))
         prior = _prior_verdicts(db, scan.asset_id, scan_id)
+    # Deterministic risk (likelihood x breachability, weighted by exposure) and
+    # the verified real world precedent for each weakness class, computed before
+    # the model is asked, so it reasons from these facts rather than its memory.
+    from app.core import dast_precedent, dast_risk
+
+    dast_risk.annotate(all_findings, exposure)
+    dast_precedent.annotate(all_findings)
     # Reuse a verdict for any finding unchanged since the last reviewed scan.
     reused = 0
     for f in findings:
@@ -3919,11 +3954,26 @@ def triage(scan_id: int, actor: str = "") -> None:
             break
         prompt = json.dumps({
             "site": host,
+            "site_exposure": {
+                "reachable": exposure or "unknown",
+                "meaning": ("open means reachable from the open internet; "
+                            "whitelisted means only from allow listed networks; "
+                            "unknown means the exposure check did not run"),
+                "detail": _clean(exposure_detail)[:200],
+            },
             "dast_findings": [{"id": f.get("id") or f["key"], "tool": f.get("tool"),
                                "severity": f.get("severity"), "title": _clean(f.get("title")),
                                "url": _clean(f.get("url"))[:300],
                                "evidence": _clean(f.get("evidence"))[:300],
-                               "cwe": f.get("cwe")} for f in part],
+                               "cwe": f.get("cwe"),
+                               "computed_likelihood": f.get("likelihood_label"),
+                               "computed_impact": f.get("breachability_label"),
+                               "computed_risk": f.get("risk"),
+                               "risk_basis": _clean(f.get("risk_basis"))[:300],
+                               "verified_real_world_precedent": f.get("precedent") or "",
+                               "precedent_reference": f.get("precedent_ref") or "",
+                               "how_the_class_is_abused": f.get("abuse") or ""}
+                              for f in part],
             "sast_findings_in_code_behind_the_site": sast,
         }, indent=1)
         answer = ai.complete(cfg, TRIAGE_SYSTEM, prompt, purpose="dast-triage")
@@ -3954,7 +4004,7 @@ def triage(scan_id: int, actor: str = "") -> None:
             verdict = str(v.get("verdict") or "")
             f["ai_verdict"] = verdict if verdict in (
                 "likely_real", "likely_false_positive", "needs_review") else "needs_review"
-            f["ai_why"] = str(v.get("why") or "")[:400]
+            f["ai_why"] = str(v.get("why") or "")[:900]
             f["ai_sast"] = str(v.get("sast") or "")[:40]
     with session_scope() as db:
         scan = db.get(ExternalDastScan, scan_id)

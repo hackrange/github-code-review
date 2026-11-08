@@ -200,6 +200,7 @@
             </div></details>{% endif %}
           {% if f.remediation %}<details class="small"><summary>How to fix</summary>{{ f.remediation }}</details>{% endif %}
           {% if f.ai_why %}<div class="small"><span class="badge ai">AI</span> {{ f.ai_why }}{% if f.ai_sast %} <span class="mono">{{ f.ai_sast }}</span>{% endif %}</div>{% endif %}
+          {% if f.precedent %}<details class="small"><summary>Real-world precedent</summary>{{ f.precedent }} <span class="faint">({{ f.precedent_ref }})</span></details>{% endif %}
           {% if f.reference %}<div class="small faint">{{ f.reference }}</div>{% endif %}</td>
         <td class="small mono" style="word-break:break-all">{{ f.url }}
           {% if f.rolled_up %}<details class="small"><summary>{{ f.rolled_up }} addresses</summary>{% for u in f.urls %}<div>{{ u }}</div>{% endfor %}{% if f.rolled_up > f.urls | length %}<div class="faint">and {{ f.rolled_up - f.urls | length }} more</div>{% endif %}</details>{% endif %}</td>

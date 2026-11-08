@@ -344,9 +344,12 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
         findings.append(f)
     overall = score(findings, triaged)
     # Risk, deterministic: likelihood x breachability, weighted by exposure.
-    from app.core import dast_risk
+    from app.core import dast_precedent, dast_risk
 
     dast_risk.annotate(findings, getattr(asset, "exposure", "") or "")
+    # The verified real world precedent for each weakness class, from the vetted
+    # table, so the report shows a factual comparable case even with no AI triage.
+    dast_precedent.annotate(findings)
     # Code sinks from the mapped repositories, split by whether the scan reached
     # the route they sit behind.  Reachable ones are leads to prove; the rest
     # are context to review, not dynamic bugs.

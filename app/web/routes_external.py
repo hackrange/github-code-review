@@ -1283,6 +1283,11 @@ def scan_page(asset_id: int, scan_id: int, request: Request, sev: str = "",
                                                     external_decisions.for_asset(db, asset.id),
                                                     scan_id=scan.id)
         findings = view["findings"]
+        # Verified real world precedent per weakness class, from the vetted table,
+        # so a finding shows its factual comparable case even before AI triage.
+        from app.core import dast_precedent
+
+        dast_precedent.annotate(findings)
         removed = external.removed_of(scan)
         if isinstance(view["ai"].get("summary"), dict):
             view["ai"]["summary"] = external.scrub_dast_review(view["ai"]["summary"], findings,
