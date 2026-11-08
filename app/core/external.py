@@ -2189,7 +2189,7 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
 
     specs, domains = [], []
     excluded = invalid = 0
-    second_headers = None
+    auth_a = auth_b = None
     with session_scope() as db:
         for row in db.query(DastRule).filter(DastRule.enabled.is_(True)).all():
             if not profiles.selected(row.rule_class, row.rulesets, rulesets):
@@ -2203,16 +2203,28 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
         domains = scope.company_domains(
             settings_mod.get(db, "web.company_domains") or [])
         oob = callback.for_scan(db)
-        # The second account, for the compare checks.  Built only when one is
-        # set and at least one enabled rule needs it.
-        if any("two_accounts" in (s.get("needs") or []) for s in specs):
-            asset = db.get(ExternalAsset, asset_id)
-            auth_b = external_auth.load_b(asset) if asset else {}
-            if auth_b:
-                sess_b = external_auth.session_for(auth_b, opts["allow_private"])
-                if sess_b.get("ok"):
-                    second_headers = _session_headers(sess_b)
-    headers = _session_headers(session)
+        asset = db.get(ExternalAsset, asset_id)
+        auth_a = (external_auth.load(asset) or None) if asset else None
+        # The second account, for the compare checks.  Loaded only when at least
+        # one enabled rule needs it.
+        if asset and any("two_accounts" in (s.get("needs") or []) for s in specs):
+            auth_b = external_auth.load_b(asset) or None
+
+    # Sign in FRESH for this stage.  The curated rules run last, after the engines
+    # (which on premium can take hours), by when the sign in from the start of the
+    # scan has usually run out and the site answers "session expired".  Each
+    # account is signed in again now, and the engine can sign in again once more
+    # if a session still lapses while the checks run.
+    def _fresh_headers(auth):
+        if not auth:
+            return None
+        s = external_auth.session_for(auth, opts["allow_private"])
+        return _session_headers(s) if s.get("ok") else None
+
+    headers = _fresh_headers(auth_a) or _session_headers(session)
+    second_headers = _fresh_headers(auth_b)
+    reauth_a = (lambda: _fresh_headers(auth_a)) if auth_a else None
+    reauth_b = (lambda: _fresh_headers(auth_b)) if auth_b else None
 
     host = urlparse(url).hostname or ""
     row = {"tool": "curated", "name": "Premium curated rules", "status": "ok",
@@ -2231,6 +2243,7 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
            "allow_private": opts["allow_private"],
            "code_routes": list(wb.get("routes") or []),
            "headers": headers or None, "second_headers": second_headers,
+           "reauth_a": reauth_a, "reauth_b": reauth_b,
            "budget": 60, "oob": oob}
     from collections import Counter
 

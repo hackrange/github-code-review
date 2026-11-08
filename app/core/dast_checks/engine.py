@@ -192,6 +192,21 @@ def _normalize(body: str) -> str:
     return re.sub(r"\s+", " ", body).strip()
 
 
+# A page that answers HTTP 200 but is really a sign in wall or a session that
+# has run out.  A long scan can outlive the session it signed in with, and the
+# site then answers these instead of the real page; a status check alone is
+# fooled, so a compare against one would be meaningless.
+_AUTHLESS = re.compile(
+    r"session (has )?(expired|timed ?out)|your session (has )?(expired|timed)|"
+    r"(log|sign) ?in again|authenticate again|please (authenticate|log ?in|sign ?in)|"
+    r"you need to (log|sign) ?in|(log|sign) ?in to continue", re.I)
+
+
+def _looks_authless(resp) -> bool:
+    """True when a response is a sign in or session expired wall, not content."""
+    return bool(_AUTHLESS.search(((resp or {}).get("body") or "")[:8000]))
+
+
 def _env_for(response: dict, control: dict, oob_hit: bool, saved: dict = None) -> dict:
     """The names and helpers a differential may use.
 
@@ -524,6 +539,23 @@ def _run_two_account(spec: dict, ctx: dict, domains, budget: Budget) -> list:
     a = Client(base_url, domains, "read", budget, allow_private, ctx.get("headers"))
     b = Client(base_url, domains, "read", budget, allow_private, ctx.get("second_headers"))
     anon = Client(base_url, domains, "read", budget, allow_private, None)
+    # A long scan can outlive the sign in, so each account can sign in again once
+    # if its session has run out while the checks run.  Kept to one per account
+    # so a site that will not keep a session is not hammered.
+    reauth = {"a": ctx.get("reauth_a"), "b": ctx.get("reauth_b")}
+    may_reauth = {"a": bool(reauth["a"]), "b": bool(reauth["b"])}
+
+    def live(client, who, url):
+        """Fetch as one account; if the session has run out, sign in again once
+        and retry, so no check ever runs against a session expired page."""
+        resp = client.request("GET", url)
+        if _looks_authless(resp) and may_reauth[who]:
+            may_reauth[who] = False
+            fresh = reauth[who]()
+            if fresh:
+                client.headers = dict(fresh)
+                resp = client.request("GET", url)
+        return resp
 
     confirm = spec.get("confirm") or {}
     differential = confirm.get("differential") or "False"
@@ -533,18 +565,25 @@ def _run_two_account(spec: dict, ctx: dict, domains, budget: Budget) -> list:
     for url in _b_objects(b, base_url, ctx.get("code_routes")):
         confirmations, resp_a = 0, None
         for _attempt in range(retest):
-            resp_b = b.request("GET", url)
-            if resp_b.get("status") != 200:
+            resp_b = live(b, "b", url)
+            # It must be the second account's real object: a 200 that is not a
+            # sign in or session expired wall.
+            if resp_b.get("status") != 200 or _looks_authless(resp_b):
                 break
-            resp_a = a.request("GET", url)
+            resp_a = live(a, "a", url)
             resp_anon = anon.request("GET", url)
+            # The first account must have reached the real object too; a sign in
+            # wall is not access and there would be nothing to compare.
+            if _looks_authless(resp_a):
+                resp_a = None
+                break
             env = _env_for(resp_a, {}, False,
                            saved={"b": resp_b, "anon": resp_anon})
             if evaluate(differential, env):
                 confirmations += 1
             else:
                 break
-        if confirmations == retest and confirmations > 0:
+        if confirmations == retest and confirmations > 0 and resp_a is not None:
             f = _finding(spec, a, resp_a, url)
             f["evidence"] = _two_account_evidence(url, resp_a, resp_b, resp_anon)
             f["reproduce"] = _two_account_reproduce(url)
