@@ -375,11 +375,24 @@
           {%- if links | length > linked | length %} <span class="faint small">, {{ links | length - linked | length }} suggested</span>{% endif %}</span></summary>
       <div class="faint small" style="padding:.4rem 1rem 0">Picked in Edit, or worked out from the Web Applications tab, web addresses, the code and names.  Linked at 60 and over.</div>
       {% if links %}
+      {# Rows tick into this one form, so several can be unpinned or removed
+         at once.  Each row keeps its own buttons in its own form. #}
+      <form method="post" action="{{ base }}/external/{{ asset.id }}/repos" id="repos-bulk"
+            class="card-body repos-bulk" style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <span class="faint small" data-repos-count>None ticked</span>
+        <button class="btn sm" name="action" value="forget" type="submit" data-repos-needs-tick
+                title="Hand picked or code found links go back to being worked out">Unpin selected</button>
+        <button class="btn sm danger" name="action" value="hide" type="submit" data-repos-needs-tick
+                title="Never link these repositories to this site">Remove selected</button>
+      </form>
       <div class="table-scroll"><table>
-        <thead><tr><th>Repository</th><th>Why</th><th>Open findings</th><th></th></tr></thead>
+        <thead><tr><th><input type="checkbox" data-repos-check-all aria-label="Select every repository"></th><th>Repository</th><th>Why</th><th>Open findings</th><th></th></tr></thead>
         <tbody>
         {% for l in links %}
           <tr>
+            <td><input type="checkbox" name="repository" value="{{ l.full_name }}" form="repos-bulk"
+                       data-repos-tick aria-label="Select {{ l.full_name }}"></td>
             <td class="small"><a href="{{ base }}/repositories/{{ l.id }}">{{ l.full_name }}</a>
               <div>{% if l.source == 'manual' %}<span class="badge ok">picked</span>{% elif l.linked %}<span class="badge ok">linked</span>{% else %}<span class="badge pending">suggested</span>{% endif %}
                 <span class="faint">{{ l.score }}</span></div>
@@ -695,4 +708,5 @@
   </form></div>
 </div>
 <script src="{{ base }}/static/external.js?v={{ asset_v('external.js') }}"></script>
+<script src="{{ base }}/static/external_repos.js?v={{ asset_v('external_repos.js') }}"></script>
 {% endblock %}

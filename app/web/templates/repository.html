@@ -67,6 +67,47 @@
   </div>
 </div>
 
+{# The host names its own files say it serves: ingress and route hosts,
+   server_name, CNAME, CDN aliases, deploy urls, allowed hosts, app urls.
+   Read off the default branch by every scan. #}
+<div class="card" id="served">
+  <div class="card-head">Sites its code serves</div>
+  <div class="card-body">
+    {% if not served_at %}
+    <span class="faint">Not read yet.  The next scan reads them from the default branch.</span>
+    {% elif not served %}
+    <span class="faint">Nothing on the default branch says which host it answers on.
+      Its ingress, web server, deploy or app url settings would.</span>
+    {% else %}
+    <div class="table-scroll"><table>
+      <thead><tr><th>Host</th><th>How it says so</th><th>Where</th>{% if can_sites %}<th>External site</th>{% endif %}</tr></thead>
+      <tbody>
+      {% for e in served %}
+        <tr><td class="mono small">{{ e.host }}
+              {% if e.kind == 'names' %}<div><span class="badge pending" title="Written in the code, which may only call it">named in the code</span></div>{% endif %}</td>
+          <td class="small">{{ e.how }}</td>
+          <td class="mono small faint">{{ e.files | join(', ') }}</td>
+          {% if can_sites %}<td class="small">{% if e.site_id %}<a href="{{ base }}/external/{{ e.site_id }}#code">open</a>
+            {% elif e.host.startswith('*.') %}<span class="faint">a wildcard</span>
+            {% else %}<span class="badge medium">not listed</span>{% endif %}</td>{% endif %}
+        </tr>
+      {% endfor %}
+      </tbody></table></div>
+    <div class="faint small">Read {{ served_at | dt('%Y-%m-%d') }} from the default branch.
+      A site whose host is here is linked to this repository on its own page.</div>
+    {% if can_sites and served_missing %}
+    <form method="post" action="{{ base }}/external/add" style="margin-top:.6rem">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="hosts" value="{{ served_missing | join('\n') }}">
+      <button class="btn" type="submit">Add {{ served_missing | length }} to External sites</button>
+      <span class="faint small">Nothing is sent to them until somebody reads their
+        telemetry or scans them.</span>
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
+</div>
+
 {% if can_tag %}
 {# The repository's own answers in the boxes, the connection's as the hint.
    An empty box, or nothing ticked, goes back to the connection. #}

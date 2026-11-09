@@ -110,6 +110,10 @@ MAX_BRANCHES = 300
 # it counts without anybody saying so.  Below this it is a suggestion.
 LINK_THRESHOLD = 60
 MAX_WHITEBOX_REPOS = 3
+# A repository whose files serve more hosts than this is likely shared
+# infrastructure (a DNS, CDN or ingress repository for many sites), so a host
+# it serves is a suggestion rather than a link.
+SHARED_SERVES = 20
 MAX_WHITEBOX_SINKS = 300
 MAX_FINDINGS = 3000
 
@@ -988,6 +992,37 @@ _ENV_WORDS = re.compile(r"^(?:dev|qa|uat|stg|stage|staging|prod|prd|test|tst|"
                         r"sandbox|sbx|demo|dr)\d*$")
 
 
+# Each repository's parsed host list, kept until a scan replaces it.  Ingest
+# checks the list when it stores it, so this only parses, and only once per
+# scan rather than on every page that works out links.
+_HOSTS_CACHE: dict = {}
+_HOSTS_CACHE_MAX = 20000
+
+
+def _code_hosts_of(repo) -> list:
+    raw = repo.default_hosts or ""
+    if not raw:
+        return []
+    stamp = (repo.default_hosts_at, len(raw))
+    hit = _HOSTS_CACHE.get(repo.id)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        value = []
+    entries = [e for e in value if isinstance(e, dict) and isinstance(e.get("host"), str)
+               and e.get("kind") in ("serves", "names")] if isinstance(value, list) else []
+    for e in entries:
+        e.setdefault("how", "")
+        if not isinstance(e.get("files"), list):
+            e["files"] = []
+    if len(_HOSTS_CACHE) >= _HOSTS_CACHE_MAX:
+        _HOSTS_CACHE.clear()
+    _HOSTS_CACHE[repo.id] = (stamp, entries)
+    return entries
+
+
 def _stem(text: str) -> str:
     """A name with its environment words and punctuation taken off."""
     value = re.sub(r"[^a-z0-9]", "", (text or "").lower())
@@ -1035,6 +1070,26 @@ class Mapper:
             stem = _stem(repo.name)
             if len(stem) >= 4:
                 self.by_stem.setdefault(stem, []).append(repo.id)
+        # Host names each repository's own files serve, or name, read off
+        # its default branch by every scan.  See app.core.code_hosts.
+        self.code_serves, self.code_names, self.code_wild = {}, {}, []
+        self.code_serve_stem, self.serve_count = {}, {}
+        for repo in repos:
+            entries = _code_hosts_of(repo)
+            serves = [e for e in entries if e["kind"] == "serves"]
+            self.serve_count[repo.id] = len(serves)
+            for e in serves:
+                if e["host"].startswith("*."):
+                    self.code_wild.append((e["host"][1:], repo.id, e))
+                    continue
+                self.code_serves.setdefault(e["host"], {}).setdefault(repo.id, e)
+                label, _dot, rest = e["host"].partition(".")
+                stem = _stem(label)
+                if len(stem) >= 4 and rest:
+                    self.code_serve_stem.setdefault((stem, rest), {}).setdefault(repo.id, e)
+            for e in entries:
+                if e["kind"] == "names":
+                    self.code_names.setdefault(e["host"], {}).setdefault(repo.id, e)
         self.app_names = {r.id: ((applies.get(r.id, {}).get("application_name") or {})
                                  .get("value") or "").strip() for r in repos}
         # Hosts a diagram found written into each repository's code.
@@ -1100,6 +1155,30 @@ class Mapper:
 
         for repo_id, how in (self.by_host.get(asset.host) or {}).items():
             add(repo_id, 95 if how == "its web addresses" else 80, f"host named in {how}")
+        # What the repository's own files say it serves.
+        host = asset.host
+        for repo_id, e in (self.code_serves.get(host) or {}).items():
+            where = e["files"][0] if e["files"] else "its files"
+            if self.serve_count.get(repo_id, 0) > SHARED_SERVES:
+                add(repo_id, 55, f"its {e['how']} serves this host ({where}), but it serves "
+                                 f"{self.serve_count[repo_id]} hosts, so it may be shared "
+                                 "infrastructure")
+            else:
+                add(repo_id, 88, f"its {e['how']} serves this host ({where})")
+        for suffix, repo_id, e in self.code_wild:
+            if host.endswith(suffix) and host != suffix.lstrip("."):
+                add(repo_id, 55, f"its {e['how']} serves *{suffix}, which covers this host")
+        label0, _dot, rest0 = host.partition(".")
+        stem0 = _stem(label0)
+        if len(stem0) >= 4 and rest0:
+            for repo_id, e in (self.code_serve_stem.get((stem0, rest0)) or {}).items():
+                if e["host"] != host and self.serve_count.get(repo_id, 0) <= SHARED_SERVES:
+                    add(repo_id, 70, f"its {e['how']} serves {e['host']}, another "
+                                     "environment of this host")
+        for repo_id, e in (self.code_names.get(host) or {}).items():
+            where = e["files"][0] if e["files"] else "its code"
+            add(repo_id, 45, f"its code names this host ({where}), which may only mean "
+                             "it calls it")
         for app in self.apps_by_host.get(asset.host, []):
             for repo_id in app["repo_ids"]:
                 add(repo_id, 90, f"part of web application {app['name']}, which lists this host")

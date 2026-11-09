@@ -478,18 +478,53 @@ Worked out on every read, best first:
 | Linked by hand, or the host found in the code by a scan | 100 |
 | The host in the repository's web addresses | 95 |
 | A web application the repository is part of lists the host | 90 |
+| The repository's own files serve the host (see below) | 88 |
 | The host in a diagram's addresses | 80 |
 | Another environment of the host is in its web addresses or web application | 75 |
+| Its files serve another environment of the host, on the same domain | 70 |
 | The host's first label, without environment words like dev or stg, equals the repository's name or its application name | 60 |
+| Its files serve a wildcard that covers the host, or it serves more than 20 hosts | 55 |
 | The site's application or a tag equals the repository's application name | 50 |
+| Its code only names the host, in an http or https address | 45 |
 | One contains the other | 40 |
 
 60 and over are linked; below that they are suggestions.  A shared application
 name alone never links a repository: sites with the same application name do not
 all run the same code, so it is offered as a suggestion to link by hand.  **Not this one**
 hides a link until somebody pins it back, and **Unpin** sends a hand made link
-back to being worked out.  Only repositories the person can see are offered, so a group
+back to being worked out.  Tick several, or the box at the top of the list for
+all of them, to **Unpin selected** or **Remove selected** at once.  Remove is
+**Not this one** for each.  Only repositories the person can see are offered, so a group
 that narrows what someone sees narrows this too.
+
+### Hosts a repository's files serve
+
+Every scan reads the default branch for the host names the code says it
+answers on, so a site links to its code without anybody typing web addresses
+into the repository.  Nothing is fetched and nothing in the checkout runs.
+
+| File | What is read |
+|---|---|
+| Kubernetes Ingress, Route, HTTPRoute, Gateway, VirtualService, Certificate | `host:` and `hosts:` |
+| Helm values | `host:` and `hosts:` under `ingress:` or a route, never under `database:` |
+| nginx, Apache, Traefik, Caddy | `server_name`, `ServerName`, `ServerAlias`, ``Host(`...`)``, site blocks |
+| `CNAME` | the host in it |
+| Terraform and CloudFormation | CDN `aliases`, certificate `domain_name` and alternative names, custom domains |
+| GitHub Actions and GitLab CI | a deploy `environment:` block's `url:` |
+| OpenAPI and Swagger | `servers:` urls and `host:` |
+| Settings and `.env` files | `APP_URL`, `SITE_URL`, `PUBLIC_URL`, `NEXTAUTH_URL`, `VIRTUAL_HOST`, `ALLOWED_HOSTS` and the like |
+| `package.json`, site generators | `homepage`, the site's `url` or `baseURL` |
+
+Settings that usually name somebody else's host, such as `API_URL`,
+`SERVER_URL` or a database host, are not read as served.  Any other http or
+https address in the code is kept as **named**.  The code may only call that
+host, so it is a suggestion and never a link.  Tests, dependencies, templated
+values and placeholders like `your-domain.com` are skipped.
+
+A repository's page lists the hosts under **Sites its code serves**.  Someone
+who manages External sites also sees which ones are already sites, and can
+add the rest with one button.  Nothing is sent to them until somebody reads
+their telemetry or scans them.
 
 ## Code behind it, from a scan
 

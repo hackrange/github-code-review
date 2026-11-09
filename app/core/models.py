@@ -409,6 +409,10 @@ class Repository(Base):
     # stays off the row.
     default_routes = Column(Text, default="")
     default_routes_at = Column(DateTime(timezone=True))
+    # Host names the default branch serves (ingress, server, deploy, CDN,
+    # allowed hosts) or names in its code.  JSON from app.core.code_hosts.
+    default_hosts = Column(Text, default="")
+    default_hosts_at = Column(DateTime(timezone=True))
 
     # Every branch the last scan actually walked here, as a list of names.
     #

@@ -50,6 +50,10 @@ api = APIRouter(prefix="/external")
 NOT_FOUND = "Not Found"
 
 
+# The most repositories one submit on a site's page may change.
+MAX_BULK_REPOS = 200
+
+
 def _back(where: str, message: str, kind: str = "ok") -> str:
     from urllib.parse import quote
 
@@ -978,7 +982,10 @@ async def clear_tls_pins(asset_id: int, request: Request, user: User = Depends(c
 
 @router.post("/external/{asset_id}/repos")
 async def link_repo(asset_id: int, request: Request, user: User = Depends(current_user)):
-    """Link a repository by name, or confirm, hide or forget a found one."""
+    """Link a repository by name, or confirm, hide or forget a found one.
+
+    Several ticked on the site's page come as several "repository" fields.
+    Only unpin (forget) and remove (hide) take more than one."""
     await check_csrf(request)
     from app.core.models import Repository
 
@@ -989,33 +996,52 @@ async def link_repo(asset_id: int, request: Request, user: User = Depends(curren
     if re.fullmatch(rf"/external/{int(asset_id)}/scans/\d{{1,9}}", back):
         here = back + "#code"
     action = str(form.get("action") or "link")
+    if action not in ("link", "hide", "forget"):
+        return redirect(_back(here, "Pick what to do with them.", "error"))
+    raw = [str(v) for v in form.getlist("repository") if str(v).strip()]
+    if not raw:
+        return redirect(_back(here, "Tick at least one repository.", "error"))
+    if len(raw) > MAX_BULK_REPOS:
+        return redirect(_back(here, f"At most {MAX_BULK_REPOS} at a time.", "error"))
+    if len(raw) > 1 and action == "link":
+        return redirect(_back(here, "Link them one at a time.", "error"))
+    names = list(dict.fromkeys(clean_text(v, "Repository", limit=320) for v in raw))
     with session_scope() as db:
         _guard(db, user)
         asset = _asset(db, asset_id)
-        name = clean_text(form.get("repository"), "Repository", limit=320)
         # Through rbac, so a name the person cannot see is the same as a
         # name that does not exist.
-        repo = (rbac.visible_repositories(db, user)
-                .filter(Repository.full_name == name).one_or_none())
-        if repo is None:
-            return redirect(_back(here, f"No repository called {name}.", "error"))
-        row = (db.query(ExternalAssetRepo)
-               .filter(ExternalAssetRepo.asset_id == asset.id,
-                       ExternalAssetRepo.repository_id == repo.id).one_or_none())
+        repos = {r.full_name: r for r in rbac.visible_repositories(db, user)
+                 .filter(Repository.full_name.in_(names)).all()}
+        missing = [n for n in names if n not in repos]
+        if missing:
+            return redirect(_back(here, f"No repository called {missing[0]}.", "error"))
+        rows = {r.repository_id: r for r in db.query(ExternalAssetRepo)
+                .filter(ExternalAssetRepo.asset_id == asset.id,
+                        ExternalAssetRepo.repository_id.in_([r.id for r in repos.values()]))
+                .all()}
+        for name in names:
+            repo = repos[name]
+            row = rows.get(repo.id)
+            if action == "forget":
+                if row is not None:
+                    db.delete(row)
+            else:
+                if row is None:
+                    row = ExternalAssetRepo(asset_id=asset.id, repository_id=repo.id)
+                    db.add(row)
+                row.source = "hidden" if action == "hide" else "manual"
+                row.added_by = user.username[:120]
+            record(db, f"external.repo_{action}", actor=user.username,
+                   target=asset.host, detail=repo.full_name, source_ip=client_ip(request))
+        one = len(names) == 1
+        what = names[0] if one else f"{len(names)} repositories"
         if action == "forget":
-            if row is not None:
-                db.delete(row)
-            message = f"{repo.full_name} is back to being worked out."
+            message = f"{what} {'is' if one else 'are'} back to being worked out."
+        elif action == "hide":
+            message = f"{what} will not be linked to {asset.host}."
         else:
-            if row is None:
-                row = ExternalAssetRepo(asset_id=asset.id, repository_id=repo.id)
-                db.add(row)
-            row.source = "hidden" if action == "hide" else "manual"
-            row.added_by = user.username[:120]
-            message = (f"{repo.full_name} will not be linked to {asset.host}."
-                       if action == "hide" else f"Linked {repo.full_name}.")
-        record(db, f"external.repo_{action}", actor=user.username,
-               target=asset.host, detail=repo.full_name, source_ip=client_ip(request))
+            message = f"Linked {what}."
     return redirect(_back(here, message))
 
 

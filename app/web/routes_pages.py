@@ -2413,6 +2413,38 @@ async def web_apps_import_check(request: Request,
         return page(request, "web_apps_import_confirm.html", **context)
 
 
+def _served_hosts(db, user, repo) -> dict:
+    """The host names this repository's files say it serves, for its page.
+
+    Anybody who can see the repository sees what its own files say.  Whether
+    each host is an External site, and the button to add the ones that are
+    not, is only for somebody who manages External sites.  Hosts the code
+    only names are shown when they are already a site, since a list of every
+    address the code calls says nothing about what it serves.
+    """
+    from app.core import code_hosts, external
+    from app.core.models import ExternalAsset
+
+    entries = code_hosts.load(repo.default_hosts or "[]") if repo.default_hosts else []
+    can_sites = rbac.can(user, "external.manage") and external.enabled(db)
+    sites = {}
+    if can_sites and entries:
+        wanted = [e["host"] for e in entries if not e["host"].startswith("*.")]
+        for i in range(0, len(wanted), 500):
+            for asset_id, host in (db.query(ExternalAsset.id, ExternalAsset.host)
+                                   .filter(ExternalAsset.host.in_(wanted[i:i + 500]))):
+                sites[host] = asset_id
+    served = []
+    for e in entries:
+        if e["kind"] == "names" and e["host"] not in sites:
+            continue
+        served.append(dict(e, site_id=sites.get(e["host"])))
+    missing = [e["host"] for e in served if e["kind"] == "serves" and not e["site_id"]
+               and not e["host"].startswith("*.")]
+    return {"served": served, "served_at": repo.default_hosts_at,
+            "can_sites": can_sites, "served_missing": missing}
+
+
 @router.get("/repositories/{repo_id:int}")
 def repository_about(repo_id: int, request: Request, msg: str = "",
                      kind: str = "", user: User = Depends(current_user)):
@@ -2479,6 +2511,7 @@ def repository_about(repo_id: int, request: Request, msg: str = "",
                     "set_by": r.set_by or "", "set_at": r.set_at}
                    for r in scan_scope.settings_of(db, repo.full_name)["branches"]
                    if r.mode == "none"]
+        context.update(_served_hosts(db, user, repo))
         from app.core import ai as _ai, code_reasoning as _cr
         context["can_reason"] = (rbac.can(user, "finding.validate")
                                  and _cr.is_on(_ai.config(db)))

@@ -968,6 +968,14 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                 [r for r in routes if isinstance(r, str) and r.startswith("/")
                  and len(r) <= 200][:300])
             repo.default_routes_at = utcnow()
+        # The host names it serves or names, the same way: only a run that
+        # read them replaces the list.
+        hosts = entry.get("default_hosts")
+        if isinstance(hosts, list):
+            from app.core import code_hosts
+
+            repo.default_hosts = json.dumps(code_hosts.load(hosts))
+            repo.default_hosts_at = utcnow()
         dast = entry.get("dast")
         if isinstance(dast, dict) and dast.get("verdict"):
             repo.dast_verdict = str(dast.get("verdict"))[:16]

@@ -6,6 +6,23 @@ moved.
 
 ## 2026-11-10
 
+**Sites link to the code that serves them, from the code itself.**  Every scan now
+reads each repository's default branch for the hosts it answers on: ingress and
+route hosts, Helm values, nginx, Apache, Traefik and Caddy, a `CNAME` file, CDN
+aliases and certificates in Terraform, deploy environment urls in CI, OpenAPI
+servers, allowed hosts and app url settings.  A site whose host is there links to
+the repository, and so does another environment of it.  A host the code only
+calls is a suggestion.  A repository that serves more than 20 hosts, such as
+shared DNS or CDN code, only suggests.  A repository's page lists **Sites its code
+serves**, and an administrator can add the ones that are not External sites yet in
+one press.  The lists fill in as each repository is next scanned.
+
+**Unpin or remove several repositories behind a site at once.**  On a site's
+page, Code behind it has a tick box per repository and one at the top for all of
+them.  **Unpin selected** sends hand picked links back to being worked out, and
+**Remove selected** keeps every ticked repository from being linked to the site
+again, asking first.
+
 **An application name alone no longer links code to a site.**  A site whose
 application, or one of its tags, matched a repository's application name had that
 repository linked as code behind it.  Sites that share an application name do not

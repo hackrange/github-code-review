@@ -90,6 +90,9 @@ scan_one_repo() {
   # say which code answers its paths.  null when they were not read, which
   # leaves the last list standing.
   DEFAULT_ROUTES_JSON='null'
+  # The host names the default branch says it serves, or names, so a site
+  # can be tied to its code.  null when not read, which leaves the last list.
+  DEFAULT_HOSTS_JSON='null'
   # Every branch that is there, as opposed to the ones this run walked.  A
   # branch skipped for being quiet is still a branch, and a sign off on one is
   # not a sign off on code that has gone.
@@ -119,7 +122,7 @@ scan_one_repo() {
     # thousand credential findings and jq refused the command line, which is
     # how a whole repository went missing from a scan that reported success.
     local f_repo f_branches f_secrets f_sbom f_license f_policy f_vulns
-    local f_sbom_branches f_access f_pulls f_traffic f_code f_iac
+    local f_sbom_branches f_access f_pulls f_traffic f_code f_iac f_hosts
     f_repo=$(json_file "$repo_json" repo)
     f_branches=$(json_file "$BRANCHES_JSON" branches)
     f_secrets=$(json_file "$SECRETS_JSON" secrets)
@@ -133,6 +136,7 @@ scan_one_repo() {
     f_traffic=$(json_file "$CLONE_TRAFFIC_JSON" traffic)
     f_code=$(json_file "$CODE_FINDINGS_JSON" code)
     f_iac=$(json_file "$MISCONFIG_JSON" iac)
+    f_hosts=$(json_file "${DEFAULT_HOSTS_JSON:-null}" hosts)
 
     jq -cn \
       --slurpfile repo "$f_repo" \
@@ -150,6 +154,7 @@ scan_one_repo() {
       --slurpfile clone_traffic "$f_traffic" \
       --slurpfile code_findings "$f_code" \
       --slurpfile misconfigurations "$f_iac" \
+      --slurpfile default_hosts "$f_hosts" \
       --argjson dur "$(( $(date +%s) - started ))" \
       --argjson code_ok "${CODE_PASS_COMPLETE:-true}" \
       --arg code_why "${CODE_PASS_INCOMPLETE:-}" \
@@ -185,6 +190,8 @@ scan_one_repo() {
         default_head: $default_head,
         # The routes the default branch declares.  null when not read.
         default_routes: $default_routes,
+        # Host names the default branch serves or names.  null when not read.
+        default_hosts: $default_hosts[0],
         branch_count: ($branches[0] | length),
         # The semgrep rules this run had, so a finding whose rule was not among
         # them is held open rather than read as fixed.
@@ -805,6 +812,14 @@ scan_one_repo() {
       if [[ "$rt_out" == \[* ]]; then
         DEFAULT_ROUTES_JSON="$rt_out"
         log_info "[$full_name] $(printf '%s' "$rt_out" | jq 'length') route(s) declared"
+      fi
+      # The host names it serves, from its ingress, server and deploy files,
+      # and the ones its code names.  Reading only, nothing runs.
+      local ch_out
+      ch_out=$("$rt_py" "$GHSCAN_HOME/lib/code_hosts.py" "$clone_dir" 2>/dev/null) || ch_out=""
+      if [[ "$ch_out" == \[* ]]; then
+        DEFAULT_HOSTS_JSON="$ch_out"
+        log_info "[$full_name] $(printf '%s' "$ch_out" | jq '[.[]|select(.kind=="serves")]|length') host name(s) served"
       fi
     fi
   fi
