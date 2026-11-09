@@ -138,9 +138,10 @@
           {% endfor %}
         </div>
       </label>
-      {% if can_scope %}<p class="faint small">Branches to leave out of scans
-        are set on <a href="{{ base }}/repositories/{{ repo.id }}/scope">Branches
-        and scope</a>, with Do not scan.</p>{% endif %}
+      {% if can_scope %}<div style="margin:.6rem 0">
+        <a class="btn" href="{{ base }}/repositories/{{ repo.id }}/scope">Change Scanned Branches</a>
+        <span class="faint small">Pick branches to leave out of scans, or to scan for
+          credentials only.</span></div>{% endif %}
       <p class="faint small">Owners and notify are email addresses, so somebody
         can be asked later.  Several are fine, comma separated.  Anything left
         empty, or with nothing ticked, uses what the connection says.  A ticked
