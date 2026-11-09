@@ -39,6 +39,19 @@ the next morning tries again.
 The age at which a scan counts as overdue is the same `dast.max_age_days` the
 Web Applications tab uses.
 
+The dynamic scanning settings are on the **DAST Admin** page, reached from
+External sites, under **General DAST settings**:
+
+| Setting | What it does |
+|---|---|
+| `dast.scan_proxy` | Run the engines through a local proxy for each scan.  On by default.  See [The scan proxy](#the-scan-proxy). |
+| `dast.oob_url` | The base address the out of band checks use for their callback.  Empty skips those checks. |
+| `dast.ai_max_findings` | The most findings one scan sends to the model, default 40. |
+| `dast.exposure_check` | Load each site a second time through a proxy no allow list knows.  Off by default.  See [Exposure](#exposure). |
+| `dast.unwhitelisted_proxy` | That proxy, such as a Squid address.  Held encrypted. |
+| `dast.whitelisted_vantage` | Which side a target's allow list lets in, this server (direct) or the proxy. |
+| `dast.whitelisted_ip`, `dast.ip_echo_url` | This server's public address, for reference, and the service that shows what address the proxy leaves from. |
+
 ## Adding sites
 
 **External sites** in the Administration menu, then **Add sites**.  Paste one
@@ -166,12 +179,48 @@ Three ways a scan gets onto a site.
 | baseline | Read only checks: headers, cookies, CORS, TRACE, reflection, TLS, exposed files such as `.git` and `.env`, risky open ports, old JavaScript libraries |
 | quick | baseline, testssl.sh, nuclei |
 | standard | quick, Nikto, Wapiti |
-| thorough | standard with ffuf content discovery first and a wider nuclei pass |
-| premium | thorough, sqlmap, Dalfox |
+| thorough | standard with ffuf content discovery first, a wider nuclei pass and the browser read of client code |
+| premium | thorough, sqlmap, Dalfox, and every curated rule that is enabled |
+
+A saved scan profile is a depth plus the rule sets to run.  See
+[Curated rules](#curated-rules).
 
 From standard up the engines send attack payloads, and the page asks you to
-confirm you are allowed to.  One engine scan runs at a time.  An engine that
-is not installed is skipped and the scan says so.
+confirm you are allowed to.  How many engine scans run at once is
+`external.max_concurrent`.  An engine that is not installed is skipped and the
+scan says so.  Each engine row says how many requests that tool sent.
+
+Thorough and premium give ffuf a list of about 1,150 high signal paths, where
+quick uses 140.  Nikto is paced, because a firewall reads its burst of TLS
+handshakes as a flood and it then gives up in about a second.  Wapiti skips the
+endless spaces an online store generates, such as add to cart, review, login
+referer, wishlist and product compare links, which used to take its whole time
+limit on one site.
+
+Each engine has a time limit.  A site can set its own, in minutes, for nuclei,
+Nikto, ffuf, Wapiti, sqlmap and Dalfox.  A blank one keeps the default.  nuclei
+and Dalfox write each finding as they find it, so a stopped engine keeps what it
+found.
+
+### The browser read of client code
+
+On thorough and premium, a headless browser loads the pages, runs their scripts
+and reads the JavaScript they loaded.  It reports a secret in a distinctive
+vendor format, redacted in the finding, and application source exposed through a
+source map.  Every request it makes is checked against private addresses, so a
+page cannot steer it into this server's network.  With no browser on hand the
+stage is skipped.
+
+### The scan proxy
+
+Each scan starts a local mitmproxy that the stock engines run through.  It puts
+the site's session on every request, so an engine that signs in badly on its own
+still sees what a user sees.  It refuses any host that is not the site or one of
+the company's domains from Settings, so an engine that follows a link off the
+target cannot reach it.  It counts what it forwards.  testssl reads the site's
+own TLS directly, and the baseline checks, the curated rules and the browser
+make their own requests, so none of those are in the count.  If mitmproxy will
+not start, the engines go direct and the scan says so.
 
 Before the engines run, the repositories mapped to the site are checked out
 at their default branch and read for routes: Express, Flask, FastAPI, Django,
@@ -189,9 +238,106 @@ minutes, and read back with its findings and a link to the assessment.
 through the API: the server, when it ran, the worst severity, the counts, a
 link to the result and, optionally, the findings.
 
-The newest finished scan becomes the site's last scan.  Every finished scan
-is also recorded as a DAST test on the Web Applications tab for the web
-applications behind the site.
+**Rapid7 InsightAppSec.**  Turn it on under **Integrations** on the DAST Admin
+page, with a region and an API key.  A scan or a schedule can run on a scan
+config made in Rapid7.  An hourly job, and **Import results now**, reads every
+completed scan, old ones included, splits its findings by host, and gives each
+host that is a site here a finished scan dated when Rapid7 finished it.  Only
+full scans come in, and Rapid7's false positives and duplicates are left out.  A
+site's newest few scans keep their findings, `ias.recent_detail` of them, and
+older ones roll back to counts, with **Pull full results** to fetch one again.
+A scan with its findings gets the PDF report, which names Rapid7 as the source,
+and AI triage.
+
+The newest finished scan becomes the site's last scan, and the list shows its
+letter grade, worked out as the page loads with the same rules as the PDF, so a
+decision made since then counts.  Every finished scan is also recorded as a DAST
+test on the Web Applications tab for the web applications behind the site.
+
+A site's page charts risk over time once it has a finished scan, with one line
+per source, such as built in and Rapid7, since they measure different things.
+Each point is one scan, its height a weighted risk from that scan's counts and
+its color the scan's worst finding.  The bubble on it shows the number and the
+point links to the scan.
+
+## Curated rules
+
+The stock engines find what their own templates know.  Curated rules add checks
+that each have to prove what they report.  A rule is data rather than code: a
+fixed engine reads it, and a small evaluator checks the result, so nothing a rule
+says can run as code.  188 ship with the product: 104 misconfiguration and
+exposure, 56 access control, 23 injection, and a few each for authentication,
+business logic and client side.
+
+**They start off.**  On the DAST Admin page, **Premium Curated Rules**, press
+**Load curated rules**.  That adds shipped rules that are not here yet, disabled,
+so an upgrade never quietly starts running new checks.  It also refreshes rules
+nobody edited, keeping whether each is on, and switches off an untouched rule the
+product stopped shipping.  Enable rules one at a time, or tick a whole class.  The
+list is grouped by class.
+
+**When they run.**  After the engines, at the premium depth, or under a saved
+scan profile that names their rule sets.  A profile called PHP with premium depth
+and the php rule set runs just those, and can be a site's default.  The scan's
+engine row says how many ran and groups the reasons the rest did not: wanting the
+callback, a second account, a mapped repository, or not being in this profile.
+
+**The standard.**  One validator is the gate for a save, for an AI draft and
+again before the engine runs a rule.  It requires:
+
+- a safety class.  `read` may send only GET, HEAD or OPTIONS.  `neutral` may send
+  a request that changes nothing lasting, and a POST has to say why.  `oob` may
+  prove only that a server made contact with the callback
+- no PUT, DELETE or PATCH in any class, and nothing in a probe that could change
+  data or knock a service over
+- a control, a request that cannot succeed so the normal answer is known, and a
+  differential, the difference a finding stands on.  A bare 200 is never a finding
+- at least one re-test
+- how to reproduce it by hand, and how to fix it
+
+The rule's requests are held to the site and the company's domains.  A probe can
+try several known paths, can decline to follow a redirect, and can forge a variant
+of the signed in session's JSON Web Token to test whether its signature is checked.
+The standard is published as a JSON Schema from the same page, so any tool can
+write to it.
+
+### Drafting a rule with AI
+
+With a model set up on the AI page, **Draft a rule with AI** takes what you want
+to find in a sentence, such as "a detection rule for a PHP-CGI argument injection
+flaw".  The model works in the background and the result lands under **Drafted
+rules**.
+
+The model is told the standard, and the validator is what enforces it.  A draft
+that names a host or an absolute URL, or fails the standard, is not offered as a
+rule, and the page says why.  A good one can be reviewed and edited.  It saves
+disabled and marked **AI draft**, and a person enables it.  Running a saved rule
+sends nothing to the model.
+
+The validator proves a rule is safe in shape and can show evidence.  It cannot
+prove a rule finds what you meant, so try it on a site where you know the answer.
+
+### Two accounts
+
+A site can hold a second test account, set under **Second account** in Edit.  With
+two accounts, a check finds an object from the second account's own pages, then
+reads it as the first account and as a signed out visitor.  It reports only when
+the first account gets the second's object and the visitor does not.  It stays
+quiet when the object is scoped to its owner or is public, and when no second
+account is set.
+
+From outside, nothing can know what your policy meant to allow, so the finding
+gives proof to judge: the address, the status each account got, whether the pages
+matched, how to repeat it, and a screenshot as each account, on the page and in
+the PDF.  Up to six findings get pictures in a scan.  Each account has a field,
+**What this login should and should not do**, and it goes into the evidence and
+the AI triage, so a read only auditor who may see everything can be told from a
+real bug.
+
+These checks run last, and a long scan can outlast a sign in.  So each account
+signs in fresh at the start of the stage, a page that says the session expired is
+not read as content even when it answers 200, and each may sign in once more part
+way.  They only read, so they say who can see an object and not who can change it.
 
 ## Scheduled scans
 
@@ -207,6 +353,12 @@ scanned, marked no scan or obsolete is skipped, and the schedule says why.  A
 once schedule turns itself off after it runs.  Through the API:
 `GET` and `POST /api/v1/external/assets/{id}/schedules`, and `DELETE` with the
 schedule's id.
+
+**Schedule monthly scans** in the list gives the ticked sites, or every site, a
+monthly scan with one profile, standard by default, inside a time window, 22:00
+to 04:00 by default.  Each site gets its own slot, across days 1 to 28 and then
+half hours, so a night holds a few scans rather than all of them.  A schedule can
+also run on InsightAppSec, using a scan config rather than a profile.
 
 ## A proxy per site
 
@@ -246,6 +398,11 @@ nuclei, ffuf, dalfox, sqlmap, nikto and wapiti sign in.  The baseline checks
 and testssl stay signed out.  A scan says whether it signed in, on its page
 and in its report, and a signed in scan past baseline needs the confirmation.
 Use a test account: a signed in scan can change what that user can change.
+
+**Test sign in** on a site's page signs in now with each saved account, the second
+included, and reports the result of each, so a wrong password shows up before a
+long scan rather than as a scan with nothing signed in.  A redirect that changes
+the host, or drops from https to http, loses every credential the request carried.
 
 A nextgen-dast server's API takes a form login, or HTTP Basic, which is sent
 from an Authorization: Basic header.  A bearer token or a cookie has no field
@@ -320,14 +477,16 @@ Worked out on every read, best first:
 |---|---|
 | Linked by hand, or the host found in the code by a scan | 100 |
 | The host in the repository's web addresses | 95 |
+| A web application the repository is part of lists the host | 90 |
 | The host in a diagram's addresses | 80 |
+| Another environment of the host is in its web addresses or web application | 75 |
 | The site's application or a tag equals the repository's application name | 70 |
-| The host's first label, without environment words like dev or stg, equals the repository's name | 60 |
+| The host's first label, without environment words like dev or stg, equals the repository's name or its application name | 60 |
 | One contains the other | 40 |
 
 60 and over are linked; below that they are suggestions.  **Not this one**
-hides a link for good, and **Unpin** sends a hand made link back to being
-worked out.  Only repositories the person can see are offered, so a group
+hides a link until somebody pins it back, and **Unpin** sends a hand made link
+back to being worked out.  Only repositories the person can see are offered, so a group
 that narrows what someone sees narrows this too.
 
 ## Code behind it, from a scan
@@ -363,6 +522,42 @@ repositories declare is split between them.  The confidence never reaches
 hand, and later scans read its routes.  **Match again** re-runs the match
 against the routes as they are now and sends nothing to the site.
 
+**A link that looks wrong.**  When a scan reaches none of the routes a linked
+repository declares, and the host is not written in its code, the scan's code
+section says so and offers **Un-pin**, which hides that repository for this site
+and takes it out of the list at once.  It asks you to confirm with the owner,
+because a repository can sit behind a site without sharing a route it reached.
+
+**Code that is not a scanned repository.**  Under **Ad-hoc code source** in a site's Edit, give
+a public git URL or upload a zip or tar.gz, and the read uses it the way it uses a
+mapped repository.  A URL has to be plain https to a public host with no
+credential in it.  An archive is unpacked with limits on size and file count, and
+every entry is checked so nothing lands outside its own folder.  The read checks
+code out in shared memory when there is room, and on disk otherwise.
+
+## Reachable code, and confirmed by both
+
+The read before a scan also looks for dangerous patterns, by type: a query built
+by joining strings, a shell or eval call, an unsafe deserialize, a template
+rendered from a string, a write into the page, and a file opened from user input.
+Each carries the routes its file declares.
+
+After the scan, a pattern is **reachable** when the scan reached one of those
+routes, and **context** when it did not.  The report's Code and the scan section
+lists the reachable ones as leads and the others as areas to review, which do not
+count toward the grade.  This reads routes and patterns.  It is not a call graph,
+so a reachable pattern is a strong lead rather than a traced path.
+
+When a reachable pattern of the matching kind sits on the same route as a dynamic
+finding, the finding is raised to confirmed, and it names the open code finding of
+that type from the repositories behind the site.  Evidence on a confirmed finding
+is labeled **Proof** in the report rather than Evidence.  None of this uses a model.
+
+It reads the other way too.  A code finding that a dynamic scan matched says so on
+its own page, naming the site and linking the scan, to anybody who can see the
+finding.  The exception form then warns that the risk is proven and reachable, and
+that "this code does not get deployed" does not apply.
+
 The scan page also says how many URI paths were reachable, how many
 addresses answered in all, the status mix, which engine found them, and for
 each linked repository how many of its routes the scan reached.  The newest
@@ -371,6 +566,24 @@ profile) in the External sites CSV and `url_paths` in the API, so you can
 see how big a site's scan is.  Recorded scans count nothing and leave the
 last count alone.
 
+## Exposure
+
+With `dast.exposure_check` on and a proxy set, each telemetry refresh also fetches
+the site's front page through the proxy.  A firewall or bot page counts as not
+reached.
+
+| This server's allowed side | The public side | The site reads |
+|---|---|---|
+| Reaches the site | Reaches the site | Open to the world |
+| Reaches the site | Does not | Whitelisted |
+| Does not | Does not | Unreachable |
+| Does not | Reaches the site | Anomaly, and worth a look |
+
+**Validate proxy** shows the address each side leaves from.  The list has an
+Exposure filter and a badge per row.  The site page shows one picture when it is
+open, since both sides saw the same page, and one from each side when they differ.
+Each answer says what one outside address saw rather than the whole internet.
+
 ## Combined risk
 
 The last dynamic scan leads, because it is what an attacker can reach now.
@@ -378,18 +591,59 @@ Open code findings behind a live site raise it, one step below their own
 level, since the code may not be what is deployed.  Both at medium or worse
 raise it one more step.
 
+## The risk of a finding
+
+Each finding on a scan also goes on a five by five matrix, shown in the PDF with
+its reasoning.  It uses no model and no tokens.
+
+**Likelihood** is how sure it is: a curated rule that proved it ranks above a
+baseline check, and that ranks above an engine's heuristic.  A known exploited
+issue moves it up, and a matching reachable pattern in the code confirms it.
+
+**Impact** is what a successful attack yields, by the class of weakness.  It goes
+up on a site open to the world or a sensitive address, and down on a whitelisted
+site.  An unconfirmed finding outside the dangerous classes stays capped at its own
+severity, so exposure alone cannot make a low into a high.
+
+**The data it holds.**  The product estimates what an application holds from the
+linked repositories' sensitivity tags, names, application names and diagrams: SOX,
+card data, health data, CUI, sensitive personal data, personal data, customer data
+or credentials.  The most serious one raises impact on proven findings, the page
+and the report say what it found, and the report names the consequence, such as
+fines or breach notification.  When nothing matches, nothing is claimed.  This reads
+tags and names, so an untagged repository with a dull name reads as holding nothing
+in particular.
+
+**How it is abused, and a real case.**  Findings in a serious class carry how that
+class is attacked and a documented public incident from a table kept in the code,
+on the page and in the PDF, with AI on or off.  A low or informational finding with
+no documented case names none.
+
+A soon to expire certificate is graded by the days it has left: 15 or fewer, or
+already expired, is high, 16 to 29 is medium, and 30 to 40 is informational.
+
 ## AI
 
 Both go through the AI analysis page's model and are off until one is set up.
 
 - **AI triage** of a scan: each finding gets likely real, likely false
-  positive or needs review, with the code finding that supports it.  It never
-  changes a severity.  A likely false positive is taken out of the scan and
+  positive or needs review, with the code finding that supports it, and a short
+  account of what can go wrong, how it is attacked and how likely that is here,
+  from the exposure, the data held and the computed risk.  It may use only the
+  incident and the consequence it was given, and it never changes a severity.
+  On a cross account finding it judges the access against what each login is
+  meant to do.  A likely false positive is taken out of the scan and
   its counts, unless it is about a secret (a key, password or token, which
   only proof lowers) or a person has decided on it.  The scan page links to
   what was taken out, with the model's reason and a Put back button.
 - **AI risk read** of a site: the last scan and the worst open code findings
   behind it, read together, with where they agree and what to do first.
+
+Three limits keep triage cheap.  It reads only what passed the filters above.  A
+finding unchanged since the site's last reviewed scan reuses its verdict and sends
+nothing.  Of the rest, `dast.ai_max_findings` go to the model, highest risk first,
+and the others keep their computed risk and are marked not reviewed.  A person's
+decision still wins.
 
 Every call is in the AI cost page under `dast-triage` or `external-risk`.  The
 scan and the site also keep their own token counts and cost.  Path traversal
@@ -422,6 +676,16 @@ saved (up to 400 addresses):
   page: Google API keys ... The key is: ...".  A title the engine cut short
   joins the rest.
 
+The re-check also drops a path that answers 401 or 403, which is a working access
+control or an expired session rather than a served file, and one that redirects to
+a sign in page.  ffuf reports a path only on a 200 or 206, and keeps the others as
+coverage.  Wapiti's cross site request forgery, Content Security Policy and htaccess
+findings are re-checked the same way.  Findings about what a page echoes or holds
+stay.  Script injection a Content Security Policy blocks, and cross site request
+forgery that SameSite cookies block, are not reported.  Cookies set on a redirect are
+kept, so a session cookie set on the way to a login page is seen.  A GraphQL
+introspection finding needs a real schema in the answer.
+
 Scans finished before these rules got them once, when the application
 started.  Findings with a person's decision were left as they were.
 
@@ -430,6 +694,12 @@ positive, a new severity, or an exception) together.  A decision shows at
 once on the page and in the PDF, with no new scan: the PDF is typeset on
 each download, and what the saved AI review said about a finding since
 called a false positive, excepted, or taken out is left out of it.
+
+Scope matters as much as the filters.  Only the paths of a real page count, as
+[Code behind it](#code-behind-it-from-a-scan) explains, and the External sites CSV
+adds `http_200_paths`, `unique_endpoints`, `paths_answered` and `scan_blocked`, so a
+site that refused most of the scan is plain to see before anybody reads its count
+as coverage.
 
 ## API
 

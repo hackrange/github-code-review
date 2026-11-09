@@ -4,6 +4,151 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-11-08
+
+**After upgrading, load the curated rules.**  Shipped rules do not arrive by
+themselves.  On the DAST Admin page, press **Load curated rules** to add new ones,
+disabled, and refresh the ones nobody edited.  Stale copies of the cross account
+rules are the most important to refresh, because the old ones report on far weaker
+evidence.
+
+**A code finding says when a scan confirmed it live.**  A code finding names the
+site and links the scan when a dynamic scan reached the same weakness.  When
+somebody asks for an exception on one, the form warns that the risk is proven and
+reachable, and that "this code does not get deployed" does not apply.  The dynamic
+report names the exact code finding, by its id, when a reachable code pattern and
+the scan agree.
+
+**A link that looks wrong says so.**  When a scan reaches none of the routes a linked
+repository declares and the host is not in its code, the scan page says so and offers
+**Un-pin**, which hides the repository for that site and drops it from the page at
+once.  The button used to do nothing for a repository linked automatically.
+
+**Code that is not a scanned repository.**  A site can name a public git URL or take
+an uploaded zip or tar.gz, and its routes and dangerous patterns are read the same
+way.  The URL must be plain https to a public host with no credential in it, and an
+archive is unpacked with limits.
+
+**Each weakness explained as a risk.**  AI triage now says what can go wrong, how it
+is attacked and how likely that is here, from the exposure and the attack surface.
+How a class is abused and a documented public incident come from a table in the code,
+on the page and in the PDF with AI on or off.  The model may name no other incident.
+
+**Risk weighs the data an application holds.**  SOX, card data, health data, CUI,
+personal and customer data are estimated from the linked repositories' tags, names
+and diagrams.  The most serious one raises impact on proven findings, and the report
+names the consequence.  A noisy low finding stays low.
+
+**Cross account findings show their proof.**  A finding says what each account saw and
+carries a screenshot as each one, on the page and in the PDF.  Each account has a field
+for what it should and should not do, which goes into the evidence and the AI triage.
+Both accounts sign in fresh for these checks, because a long scan had outlasted the
+session and an expired session page that answered 200 was read as the account's
+content.  ffuf no longer reports a 401 or 403 as a found file.
+
+**More curated rules.**  Oracle E-Business Suite self registration, file read and
+reflected script checks.  Adobe AEM's content, QueryBuilder, developer and OSGi
+consoles and a reflected script check.  Magento version.  The MuleSoft APIkit console.
+Exposed credential files and Spring Actuator on their known paths.  GraphQL login
+amplification through aliases.  Open registration on LibreChat, an open Open WebUI,
+and exposed Ollama, Jupyter and vector databases.  CORS with credentials, open redirect
+and Host header injection, the first rules for business logic and client side.  A rule
+can now try several known paths, and can decline to follow a redirect.
+
+**Risk over time, per source.**  A site page charts risk with one line for each of its
+scanners, built in or Rapid7, each point labeled with its number and linked to its scan.
+
+**A time limit per engine, per site.**  A site can set its own minutes for nuclei,
+Nikto, ffuf, Wapiti, sqlmap and Dalfox.  Wapiti also keeps out of the endless link
+spaces an online store generates, which used to take its whole limit.
+
+**Single sign on and sessions, from a security review.**  An account is now identified
+by the provider's issuer and immutable subject rather than a user name that can be
+reused, and the flow is bound to the browser that started it.  A scan drops every
+credential when a redirect changes host or falls back to http.  The API review no
+longer holds up the web worker while it runs, and account recovery codes, which never
+verified, now work.
+
+**Rapid7 stops switching itself off.**  Saving the Settings page turned the
+InsightAppSec integration off and blanked its key, because that page has none of its
+fields.  It now leaves them alone.
+
+## 2026-11-07
+
+**Risk scoring.**  Each dynamic finding goes on a five by five matrix, from how sure it
+is and what it would yield.  It uses no model.  The PDF shows the matrix and the
+reasoning on each finding.  The same finding reads higher on a site open to the world
+than on an allow listed one, and an unconfirmed low stays at its own level.
+
+**Reachable code.**  The code behind a site is read for dangerous patterns.  After the
+scan each is marked reachable when the scan reached its route, or context when it did
+not.  A live finding on a route with a matching pattern is raised to confirmed, and its
+evidence is labeled Proof.
+
+**Open to the world, or whitelisted.**  An optional second look through a proxy on no
+allow list sets each site's exposure.  The list filters on it and the site page shows
+what each side saw.
+
+**A sign in proxy for every engine.**  Each scan starts a local proxy that puts the
+session on every request and refuses hosts out of scope, on by default.  The scan page
+shows how many requests each tool sent.
+
+**A browser reads client code.**  Thorough and premium scans load pages in a headless
+browser and report a key in a vendor format, redacted, and source exposed through a
+source map.
+
+**Close to a hundred more curated rules.**  Served credential and config files,
+database dumps, debug panels, registries, consoles and open services, plus JSON Web
+Token bypass rules through a new step type.  Each fires on a specific signature against
+a control, never a bare 200.  The scan says why any rule skipped, grouped by reason.
+
+**Far fewer false positives.**  Paths answering 401 or 403, redirects to a login,
+script injection a Content Security Policy blocks and cross site request forgery that
+SameSite cookies block are left out, and Wapiti's findings are re-checked too.  A
+refusal that merely names `__schema` is no longer GraphQL introspection.
+
+**AI triage on a budget.**  A finding unchanged since the last reviewed scan reuses its
+verdict and sends nothing, and a cap, 40 per scan by default, sends the highest risk
+first.
+
+**Rapid7 detail.**  A site's newest InsightAppSec scans keep their full findings, whatever
+their size.  An older one has **Pull full results**.  The PDF report, which names Rapid7,
+and AI triage work on them.
+
+**Engines that keep what they found.**  nuclei and Dalfox write each finding as they find
+it, so a timeout keeps them.  nuclei also covers more in the time.  Nikto is paced so a
+firewall does not stop it in a second, and ffuf has about 1,150 paths on the deeper
+profiles.
+
+**Test sign in.**  A button on the site page signs in with each account now and reports
+the result, the second account included.
+
+**Better screenshots and certificate grades.**  Preloaders and scroll animations are
+cleared before the picture, so those pages stop reading as blank.  A certificate within
+the window is graded by the days it has left.
+
+## 2026-11-06
+
+**Curated rules, and a page to run them from.**  A new DAST Admin page, reached from
+External sites, holds enhanced checks that run after the stock engines.  A rule is data
+rather than code, and a validator refuses anything destructive, out of scope or unable
+to prove a finding with a control, a re-test, a way to reproduce it and a fix.  Out of
+band checks prove server side request forgery with a callback.
+
+**Draft a rule with AI.**  Describe what you want to find and the model drafts a rule in
+the background, under **Drafted rules**.  It meets the same validator as a hand written
+rule, saves disabled and marked **AI draft**, and runs only once a person enables it.
+Running a saved rule sends nothing to the model.
+
+**Scan profiles.**  A saved profile is a depth plus the rule sets to run, per scan or as a
+site's default.
+
+**Two accounts.**  A site can hold a second test account, which unlocks read only checks
+for one user reaching another's data.
+
+**InsightAppSec moves.**  It is now on the DAST Admin page's Integrations tab, with the
+other dynamic scanning settings.
+
 ## 2026-11-05
 
 **DAST reports leave out code findings with an exception or a false
@@ -13,6 +158,24 @@ the PDF.  Now, when a saved summary names a code finding that has since been
 excepted or marked a false positive, the summary is hidden with a note to run
 it again, and any priority, next step, match or correlation naming one is
 dropped.  The code finding counts beside a site also leave out exceptions.
+
+**Fewer dynamic false positives.**  An address that answers not found is dropped, a name
+starting with a dot is tested against a control, and one title on many addresses rolls up
+into one finding.  Findings can be ticked and decided together, and a decision shows at
+once on the page and in the PDF.
+
+**A grade on the sites list.**  The newest scan's letter grade sits beside its worst
+severity, worked out as the page loads with the same rules as the PDF.
+
+**Import web applications.**  The web applications CSV comes back in as a full sync, with a
+preview, and a removal has to be ticked.  The External sites CSV fills in change frequency.
+
+**Scan now scans what you can see.**  Somebody who is not an administrator now scans
+exactly the repositories they can see.  A group entry of `*` used to send a developer's
+click to every account.
+
+**Utilization history survives an upgrade.**  The charts no longer come up empty after a
+new container.
 
 ## 2026-11-04
 
@@ -61,6 +224,32 @@ big a site's scan is.
 
 **Up to 12 scans at once.**  Settings now allows 1 to 12 engine scans at the
 same time, up from 6.  The default is still 1.
+
+**Exceptions and exclusions through the token API.**  A `reports` token now reads, changes
+and withdraws its owner's exceptions, and can revoke where its owner's role allows, which
+leaves the record in place.  A new `approve` scope, for administrators only, approves,
+rejects and writes exclusions, and replaces the rule above that a token could only ever
+ask.  A leaked pipeline token still cannot hide anything.  Administrators can change the
+scopes of an existing token.
+
+**Rapid7 InsightAppSec.**  Scans can run on it by hand or on a schedule, and every completed
+scan comes in on its own, old ones included, matched to your sites by host.
+
+**How big a scan really was.**  The External sites CSV adds `http_200_paths`,
+`unique_endpoints`, `paths_answered` and `scan_blocked`.
+
+**Monthly scans for many sites.**  **Schedule monthly scans** spreads them across a night
+window.
+
+**Certificate expiry mail and faster lists.**  A morning mail names sites whose certificate
+is about to end, after reading the live certificate again.  The list shows 50 sites a page
+with small thumbnails.
+
+**Staleness.**  `staleness.csv` and `staleness.json` name repositories and branches nothing
+has landed in for 180 days by default, and a weekly or monthly digest can mail them.
+
+**A site stays up during exclusion re-checks.**  They moved off the event loop, after one
+froze the web app for about half a minute.
 
 ## 2026-11-03
 
@@ -196,6 +385,11 @@ has a script.
 **An API reference tab** on the IDE tokens page lists every call, lets you
 try each one with your token, and downloads an OpenAPI (Swagger) file and a
 Postman collection.
+
+## 2026-10-28
+
+**A credential on a branch head says where.**  A TruffleHog match found on a branch head now
+carries its file and line.
 
 ## 2026-10-27
 
