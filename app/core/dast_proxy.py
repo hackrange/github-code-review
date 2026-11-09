@@ -75,9 +75,10 @@ class Handle:
 
 
 def start(auth_headers: dict, hosts: list, upstream: str = "",
-          workdir: Path = None) -> "Handle | None":
-    """Start the scan proxy.  auth_headers is stamped on every request; hosts is
-    the scope (company domains plus the target); upstream is a site proxy to
+          workdir: Path = None, auth_hosts: list = None) -> "Handle | None":
+    """Start the scan proxy.  auth_headers is stamped on requests to auth_hosts
+    and their subdomains (the target; the first scope host when not given);
+    hosts is the scope (company domains plus the target); upstream is a site proxy to
     chain through.  -> a Handle, or None when mitmproxy is not available or did
     not come up, so the caller just runs the engines direct."""
     exe = mitmdump()
@@ -95,6 +96,8 @@ def start(auth_headers: dict, hosts: list, upstream: str = "",
     env = dict(os.environ,
                GCR_MITM_AUTH=json.dumps(auth_headers or {}),
                GCR_MITM_HOSTS=json.dumps([h for h in (hosts or []) if h]),
+               GCR_MITM_AUTH_HOSTS=json.dumps([h for h in (auth_hosts or (hosts or [])[:1])
+                                               if h]),
                GCR_MITM_SCOPE="1",
                GCR_MITM_COUNT=str(count_path))
     try:

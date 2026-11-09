@@ -3,23 +3,23 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "critical",
-  "title": "The Kubernetes API answers unauthenticated",
-  "summary": "The Kubernetes API server returns its version to an unauthenticated caller, which usually means the cluster can be read or controlled.",
+  "title": "The Kubernetes API lists namespaces without signing in",
+  "summary": "The Kubernetes API server lists its namespaces to a caller with no credentials.  Anonymous access is allowed past the public endpoints, so the cluster can be read and often changed.",
   "needs": [],
   "probe": [
     {
       "request": {
         "method": "GET",
-        "path": "/version"
+        "path": "/api/v1/namespaces"
       }
     }
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_contains(\"gitVersion\") and body_contains(\"goVersion\") and body_differs(control)",
+    "differential": "status==200 and body_matches(\"\\\"kind\\\"\\\\s*:\\\\s*\\\"NamespaceList\\\"\") and body_differs(control)",
     "retest": 2
   },
-  "reproduce": "curl -s https://host/version",
+  "reproduce": "curl -sk https://host/api/v1/namespaces and look for \"kind\":\"NamespaceList\".  /version answering alone is normal and is not this finding.",
   "remediate": "Require authentication and authorization on the API server.",
   "references": [],
   "mappings": {

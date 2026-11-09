@@ -726,7 +726,8 @@ def _group_evidence(ref: str, group: dict, root, send_code: bool, context: int) 
         code = _snippet(root, group, context)
         if code:
             body += "\n\ncode:\n" + code
-    return f'<evidence label="{html.escape(ref)}">\n{body}\n</evidence>'
+    from app.core.diagram import fence
+    return f'<evidence label="{html.escape(ref)}">\n{fence(body)}\n</evidence>'
 
 
 def _review(asker: _Asker, batch: list, progress) -> dict:

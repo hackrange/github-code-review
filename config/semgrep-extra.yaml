@@ -413,8 +413,12 @@ rules:
   - pattern-either:
     - pattern: $Z.extractall(...)
     - pattern: $Z.read(...)
-  - pattern-inside: |
-      with zipfile.ZipFile(...) as $Z:
+  - pattern-either:
+    - pattern-inside: |
+        with zipfile.ZipFile(...) as $Z:
+          ...
+    - pattern-inside: |
+        $Z = zipfile.ZipFile(...)
         ...
   - pattern-not-inside: |
       def $F(...):
@@ -480,7 +484,7 @@ rules:
     - pattern: '"$FLAG"'
     - metavariable-regex:
         metavariable: $FLAG
-        regex: ^(--ssl-insecure|--trust-server-cert(-failures.*)?|--no-check-certificate|http\.sslVerify=false)$
+        regex: ^(--ssl-insecure|--trust-server-cert(-failures.*)?|--no-check-certificate|--ignore-certificate-errors|http\.sslVerify=false)$
 - id: gcr-tls-verify-disabled-js
   languages:
   - javascript
@@ -507,6 +511,8 @@ rules:
     - Dockerfile
     - '*.yml'
     - '*.yaml'
+    exclude:
+    - '*semgrep*'
   severity: WARNING
   message: A command is told to accept any certificate, so anybody on the network path can pose as the
     server and read what is sent, credentials included. Give it the right CA certificate instead.
@@ -514,7 +520,7 @@ rules:
     cwe: 'CWE-295: Improper Certificate Validation'
     category: security
     confidence: MEDIUM
-  pattern-regex: (--ssl-insecure|--trust-server-cert-failures|--trust-server-cert\b|--no-check-certificate|http\.sslVerify[= ]+false|GIT_SSL_NO_VERIFY=(1|true)|NODE_TLS_REJECT_UNAUTHORIZED=0|\bcurl\b[^\n|;]*\s(-[a-jl-zA-Z]*k[a-zA-Z]*|--insecure)\b)
+  pattern-regex: (--ssl-insecure|--trust-server-cert-failures|--trust-server-cert\b|--no-check-certificate|--ignore-certificate-errors|http\.sslVerify[= ]+false|GIT_SSL_NO_VERIFY=(1|true)|NODE_TLS_REJECT_UNAUTHORIZED=0|\bcurl\b[^\n|;]*\s(-[a-jl-zA-Z]*k[a-zA-Z]*|--insecure)\b)
 - id: gcr-secret-in-process-arguments
   languages:
   - generic
@@ -617,3 +623,127 @@ rules:
       "$KEY": {..., "scope": "application", ...}
   - pattern-not: |
       "$KEY": {..., "scope": "machine", ...}
+- id: gcr-actions-pr-runs-code-with-secret
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.yml'
+    - '*.yaml'
+  severity: WARNING
+  message: A pull_request workflow runs a script from the checked out pull request while a secret is
+    in its environment. Whoever opens the pull request from a branch in this repository can change
+    that script to read the secret and send it anywhere. Check out the base branch for the steps that
+    hold the secret, or give the secret only to steps that run nothing from the pull request.
+  metadata:
+    cwe: 'CWE-829: Inclusion of Functionality from Untrusted Control Sphere'
+    category: security
+    confidence: MEDIUM
+  pattern-regex: (?s)\A(?=.*?^on:.*?\bpull_request\b(?!_target))(?=.*?\$\{\{\s*secrets\.)(?=.*?actions/checkout)(?!.*?ref:\s*\$\{\{\s*github\.event\.pull_request\.base).*?\n\s*-?\s*run:\s*\K(?:python3?|bash|sh|node|ruby|perl|\./)[^\n]*?(?:\./|\.github/|scripts?/|\w+\.(?:py|sh|js|rb|pl))
+- id: gcr-git-clone-follows-redirects
+  languages:
+  - python
+  severity: WARNING
+  message: git clone is given an address and left to follow redirects. If the address came from a
+    person, checking its host first is not enough, because the server there can redirect the clone
+    into the private network. Pass -c http.followRedirects=false, and check the host again at
+    connect time.
+  metadata:
+    cwe: 'CWE-918: Server-Side Request Forgery (SSRF)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: subprocess.$RUN($ARGS, ...)
+    - patterns:
+      - pattern-inside: |
+          $CMD = $ARGS
+          ...
+      - pattern: subprocess.$RUN($CMD, ...)
+  - metavariable-pattern:
+      metavariable: $ARGS
+      patterns:
+      - pattern: '[..., "clone", ...]'
+      - pattern-not: '[..., "http.followRedirects=false", ...]'
+  - metavariable-pattern:
+      metavariable: $ARGS
+      patterns:
+      - pattern: '[..., $URL, ...]'
+      - metavariable-regex:
+          metavariable: $URL
+          regex: (?i)^[\w.]*(url|uri|repo|remote|source|address|link)\w*$
+- id: gcr-password-in-query-string
+  languages:
+  - python
+  severity: WARNING
+  mode: taint
+  message: A password ends up in a request's query string. Addresses are kept by access logs, proxies,
+    monitoring and browser history, so the password is copied into all of them. Send it in the body
+    of a POST, and refuse to send it any other way.
+  metadata:
+    cwe: 'CWE-598: Use of GET Request Method With Sensitive Query Strings'
+    category: security
+    confidence: MEDIUM
+  pattern-sources:
+  - pattern: $D.get("password", ...)
+  - pattern: $D["password"]
+  - pattern: $D.get("passwd", ...)
+  - pattern: $D.password
+  pattern-sinks:
+  - patterns:
+    - pattern-inside: $FN(..., params=$P, ...)
+    - focus-metavariable: $P
+- id: gcr-prompt-fence-unescaped
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.py'
+  severity: WARNING
+  message: Text goes into a prompt between tags meant to mark it as data, without anything stopping
+    it from closing those tags itself. A file that contains the closing tag ends the block early, and
+    what follows reads as instructions. Escape or neutralize the closing tag in the text first.
+  metadata:
+    cwe: 'CWE-1427: Improper Neutralization of Input Used for LLM Prompting'
+    category: security
+    confidence: MEDIUM
+  pattern-regex: f(["'])[^\n]*?<(evidence|document|data|context|untrusted|source|input|code)\b[^>\n]*>[^\n]*?\{(?!\s*(?:html\.escape|escape|fence|json\.dumps|quote|_escape|_fence))[^}\n]+\}[^\n]*?</\2>[^\n]*?\1
+- id: gcr-request-body-read-unbounded
+  languages:
+  - python
+  severity: INFO
+  message: The whole request body is read and parsed before any size limit is checked, so one large
+    request can use up the worker's memory before a limit later in the handler refuses it. Check
+    Content-Length first, or read the body in chunks and stop at the limit.
+  metadata:
+    cwe: 'CWE-770: Allocation of Resources Without Limits or Throttling'
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern: await $R.json()
+    - pattern: await $R.body()
+  - pattern-either:
+    - pattern-inside: |
+        async def $F(..., $R: Request, ...):
+          ...
+    - pattern-inside: |
+        @$D(...)
+        async def $F(..., $R: Request, ...):
+          ...
+  - pattern-not-inside: |
+      async def $F(...):
+        ...
+        <... $R.headers.get("content-length", ...) ...>
+        ...
+  - pattern-not-inside: |
+      @$D(...)
+      async def $F(...):
+        ...
+        <... $R.headers.get("content-length", ...) ...>
+        ...
+  - pattern-not-inside: |
+      async def $F(...):
+        ...
+        <... $R.headers["content-length"] ...>
+        ...

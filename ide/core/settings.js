@@ -59,6 +59,40 @@ function resolve(raw, env) {
   };
 }
 
+/* What a workspace may decide, and what only the person may.
+ *
+ * A repository can carry editor settings, and opening it applies them.  So the
+ * token and the switch that turns certificate checks off are read from the
+ * person's own settings (or secret storage) only.  A workspace naming a server
+ * other than the person's own is asked about once: send this workspace's code,
+ * with the token, to that address?  The answer is remembered per workspace, as
+ * "allow:<address>" or "deny:<address>", so the question comes back only if the
+ * address changes.
+ *
+ * inspected is VS Code's inspect() for server, token and allowInsecureTls.
+ * -> {server, token, allowInsecureTls, ask}, ask being the address to ask
+ *    about, or "" when there is nothing to ask. */
+function trusted(inspected, stored, decision) {
+  const look = inspected || {};
+  const user = (key) => (look[key] || {}).globalValue;
+  const shared = (key) => pick((look[key] || {}).workspaceFolderValue,
+                               (look[key] || {}).workspaceValue);
+  const own = pick(user("server"));
+  const asked = shared("server");
+  let server = own;
+  let ask = "";
+  if (asked && asked !== own) {
+    if (decision === "allow:" + asked) { server = asked; }
+    else if (decision !== "deny:" + asked) { ask = asked; }
+  }
+  return {
+    server,
+    token: pick(user("token"), stored),
+    allowInsecureTls: bool(user("allowInsecureTls"), false),
+    ask
+  };
+}
+
 /* Only these are sent anywhere.  A file the editor opened out of a jar, a
  * settings file, a git object - none of that is somebody's working tree. */
 function reviewable(uriOrPath) {
@@ -68,4 +102,4 @@ function reviewable(uriOrPath) {
   return true;
 }
 
-module.exports = { resolve, reviewable };
+module.exports = { resolve, reviewable, trusted };

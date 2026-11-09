@@ -131,10 +131,47 @@ _MASKS = (
 )
 
 
+# The shapes the patterns above miss: a quoted key ("client_secret": "x"), a
+# quoted value with spaces in it, the rest of a properties line, and a YAML
+# block value under the key.  A key that only names a setting (token_url,
+# password_field, author) is left alone, so a drawing keeps its endpoints.
+_SECRET_WORDS = (r"(?:pass(?:word|wd)?|pwd|secret|token|api[_-]?key|access[_-]?key|"
+                 r"private[_-]?key|auth|credential|client[_-]?secret)")
+_NOT_A_SECRET = re.compile(
+    r"(?i)(url|uri|endpoint|path|file|name|type|field|header|length|ttl|expir\w*|"
+    r"policy|mode|enabled|required|id|ids|author\w*|authority|method|scheme)$")
+_MORE_MASKS = (
+    re.compile(r"(?i)([\"']([\w.\-]*" + _SECRET_WORDS + r"[\w.\-]*)[\"']\s*[:=]\s*)"
+               r"([\"'])(?!\$\{|!\[|#\[)([^\"'\n]+)\3"),
+    re.compile(r"(?i)((?<![\w\"'])([\w.\-]*" + _SECRET_WORDS + r"[\w.\-]*)\s*[:=]\s*)"
+               r"([\"'])(?!\$\{|!\[|#\[)([^\"'\n]*\s[^\"'\n]*)\3"),
+)
+_LINE_MASK = re.compile(r"(?im)^(\s*([\w.\-]*" + _SECRET_WORDS + r"[\w.\-]*)\s*[:=]\s*)"
+                        r"(?![\"'$!#|>\s])([^\n(]*\s[^\n(]*)$")
+_BLOCK_MASK = re.compile(r"(?im)^(\s*([\w.\-]*" + _SECRET_WORDS + r"[\w.\-]*)\s*:\s*"
+                         r"[|>][-+]?[ \t]*\n)((?:[ \t]+\S.*(?:\n|$))+)")
+
+
+def _keep(key: str) -> bool:
+    return bool(_NOT_A_SECRET.search((key or "").strip("\"'")))
+
+
 def mask(text: str) -> str:
     for pattern, repl in _MASKS:
         text = pattern.sub(repl, text)
+    for pattern in _MORE_MASKS:
+        text = pattern.sub(lambda m: m.group(0) if _keep(m.group(2))
+                           else f"{m.group(1)}{m.group(3)}****{m.group(3)}", text)
+    text = _LINE_MASK.sub(lambda m: m.group(0) if _keep(m.group(2))
+                          else f"{m.group(1)}****", text)
+    text = _BLOCK_MASK.sub(lambda m: m.group(0) if _keep(m.group(2))
+                           else f"{m.group(1)}  ****\n", text)
     return text
+
+
+def fence(body: str) -> str:
+    """Text to go inside an <evidence> block, unable to close it early."""
+    return re.sub(r"(?i)<(\s*/\s*evidence)", r"<\\\1", body or "")
 
 
 SYSTEM_PROMPT = """\
@@ -300,7 +337,7 @@ def gather(root: Path, send_code: bool, sources_summary: dict,
         notes.append("Sending code is switched off on the AI page, so only the "
                      "file tree and the dependency sources were sent.")
 
-    text = "\n\n".join(f'<evidence label="{html.escape(title)}">\n{body}\n</evidence>'
+    text = "\n\n".join(f'<evidence label="{html.escape(title)}">\n{fence(body)}\n</evidence>'
                        for title, body in sections)
     return text, notes
 

@@ -2246,7 +2246,7 @@ def _start_scan_proxy(session, host, upstream, workdir):
         return None
     hosts = list(dict.fromkeys([host] + [d for d in domains if d]))
     return dast_proxy.start(_session_headers(session), hosts, upstream=upstream or "",
-                            workdir=workdir)
+                            workdir=workdir, auth_hosts=[host])
 
 
 def _browser_dom(scan_id, url, opts, proxy) -> tuple:

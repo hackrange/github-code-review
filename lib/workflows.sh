@@ -34,19 +34,24 @@ run_zizmor() {
   # Offline by default.  Some audits ask GitHub about an action, which needs a
   # token, and handing this tool's credential to another binary is a decision
   # somebody should make on purpose rather than inherit.
-  local token_env=()
+  local give_token=0
   if cfg_bool '.scan.workflows.offline' true; then
     args+=(--offline)
   elif [[ -n "${GHSCAN_TOKEN:-}" ]]; then
-    # Through the environment, never on argv, so it stays out of ps output.
-    token_env=(env "GH_TOKEN=$GHSCAN_TOKEN")
+    give_token=1
   fi
 
   local timeout_s; timeout_s=$(cfg_num '.scan.workflows.timeout_sec' 300)
   log_debug "$full_name: zizmor ${args[*]}"
   # zizmor exits non-zero to say how bad the worst finding was, so a failure
   # here is not a failure.  What matters is whether the output parses.
-  ( cd "$dir" && with_timeout "$timeout_s" "${token_env[@]}" zizmor "${args[@]}" ) \
+  # The token goes in through the environment of the subshell, exported, never
+  # on any command line.  "env GH_TOKEN=... zizmor" looked like that and was
+  # not: env receives the assignment as an argument, so timeout and env both
+  # carried the token in their argv, readable by any local user from ps.
+  ( cd "$dir" || exit
+    if (( give_token )); then export GH_TOKEN="$GHSCAN_TOKEN"; fi
+    with_timeout "$timeout_s" zizmor "${args[@]}" ) \
     > "$out" 2>"$GHSCAN_TMPROOT/zizmor.log" || true
   jq -e 'type == "array"' "$out" >/dev/null 2>&1 || {
     log_warn "$full_name: zizmor produced nothing usable: $(tail -1 "$GHSCAN_TMPROOT/zizmor.log" 2>/dev/null)"

@@ -16,7 +16,7 @@
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_differs(control) and not body_contains(\"<html\")",
+    "differential": "status==200 and body_differs(control) and body_matches(\"^PK\\\\x03\\\\x04\")",
     "retest": 2
   },
   "reproduce": "curl -sI https://host/www.zip",

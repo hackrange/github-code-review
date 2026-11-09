@@ -2,9 +2,9 @@
   "id": "access-control-weblogic-console-exposed",
   "class": "access-control",
   "safety": "read",
-  "severity_floor": "high",
-  "title": "An Oracle WebLogic console is exposed",
-  "summary": "The WebLogic admin console is reachable.  WebLogic has a long run of remote code execution flaws.",
+  "severity_floor": "low",
+  "title": "The Oracle WebLogic console sign in page is reachable from the internet",
+  "summary": "The Oracle WebLogic console is an administrative interface and its sign in page answers from the internet.  This proves it is exposed, not that it can be used without a password. It has a long history of authentication bypass and remote code execution, so keeping it off the internet matters more than usual.",
   "needs": [],
   "probe": [
     {
@@ -20,11 +20,11 @@
     "retest": 2
   },
   "reproduce": "curl -s https://host/console/login/LoginForm.jsp",
-  "remediate": "Keep the console off the public internet and WebLogic patched.",
+  "remediate": "Put it behind a VPN or an allow list of networks, or take it off the public site.",
   "references": [],
   "mappings": {
-    "cwe": "CWE-306",
-    "owasp": "A01:2021"
+    "cwe": "CWE-668",
+    "owasp": "A05:2021"
   },
   "rulesets": [
     "weblogic",

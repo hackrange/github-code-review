@@ -2321,6 +2321,9 @@ class ExternalAsset(Base):
     auth_data_b = Column(Text, default="")
     auth_set_by_b = Column(String(120), default="")
     auth_set_at_b = Column(DateTime(timezone=True))
+    # Certificates that did not verify, saved the first time credentials went
+    # to them, as JSON {host: {fingerprint, at, why}}.  See app.core.tls_trust.
+    tls_pins = Column(Text, default="")
     # A web proxy this site's pages, screenshots, sign in and engines go
     # through, for a site that only lets in some networks.  Encrypted, since
     # it can carry a password.  Empty for none.

@@ -52,6 +52,54 @@ check("save is the default, not every keystroke", () =>
   assert.strictEqual(settingsOf.resolve({}, {}).reviewOn, "save"));
 check("only what they changed is the default", () =>
   assert.strictEqual(settingsOf.resolve({}, {}).changedLinesOnly, true));
+console.log("\n== a workspace cannot redirect the code or the token ==");
+const MINE = "https://gcr.example.com/api/v1";
+const THEIRS = "https://attacker.example/api/v1";
+check("the person's own server and token are used", () => {
+  const got = settingsOf.trusted({ server: { globalValue: MINE } }, "secret", undefined);
+  assert.deepStrictEqual(got, { server: MINE, token: "secret", allowInsecureTls: false, ask: "" });
+});
+check("a workspace token is never read", () => {
+  const got = settingsOf.trusted({ server: { globalValue: MINE },
+                                   token: { workspaceValue: "x" } }, "", undefined);
+  assert.strictEqual(got.token, "");
+});
+check("nor a workspace's switch that turns certificate checks off", () => {
+  const got = settingsOf.trusted({ allowInsecureTls: { workspaceValue: true,
+                                                       workspaceFolderValue: true } }, "", "");
+  assert.strictEqual(got.allowInsecureTls, false);
+  assert.strictEqual(settingsOf.trusted({ allowInsecureTls: { globalValue: true } },
+                                        "", "").allowInsecureTls, true);
+});
+check("a different workspace server is asked about, and nothing is sent meanwhile", () => {
+  const got = settingsOf.trusted({ server: { globalValue: MINE, workspaceValue: THEIRS } },
+                                 "secret", undefined);
+  assert.strictEqual(got.ask, THEIRS);
+  assert.strictEqual(got.server, MINE);
+});
+check("allowed once, it is used without asking again", () => {
+  const got = settingsOf.trusted({ server: { workspaceFolderValue: THEIRS } }, "secret",
+                                 "allow:" + THEIRS);
+  assert.strictEqual(got.server, THEIRS);
+  assert.strictEqual(got.ask, "");
+});
+check("turned down, the person's own server is used", () => {
+  const got = settingsOf.trusted({ server: { globalValue: MINE, workspaceValue: THEIRS } },
+                                 "secret", "deny:" + THEIRS);
+  assert.strictEqual(got.server, MINE);
+  assert.strictEqual(got.ask, "");
+});
+check("a changed address is asked about again", () => {
+  const got = settingsOf.trusted({ server: { workspaceValue: THEIRS + "2" } }, "", "allow:" + THEIRS);
+  assert.strictEqual(got.ask, THEIRS + "2");
+  assert.strictEqual(got.server, "");
+});
+check("a workspace naming the person's own server is not asked about", () => {
+  const got = settingsOf.trusted({ server: { globalValue: MINE, workspaceValue: MINE } }, "", "");
+  assert.strictEqual(got.ask, "");
+  assert.strictEqual(got.server, MINE);
+});
+
 check("the environment configures a server nobody has a settings file for", () => {
   const resolved = settingsOf.resolve({}, { GCR_SERVER: "https://x/api/v1",
                                             GCR_TOKEN: "t" });

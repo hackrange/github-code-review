@@ -29,6 +29,13 @@ from mitmproxy import http
 _AUTH = json.loads(os.environ.get("GCR_MITM_AUTH", "{}") or "{}")
 _HOSTS = [h.lower().strip().rstrip(".") for h in
           json.loads(os.environ.get("GCR_MITM_HOSTS", "[]") or "[]") if h]
+# Where the session goes: the target and its subdomains, never the rest of
+# the scope.  A company domain in scope can be another team's site, and a
+# redirect or a crawled link there must not carry this site's cookie or token.
+# Older callers did not say, so the target (the first scope host) stands in.
+_AUTH_HOSTS = [h.lower().strip().rstrip(".") for h in
+               json.loads(os.environ.get("GCR_MITM_AUTH_HOSTS", "null") or "null")
+               or _HOSTS[:1] if h]
 _ENFORCE = os.environ.get("GCR_MITM_SCOPE", "1") == "1"
 _COUNT_PATH = os.environ.get("GCR_MITM_COUNT", "")
 
@@ -44,6 +51,11 @@ def _in_scope(host: str) -> bool:
         if host == allowed or host.endswith("." + allowed):
             return True
     return False
+
+
+def _gets_auth(host: str) -> bool:
+    host = (host or "").lower().rstrip(".")
+    return bool(host) and any(host == h or host.endswith("." + h) for h in _AUTH_HOSTS)
 
 
 def _write_count() -> None:
@@ -66,7 +78,8 @@ def request(flow: http.HTTPFlow) -> None:
             403, b"blocked: out of the scan's scope\n",
             {"Content-Type": "text/plain"})
         return
-    for name, value in _AUTH.items():
-        flow.request.headers[str(name)] = str(value)
+    if _gets_auth(host):
+        for name, value in _AUTH.items():
+            flow.request.headers[str(name)] = str(value)
     _sent += 1
     _write_count()

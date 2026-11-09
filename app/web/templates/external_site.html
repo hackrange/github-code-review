@@ -137,6 +137,17 @@
         {% if auth_b and auth_b.kind %}<tr><th>Second account</th><td>{{ auth_b.kind_name }}
             {%- if auth_b.username %}, {{ auth_b.username }} at <span class="mono">{{ auth_b.login_url }}</span>{% endif %}
             <div class="faint small">The compare account that unlocks the two account access checks.  Saved encrypted.  Set {{ auth_b.set_at[:10] if auth_b.set_at else '' }}{% if auth_b.set_by %} by {{ auth_b.set_by }}{% endif %}.</div></td></tr>{% endif %}
+        {% if tls_pins %}<tr><th>Saved certificates</th><td>
+            {% for host, pin in tls_pins %}<div class="small"><span class="mono">{{ host }}</span>
+              <span class="faint">saved {{ pin.at }}{% if pin.why %}, not trusted because: {{ pin.why }}{% endif %}</span></div>{% endfor %}
+            <div class="faint small">These certificates did not verify, so the one presented
+              the first time a scan signed in was saved.  Credentials go only to that
+              certificate.  If the site renews it, signed in scans stop until it is cleared.</div>
+            <form method="post" action="{{ base }}/external/{{ asset.id }}/tls-pins/clear"
+                  data-confirm="Forget the saved certificates for {{ asset.host }}?  Do this only after a renewal you know about." style="margin-top:.4rem">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm" type="submit">Clear saved certificates</button></form>
+          </td></tr>{% endif %}
         {% if asset.notes %}<tr><th>Comments</th><td class="small" style="white-space:pre-wrap">{{ asset.notes }}</td></tr>{% endif %}
       </tbody></table>
       {% if (auth and auth.kind) or (auth_b and auth_b.kind) %}

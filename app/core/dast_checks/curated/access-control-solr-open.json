@@ -3,23 +3,23 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
-  "title": "Solr Admin is reachable without signing in",
-  "summary": "Solr Admin is an administrative interface.  Reachable without authentication, it is a direct path into the data or the server.",
+  "title": "Solr answers its admin API without signing in",
+  "summary": "The Solr admin API reports its cores to a caller with no credentials, so the same caller can query, change or drop the indexes.",
   "needs": [],
   "probe": [
     {
       "request": {
         "method": "GET",
-        "path": "/solr/"
+        "path": "/solr/admin/cores?action=STATUS&wt=json"
       }
     }
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_contains(\"Solr Admin\") and body_differs(control)",
+    "differential": "status==200 and body_contains(\"\\\"responseHeader\\\"\") and body_contains(\"\\\"status\\\"\") and not body_contains(\"<html\") and body_differs(control)",
     "retest": 2
   },
-  "reproduce": "curl -s https://host/solr/",
+  "reproduce": "curl -sk \"https://host/solr/admin/cores?action=STATUS&wt=json\" and look for \"responseHeader\" and a \"status\" listing cores.",
   "remediate": "Put the interface behind authentication and off the public internet.",
   "references": [],
   "mappings": {

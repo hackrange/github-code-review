@@ -59,6 +59,10 @@ def load(asset, slot: str = "a") -> dict:
     except Exception:  # noqa: BLE001 - a key change makes it unreadable, not fatal
         return {}
     data["kind"] = kind
+    # Which site this is, so a sign in can check the certificate it sends the
+    # credentials over.  Never saved: load() adds them each time.
+    data["_asset_id"] = getattr(asset, "id", None)
+    data["_host"] = getattr(asset, "host", "") or ""
     return data
 
 
@@ -269,13 +273,24 @@ def login(data: dict, allow_private: bool = False) -> dict:
                "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
     try:
         proxy = external_probe.current_proxy()
-        with httpx.Client(verify=False, timeout=20, follow_redirects=False,
+        checked = {(urlparse(url).hostname or "")}
+        # Certificates are not checked by the client: a site's own self signed
+        # one is common.  tls_trust has checked or pinned each host instead,
+        # in session_for for the first and in go() for any other.
+        with httpx.Client(verify=False, timeout=20, follow_redirects=False,  # noqa: S501
                           proxy=proxy or None, trust_env=not proxy) as client:
             def go(method, target, **kw):
                 for _hop in range(6):
                     host = urlparse(target).hostname or ""
                     if not allow_private and not external_probe._host_is_public(host):
                         raise ValueError(f"{host} is a private address")
+                    # A redirect to another host is checked as the first one was.
+                    if host not in checked:
+                        from app.core import tls_trust
+                        gate = tls_trust.allow(data.get("_asset_id"), target, allow_private)
+                        if not gate["ok"]:
+                            raise ValueError(gate["detail"])
+                        checked.add(host)
                     resp = client.request(method, target, headers=headers, **kw)
                     location = resp.headers.get("location")
                     if 300 <= resp.status_code < 400 and location:
@@ -308,11 +323,16 @@ def login(data: dict, allow_private: bool = False) -> dict:
             if registrable(urlparse(action).hostname or "") != registrable(urlparse(url).hostname or ""):
                 out["detail"] = "the login form posts to another domain, so the password was not sent"
                 return out
+            # A form that submits by GET, or names no method, would put the
+            # password in the address, where access logs, proxies and history
+            # keep it.  The password is not sent that way.
+            if form["method"] != "post":
+                out["detail"] = ("the login form submits by GET, which would put the "
+                                 "password in the address and in every log that keeps "
+                                 "one, so the password was not sent")
+                return out
             before = {(c.name, c.value) for c in client.cookies.jar}
-            if form["method"] == "post":
-                result, _final = go("POST", action, data=fields)
-            else:
-                result, _final = go("GET", action, params=fields)
+            result, _final = go("POST", action, data=fields)
             after = {(c.name, c.value) for c in client.cookies.jar}
             jar = "; ".join(f"{c.name}={c.value}" for c in client.cookies.jar)
             # A login that works sets a new session cookie, or changes the one
@@ -343,6 +363,19 @@ def session_for(data: dict, allow_private: bool = False) -> dict:
     out = {"kind": data.get("kind", ""), "headers": [], "cookie": "", "form": None,
            "ok": True, "detail": ""}
     kind = out["kind"]
+    # Every credential a scan uses comes through here, for the engines, the
+    # scan proxy and the screenshots alike.  A certificate that changed since
+    # it was first trusted gets none of them.  See app.core.tls_trust.
+    if kind:
+        from app.core import tls_trust
+        targets = [f"https://{data['_host']}/"] if data.get("_host") else []
+        if kind == "form" and data.get("login_url"):
+            targets.append(data["login_url"])
+        for target in dict.fromkeys(targets):
+            gate = tls_trust.allow(data.get("_asset_id"), target, allow_private)
+            if not gate["ok"]:
+                out.update(ok=False, detail=gate["detail"])
+                return out
     if kind == "header":
         out["headers"] = [(data["header_name"], data["header_value"])]
         out["detail"] = f"the {data['header_name']} header"

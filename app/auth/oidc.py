@@ -56,6 +56,24 @@ def _redirect_uri() -> str:
     raise OIDCError("GCR_OIDC_REDIRECT_URL is not set, so we cannot start a login")
 
 
+def _require_https(address: str) -> None:
+    """Refuse a plain http identity provider, except one on this machine.
+
+    Over http, anybody on the path can answer with their own sign in page,
+    token endpoint and signing keys, and sign in as anyone, administrators
+    included.  A provider on localhost is a developer's own and is allowed.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(address or "")
+    if parsed.scheme == "https":
+        return
+    if parsed.scheme == "http" and (parsed.hostname or "") in ("localhost", "127.0.0.1", "::1"):
+        return
+    raise OIDCError("the identity provider's address has to start with https://, so "
+                    "nobody on the network can stand in for it")
+
+
 async def get_discovery() -> dict:
     """Fetch and cache the provider's discovery document."""
     issuer = live.auth_config().oidc_issuer.rstrip("/")
@@ -63,6 +81,7 @@ async def get_discovery() -> dict:
     if cached and time.time() - cached["at"] < _DISCOVERY_TTL:
         return cached["doc"]
 
+    _require_https(issuer)
     url = f"{issuer}/.well-known/openid-configuration"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -81,6 +100,9 @@ async def get_discovery() -> dict:
     for required in ("authorization_endpoint", "token_endpoint", "jwks_uri", "issuer"):
         if required not in doc:
             raise OIDCError(f"the discovery document has no {required}")
+    # The addresses it hands back carry the client secret and the signing keys.
+    for field in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
+        _require_https(str(doc[field]))
 
     _discovery_cache[issuer] = {"doc": doc, "at": time.time()}
     return doc

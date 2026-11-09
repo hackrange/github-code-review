@@ -16,7 +16,7 @@
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_differs(control) and not body_contains(\"<html\")",
+    "differential": "status==200 and \"html\" not in header(\"content-type\") and (body_contains(\"CREATE TABLE\") or body_contains(\"INSERT INTO\") or body_contains(\"-- MySQL dump\") or body_contains(\"DROP TABLE\")) and body_differs(control)",
     "retest": 2
   },
   "reproduce": "curl -sI https://host/database.sql",

@@ -3,23 +3,23 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
-  "title": "A HashiCorp Vault is exposed and unsealed",
-  "summary": "A Vault health endpoint answers here and reports the vault unsealed, which means its secrets can be read over the network.",
+  "title": "HashiCorp Vault lists its secret engines without a token",
+  "summary": "Vault lists its secret engines to a caller with no token, so anonymous requests get past its access control.  The health endpoint answering, which it does by default, is not this finding.",
   "needs": [],
   "probe": [
     {
       "request": {
         "method": "GET",
-        "path": "/v1/sys/health"
+        "path": "/v1/sys/mounts"
       }
     }
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and (body_contains(\"\\\"sealed\\\":false\") or body_contains(\"\\\"sealed\\\": false\")) and (body_contains(\"cluster_name\") or body_contains(\"\\\"initialized\\\"\")) and body_differs(control)",
+    "differential": "status==200 and body_matches(\"\\\"[\\\\w-]+/\\\"\\\\s*:\\\\s*\\\\{[^}]*\\\"type\\\"\") and not body_contains(\"missing client token\") and body_differs(control)",
     "retest": 2
   },
-  "reproduce": "curl -s https://host/v1/sys/health",
+  "reproduce": "curl -sk https://host/v1/sys/mounts with no X-Vault-Token header.  A list of mounts, rather than \"missing client token\", means anonymous access works.",
   "remediate": "Put Vault behind the network boundary it is meant to sit behind, and review whether it should be reachable here at all.",
   "references": [],
   "mappings": {

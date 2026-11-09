@@ -4,6 +4,65 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-11-10
+
+**After upgrading, load the curated rules.**  Several shipped rules were tightened
+and six duplicates were retired, and only loading them brings that in.  Rules you
+edited yourself are left alone.
+
+**Credentials go only to a certificate this server has seen before.**  A signed in
+scan, a sign in test and a signed in screenshot used to send the site's password,
+cookie or token over any certificate at all.  A certificate that verifies is used
+as before.  One that does not, such as a self signed or internal one, is saved the
+first time credentials go to it, and from then on credentials go only to that
+certificate.  If it changes, the scan runs signed out and says why.  When the site
+really did renew it, press **Clear saved certificates** on the site's page.
+Nothing that signs in today stops.
+
+**A scan's session stays with its site.**  The session goes only to the site being
+scanned and its subdomains.  Before, the scan proxy also sent it to every other
+company domain a link or a redirect reached, and a signed in screenshot sent it to
+every host the page loaded anything from.
+
+**Other ways credentials could leak are closed.**
+- A login form that submits by GET is refused, because the password would end up
+  in the address and in every log that keeps one.
+- The single sign on provider has to be https, except on localhost.
+- The GitHub token handed to zizmor no longer appears in the process list.
+- Code sent to the model is masked more thoroughly: quoted JSON keys, values with
+  spaces and YAML blocks are now covered.  Text cannot close the block that marks
+  it as data.
+- The sample fix plan workflow runs its helper from the base branch, so a pull
+  request cannot change the code that holds the token.
+
+**The editor asks before sending code to a workspace's server.**  The token, and
+the switch that turns certificate checks off, are now read only from your own
+settings.  A repository's settings that name a different server get one question
+per workspace before anything is sent there.
+
+**Dynamic rules that said more than they proved.**
+- Kubernetes, Portainer, Vault and Solr now report only when a protected list
+  answers without credentials, not when a public status page does.
+- The Jenkins script console has to be the console itself, not its sign in page.
+- Backups have to carry an archive's own signature, and the editor sftp, Docker
+  config and actuator beans files have to be real JSON.
+- The phpMyAdmin, Adminer, Kibana, WebLogic and ColdFusion sign in pages are now
+  low findings that say the page is exposed.  They no longer claim nobody needs a
+  password.
+- Pairs that reported one exposure twice now report it once.
+
+**Seven more code rules, and code reasoning reads model answers.**  New rules find:
+- Chromium told to ignore certificates
+- archives read without a size check
+- pull request workflows that run their own scripts beside a secret
+- git clones that follow redirects
+- passwords in a query string
+- prompt fences the text can close
+- request bodies parsed before any size limit
+
+Code reasoning now also asks about functions that let a model's answer change a
+record with no check and no person confirming it.
+
 ## 2026-11-09
 
 **After upgrading, load the curated rules.**  Three new dynamic rules arrive

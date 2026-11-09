@@ -3,23 +3,23 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
-  "title": "A Portainer instance answers unauthenticated",
-  "summary": "The Portainer API returns its status without a sign in.  Portainer controls Docker, so an exposed instance is control of the host.",
+  "title": "Portainer lists its Docker environments without signing in",
+  "summary": "The Portainer API lists the Docker environments it manages to a caller with no credentials.  Portainer controls Docker, so this is control of the hosts.",
   "needs": [],
   "probe": [
     {
       "request": {
         "method": "GET",
-        "path": "/api/system/status"
+        "path": "/api/endpoints"
       }
     }
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_contains(\"Version\") and body_contains(\"InstanceID\") and body_differs(control)",
+    "differential": "status==200 and body_matches(\"^\\\\s*\\\\[\\\\s*\\\\{\") and body_contains(\"\\\"Id\\\"\") and (body_contains(\"\\\"URL\\\"\") or body_contains(\"\\\"PublicURL\\\"\")) and body_differs(control)",
     "retest": 2
   },
-  "reproduce": "curl -s https://host/api/system/status",
+  "reproduce": "curl -sk https://host/api/endpoints and look for a list of environments with \"Id\" and \"URL\".  /api/system/status answering is normal and is not this finding.",
   "remediate": "Never expose Portainer; require authentication and restrict the network.",
   "references": [],
   "mappings": {

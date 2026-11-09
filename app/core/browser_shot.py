@@ -174,17 +174,49 @@ def main() -> int:
             # A session to photograph the page as, read from the environment, not
             # the command line, so the cookie or token never shows in the process
             # list.  It signs the browser in as one account for a proof picture.
+            #
+            # Added per request, only for the target and its subdomains.  Set on
+            # the whole context it went with every image, script and redirect the
+            # page asked for, to whatever host, so a page could hand the session
+            # to any collector it named.
             try:
                 extra = json.loads(os.environ.get("GCR_SHOT_HEADERS", "{}") or "{}")
-                if isinstance(extra, dict) and extra:
-                    ctx.set_extra_http_headers({str(k): str(v) for k, v in extra.items()})
+                extra = ({str(k): str(v) for k, v in extra.items()}
+                         if isinstance(extra, dict) else {})
             except Exception:  # noqa: BLE001 - a bad header set just means no session
-                pass
+                extra = {}
             ctx.add_init_script(HIDE_AUTOMATION)
-            if not args.allow_private:
-                ctx.route("**/*", lambda route: route.continue_()
-                          if public(urlparse(route.request.url).hostname or "")
-                          else route.abort("addressunreachable"))
+            target = (urlparse(args.url).hostname or "").lower().rstrip(".")
+            # A cookie goes in the browser's own jar, for the target's domain,
+            # which is what sends it to the target and its subdomains and
+            # nowhere else.  A Cookie header set per request is dropped.
+            cookie = next((v for k, v in extra.items() if k.lower() == "cookie"), "")
+            extra = {k: v for k, v in extra.items() if k.lower() != "cookie"}
+            if cookie and target:
+                try:
+                    ipaddress.ip_address(target)
+                    where = {"url": f"{urlparse(args.url).scheme}://{target}/"}
+                except ValueError:
+                    # A leading dot is what takes it to the subdomains too.
+                    where = {"domain": "." + target, "path": "/"}
+                jar = []
+                for part in cookie.split(";"):
+                    name, sep, value = part.strip().partition("=")
+                    if sep and name:
+                        jar.append({"name": name, "value": value, **where})
+                if jar:
+                    ctx.add_cookies(jar)
+            if extra or not args.allow_private:
+                def _route(route):
+                    host = (urlparse(route.request.url).hostname or "").lower().rstrip(".")
+                    if not args.allow_private and not public(host):
+                        route.abort("addressunreachable")
+                    elif extra and target and (host == target
+                                               or host.endswith("." + target)):
+                        route.continue_(headers={**route.request.headers, **extra})
+                    else:
+                        route.continue_()
+                ctx.route("**/*", _route)
             page = ctx.new_page()
             # A check that passes reloads or redirects into the site.  Imperva
             # also puts its script on the real pages, so the script being on

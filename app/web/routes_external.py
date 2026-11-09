@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from app.core import external, rbac
 from app.core import dast_adhoc as dast_adhoc_mod
 from app.core import external_auth as external_auth_mod
+from app.core import tls_trust
 from app.core import external_schedule
 from app.core.models import ExternalScanSchedule
 from app.core.audit import record
@@ -715,6 +716,7 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             fields=external.fields_of(asset), security_headers=external.SECURITY_HEADERS,
             auth=external_auth_mod.describe(asset),
             auth_b=external_auth_mod.describe(asset, "b"),
+            tls_pins=sorted(tls_trust.pins_of(asset).items()),
             adhoc=dast_adhoc_mod.describe(asset),
             auth_kinds=external_auth_mod.KINDS,
             site_profile=external.profile_for(asset), proxy_label=external.proxy_shown(asset),
@@ -949,6 +951,29 @@ async def signin_test(asset_id: int, request: Request, user: User = Depends(curr
         failed = failed or not r["ok"]
     return redirect(_back(f"/external/{asset_id}", "Sign in test.  " + "  ".join(parts),
                           "warn" if failed else "ok"))
+
+
+@router.post("/external/{asset_id}/tls-pins/clear")
+async def clear_tls_pins(asset_id: int, request: Request, user: User = Depends(current_user)):
+    """Forget the certificates saved on first use, after a real renewal.
+
+    The next sign in saves whatever the site presents then, so do this only
+    when the change is known to be the site's own.
+    """
+    await check_csrf(request)
+    from app.core.audit import record
+
+    with session_scope() as db:
+        _guard(db, user)
+        asset = _asset(db, asset_id)
+        had = asset.tls_pins or ""
+        asset.tls_pins = ""
+        if had:
+            record(db, "external.tls_pins_cleared", actor=user.username,
+                   target=asset.host, detail=had[:200], source_ip=client_ip(request))
+    return redirect(_back(f"/external/{asset_id}",
+                          "Cleared.  The next sign in saves the certificate the site "
+                          "presents then."))
 
 
 @router.post("/external/{asset_id}/repos")

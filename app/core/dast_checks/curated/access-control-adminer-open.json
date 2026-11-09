@@ -2,9 +2,9 @@
   "id": "access-control-adminer-open",
   "class": "access-control",
   "safety": "read",
-  "severity_floor": "high",
-  "title": "Adminer is reachable without signing in",
-  "summary": "Adminer is an administrative interface.  Reachable without authentication, it is a direct path into the data or the server.",
+  "severity_floor": "low",
+  "title": "Adminer sign in page is reachable from the internet",
+  "summary": "Adminer is an administrative interface and its sign in page answers from the internet.  This proves it is exposed, not that it can be used without a password.",
   "needs": [],
   "probe": [
     {
@@ -20,11 +20,11 @@
     "retest": 2
   },
   "reproduce": "curl -s https://host/adminer.php",
-  "remediate": "Put the interface behind authentication and off the public internet.",
+  "remediate": "Put it behind a VPN or an allow list of networks, or take it off the public site.",
   "references": [],
   "mappings": {
-    "cwe": "CWE-306",
-    "owasp": "A01:2021"
+    "cwe": "CWE-668",
+    "owasp": "A05:2021"
   },
   "rulesets": [
     "php"

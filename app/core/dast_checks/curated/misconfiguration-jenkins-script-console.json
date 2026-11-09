@@ -4,7 +4,7 @@
   "safety": "read",
   "severity_floor": "critical",
   "title": "Jenkins script console is reachable",
-  "summary": "The Jenkins Groovy script console runs code on the server.  Reachable without a login, it is remote code execution.",
+  "summary": "The Jenkins Groovy script console is open without a sign in, and it runs code on the server.  A sign in page at /script is not this finding.",
   "needs": [],
   "probe": [
     {
@@ -16,7 +16,7 @@
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_contains(\"Jenkins\") and body_contains(\"Groovy\")",
+    "differential": "status==200 and body_contains(\"Script Console\") and body_matches(\"<textarea[^>]*name=[\\\"']?script\") and not body_matches(\"j_username|j_password|loginForm\") and body_differs(control)",
     "retest": 2
   },
   "reproduce": "curl -s https://host/script",

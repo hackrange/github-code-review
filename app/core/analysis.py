@@ -561,8 +561,8 @@ def _prompt(evidence: dict, advisory: str, code: str, notes: list) -> str:
     def fenced(title, body):
         # A closing tag inside the evidence would end the fence early and let
         # what follows read as instructions, so it is defused first.
-        body = body.replace("</evidence>", "<\\/evidence>")
-        return f"## {title}\n<evidence>\n{body}\n</evidence>"
+        from app.core.diagram import fence
+        return f"## {title}\n<evidence>\n{fence(body)}\n</evidence>"
 
     parts = [fenced(title, body) for title, body in evidence["sections"] if body]
     if advisory:

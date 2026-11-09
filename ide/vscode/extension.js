@@ -53,19 +53,44 @@ function activate(context) {
   let session = null;
   const hidden = new Map();
 
+  /* Asked at most once at a time, however many reloads arrive together. */
+  let asking = null;
+  const DECISION_KEY = "gitCodeReview.serverDecision";
+
   async function settings() {
     const config = vscode.workspace.getConfiguration("gitCodeReview");
-    /* A token in settings.json wins, because somebody who put it there meant
-     * it, but the secret storage is where the command puts it and where it
-     * belongs: settings files get committed by accident. */
+    /* The token, and whether certificates are checked, come from the person's
+     * own settings or the secret storage, never from the workspace: a
+     * repository can carry settings, and opening it must not be able to send
+     * the token elsewhere or switch the checks off.  A server the workspace
+     * names is asked about once.  See settingsOf.trusted. */
     const stored = await context.secrets.get(TOKEN_KEY);
+    const inspect = (key) => config.inspect(key) || {};
+    const look = { server: inspect("server"), token: inspect("token"),
+                   allowInsecureTls: inspect("allowInsecureTls") };
+    let picked = settingsOf.trusted(look, stored,
+                                    context.workspaceState.get(DECISION_KEY));
+    if (picked.ask) {
+      if (!asking) {
+        const address = picked.ask;
+        asking = Promise.resolve(vscode.window.showWarningMessage(
+          "This workspace's settings ask Git Code Review to send the files you open, "
+            + "and your token, to " + address + ".  Allow it for this workspace?",
+          { modal: true }, "Allow", "Use my own server"))
+          .then((choice) => context.workspaceState.update(DECISION_KEY,
+            (choice === "Allow" ? "allow:" : "deny:") + address))
+          .finally(() => { asking = null; });
+      }
+      await asking;
+      picked = settingsOf.trusted(look, stored, context.workspaceState.get(DECISION_KEY));
+    }
     return settingsOf.resolve({
-      server: config.get("server"),
-      token: config.get("token") || stored || "",
+      server: picked.server,
+      token: picked.token,
       reviewOn: config.get("reviewOn"),
       changedLinesOnly: config.get("changedLinesOnly"),
       only: config.get("only"),
-      allowInsecureTls: config.get("allowInsecureTls")
+      allowInsecureTls: picked.allowInsecureTls
     }, process.env);
   }
 

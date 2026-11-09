@@ -16,7 +16,7 @@
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_differs(control) and not body_contains(\"<html\")",
+    "differential": "status==200 and body_differs(control) and (body_matches(\"^\\\\x1f[\\\\x8b\\\\u2039\\\\ufffd]\\\\x08\") or body_matches(\"^.{257}ustar\"))",
     "retest": 2
   },
   "reproduce": "curl -sI https://host/backup.tar.gz",

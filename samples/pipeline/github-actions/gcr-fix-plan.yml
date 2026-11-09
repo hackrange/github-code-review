@@ -22,16 +22,25 @@ jobs:
     runs-on: ${{ vars.GCR_RUNNER || 'ubuntu-latest' }}
     env:
       GCR_URL: ${{ vars.GCR_URL }}
-      GCR_TOKEN: ${{ secrets.GCR_TOKEN }}
     steps:
+      # The helper runs from the base branch, never from the pull request.
+      # The plan is about the repository, not about the change, and code a
+      # pull request brings must never run beside the token: it could read it
+      # and send it anywhere.  A schedule or a manual run checks out the
+      # default branch as before.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
 
       - name: Check the token
+        env:
+          GCR_TOKEN: ${{ secrets.GCR_TOKEN }}
         run: python3 .github/gcr/python/gcr_api.py token-expiry --warn-days 14
 
       - name: Build the fix plan
+        env:
+          GCR_TOKEN: ${{ secrets.GCR_TOKEN }}
         run: python3 .github/gcr/python/gcr_api.py fix-plan --markdown fix-plan.md
 
       - name: Keep the plan as a download

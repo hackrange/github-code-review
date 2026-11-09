@@ -16,7 +16,7 @@
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_contains(\"host\") and body_contains(\"username\") and body_contains(\"password\") and body_differs(control)",
+    "differential": "status==200 and \"html\" not in header(\"content-type\") and body_matches(\"^\\\\s*[\\\\[{]\") and body_contains(\"\\\"host\\\"\") and body_contains(\"\\\"username\\\"\") and (body_contains(\"\\\"password\\\"\") or body_contains(\"\\\"privateKeyPath\\\"\")) and body_differs(control)",
     "retest": 2
   },
   "reproduce": "curl -s https://host/.vscode/sftp.json",

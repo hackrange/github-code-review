@@ -16,7 +16,7 @@
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known.",
-    "differential": "status==200 and body_contains(\"beans\") and body_differs(control)",
+    "differential": "status==200 and \"json\" in header(\"content-type\") and body_matches(\"\\\"beans\\\"\\\\s*:\\\\s*[\\\\[{]\") and (body_contains(\"\\\"contexts\\\"\") or body_contains(\"\\\"context\\\"\")) and body_differs(control)",
     "retest": 2
   },
   "reproduce": "curl -s https://host/actuator/beans",

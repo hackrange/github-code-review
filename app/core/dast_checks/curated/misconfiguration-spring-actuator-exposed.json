@@ -7,16 +7,16 @@
   "summary": "A Spring Boot Actuator endpoint is answering without a login. The env and configprops endpoints print the application's configuration, which usually includes database passwords, API keys and other secrets, and the heapdump endpoint hands over a full memory dump that carries every secret the process holds. An outsider who reaches these reads the credentials and can often move on to take over the service. This check only reports it when the response is an actuator payload, not a plain page.",
   "needs": [],
   "candidate_paths": [
-    "/actuator",
-    "/actuator/env",
-    "/actuator/configprops",
-    "/actuator/beans",
-    "/actuator/mappings",
     "/api/actuator",
     "/api/actuator/env"
   ],
   "probe": [
-    { "request": { "method": "GET", "path": "{route}" } }
+    {
+      "request": {
+        "method": "GET",
+        "path": "{route}"
+      }
+    }
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known and an actuator payload is told apart from a soft 404 or a catch-all page.",
@@ -30,5 +30,7 @@
     "cwe": "CWE-200",
     "owasp": "A05:2021"
   },
-  "rulesets": ["spring-boot"]
+  "rulesets": [
+    "spring-boot"
+  ]
 }

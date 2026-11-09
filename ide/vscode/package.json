@@ -23,14 +23,14 @@
         "gitCodeReview.server": {
           "type": "string",
           "default": "",
-          "markdownDescription": "The address of your Git Code Review server, ending in `/api/v1`. It is printed on the **IDE tokens** page of the server itself.",
+          "markdownDescription": "The address of your Git Code Review server, ending in `/api/v1`. It is printed on the **IDE tokens** page of the server itself. A workspace that names a different server is asked about once before anything is sent to it.",
           "scope": "machine-overridable"
         },
         "gitCodeReview.token": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Your API token. Better left empty: run **Git Code Review: Set the token** instead and it is kept in the editor's secret storage rather than in a settings file that ends up in backups and sometimes in a repository.",
-          "scope": "machine-overridable"
+          "markdownDescription": "Your API token. Better left empty: run **Git Code Review: Set the token** instead and it is kept in the editor's secret storage rather than in a settings file that ends up in backups and sometimes in a repository. Read from your own settings only, never from a workspace.",
+          "scope": "application"
         },
         "gitCodeReview.reviewOn": {
           "type": "string",
@@ -57,7 +57,8 @@
         "gitCodeReview.allowInsecureTls": {
           "type": "boolean",
           "default": false,
-          "description": "Accept a server certificate this machine does not trust. Off, and worth leaving off: install the certificate authority instead."
+          "description": "Accept a server certificate this machine does not trust. Off, and worth leaving off: install the certificate authority instead. Read from your own settings only, never from a workspace.",
+          "scope": "application"
         }
       }
     },
