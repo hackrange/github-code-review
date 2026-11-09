@@ -107,6 +107,19 @@ SETTINGS = {
     "ai.auto_review_max":      (200, False,
                                 "Most new findings one scan hands to the automatic "
                                 "review, worst first. 0 for no limit."),
+    # Off by default for the same reason.  On, the handlers that read the
+    # request and touch stored data are read after every scan, a few at a
+    # time, for access checks a pattern cannot judge.
+    "ai.code_reasoning":       (False, False,
+                                "After a scan, ask the model about request handlers for "
+                                "missing access checks and similar logic mistakes."),
+    "ai.code_reasoning_monthly_tokens": (1_000_000, False,
+                                         "Most tokens the code reasoning pass may "
+                                         "use in a calendar month, in and out "
+                                         "together."),
+    "ai.code_reasoning_per_repo": (25, False,
+                                   "Most handlers asked about in one repository per "
+                                   "run, the likeliest first."),
     # What the custom service charges, per million tokens, for the cost page.
     # Kept as text so 0.10 stays 0.10.  Empty is not counted.
     "ai.price_input":          ("", False, "Price per million input tokens."),
@@ -190,6 +203,12 @@ def read_form(form, text, number, url, checked) -> dict:
                                             "Questions per minute", 1, 600),
         "ai.auto_review_max": number(form.get("ai.auto_review_max") or 200,
                                      "New findings per scan", 0, 100_000),
+        "ai.code_reasoning": checked("ai.code_reasoning"),
+        "ai.code_reasoning_monthly_tokens": number(
+            form.get("ai.code_reasoning_monthly_tokens") or 0,
+            "Monthly token limit", 0, 2_000_000_000),
+        "ai.code_reasoning_per_repo": number(form.get("ai.code_reasoning_per_repo") or 25,
+                                             "Handlers per repository", 1, 500),
     }
 
 
@@ -293,6 +312,18 @@ def describe_model(cfg: dict) -> str:
         host = urlparse(cfg.get("ai.custom_url") or "").hostname or ""
         return f"the service at {host}" if host else "the custom service"
     return ""
+
+
+def low_effort(cfg: dict) -> dict:
+    """A copy of the settings asking for the least effort the provider allows.
+
+    Only a provider with an effort setting is changed, and only when one is
+    set, because an empty one means the model does not take it.
+    """
+    out = dict(cfg)
+    if out.get("ai.anthropic_effort"):
+        out["ai.anthropic_effort"] = "low"
+    return out
 
 
 def complete(cfg: dict, system: str, prompt: str, *, max_tokens: int = None,

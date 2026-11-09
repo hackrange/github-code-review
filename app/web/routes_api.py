@@ -6521,3 +6521,38 @@ async def apply_connection_scope(connection_id: int, request: Request,
             "Credentials are still scanned everywhere.  Each change can be "
             "reverted from its repository's scope page.")
     return redirect(_back_with(back, note, "ok"))
+
+
+@router.post("/repositories/{repo_id}/reasoning")
+async def run_code_reasoning(repo_id: int, request: Request,
+                             user: User = Depends(current_user)):
+    """Queue one repository for the code reasoning pass, now rather than after a scan.
+
+    The same permission as asking the model about a finding, because it sends
+    code out and costs money.  The monthly limit applies all the same.
+    """
+    await check_csrf(request)
+    rbac.require(user, "finding.validate")
+
+    from app.core import ai, code_reasoning
+    from app.core.models import Repository as m_Repository
+
+    with session_scope() as db:
+        repo = (rbac.visible_repositories(db, user)
+                .filter(m_Repository.id == repo_id).one_or_none())
+        if repo is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        name = repo.full_name
+        cfg = ai.config(db)
+        if not code_reasoning.is_on(cfg):
+            raise HTTPException(status_code=409,
+                                detail="Code reasoning is switched off on the AI page.")
+        if not code_reasoning.budget(db, cfg)["left"]:
+            return redirect(_back_with(f"/repositories/{repo_id}",
+                                       "This month's code reasoning tokens are used up.",
+                                       "warn"))
+        record(db, "ai.code_reasoning_requested", actor=user.username, target=name,
+               source_ip=client_ip(request))
+    code_reasoning.after_scan([name])
+    return redirect(_back_with(f"/repositories/{repo_id}",
+                               "Queued.  New findings appear on this repository when it is done."))

@@ -1,0 +1,43 @@
+{
+  "id": "authentication-login-form-get",
+  "class": "authentication",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Sign in form sends the password in the address",
+  "summary": "A form with a password box submits by GET, or names no method, which browsers treat as GET.  The password then travels in the URL, where web server and proxy logs, browser history and monitoring tools all keep it.",
+  "needs": [],
+  "candidate_paths": [
+    "/login",
+    "/signin",
+    "/sign-in",
+    "/sign_in",
+    "/auth/login",
+    "/user/login",
+    "/users/sign_in",
+    "/account/login",
+    "/admin/login",
+    "/admin",
+    "/"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "{route}"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_matches(\"<form\\\\b(?:(?!\\\\bmethod\\\\s*=\\\\s*[\\\"']?post)[^>])*>(?:(?!</form>).){0,8000}?<input\\\\b[^>]*\\\\btype\\\\s*=\\\\s*[\\\"']?password\")",
+    "retest": 2
+  },
+  "reproduce": "Open the sign in page and read the form that holds the password box.  If its method is get, or it has no method at all, submit it with a test account: the password appears in the address bar and in the server's access log.",
+  "remediate": "Give the form method=\"post\", and refuse a sign in that arrives by GET on the server, so a stray form cannot put a password in a log.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-598",
+    "owasp": "A04:2021"
+  },
+  "rulesets": []
+}

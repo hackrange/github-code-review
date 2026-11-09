@@ -9,6 +9,9 @@
     {% if can_scope %}<a class="btn" href="{{ base }}/repositories/{{ repo.id }}/scope">Branches and scope</a>{% endif %}
     {% if repo.html_url %}<a class="btn" rel="noopener noreferrer" target="_blank" href="{{ repo.html_url }}">Open on the host</a>{% endif %}
     <a class="btn" href="{{ base }}/repositories">All repositories</a>
+    {% if can_reason %}<form method="post" action="{{ base }}/repositories/{{ repo.id }}/reasoning" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit" title="Ask the model about this repository's request handlers for missing access checks">Run code reasoning</button></form>{% endif %}
     {% if purge %}<button type="button" class="btn danger" data-modal="purge-modal">Delete findings and exceptions</button>{% endif %}
   </div></div>
 

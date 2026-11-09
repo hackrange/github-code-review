@@ -1106,6 +1106,9 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
 
 
 REPORT_ENGINE = "security-report"
+# Findings a model raised rather than a scanner.  A scan never closes them,
+# and they step aside when a scanner reports the same place.
+MODEL_ENGINES = (REPORT_ENGINE, "code-reasoning")
 MAX_LINE_FILES = 20_000
 NEAR_LINES = 3        # the same place, give or take a line or two
 SAME_CWE_LINES = 30   # the same weakness in the same part of the file
@@ -1169,7 +1172,7 @@ def hand_over(session, repositories) -> int:
         return 0
     ours = (session.query(Finding)
             .filter(Finding.repository.in_(list(repositories)),
-                    Finding.engines == REPORT_ENGINE,
+                    Finding.engines.in_(MODEL_ENGINES),
                     Finding.state == FindingState.OPEN)
             .all())
     handed = 0
@@ -1184,13 +1187,15 @@ def hand_over(session, repositories) -> int:
                                 Finding.kind.in_([FindingKind.CODE,
                                                   FindingKind.MISCONFIGURATION]),
                                 Finding.state == FindingState.OPEN,
-                                Finding.engines != REPORT_ENGINE)
+                                Finding.engines.notin_(MODEL_ENGINES))
                         .all() if _near(g, place)), None)
         if scanner is None:
             continue
         f.state, f.excepted = FindingState.WAIVED, True
         f.exception_reason = f"Now reported by the scanner as finding {scanner.id}."
-        f.exception_by, f.exception_at = "the security report", _now()
+        f.exception_by = ("the security report" if f.engines == REPORT_ENGINE
+                          else "the code reasoning pass")
+        f.exception_at = _now()
         handed += 1
     return handed
 

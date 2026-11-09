@@ -1,0 +1,30 @@
+{
+  "id": "authentication-oidc-discovery-cleartext",
+  "class": "authentication",
+  "safety": "read",
+  "severity_floor": "high",
+  "title": "Single sign on settings point at plain http addresses",
+  "summary": "The OpenID Connect discovery document names an issuer, sign in, token or key address that starts with http rather than https.  Anybody on the network path can then swap the signing keys or the token endpoint and sign in as anyone, including an administrator.",
+  "needs": [],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/.well-known/openid-configuration"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status==200 and body_contains(\"\\\"issuer\\\"\") and body_differs(control) and body_matches(\"\\\"(issuer|authorization_endpoint|token_endpoint|jwks_uri|userinfo_endpoint)\\\"\\\\s*:\\\\s*\\\"http://(?!(localhost|127\\\\.0\\\\.0\\\\.1)[:/\\\"])\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/.well-known/openid-configuration and read issuer, authorization_endpoint, token_endpoint and jwks_uri.  Any of them starting with http:// can be answered by somebody on the network instead of the real server.",
+  "remediate": "Serve every single sign on address over https, set the issuer to its https form, and make clients refuse a discovery document or key set fetched over http.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-319",
+    "owasp": "A02:2021"
+  },
+  "rulesets": []
+}

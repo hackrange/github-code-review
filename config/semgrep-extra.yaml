@@ -123,3 +123,497 @@ rules:
   - pattern: redirect($X, ...)
   - pattern: HttpResponseRedirect($X)
   - pattern: HttpResponseRedirect($X, ...)
+
+# ---- Missed logic that a signature can still see ----------------------------
+#
+# The rules below came from a review of what another product's scan found and
+# ours did not.  Most of that list was missing authorization, which no pattern
+# can judge, and goes to the reasoning pass instead.  These are the ones that
+# leave a mark in the code itself.  Each fixture lives with the tests.
+- id: gcr-validator-returns-early
+  languages:
+  - php
+  - javascript
+  - typescript
+  severity: ERROR
+  message: This function returns true before it checks anything, and the code after it never runs. If
+    it guards a token, an origin or a permission, that check is switched off. Remove the early return.
+  metadata:
+    cwe: 'CWE-1188: Initialization of a Resource with an Insecure Default'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-inside: |
+      function $F(...) { ... }
+  - pattern: |
+      return true;
+      $NEXT;
+- id: gcr-validator-returns-early-python
+  languages:
+  - python
+  severity: ERROR
+  message: This function returns True before it checks anything, and the code after it never runs. If
+    it guards a token, an origin or a permission, that check is switched off. Remove the early return.
+  metadata:
+    cwe: 'CWE-1188: Initialization of a Resource with an Insecure Default'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-inside: |
+      def $F(...):
+        ...
+  - pattern: |
+      return True
+      $NEXT
+- id: gcr-validator-stub
+  languages:
+  - php
+  - javascript
+  - typescript
+  severity: ERROR
+  message: A security check that only returns true. Every request passes it, so the token, origin,
+    signature or permission it is named for is never checked.
+  metadata:
+    cwe: 'CWE-1188: Initialization of a Resource with an Insecure Default'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern: |
+      function $F(...) { return true; }
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i)^_*(validate|verify|check|is_?valid|is_?allowed|is_?authori[sz]ed|authori[sz]e|has_?permission|can_?access).*(csrf|token|origin|referer|referrer|signature|hmac|nonce|permission|access|auth|session|otp|totp|mfa|saml).*$
+- id: gcr-validator-stub-python
+  languages:
+  - python
+  severity: ERROR
+  message: A security check that only returns True. Every request passes it, so the token, origin,
+    signature or permission it is named for is never checked.
+  metadata:
+    cwe: 'CWE-1188: Initialization of a Resource with an Insecure Default'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern: |
+      def $F(...):
+        return True
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i)^_*(validate|verify|check|is_?valid|is_?allowed|is_?authori[sz]ed|authori[sz]e|has_?permission|can_?access).*(csrf|token|origin|referer|referrer|signature|hmac|nonce|permission|access|auth|session|otp|totp|mfa|saml).*$
+- id: gcr-csv-formula-injection
+  languages:
+  - php
+  severity: WARNING
+  mode: taint
+  message: Stored or submitted text is written to a CSV without neutralizing spreadsheet formulas. A
+    cell starting with = + - @ runs as a formula when the export is opened, which can read the cells
+    beside it and send them out. Prefix those cells with a single quote before writing.
+  metadata:
+    cwe: 'CWE-1236: Improper Neutralization of Formula Elements in a CSV File'
+    category: security
+    confidence: MEDIUM
+  pattern-sources:
+  - pattern: $S->fetch(...)
+  - pattern: $S->fetchAll(...)
+  - pattern: $S->fetchColumn(...)
+  - pattern: mysqli_fetch_assoc(...)
+  - pattern: mysqli_fetch_array(...)
+  - pattern: $_GET
+  - pattern: $_POST
+  - pattern: $_REQUEST
+  pattern-sanitizers:
+  - patterns:
+    - pattern-either:
+      - pattern: $SAFE(...)
+      - pattern: array_map($SAFE, ...)
+      - pattern: $O->$SAFE(...)
+    - metavariable-regex:
+        metavariable: $SAFE
+        regex: (?i).*(csv.?safe|safe.?cell|spreadsheet.?(row|cell|safe)|formula|neutrali[sz]e|csv.?escape|escape.?csv|sanitize.?csv|csv.?sanitize|safe.?csv).*
+  pattern-sinks:
+  - pattern: fputcsv($H, $ROW, ...)
+- id: gcr-csv-formula-injection-python
+  languages:
+  - python
+  severity: WARNING
+  mode: taint
+  message: Stored or submitted text is written to a CSV without neutralizing spreadsheet formulas. A
+    cell starting with = + - @ runs as a formula when the export is opened. Prefix those cells with a
+    single quote before writing.
+  metadata:
+    cwe: 'CWE-1236: Improper Neutralization of Formula Elements in a CSV File'
+    category: security
+    confidence: MEDIUM
+  pattern-sources:
+  - pattern: $C.fetchall()
+  - pattern: $C.fetchone()
+  - pattern: $C.fetchmany(...)
+  - pattern: $Q.all()
+  - pattern: request.form.get(...)
+  - pattern: request.args.get(...)
+  pattern-sanitizers:
+  - patterns:
+    - pattern-either:
+      - pattern: $SAFE(...)
+      - pattern: $O.$SAFE(...)
+    - metavariable-regex:
+        metavariable: $SAFE
+        regex: (?i).*(csv.?safe|safe.?cell|spreadsheet.?(row|cell|safe)|formula|neutrali[sz]e|csv.?escape|escape.?csv|sanitize.?csv|csv.?sanitize|safe.?csv).*
+  pattern-sinks:
+  - pattern: $W.writerow($ROW)
+  - pattern: $W.writerows($ROWS)
+- id: gcr-curl-follows-redirects
+  languages:
+  - php
+  severity: WARNING
+  message: This request follows redirects to wherever the server says. Checking the first address is
+    not enough, because a public host can redirect into the private network or the cloud metadata
+    address. Turn redirects off and follow each hop yourself, checking it and pinning the address
+    you checked with CURLOPT_RESOLVE.
+  metadata:
+    cwe: 'CWE-918: Server-Side Request Forgery (SSRF)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: curl_setopt($CH, CURLOPT_FOLLOWLOCATION, true)
+    - pattern: curl_setopt($CH, CURLOPT_FOLLOWLOCATION, 1)
+    - pattern: 'curl_setopt_array($CH, [..., CURLOPT_FOLLOWLOCATION => true, ...])'
+    - pattern: 'curl_setopt_array($CH, [..., CURLOPT_FOLLOWLOCATION => 1, ...])'
+  - pattern-not-inside: |
+      $CH = curl_init("...");
+      ...
+- id: gcr-url-attribute-escape-only
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.php'
+    - '*.phtml'
+  severity: WARNING
+  message: A link or source address is printed with HTML escaping only. Escaping does not stop a
+    javascript URL, which runs script when clicked. Check the scheme is http or https, or start
+    the attribute with a fixed path.
+  metadata:
+    cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-regex: (?i)\b(href|src)\s*=\s*["']\s*<\?(=|php\s+echo)\s*(e|h|esc|esc_html|escape|htmlspecialchars|htmlentities)\(\s*\$\w+\s*(\[|->)
+- id: gcr-strip-tags-allowlist
+  languages:
+  - php
+  severity: WARNING
+  message: strip_tags with a list of allowed tags keeps every attribute on those tags, onclick and
+    onerror included. It is not an HTML sanitizer. Use a real one (HTML Purifier), or escape the text
+    and add formatting yourself.
+  metadata:
+    cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+    category: security
+    confidence: HIGH
+  pattern: strip_tags($X, $ALLOWED)
+- id: gcr-regex-html-sanitizer
+  languages:
+  - php
+  severity: WARNING
+  message: HTML is being cleaned with a regular expression. Browsers accept far more forms of a tag or
+    attribute than a pattern can list (onload/onerror after a slash, mixed case, encoded characters),
+    so something gets through. Use a real sanitizer, or escape the text instead.
+  metadata:
+    cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: preg_replace($RE, ...)
+  - pattern-not-inside: |
+      function $F(...) { ... strip_tags($X); ... }
+  - metavariable-regex:
+      metavariable: $RE
+      regex: (?i).*(<\\?/?\s*\(?\??:?script|on\\w\+|on\\w\*|on\[a-z|\son\(|\\son|javascript\s*:).*
+- id: gcr-regex-html-sanitizer-python
+  languages:
+  - python
+  severity: WARNING
+  message: HTML is being cleaned with a regular expression. Browsers accept far more forms of a tag or
+    attribute than a pattern can list (onload/onerror after a slash, mixed case, encoded characters),
+    so something gets through. Use a real sanitizer, or escape the text instead.
+  metadata:
+    cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: re.sub($RE, ...)
+  - pattern-not-inside: |
+      def $F(...):
+        ...
+        <... re.sub("<[^>]+>", ...) ...>
+  - pattern-not-inside: |
+      def $F(...):
+        ...
+        <... re.sub("<[^>]*>", ...) ...>
+  - metavariable-regex:
+      metavariable: $RE
+      regex: (?i).*(<\\?/?\s*\(?\??:?script|on\\w\+|on\\w\*|on\[a-z|\son\(|\\son|javascript\s*:).*
+- id: gcr-regex-html-sanitizer-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: HTML is being cleaned with a regular expression. Browsers accept far more forms of a tag or
+    attribute than a pattern can list (onload/onerror after a slash, mixed case, encoded characters),
+    so something gets through. Use a real sanitizer, or escape the text instead.
+  metadata:
+    cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $S.replace($RE, ...)
+    - pattern: $S.replaceAll($RE, ...)
+  - pattern-not-inside: |
+      function $F(...) { ... $S2.replace(/<[^>]+>/g, ...); ... }
+  - pattern-not-inside: |
+      function $F(...) { ... $S2.replace(/<[^>]*>/g, ...); ... }
+  - metavariable-regex:
+      metavariable: $RE
+      regex: (?i).*(<\\?/?\s*\(?\??:?script|on\\w\+|on\\w\*|on\[a-z|\son\(|\\son|javascript\s*:).*
+- id: gcr-zip-entry-size-unchecked
+  languages:
+  - php
+  severity: WARNING
+  message: An archive entry is read into memory without checking how big it unpacks to. A small upload
+    can expand to gigabytes (a zip bomb) and take the worker down. Read the entry's uncompressed size
+    first (statName or statIndex) and refuse anything over a limit.
+  metadata:
+    cwe: 'CWE-409: Improper Handling of Highly Compressed Data (Data Amplification)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $Z->getFromName(...)
+    - pattern: $Z->getFromIndex(...)
+    - pattern: $Z->extractTo(...)
+  - pattern-not-inside: |
+      function $F(...) { ... $Z->statName(...); ... }
+  - pattern-not-inside: |
+      function $F(...) { ... $Z->statIndex(...); ... }
+- id: gcr-zip-entry-size-unchecked-python
+  languages:
+  - python
+  severity: WARNING
+  message: An archive is unpacked without checking how big its entries are. A small upload can expand
+    to gigabytes (a zip bomb). Check each entry's file_size against a limit first.
+  metadata:
+    cwe: 'CWE-409: Improper Handling of Highly Compressed Data (Data Amplification)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $Z.extractall(...)
+    - pattern: $Z.read(...)
+  - pattern-inside: |
+      with zipfile.ZipFile(...) as $Z:
+        ...
+  - pattern-not-inside: |
+      def $F(...):
+        ...
+        <... $I.file_size ...>
+        ...
+- id: gcr-saml-response-not-bound
+  languages:
+  - php
+  - python
+  severity: ERROR
+  message: The SAML response is accepted without being tied to a sign in this application started. A
+    response captured once can be replayed into a new session. Pass the stored request id, and keep the
+    assertion ids already used until they expire.
+  metadata:
+    cwe: 'CWE-294: Authentication Bypass by Capture-replay'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: $R->isValid(null)
+  - pattern: $A->processResponse(null)
+  - pattern: $A->processResponse()
+  - pattern: $A.process_response(request_id=None)
+  - pattern: $A.process_response()
+- id: gcr-container-privileged
+  languages:
+  - yaml
+  paths:
+    include:
+    - '*compose*.yml'
+    - '*compose*.yaml'
+  severity: WARNING
+  message: The container runs privileged, with every device and capability on the host. Anybody who
+    gets code running in it can usually reach the host. Grant the one capability it needs instead.
+  metadata:
+    cwe: 'CWE-250: Execution with Unnecessary Privileges'
+    category: security
+    confidence: HIGH
+  pattern: 'privileged: true'
+- id: gcr-tls-verify-disabled
+  languages:
+  - python
+  severity: WARNING
+  message: Certificate checking is turned off for this connection, so anybody on the network path can
+    pose as the server and read what is sent, credentials included. If one known host has a bad
+    certificate, trust that certificate alone (a CA bundle or a pinned fingerprint) rather than all of them.
+  metadata:
+    cwe: 'CWE-295: Improper Certificate Validation'
+    category: security
+    confidence: HIGH
+  pattern-either:
+  - pattern: httpx.$M(..., verify=False, ...)
+  - pattern: httpx.Client(..., verify=False, ...)
+  - pattern: httpx.AsyncClient(..., verify=False, ...)
+  - pattern: requests.$M(..., verify=False, ...)
+  - pattern: $B.new_context(..., ignore_https_errors=True, ...)
+  - pattern: $B.new_page(..., ignore_https_errors=True, ...)
+  - pattern: $B.launch_persistent_context(..., ignore_https_errors=True, ...)
+  - pattern: ssl._create_unverified_context(...)
+  - pattern: $CTX.check_hostname = False
+  - pattern: $CTX.verify_mode = ssl.CERT_NONE
+  - patterns:
+    - pattern: '"$FLAG"'
+    - metavariable-regex:
+        metavariable: $FLAG
+        regex: ^(--ssl-insecure|--trust-server-cert(-failures.*)?|--no-check-certificate|http\.sslVerify=false)$
+- id: gcr-tls-verify-disabled-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: Certificate checking is turned off for this connection, so anybody on the network path can
+    pose as the server and read what is sent, credentials included. Trust the one certificate that is
+    needed rather than all of them.
+  metadata:
+    cwe: 'CWE-295: Improper Certificate Validation'
+    category: security
+    confidence: HIGH
+  pattern-either:
+  - pattern: '{..., rejectUnauthorized: false, ...}'
+  - pattern: '{..., ignoreHTTPSErrors: true, ...}'
+  - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+- id: gcr-tls-verify-disabled-command
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.sh'
+    - '*.bash'
+    - Dockerfile
+    - '*.yml'
+    - '*.yaml'
+  severity: WARNING
+  message: A command is told to accept any certificate, so anybody on the network path can pose as the
+    server and read what is sent, credentials included. Give it the right CA certificate instead.
+  metadata:
+    cwe: 'CWE-295: Improper Certificate Validation'
+    category: security
+    confidence: MEDIUM
+  pattern-regex: (--ssl-insecure|--trust-server-cert-failures|--trust-server-cert\b|--no-check-certificate|http\.sslVerify[= ]+false|GIT_SSL_NO_VERIFY=(1|true)|NODE_TLS_REJECT_UNAUTHORIZED=0|\bcurl\b[^\n|;]*\s(-[a-jl-zA-Z]*k[a-zA-Z]*|--insecure)\b)
+- id: gcr-secret-in-process-arguments
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.sh'
+    - '*.bash'
+  severity: WARNING
+  message: A secret is put on a command line, where any local user can read it with ps or from
+    /proc while the command runs. "env NAME=value command" counts, because env receives the
+    assignment as an argument. Export the variable in the parent shell, or pass a file the command
+    reads.
+  metadata:
+    cwe: 'CWE-214: Invocation of Process Using Visible Sensitive Information'
+    category: security
+    confidence: MEDIUM
+  pattern-regex: (?i)(\benv\s+(-\S+\s+)*["']?\w*(token|secret|passw(or)?d|pat|api_?key|credential)\w*=["']?\$|--(token|password|passwd|secret|api-key)[= ]["']?\$\{?\w*(token|secret|pass|key|pat)\w*)
+- id: gcr-browser-context-auth-headers
+  languages:
+  - python
+  - javascript
+  - typescript
+  severity: WARNING
+  message: Headers set on the whole browser context go with every request the page makes, to every
+    host it links to, redirects to or loads from. A session cookie or bearer token here reaches
+    whatever site the page points at. Add them in a request route, only for the target's own origin.
+  metadata:
+    cwe: 'CWE-522: Insufficiently Protected Credentials'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: $CTX.set_extra_http_headers(...)
+  - pattern: $CTX.setExtraHTTPHeaders(...)
+  - pattern: $B.new_context(..., extra_http_headers=$H, ...)
+  - pattern: '$B.newContext({..., extraHTTPHeaders: $H, ...})'
+- id: gcr-check-then-fetch-unpinned
+  languages:
+  - python
+  severity: WARNING
+  message: The host is checked for a private address, then fetched by name, which looks the name up
+    again. A name that answers with a public address for the check and a private one for the fetch
+    (DNS rebinding) walks straight past it, and so does any redirect the client follows. Connect to the
+    address that was checked, and check every hop again.
+  metadata:
+    cwe: 'CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-inside: |
+      def $F(...):
+        ...
+        <... $CHECK(...) ...>
+        ...
+  - metavariable-regex:
+      metavariable: $CHECK
+      regex: (?i)^(_*(host_?is_?public|is_?public(_?host|_?ip|_?address)?|public|is_?private(_?host|_?ip|_?address)?|is_?safe_?(url|host|target)|allowed_?host|check_?(host|url|target)))$
+  - pattern-either:
+    - pattern: httpx.$M(...)
+    - pattern: requests.$M(...)
+    - pattern: urllib.request.urlopen(...)
+    - pattern: $PAGE.goto(...)
+    - pattern: $CTX.request.get(...)
+    - pattern: subprocess.$RUN([..., "clone", ...], ...)
+    - patterns:
+      - pattern-inside: |
+          with httpx.Client(...) as $CL:
+            ...
+      - pattern-either:
+        - pattern: $CL.stream(...)
+        - pattern: $CL.request(...)
+        - pattern: $CL.get(...)
+        - pattern: $CL.post(...)
+  - pattern-not: httpx.Client(...)
+  - pattern-not: httpx.AsyncClient(...)
+  - pattern-not: httpx.HTTPTransport(...)
+- id: gcr-vscode-setting-workspace-overridable
+  languages:
+  - json
+  paths:
+    include:
+    - package.json
+  severity: WARNING
+  message: A setting that names the server to send code to, or the token to send with it, can be set by
+    the workspace. A repository's .vscode/settings.json then points the extension at another host,
+    which receives the developer's code and token. Give it "scope" "application" so only the user can
+    set it.
+  metadata:
+    cwe: 'CWE-15: External Control of System or Configuration Setting'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-inside: |
+      "properties": {...}
+  - pattern: |
+      "$KEY": {...}
+  - metavariable-regex:
+      metavariable: $KEY
+      regex: (?i)^"?[\w.-]*\.(server|serverurl|url|baseurl|apiurl|endpoint|host|token|apitoken|insecure\w*|allowinsecure\w*)"?$
+  - pattern-not: |
+      "$KEY": {..., "scope": "application", ...}
+  - pattern-not: |
+      "$KEY": {..., "scope": "machine", ...}

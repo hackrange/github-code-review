@@ -254,6 +254,47 @@
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-head">Code reasoning</div>
+    <div class="card-body">
+      <label class="check">
+        <input type="checkbox" name="ai.code_reasoning" value="1"
+               {{ 'checked' if values['ai.code_reasoning'] }}>
+        After a scan, have the model look for missing access checks
+      </label>
+      <p class="faint small">Some weaknesses are a check that is not there: a
+        handler that loads a record by the id it was sent without asking whether
+        the caller may see it, or an admin action whose page hides the button
+        but whose server never checks the role.  No pattern can see those.  When
+        this is on, code picks the request handlers that read the request,
+        touch stored data and take an id or do something privileged, and the
+        model reads each one with the access checks it calls.  Nothing else in
+        the repository is sent.  An answer is kept, so a handler nobody changed
+        is never asked about again.  What it finds is filed for a person to
+        confirm, and it never lowers or closes anything.  It needs sending code
+        switched on above.</p>
+      <label>Monthly token limit
+        <input type="number" name="ai.code_reasoning_monthly_tokens" min="0"
+               max="2000000000" value="{{ values['ai.code_reasoning_monthly_tokens'] }}">
+      </label>
+      {% if reasoning_budget %}
+      <p class="small">Used this month: <strong>{{ '{:,}'.format(reasoning_budget.used) }}</strong>
+        of {{ '{:,}'.format(reasoning_budget.limit) }} tokens
+        ({{ reasoning_budget.percent }}%).</p>
+      {% endif %}
+      <p class="faint small">Input and output together, since the first of the
+        month.  The pass checks before every question and stops when the next
+        one would go over, then picks up again next month.  0 stops it
+        altogether.</p>
+      <label>Handlers per repository
+        <input type="number" name="ai.code_reasoning_per_repo" min="1" max="500"
+               value="{{ values['ai.code_reasoning_per_repo'] }}">
+      </label>
+      <p class="faint small">The likeliest first.  Cached ones count toward
+        this but cost nothing.</p>
+    </div>
+  </div>
+
   {% if can_write %}
   <div class="page-actions">
     <button class="btn primary" type="submit">Save</button>

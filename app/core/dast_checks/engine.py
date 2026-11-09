@@ -26,6 +26,7 @@ import base64
 import hashlib
 import hmac
 import json
+import functools
 import re
 import secrets
 import time
@@ -110,7 +111,8 @@ class Client:
 # ------------------------------------------------------------------ the DSL
 
 _ALLOWED_FUNCS = {"body_differs", "body_contains", "header", "reflected",
-                  "status_in", "differ", "same", "status_of"}
+                  "status_in", "differ", "same", "status_of",
+                  "body_matches", "cookie_matches"}
 _ALLOWED_CMP = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
                 ast.In, ast.NotIn)
 
@@ -203,6 +205,24 @@ _AUTHLESS = re.compile(
     r"you need to (log|sign) ?in|(log|sign) ?in to continue", re.I)
 
 
+# A pattern in a rule is matched against at most this much of a body, so a
+# careless pattern on a huge page cannot hold the scan for long.
+MATCH_BODY_CHARS = 200_000
+MAX_PATTERN_CHARS = 500
+
+
+@functools.lru_cache(maxsize=256)
+def _rule_regex(pattern) -> "re.Pattern":
+    """A rule's pattern, compiled once.  Case and line breaks do not matter."""
+    pattern = str(pattern)
+    if len(pattern) > MAX_PATTERN_CHARS:
+        raise Refused("a pattern in the rule is too long")
+    try:
+        return re.compile(pattern, re.I | re.S)
+    except re.error:
+        raise Refused("a pattern in the rule does not compile")
+
+
 def _looks_authless(resp) -> bool:
     """True when a response is a sign in or session expired wall, not content."""
     return bool(_AUTHLESS.search(((resp or {}).get("body") or "")[:8000]))
@@ -241,6 +261,15 @@ def _env_for(response: dict, control: dict, oob_hit: bool, saved: dict = None) -
     def status_of(resp):
         return (resp or {}).get("status", 0)
 
+    def body_matches(pattern):
+        return bool(_rule_regex(pattern).search(body[:MATCH_BODY_CHARS]))
+
+    def cookie_matches(pattern):
+        """True when any cookie the response set matches, attributes included."""
+        rx = _rule_regex(pattern)
+        return any(rx.search(str(c)) for c in (response.get("set_cookies") or [])
+                   + ([headers["set-cookie"]] if headers.get("set-cookie") else []))
+
     env = {
         "status": response.get("status", 0),
         "response": response,
@@ -249,7 +278,8 @@ def _env_for(response: dict, control: dict, oob_hit: bool, saved: dict = None) -
         "_funcs": {"body_differs": body_differs, "body_contains": body_contains,
                    "header": header, "reflected": reflected,
                    "status_in": status_in, "differ": differ, "same": same,
-                   "status_of": status_of},
+                   "status_of": status_of, "body_matches": body_matches,
+                   "cookie_matches": cookie_matches},
     }
     env.update(saved or {})
     return env

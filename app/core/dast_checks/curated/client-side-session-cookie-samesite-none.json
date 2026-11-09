@@ -1,0 +1,38 @@
+{
+  "id": "client-side-session-cookie-samesite-none",
+  "class": "client-side",
+  "safety": "read",
+  "severity_floor": "low",
+  "title": "Session cookie goes with requests from other sites",
+  "summary": "A cookie that looks like the session is set with SameSite=None, so the browser sends it on requests that other sites start.  Any form or action without a working request forgery check can then be triggered by a page the signed in user merely visits.",
+  "needs": [],
+  "candidate_paths": [
+    "/",
+    "/login",
+    "/signin",
+    "/auth/login",
+    "/account/login"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "{route}",
+        "follow": false
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status_in(200, 301, 302, 303, 307, 308) and cookie_matches(\"^\\\\s*[^=;]*(sess|sid|auth|token|jwt|login)[^=;]*=[^;]*;(?:[^;]*;)*?\\\\s*samesite\\\\s*=\\\\s*none\")",
+    "retest": 2
+  },
+  "reproduce": "curl -s -i https://host/login and read the Set-Cookie lines.  A session or sign in cookie carrying SameSite=None is sent on requests from any other site.",
+  "remediate": "Set the session cookie to SameSite=Lax or Strict.  Keep a request forgery token on every state change as well, because SameSite does not cover sibling sites under the same domain.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-1275",
+    "owasp": "A01:2021"
+  },
+  "rulesets": []
+}

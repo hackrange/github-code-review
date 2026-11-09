@@ -1846,7 +1846,7 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             # A finding the security report recorded was never in any scan, so
             # a scan not reporting it says nothing.  A person closes it, or the
             # next report hands it over to a scanner that found the same thing.
-            if seen_by_engines == {"security-report"}:
+            if seen_by_engines in ({"security-report"}, {"code-reasoning"}):
                 counts["held_open"] = counts.get("held_open", 0) + 1
                 continue
             loaded = rules_loaded.get(finding.repository)

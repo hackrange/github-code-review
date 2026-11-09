@@ -4,6 +4,45 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-11-09
+
+**After upgrading, load the curated rules.**  Three new dynamic rules arrive
+disabled, as always.
+
+**Code reasoning, for the checks that are missing.**  A pattern finds a dangerous
+call.  It cannot find a handler that loads a record by the id it was sent without
+asking whether the caller may see it, or an admin action whose page hides the button
+but whose server never checks the role.  On the AI page, **Code reasoning** has the
+model read the request handlers that take an id or do something privileged, each with
+the access checks it calls, after every scan.  Nothing else in the repository is
+sent.  It is off by default and has its own **monthly token limit**, checked before
+every question, with this month's use shown beside it.  An answer is kept against
+exactly what was sent, so a handler nobody changed is never asked about again, and
+only a high severity claim gets a second question to confirm it.  What it finds is
+filed for a person to confirm.  It never lowers, waives or closes anything, and a
+scan never closes what it filed.  **Run code reasoning** on a repository's page runs
+it on demand.
+
+**Twenty three new code rules.**  They find security checks that return true before
+checking anything, CSV exports that do not neutralize formulas, requests that follow
+redirects after checking only the first address, a host checked for a private
+address and then fetched by name, certificate checking turned off, secrets on a
+command line, headers set for a whole browser session, links printed with HTML
+escaping only, strip_tags and regular expressions used as HTML sanitizers, archives
+read without a size limit, SAML responses not tied to a sign in, privileged
+containers, and editor extension settings a workspace can redirect.
+
+**Three new dynamic rules, all read only.**  A sign in form that sends the password
+in the address, single sign on discovery that names plain http addresses, and a
+session cookie sent on requests from other sites.
+
+**Propose changes and branches not to scan.**  Anybody who can see a repository can
+propose changes from its own page, including ticking branches that should not be
+scanned, with a reason.  Nothing moves until an administrator approves it on
+Proposed Updates.  The default branch is never offered, and a whole repository
+cannot be left out this way.  An approved branch is skipped entirely, credentials
+included, and findings that live only there stay open.
+
 ## 2026-11-08
 
 **After upgrading, load the curated rules.**  Shipped rules do not arrive by

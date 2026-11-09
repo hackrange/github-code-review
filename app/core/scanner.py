@@ -1065,8 +1065,9 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
             counts.pop("new_findings", None)
             log.info("scan done: %s", counts)
 
-            from app.core import analysis
+            from app.core import analysis, code_reasoning
             analysis.auto_review(new_ids)
+            code_reasoning.after_scan(scanned)
 
             # The findings are in the database now, so the copies on disk have
             # done their job.  Removed here rather than in a finally, because

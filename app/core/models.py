@@ -2021,6 +2021,28 @@ class RepoAssessment(Base):
     started_at = Column(DateTime(timezone=True))
 
 
+class CodeReasoningCache(Base):
+    """What the code reasoning pass was told about one handler, by digest.
+
+    The digest covers exactly what was sent: the handler, the helpers beside
+    it and the question's version.  The same digest is never asked about
+    again, which is most of what keeps the pass cheap.
+    """
+
+    __tablename__ = "code_reasoning_cache"
+    __table_args__ = (
+        UniqueConstraint("repository", "digest", name="uq_code_reasoning"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    repository = Column(String(320), nullable=False, index=True)
+    digest = Column(String(64), nullable=False)
+    unit = Column(String(500), default="")
+    # JSON list of what was kept, [] for nothing.
+    result = Column(Text, default="[]")
+    at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class RepoProposal(Base):
     """A change to what a repository is, asked for by somebody who cannot make it.
 

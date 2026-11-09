@@ -2479,6 +2479,9 @@ def repository_about(repo_id: int, request: Request, msg: str = "",
                     "set_by": r.set_by or "", "set_at": r.set_at}
                    for r in scan_scope.settings_of(db, repo.full_name)["branches"]
                    if r.mode == "none"]
+        from app.core import ai as _ai, code_reasoning as _cr
+        context["can_reason"] = (rbac.can(user, "finding.validate")
+                                 and _cr.is_on(_ai.config(db)))
         context.update(active_page="repositories", repo=repo, applies=applies,
                        own=own, tag_labels=labels, open_count=open_count,
                        purge=purge, can_propose=can_propose, skipped=skipped,
@@ -4830,6 +4833,8 @@ def ai_page(request: Request, msg: str = "", kind: str = "", tab: str = "",
         # The cost tab belongs to the custom service, which is the one whose
         # prices nobody else publishes.
         has_cost = cfg.get("ai.provider") == "custom"
+        from app.core import code_reasoning
+        context["reasoning_budget"] = code_reasoning.budget(db, cfg)
         tab = "cost" if tab == "cost" and has_cost else "settings"
         days = max(1, min(366, int(days or 30)))
         context.update(tab=tab, has_cost=has_cost, cost_days=days,
