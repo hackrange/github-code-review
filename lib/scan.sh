@@ -36,7 +36,7 @@ scope_full_scan() {
   over=$(jq -r --arg b "$branch" '.branches[$b] // ""' <<<"$rule" 2>/dev/null)
   case "$over" in
     full) return 0 ;;
-    credentials) return 1 ;;
+    credentials|none) return 1 ;;
   esac
   mode=$(jq -r '.mode // "all"' <<<"$rule" 2>/dev/null)
   case "$mode" in
@@ -49,6 +49,17 @@ scope_full_scan() {
       return 1 ;;
   esac
   return 0
+}
+
+# Branches marked Do Not Scan, one per line.  An administrator sets these,
+# never on the default branch, and nothing reads them: no checkout, no
+# engine, and their refs leave the clone before the history walk.
+scope_skipped_branches() {
+  local repo="$1"
+  printf '%s' "$GHSCAN_CFG_JSON" \
+    | jq -r --arg r "$repo" \
+        '(.scan.branch_scope[$r].branches // {}) | to_entries[]
+         | select(.value == "none") | .key' 2>/dev/null
 }
 
 # Per-repository worker
@@ -349,6 +360,37 @@ scan_one_repo() {
         git -C "$clone_dir" for-each-ref --format='%(refname:strip=2)' \
             --sort=-committerdate refs/heads/ 2>/dev/null; } \
         | awk 'NF && !seen[$0]++' | jq -R . | jq -sc '.')
+
+    # Do Not Scan branches go now, after the present list and dates above
+    # are recorded, so a skipped branch still counts as there and keeps its
+    # sign off.  Its refs leave the clone so the history walk, which reads
+    # every ref, does not read it either.  Commits it shares with a branch
+    # that is scanned are still read through that branch.
+    local -a skip_these=()
+    local sk
+    while IFS= read -r sk; do
+      [[ -n "$sk" && "$sk" != "$default_branch" ]] && skip_these+=("$sk")
+    done < <(scope_skipped_branches "$full_name")
+    if (( ${#skip_these[@]} > 0 )); then
+      local -a kept=()
+      local kb hit
+      for kb in "${branches[@]}"; do
+        hit=0
+        for sk in "${skip_these[@]}"; do [[ "$kb" == "$sk" ]] && { hit=1; break; }; done
+        (( hit )) || kept+=("$kb")
+      done
+      branches=("${kept[@]}")
+      for sk in "${skip_these[@]}"; do
+        git -C "$clone_dir" update-ref -d "refs/heads/$sk" 2>/dev/null || true
+        git -C "$clone_dir" update-ref -d "refs/remotes/origin/$sk" 2>/dev/null || true
+      done
+      BRANCHES_JSON=$(printf '%s\n' "${branches[@]}" | jq -R . | jq -sc '.')
+      export GHSCAN_BRANCH_SET="$BRANCHES_JSON"
+      GHSCAN_BRANCH_SET_HEADS=$(printf '%s' "$GHSCAN_BRANCH_SET_HEADS" \
+        | jq -c --argjson s "$(printf '%s\n' "${skip_these[@]}" | jq -R . | jq -sc '.')" \
+            '[ .[] | select(. as $b | $s | index($b) | not) ]')
+      log_info "[$full_name] ${#skip_these[@]} branch(es) marked do not scan, left out"
+    fi
 
     log_info "[$full_name] ${#branches[@]} branch(es) in scope"
   fi

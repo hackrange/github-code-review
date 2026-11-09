@@ -1716,8 +1716,20 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                  .filter(Finding.repository.in_(list(in_scope)))
                  .filter(Finding.state != FindingState.FIXED)
                  .all())
+        # Do Not Scan branches.  Nothing read them, so a finding that lives
+        # only there is unread, not fixed, whatever its kind.
+        from app.core import scan_scope
+        skip_rules = {name: rule for name, rule in
+                      scan_scope.rules(session, list(in_scope)).items()
+                      if rule.skipped_branches()}
         for finding in stale:
             if finding.fingerprint in seen_fingerprints:
+                continue
+            if scan_scope.held_by_skip(skip_rules.get(finding.repository),
+                                       finding.kind, finding.branch,
+                                       finding.branches):
+                counts["held_open"] = counts.get("held_open", 0) + 1
+                counts["skip_branch_held"] = counts.get("skip_branch_held", 0) + 1
                 continue
             # A credential somebody proved was live is not closed by silence.
             #

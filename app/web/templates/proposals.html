@@ -25,6 +25,7 @@
         <tr><th>{{ r.label }}</th>
           {% for value in (r.now, r.asked) %}
           <td>{% if r.field == 'web_app' %}{{ 'yes' if value else 'no' }}
+              {% elif r.field == 'no_scan_branches' %}{% if value %}<span class="mono">{{ value | join(', ') }}</span>{% else %}<span class="faint">none</span>{% endif %}
               {% elif value %}<span class="audit-detail-text">{{ value }}</span>
               {% else %}<span class="faint">empty</span>{% endif %}</td>
           {% endfor %}
@@ -32,6 +33,14 @@
         {% endfor %}
       </tbody>
     </table>
+    {% if p.stops_scans %}
+    <div class="notice warn" style="margin-top:.75rem"><div>Approving this
+      stops every scan of <span class="mono">{{ p.stops_scans | join(', ') }}</span>,
+      credentials included.  {{ p.open_count }} open
+      finding{{ '' if p.open_count == 1 else 's' }} live only there and stay
+      open, unread, until the branch is scanned again.  It can be undone on the
+      <a href="{{ base }}/repositories/{{ p.repo.id }}/scope">scope page</a>.</div></div>
+    {% endif %}
 
     <details style="margin-top:.75rem" open>
       <summary class="small">Edit before approving</summary>

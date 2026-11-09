@@ -4344,7 +4344,6 @@ async def tag_one_repository(repo_id: int, request: Request,
                 detail="Give the address of the web application it is part "
                        "of, so it can be found.")
         values["web_app_urls"] = ", ".join(urls)
-
     with session_scope() as db:
         repo = (db.query(m_Repository)
                 .filter(m_Repository.id == repo_id).one_or_none())
@@ -4424,6 +4423,7 @@ def _proposal_values(db, form, repo) -> dict:
             detail="Give the address of the web application it is part "
                    "of, so it can be found.")
     values["web_app_urls"] = ", ".join(urls)
+    values.update(_no_scan_values(form, repo))
 
     own = tagging.split_labels(repo.sensitivity or "")
     offered = tagging.labels(db)
@@ -4431,6 +4431,36 @@ def _proposal_values(db, form, repo) -> dict:
     values["sensitivity"] = ", ".join(
         label for label in offered if _checked(form, f"holds:{label}"))
     return values
+
+
+NO_SCAN_REASON_LIMIT = 500
+
+
+def _no_scan_values(form, repo) -> dict:
+    """The ticked Do Not Scan branches and why.
+
+    Only branches this repository has, never its default branch, and so
+    never the whole repository.  A change either way needs a reason.
+    """
+    from app.core import proposals
+
+    choices = set(proposals.branch_choices(repo))
+    ticked = sorted({str(v).strip() for v in form.getlist("no_scan_branch")
+                     if str(v).strip()})
+    stray = [b for b in ticked if b not in choices]
+    if stray:
+        raise HTTPException(
+            status_code=400,
+            detail="Only branches of this repository can be left out, and "
+                   "never its default branch.")
+    reason = clean_text(form.get("no_scan_reason"), "Why not scan them",
+                        limit=NO_SCAN_REASON_LIMIT, required=False)
+    if ticked != proposals.skipped_now(repo) and len(reason) < 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Say in a sentence why those branches should or should "
+                   "not be scanned, so whoever approves it knows.")
+    return {"no_scan_branches": ticked, "no_scan_reason": reason}
 
 
 @router.post("/repositories/{repo_id}/purge")
@@ -4821,8 +4851,15 @@ async def approve_repository_change(proposal_id: int, request: Request,
     with session_scope() as db:
         row = _proposal(db, proposal_id)
         values = _proposal_values(db, form, row.repo)
+        # Approving a Do Not Scan change is a scope decision, checked here
+        # rather than trusted to who can open the page.
+        if values["no_scan_branches"] != proposals.skipped_now(row.repo):
+            rbac.require(user, "repo.scope")
         asked_by = row.proposed_by
-        moved = proposals.approve(db, row, values, user.username)
+        try:
+            moved = proposals.approve(db, row, values, user.username)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)[:300])
         record(db, "repository.proposal_approved", actor=user.username,
                target=row.repo.full_name,
                detail=(f"asked by {asked_by}; "

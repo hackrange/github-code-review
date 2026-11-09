@@ -1864,6 +1864,7 @@ def finding_detail(finding_id: int, request: Request, msg: str = "",
                             else proposals.current(_own_row))
                 proposed["holds"] = tagging.split_labels(proposed["sensitivity"])
                 proposed["asked_at"] = _asked.proposed_at if _asked else None
+                proposed["branch_choices"] = proposals.branch_choices(_own_row)
                 tag_labels = tagging.labels(db) + [
                     x for x in proposed["holds"]
                     if x not in tagging.labels(db)]
@@ -2453,17 +2454,57 @@ def repository_about(repo_id: int, request: Request, msg: str = "",
                           .filter(Exclusion.repository == repo.full_name)
                           .count()),
             }
+        # Somebody who can see it but not change it can ask for a change,
+        # and sees what they last asked for until an administrator decides.
+        can_tag = rbac.can(user, "repo.write")
+        can_propose = not can_tag and rbac.can(user, "repo.propose")
+        proposed = {}
+        if can_propose:
+            from app.core import proposals
+
+            asked = proposals.mine(db, repo.id, user.username)
+            proposed = (proposals.wanted(asked) if asked
+                        else proposals.current(repo))
+            proposed["holds"] = tagging.split_labels(proposed["sensitivity"])
+            proposed["asked_at"] = asked.proposed_at if asked else None
+            proposed["branch_choices"] = proposals.branch_choices(repo)
+            proposed["asked"] = sorted(
+                proposals.LABELS[f] for f in proposals.changes(asked)
+            ) if asked else []
+            labels = labels + [x for x in proposed["holds"]
+                               if x not in labels]
         context = _shared(db, user)
+        from app.core import scan_scope
+        skipped = [{"branch": r.branch, "reason": r.reason or "",
+                    "set_by": r.set_by or "", "set_at": r.set_at}
+                   for r in scan_scope.settings_of(db, repo.full_name)["branches"]
+                   if r.mode == "none"]
         context.update(active_page="repositories", repo=repo, applies=applies,
                        own=own, tag_labels=labels, open_count=open_count,
-                       purge=purge,
+                       purge=purge, can_propose=can_propose, skipped=skipped,
+                       proposed=proposed,
                        web_urls=tagging.web_urls(repo.web_app_urls)[0],
                        told=tagging.notify_addresses(repo, applies),
-                       can_tag=rbac.can(user, "repo.write"),
+                       can_tag=can_tag,
                        can_scope=rbac.can(user, "repo.scope"),
                        flash=clean_notice(msg, limit=300),
                        flash_kind=notice_class(kind))
         return page(request, "repository.html", **context)
+
+
+def _held_by_branches(db, repo, branches) -> int:
+    """Open findings that live only on these branches."""
+    if not branches:
+        return 0
+    from app.core import scan_scope
+
+    rule = scan_scope.Rule(overrides={b: "none" for b in branches})
+    rows = (db.query(Finding.kind, Finding.branch, Finding.branches)
+            .filter(Finding.repo_id == repo.id)
+            .filter(Finding.state == FindingState.OPEN).all())
+    return sum(1 for kind, primary, listed in rows
+               if scan_scope.branches_of(primary, listed)
+               and scan_scope.held_by_skip(rule, kind, primary, listed))
 
 
 @router.get("/repositories/proposals")
@@ -2488,6 +2529,9 @@ def repository_proposals(request: Request, msg: str = "", kind: str = "",
                     .order_by(RepoProposal.proposed_at)):
             now, asked = proposals.current(row.repo), proposals.changes(row)
             form = proposals.wanted(row)
+            form["branch_choices"] = proposals.branch_choices(row.repo)
+            stops = [b for b in asked.get("no_scan_branches") or []
+                     if b not in now["no_scan_branches"]]
             form["holds"] = tagging.split_labels(form["sensitivity"])
             own = tagging.split_labels(row.repo.sensitivity or "")
             waiting.append({
@@ -2498,6 +2542,8 @@ def repository_proposals(request: Request, msg: str = "", kind: str = "",
                           "now": now[f], "asked": asked[f]}
                          for f in proposals.FIELDS if f in asked],
                 "form": form,
+                "stops_scans": stops,
+                "open_count": _held_by_branches(db, row.repo, stops),
                 "labels": offered + [x for x in own + form["holds"]
                                      if x not in offered],
             })
@@ -2551,6 +2597,7 @@ def repository_scope(repo_id: int, request: Request, msg: str = "",
         for name in sorted(names):
             full, source = rule.full_scan(name)
             branches.append({"name": name, "full": full, "source": source,
+                             "skipped": rule.skipped(name),
                              "default": name == repo.default_branch})
         stored = scan_scope.settings_of(db, repo.full_name)
         hidden = (rbac.visible_findings(db, user)
@@ -2899,6 +2946,7 @@ def connection_scope(connection_id: int, request: Request, msg: str = "",
             for name in sorted(names):
                 full, source = rule.full_scan(name)
                 branches.append({"name": name, "full": full, "source": source,
+                                 "skipped": rule.skipped(name),
                                  "default": name == repo.default_branch})
             listing.append({"repo": repo, "rule": rule,
                             "text": scan_scope.describe(rule, repo.default_branch),

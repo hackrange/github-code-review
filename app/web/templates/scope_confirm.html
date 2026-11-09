@@ -20,6 +20,7 @@
       {% if branch %}
         <span class="mono">{{ branch }}</span> becomes
         <strong>{{ {'full': 'full scan', 'credentials': 'credentials only',
+                    'none': 'do not scan, credentials included',
                     'inherit': 'whatever the repository says'}[mode] }}</strong>.
       {% else %}
         Repository setting becomes <strong>{{ labels[mode] }}</strong>{% if mode == 'chosen' %}:

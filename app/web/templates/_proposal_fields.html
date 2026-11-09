@@ -38,3 +38,24 @@
     are needed when it is ticked.  An empty box uses what the connection
     says.</span>
 </label>
+{% if vals.branch_choices %}
+<fieldset class="no-scan-branches">
+  <legend>Branches not to scan</legend>
+  <span class="faint small">Tick a branch to leave it out of every scan,
+    credentials included.  The default branch is not offered, because it is
+    the code that ships.  Untick one to ask for it to be scanned again.</span>
+  <div class="check-grid" style="max-height:16rem;overflow:auto">
+    {% for b in vals.branch_choices %}
+    <label class="check mono small"><input type="checkbox" name="no_scan_branch"
+           value="{{ b }}" {{ 'checked' if b in vals.no_scan_branches }}> {{ b }}</label>
+    {% endfor %}
+  </div>
+  <label>Why
+    <textarea name="no_scan_reason" rows="2" maxlength="500"
+              placeholder="Vendor drop we never change, an experiment nobody deploys, a mirror of another repository.">{{ vals.no_scan_reason }}</textarea>
+    <span class="faint small">Needed, in a sentence, whenever the ticks
+      change.  Findings that live only on a branch left out stay open,
+      because nothing reads them.</span>
+  </label>
+</fieldset>
+{% endif %}

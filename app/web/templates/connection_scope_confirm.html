@@ -12,8 +12,11 @@
   <div class="card-head">What this changes</div>
   <div class="card-body">
     <p>Everything ticked becomes <strong>{{ {'credentials': 'credentials only',
-      'full': 'credentials + full scan', 'inherit': 'whatever its repository says'}[action] }}</strong>.
-      Credentials are still scanned on every branch.</p>
+      'full': 'credentials + full scan', 'none': 'do not scan',
+      'inherit': 'whatever its repository says'}[action] }}</strong>.
+      {% if action == 'none' %}No pass reads those branches, credentials
+      included.  Findings that live only there stay open, unread.
+      {% else %}Credentials are still scanned on every branch.{% endif %}</p>
     <p>
       {% if totals.hide_total %}
         <strong>{{ totals.hide_total }}</strong> open finding{{ '' if totals.hide_total == 1 else 's' }}

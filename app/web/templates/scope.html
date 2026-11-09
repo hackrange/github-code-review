@@ -24,6 +24,7 @@
         <option value="">Any</option>
         <option value="full">Credentials + Full scan</option>
         <option value="credentials">Credentials</option>
+        <option value="none">Do not scan</option>
         <option value="own">Set on the branch itself</option>
       </select>
     </div>
@@ -44,6 +45,8 @@
       <span class="small faint">Set the ticked ones to</span>
       <button class="btn" type="submit" name="action" value="credentials" disabled>Credentials only</button>
       <button class="btn" type="submit" name="action" value="full" disabled>Credentials + Full scan</button>
+      <button class="btn" type="submit" name="action" value="none" disabled
+              title="No pass reads it, credentials included.  Not the default branch.">Do not scan</button>
       <button class="btn" type="submit" name="action" value="inherit" disabled
               title="Drop the branch's own setting and follow the repository's">Follow the repository</button>
       <button class="btn" type="button" data-clear hidden>Clear</button>
@@ -59,12 +62,13 @@
       <tbody>
       {% for b in branches %}
         <tr data-branches="{{ b.name }}"
-            data-mode="{{ 'full' if b.full else 'credentials' }}{{ ' own' if b.source == 'branch' }}">
+            data-mode="{{ 'none' if b.skipped else ('full' if b.full else 'credentials') }}{{ ' own' if b.source == 'branch' }}">
           <td class="nowrap"><input type="checkbox" name="branch" form="branch-bulk"
               value="{{ b.name }}"></td>
           <td class="mono branch-name">{{ b.name }}
             {% if b.default %}<span class="badge ok">default</span>{% endif %}</td>
-          <td>{% if b.full %}<span class="badge scope-full">Credentials + Full scan</span>
+          <td>{% if b.skipped %}<span class="badge high">Do not scan</span>
+              {% elif b.full %}<span class="badge scope-full">Credentials + Full scan</span>
               {% else %}<span class="badge scope-creds">Credentials</span>{% endif %}</td>
           <td class="faint">{{ 'this branch' if b.source == 'branch' else 'inherited from repository' }}</td>
           <td class="nowrap">

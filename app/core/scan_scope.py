@@ -9,7 +9,12 @@ A repository has one of three settings:
                gets credentials only.
   credentials  the whole repository gets credentials only.
 
-A branch can override that either way, and the override wins.
+A branch can override that either way, and the override wins.  A branch can
+also be "none", Do Not Scan: no pass reads it, credentials included.  That is
+the one exception to the paragraph below, and it is only ever set by an
+administrator, often approving somebody's proposal.  Never the default
+branch, and never a whole repository from here.  Findings that live only on
+such a branch are held open, because unread is not fixed.
 
 Credentials are read on every branch whatever this says.  A key pushed to a
 branch nobody deploys still works, so "does not ship" is no reason to stop
@@ -37,7 +42,7 @@ from app.core.models import (BranchScope, BranchScopeChange, Finding,
 log = logging.getLogger("gcr.scope")
 
 REPO_MODES = ("all", "chosen", "credentials")
-BRANCH_MODES = ("full", "credentials")
+BRANCH_MODES = ("full", "credentials", "none")
 
 # How the page says each one.
 REPO_LABELS = {"all": "Full scan, all branches",
@@ -67,6 +72,13 @@ class Rule:
         if self.mode == "chosen":
             return any(fnmatch.fnmatchcase(branch, p) for p in self.full), "repository"
         return True, "repository"
+
+    def skipped(self, branch: str) -> bool:
+        """Whether this branch is Do Not Scan."""
+        return self.overrides.get(branch or "") == "none"
+
+    def skipped_branches(self) -> list:
+        return sorted(b for b, m in self.overrides.items() if m == "none")
 
     def as_scanner(self) -> dict:
         return {"mode": self.mode, "full": self.full,
@@ -140,6 +152,22 @@ def out_of_scope(rule, kind, primary, listed) -> bool:
     if not names:
         return False
     return not any(rule.full_scan(name)[0] for name in names)
+
+
+def held_by_skip(rule, kind, primary, listed) -> bool:
+    """Whether a finding went unread because of Do Not Scan branches.
+
+    True when every branch it names is skipped.  A credential that names no
+    branch came from the history walk, and the skipped branches' commits were
+    not walked, so it is held too whenever the repository skips any branch.
+    """
+    if rule is None or not rule.skipped_branches():
+        return False
+    names = branches_of(primary, listed)
+    if not names:
+        return (kind == FindingKind.CREDENTIAL
+                or getattr(kind, "value", kind) == "credential")
+    return all(rule.skipped(name) for name in names)
 
 
 def refresh(session, repositories=None) -> int:
@@ -249,7 +277,8 @@ def validate(repository: str, branch: str, mode: str, patterns) -> str:
         return "There is no repository to change."
     if branch:
         if mode not in BRANCH_MODES + ("inherit",):
-            return "A branch is either full scan, credentials only or inherited."
+            return ("A branch is full scan, credentials only, do not scan or "
+                    "inherited.")
         return ""
     if mode not in REPO_MODES:
         return "Pick one of the three repository settings."
@@ -366,6 +395,12 @@ def apply(session, repository: str, branch: str, mode: str, patterns,
     reason = (reason or "").strip()
     if len(reason) < 10:
         return None, "Say why, in a sentence.  Somebody will read this later."
+    if branch and mode == "none":
+        repo = (session.query(Repository)
+                .filter(Repository.full_name == repository).first())
+        if repo is not None and branch == (repo.default_branch or ""):
+            return None, (f"{branch} is the default branch, the code that "
+                          "ships.  It cannot be left out of scans.")
 
     row = _row(session, repository, branch)
     before = _snapshot(row)
@@ -461,7 +496,7 @@ def settings_of(session, repository: str) -> dict:
 
 # ---- many at once, from a connection's page ----------------------------------
 
-ACTIONS = ("credentials", "full", "inherit")
+ACTIONS = ("credentials", "full", "inherit", "none")
 
 
 def batch(repositories, pairs, action: str) -> dict:
@@ -474,7 +509,9 @@ def batch(repositories, pairs, action: str) -> dict:
     out = {}
     if action not in ACTIONS:
         return out
-    for repository in repositories:
+    # Do Not Scan is for branches only.  A whole repository is never left
+    # out from here, so ticked repositories are ignored for it.
+    for repository in ([] if action == "none" else repositories):
         out.setdefault(repository, []).append(
             ("", "credentials" if action == "credentials" else "all", ""))
     for repository, branch in pairs:

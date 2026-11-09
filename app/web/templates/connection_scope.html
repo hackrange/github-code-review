@@ -64,7 +64,8 @@
                     <input type="checkbox" name="pair" value="{{ r.full_name }} {{ b.name }}">
                     {{ b.name }}
                     {% if b.default %}<span class="badge ok">default</span>{% endif %}
-                    {% if not b.full %}<span class="badge waived">credentials only{{ '' if b.source == 'branch' else ', inherited' }}</span>{% endif %}
+                    {% if b.skipped %}<span class="badge high">do not scan</span>
+                    {% elif not b.full %}<span class="badge waived">credentials only{{ '' if b.source == 'branch' else ', inherited' }}</span>{% endif %}
                   </label>
                 {% endfor %}
                 </div>

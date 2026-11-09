@@ -45,6 +45,15 @@
             {% for url in web_urls %}<div class="mono small"><a rel="noopener noreferrer" target="_blank" href="{{ url }}">{{ url }}</a></div>{% endfor %}
           {% else %}<span class="faint">not marked as part of one</span>{% endif %}
         </td></tr>
+        <tr><th>Branches not scanned</th><td>
+          {% if skipped %}
+            {% for s in skipped %}<div><span class="mono">{{ s.branch }}</span>
+              <span class="faint small">{{ s.set_by }}{% if s.set_at %}, {{ s.set_at | dt('%Y-%m-%d') }}{% endif %}:
+              <span class="audit-detail-text">{{ s.reason }}</span></span></div>{% endfor %}
+            <div class="faint small">No pass reads these, credentials included.
+              Findings that live only there stay open, unread.</div>
+          {% else %}<span class="faint">none, every branch is scanned as its scope says</span>{% endif %}
+        </td></tr>
         <tr><th>Connection</th><td>{{ repo.connection or 'not recorded' }}</td></tr>
         <tr><th>Last scanned</th><td>{{ repo.last_scanned_at | dt('%Y-%m-%d %H:%M') if repo.last_scanned_at else 'never' }}</td></tr>
         {% if repo.tagged_by %}
@@ -126,11 +135,40 @@
           {% endfor %}
         </div>
       </label>
+      {% if can_scope %}<p class="faint small">Branches to leave out of scans
+        are set on <a href="{{ base }}/repositories/{{ repo.id }}/scope">Branches
+        and scope</a>, with Do not scan.</p>{% endif %}
       <p class="faint small">Owners and notify are email addresses, so somebody
         can be asked later.  Several are fine, comma separated.  Anything left
         empty, or with nothing ticked, uses what the connection says.  A ticked
         owner can be the connection's.</p>
       <button class="btn primary" type="submit">Save</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{% if can_propose %}
+{# Not saved onto the repository.  It waits on Proposed Updates for an
+   administrator to edit, approve or turn down. #}
+<div class="card">
+  <div class="card-head">Propose a change</div>
+  <div class="card-body">
+    {% if proposed.asked_at %}
+    <div class="notice info"><div>You asked for a change on
+      {{ proposed.asked_at | dt('%Y-%m-%d') }}
+      ({{ proposed.asked | join(', ') }}).  It is waiting for an
+      administrator.  Sending this again replaces it, and sending back what
+      the repository already says withdraws it.</div></div>
+    {% endif %}
+    <form method="post" action="{{ base }}/repositories/{{ repo.id }}/propose"
+          style="max-width:70ch">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="back" value="/repositories/{{ repo.id }}">
+      {% with vals=proposed, labels=tag_labels %}{% include "_proposal_fields.html" %}{% endwith %}
+      <p class="faint small">Nothing changes until an administrator approves
+        it, and they may edit it first.</p>
+      <button class="btn primary" type="submit">Send for approval</button>
     </form>
   </div>
 </div>
