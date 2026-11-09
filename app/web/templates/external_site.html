@@ -429,7 +429,7 @@
       <input type="hidden" name="with_fields" value="1">
       <label>Application <input type="text" name="application" maxlength="200" value="{{ asset.application }}"></label>
       <label>Tags <input type="text" name="tags" maxlength="1000" value="{{ tags | join(', ') }}">
-        <span class="faint small">Comma separated.  A tag that matches a repository's application name links them.</span></label>
+        <span class="faint small">Comma separated.  A tag that matches a repository's application name suggests it, but does not link it.</span></label>
       {{ detail_fields(asset, environments, statuses, picks_json, profiles, scan_profiles) }}
       <label class="check"><input type="checkbox" name="no_scan" value="1" {{ 'checked' if asset.no_scan }}>
         <span>No scan.  We are not allowed to scan this host{% if asset.kind == 'domain' %} or anything under it{% endif %}.</span></label>

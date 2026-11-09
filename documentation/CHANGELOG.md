@@ -6,6 +6,14 @@ moved.
 
 ## 2026-11-10
 
+**An application name alone no longer links code to a site.**  A site whose
+application, or one of its tags, matched a repository's application name had that
+repository linked as code behind it.  Sites that share an application name do not
+all run the same code, so that match is now only a suggestion on the site's page,
+with a **Link** button.  The host in the repository's web addresses, its web
+application, its diagram or its name still links it, and so does anything linked
+by hand.
+
 **After upgrading, load the curated rules.**  Several shipped rules were tightened
 and six duplicates were retired, and only loading them brings that in.  Rules you
 edited yourself are left alone.

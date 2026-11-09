@@ -1103,10 +1103,15 @@ class Mapper:
         for app in self.apps_by_host.get(asset.host, []):
             for repo_id in app["repo_ids"]:
                 add(repo_id, 90, f"part of web application {app['name']}, which lists this host")
+        # A site's application name, or a tag, that matches a repository's
+        # application name is a hint and never a link on its own.  Sites that
+        # share an application name do not all run the same repositories, so
+        # this stays below LINK_THRESHOLD: it shows as suggested, and someone
+        # who knows can link it.  Other evidence about the host still links.
         names = [asset.application] + [t.tag for t in asset.tags]
         for name in names:
             for repo_id in self.by_app.get((name or "").strip().casefold(), []):
-                add(repo_id, 70, f"application {name} matches")
+                add(repo_id, LINK_THRESHOLD - 10, f"application {name} matches")
         label = asset.host.split(".")[0]
         stem = _stem(label)
         if len(stem) >= 4:

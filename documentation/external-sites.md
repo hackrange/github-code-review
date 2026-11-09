@@ -480,11 +480,13 @@ Worked out on every read, best first:
 | A web application the repository is part of lists the host | 90 |
 | The host in a diagram's addresses | 80 |
 | Another environment of the host is in its web addresses or web application | 75 |
-| The site's application or a tag equals the repository's application name | 70 |
 | The host's first label, without environment words like dev or stg, equals the repository's name or its application name | 60 |
+| The site's application or a tag equals the repository's application name | 50 |
 | One contains the other | 40 |
 
-60 and over are linked; below that they are suggestions.  **Not this one**
+60 and over are linked; below that they are suggestions.  A shared application
+name alone never links a repository: sites with the same application name do not
+all run the same code, so it is offered as a suggestion to link by hand.  **Not this one**
 hides a link until somebody pins it back, and **Unpin** sends a hand made link
 back to being worked out.  Only repositories the person can see are offered, so a group
 that narrows what someone sees narrows this too.
