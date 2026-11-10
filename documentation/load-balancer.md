@@ -43,6 +43,25 @@ sees, list both. Extra entries cost nothing.
 
 CIDR works: `GCR_TRUSTED_PROXIES=10.0.0.0/24`.
 
+`0.0.0.0` is not a wildcard.  It is one address that never connects, so it
+trusts nothing and puts everybody back in one shared budget.
+
+The same list is on Settings, Sign in tab, under **Load balancer addresses**.
+A value saved there wins over `.env` and takes effect within about 15 seconds,
+with no restart, so running scans keep going.
+
+### Scanning this site through the balancer
+
+A web scan of this site, including one it runs on itself, sends thousands of
+requests a minute.  With the balancer trusted, those count against the
+scanner's own address and nobody else's.  To give the scanner room to finish,
+put its address under **Scanner addresses** on the same tab.  When the site
+scans itself, that is the server's own public address.  A listed address gets
+ten times the normal budget, never an unlimited one, so a scan cannot swamp
+the app either.  Ranges wider than a /24 are refused, and so is any balancer
+address, because exempting the balancer would lift the limit for everybody
+behind it.
+
 ### TLS stops at the balancer
 
 The app speaks plain HTTP. Keep `GCR_FORCE_HTTPS=true`, which marks session

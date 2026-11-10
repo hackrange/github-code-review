@@ -1824,6 +1824,31 @@ async def scan_one_repository(repo_id: int, request: Request,
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
+def _address_list(raw: str, label: str, narrow: bool = False) -> list:
+    """A box of addresses and ranges, each checked, or a 400 that names the bad one.
+
+    narrow refuses anything wider than a /24 (IPv4) or a /64 (IPv6).  An
+    exemption is meant for one scanner, not a slice of the internet.
+    """
+    import ipaddress
+
+    text = (raw or "").replace("\r", "\n").replace("\n", ",")
+    items = [item.strip() for item in text.split(",") if item.strip()]
+    if len(items) > 50:
+        raise HTTPException(status_code=400, detail=f"{label}: at most 50 entries.")
+    for item in items:
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=(
+                f"{label}: {item[:60]!r} is not an IP address or range."))
+        if narrow and network.prefixlen < (24 if network.version == 4 else 64):
+            raise HTTPException(status_code=400, detail=(
+                f"{label}: {item[:60]} is too wide.  Name the scanner's own "
+                "address, or a /24 at most."))
+    return items
+
+
 def _csv_list(raw: str) -> list:
     """Split a comma or newline separated box into a clean list.
 
@@ -2221,7 +2246,21 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
             put("ias.enabled", ias_on)
 
         put("security.force_https", _checked(form, "security.force_https"))
-        put("security.trusted_proxies", _csv_list(text("security.trusted_proxies")))
+        proxies = _address_list(text("security.trusted_proxies"),
+                                "Load balancer addresses")
+        put("security.trusted_proxies", proxies)
+        # Only when the form sent it.  A page without the box must not empty it.
+        if "security.rate_limit_exempt" in form:
+            exempt = _address_list(text("security.rate_limit_exempt"),
+                                   "Scanner addresses", narrow=True)
+            from app.web.security import parse_networks
+            lbs = parse_networks(proxies or live.trusted_proxies())
+            for entry in parse_networks(exempt):
+                if any(entry.version == lb.version and entry.overlaps(lb) for lb in lbs):
+                    raise HTTPException(status_code=400, detail=(
+                        "%s is a load balancer address.  Exempting it would switch the "
+                        "rate limit off for everybody behind it." % entry))
+            put("security.rate_limit_exempt", exempt)
 
         # Check what they just asked for before it takes effect.  Turning on a
         # provider that cannot answer would lock everybody out of their own

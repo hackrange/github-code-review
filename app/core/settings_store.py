@@ -307,6 +307,10 @@ DEFAULTS = {
     "security.force_https":    (True, False, "Mark cookies secure and send HSTS. Leave on behind TLS."),
     "security.trusted_proxies": ([], False,
                                 "Addresses the load balancer connects from. X-Forwarded-For is believed from these and nowhere else."),
+    "security.rate_limit_exempt": ([], False,
+                                "Addresses that get their own, ten times wider request "
+                                "budget, such as the scanner that tests this site. Never "
+                                "the load balancer."),
 
     # ---- what the systems being scanned hold ----
     "sensitivity.labels":      (["PCI", "HIPAA", "SOX", "Customer Data", "PII",
@@ -549,7 +553,7 @@ LIVE_KEYS = [
     "oidc.default_role",
     "session.hours", "session.idle_minutes", "login.attempt_limit",
     "login.lockout_minutes", "security.force_https", "security.trusted_proxies",
-    "ui.timezone",
+    "security.rate_limit_exempt", "ui.timezone",
 ]
 
 
@@ -582,7 +586,8 @@ SECTIONS = [
                  "oidc.default_role"]),
     ("Sessions", ["session.hours", "session.idle_minutes",
                   "login.attempt_limit", "login.lockout_minutes",
-                  "security.force_https", "security.trusted_proxies"]),
+                  "security.force_https", "security.trusted_proxies",
+                  "security.rate_limit_exempt"]),
     ("Display", ["ui.timezone"]),
     ("Fidelity", ["code.muted_rules"]),
     ("Sensitivity labels", ["sensitivity.labels"]),

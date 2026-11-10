@@ -138,3 +138,8 @@ def timezone_name() -> str:
 
 def trusted_proxies() -> list:
     return list(_get("security.trusted_proxies", env_settings.trusted_proxies) or [])
+
+
+def rate_limit_exempt() -> list:
+    """Addresses the request rate limit leaves alone.  Nothing by default."""
+    return list(_get("security.rate_limit_exempt", []) or [])

@@ -6,6 +6,16 @@ moved.
 
 ## 2026-11-10
 
+**A scan of this site no longer locks everybody out.**  A web scan aimed at the
+site came in through the load balancer, and when the balancer was not listed as
+trusted every person shared the balancer's request budget, so the scan used it
+up and sign in answered 429 for everyone.  The **Load balancer addresses** box
+now refuses anything that is not an address or range, and a new **Scanner
+addresses** box on the Sign in tab gives a named scanner its own budget, ten
+times the normal one and never unlimited.  The balancer itself cannot be listed
+there.  The load balancer guide says how to set both, and that `0.0.0.0` trusts
+nothing.
+
 **Sites link to the code that serves them, from the code itself.**  Every scan now
 reads each repository's default branch for the hosts it answers on: ingress and
 route hosts, Helm values, nginx, Apache, Traefik and Caddy, a `CNAME` file, CDN

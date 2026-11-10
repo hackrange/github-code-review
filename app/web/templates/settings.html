@@ -422,6 +422,18 @@
         it came from the balancer, so one person getting their password wrong
         locks out everybody.</span>
     </label>
+    <label class="wide">Scanner addresses
+      <input type="text" name="security.rate_limit_exempt"
+             value="{{ values['security.rate_limit_exempt'] | join(', ') }}"
+             placeholder="203.0.113.10">
+      <span class="faint small">For a scanner testing this site.  It gets its
+        own budget, ten times the normal one, and never uses up anybody
+        else's.  When this
+        site scans itself, that is this server's public address.  Set the load
+        balancer addresses above first, or the scanner looks like the balancer
+        and gets limited along with everyone else.  The balancer itself is
+        refused here.</span>
+    </label>
     <label class="check">
       <input type="checkbox" name="security.force_https" value="1"
              {{ 'checked' if values['security.force_https'] }}> Behind TLS

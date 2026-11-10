@@ -51,6 +51,25 @@ def public_base(request: Request) -> str:
     return base
 
 
+def parse_networks(entries) -> list:
+    """Addresses and ranges from a settings list.  Anything unreadable is skipped."""
+    networks = []
+    for entry in entries or []:
+        try:
+            networks.append(ipaddress.ip_network(str(entry).strip(), strict=False))
+        except ValueError:
+            continue
+    return networks
+
+
+def address_in(address: str, networks) -> bool:
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(parsed in network for network in networks)
+
+
 def client_ip(request: Request) -> str:
     """The caller's address.
 
@@ -63,19 +82,10 @@ def client_ip(request: Request) -> str:
     if not proxies:
         return peer
 
-    networks = []
-    for entry in proxies:
-        try:
-            networks.append(ipaddress.ip_network(entry, strict=False))
-        except ValueError:
-            continue
+    networks = parse_networks(proxies)
 
     def trusted(address: str) -> bool:
-        try:
-            parsed = ipaddress.ip_address(address)
-        except ValueError:
-            return False
-        return any(parsed in network for network in networks)
+        return address_in(address, networks)
 
     if not trusted(peer):
         return peer
@@ -246,6 +256,25 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         bucket.append(now)
         return True
 
+    # How many times the general budget a named scanner gets.  3000 a minute
+    # at the defaults: enough for a scan to finish, not enough to swamp a
+    # single process.
+    SCANNER_FACTOR = 10
+
+    @staticmethod
+    def _exempt(ip: str) -> bool:
+        """An address an administrator named, so a scan of this site runs whole.
+
+        Never a load balancer.  When X-Forwarded-For is not believed, every
+        caller wears the balancer's address, and exempting it would switch the
+        limiter off for the whole internet.  The save refuses that pairing, and
+        this refuses it again in case the lists were changed some other way.
+        """
+        exempt = live.rate_limit_exempt()
+        if not exempt or not address_in(ip, parse_networks(exempt)):
+            return False
+        return not address_in(ip, parse_networks(live.trusted_proxies()))
+
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         if path.endswith(("/healthz", "/readyz")):
@@ -257,7 +286,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # same budget as somebody clicking around the pages would lock the
         # pages out.  Its own bucket, and a wider one.
         is_api = "/api/v1/" in path
-        if is_api:
+        if self._exempt(ip):
+            # A scanner an administrator named gets its own, much wider
+            # budget, but still a budget.  Unlimited would trade a locked out
+            # sign in page for a scanner that can flood the app itself.
+            limit, kind = self.general * self.SCANNER_FACTOR, "scan"
+        elif is_api:
             limit, kind = self.general * 4, "api"
         elif is_auth_path:
             limit, kind = self.auth, "auth"
