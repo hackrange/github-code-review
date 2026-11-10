@@ -1495,7 +1495,8 @@ rules:
   message: This address check blocks private addresses with is_private, which is False for the
     100.64.0.0/10 shared range (carrier grade NAT). Cloud metadata services and internal hosts
     live there, so a URL that resolves to one passes the check. Accept an address only when
-    is_global is True, which also refuses link local, reserved and loopback ranges.
+    is_global is True and it is neither multicast nor inside the NAT64 prefix 64:ff9b::/96,
+    which is_global still calls public.
   metadata:
     cwe: 'CWE-918: Server-Side Request Forgery (SSRF)'
     category: security
@@ -1570,6 +1571,19 @@ rules:
       function $F(...) {
         ...
         <... '100.64.' ...>;
+        ...
+      }
+  # The ranges kept in a class constant and checked by another method.
+  - pattern-not-inside: |
+      class $C {
+        ...
+        const $K = [..., '100.64.0.0/10', ...];
+        ...
+      }
+  - pattern-not-inside: |
+      class $C {
+        ...
+        const $K = [..., "100.64.0.0/10", ...];
         ...
       }
 - id: gcr-proxy-trusted-from-anywhere
