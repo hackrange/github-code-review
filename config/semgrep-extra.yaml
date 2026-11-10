@@ -1271,3 +1271,340 @@ rules:
     - pattern: 'return JsonResponse({..., $K: str($E), ...}, ...)'
     - pattern: return traceback.format_exc()
     - pattern: 'return {..., $K: traceback.format_exc(), ...}'
+# ---------------------------------------------------------------------------
+# Weaknesses the 2026 AI pen tests of a PHP application proved, in the shapes
+# a pattern can decide on its own.  Each one is narrow on purpose: a safe
+# version of the same code has to stay quiet.
+- id: gcr-dompdf-php-enabled
+  languages:
+  - php
+  severity: ERROR
+  message: Dompdf is set to run PHP found inside the HTML it renders. Any text a user can get into
+    the document, such as a company name or a note, can then carry a script tag of type text/php,
+    and the server runs it while building the PDF. That is remote code execution, and it reaches
+    the database and the network from inside the server. Leave isPhpEnabled off and build any
+    page numbers or headers with Dompdf's canvas API instead.
+  metadata:
+    cwe: 'CWE-94: Improper Control of Generation of Code'
+    category: security
+    confidence: HIGH
+  pattern-either:
+  - pattern: $O->set_option('isPhpEnabled', true)
+  - pattern: $O->set_option("isPhpEnabled", true)
+  - pattern: $O->set('isPhpEnabled', true)
+  - pattern: $O->set("isPhpEnabled", true)
+  - pattern: $O->setIsPhpEnabled(true)
+  - pattern: $O->set_option('enable_php', true)
+  - pattern: $O->set_option("enable_php", true)
+  - pattern: new Options([..., 'isPhpEnabled' => true, ...])
+  - pattern: new Options([..., "isPhpEnabled" => true, ...])
+  - pattern: new \Dompdf\Options([..., 'isPhpEnabled' => true, ...])
+  - pattern: new Dompdf([..., 'isPhpEnabled' => true, ...])
+  - pattern: new \Dompdf\Dompdf([..., 'isPhpEnabled' => true, ...])
+  - pattern: define('DOMPDF_ENABLE_PHP', true)
+  - pattern: define("DOMPDF_ENABLE_PHP", true)
+- id: gcr-php-server-path-reflected
+  languages:
+  - php
+  severity: WARNING
+  mode: taint
+  message: The page writes the request's own path or query string into its HTML (or a redirect)
+    without encoding it. With a script that also accepts extra path after its name, a link like
+    page.php/"><meta http-equiv=refresh content="0;url=https://attacker.example"> puts markup
+    on the page, which sends the visitor anywhere or runs script. Encode it with htmlspecialchars,
+    or use a fixed path such as the script's own name.
+  metadata:
+    cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+    category: security
+    confidence: HIGH
+  pattern-sources:
+  - patterns:
+    - pattern: $_SERVER[$K]
+    - metavariable-regex:
+        metavariable: $K
+        regex: ^['"](PHP_SELF|REQUEST_URI|PATH_INFO|ORIG_PATH_INFO|QUERY_STRING|HTTP_REFERER)['"]$
+  pattern-sanitizers:
+  # Only plain string handling carries the path through.  Any other function or
+  # method in between (an escaper, a router, a library building a URL) is
+  # taken as deciding what comes out, so it does not report what it cannot see.
+  - patterns:
+    - pattern: $F(...)
+    - metavariable-regex:
+        metavariable: $F
+        regex: ^(?!(trim|ltrim|rtrim|strtolower|strtoupper|str_replace|str_ireplace|sprintf|vsprintf|implode|join|urldecode|rawurldecode|substr|mb_substr|dirname|stripslashes|strval|preg_replace|ucfirst|nl2br|print|printf|header|echo)$)\$?[A-Za-z_\\][\w\\]*$
+  - pattern: $O->$M(...)
+  - pattern: $C::$M(...)
+  pattern-sinks:
+  - pattern: echo ...;
+  - pattern: print(...)
+  - pattern: printf(...)
+  - patterns:
+    - pattern: header($H, ...)
+    - metavariable-regex:
+        metavariable: $H
+        regex: '(?i)^[''"](Location|Refresh)\s*:'
+- id: gcr-csv-neutralizer-first-character-only
+  languages:
+  - php
+  severity: WARNING
+  message: This spreadsheet formula guard looks only at the very first character. A value that
+    starts with a space, a tab or a line break before the = + - @ (or uses the full width forms
+    ＝ ＋ － ＠) slips past it, and some spreadsheet programs still run it as a formula when the
+    export is opened. Trim leading whitespace before the check, or match ^\s* in the pattern,
+    and treat the full width forms the same way.
+  metadata:
+    cwe: 'CWE-1236: Improper Neutralization of Formula Elements in a CSV File'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - patterns:
+      - pattern: preg_match($RE, $V, ...)
+      - metavariable-regex:
+          metavariable: $RE
+          regex: ^['"]([/#~])\^\[[^\]]*=[^\]]*\]
+      - metavariable-regex:
+          metavariable: $RE
+          regex: ^(?!.*(\\s|\[:space:\]| \]|\\x20|\\t\]|＝)).*$
+    - pattern: in_array($V[0], $LIST, ...)
+    - pattern: in_array(substr($V, 0, 1), $LIST, ...)
+    - pattern: in_array(mb_substr($V, 0, 1), $LIST, ...)
+    - pattern: strpos($CHARS, $V[0]) !== false
+    - pattern: strpbrk(substr($V, 0, 1), $CHARS)
+  - pattern-not-inside: |
+      function $F(...) {
+        ...
+        $V = ltrim(...);
+        ...
+      }
+  - pattern-not-inside: |
+      function $F(...) {
+        ...
+        $V = trim(...);
+        ...
+      }
+  - pattern-not-inside: |
+      function $F(...) {
+        ...
+        $V = preg_replace(...);
+        ...
+      }
+  - pattern-inside: |
+      function $F(...) {
+        ...
+      }
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i).*(csv|cell|formula|spreadsheet|neutrali[sz]|export|excel|xls).*
+- id: gcr-csv-neutralizer-first-character-only-python
+  languages:
+  - python
+  severity: WARNING
+  message: This spreadsheet formula guard looks only at the very first character. A value that
+    starts with a space, a tab or a line break before the = + - @ (or uses the full width forms
+    ＝ ＋ － ＠) slips past it, and some spreadsheet programs still run it as a formula when the
+    export is opened. Check value.lstrip() instead, and treat the full width forms the same way.
+  metadata:
+    cwe: 'CWE-1236: Improper Neutralization of Formula Elements in a CSV File'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $V.startswith($T)
+    - pattern: $V[:1] in $T
+    - pattern: $V[0] in $T
+  - metavariable-regex:
+      metavariable: $T
+      regex: (?s).*['"]=.*
+  - metavariable-regex:
+      metavariable: $V
+      regex: ^(?!.*(strip|lstrip)).*$
+  - pattern-not-inside: |
+      def $F(...):
+        ...
+        $V = $X.lstrip(...)
+        ...
+  - pattern-not-inside: |
+      def $F(...):
+        ...
+        $V = $X.strip(...)
+        ...
+  - pattern-inside: |
+      def $F(...):
+        ...
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i).*(csv|cell|formula|spreadsheet|neutrali[sz]|export|excel|xls).*
+- id: gcr-php-upload-trusts-client-type
+  languages:
+  - php
+  severity: WARNING
+  message: The upload is accepted or refused on the content type the browser sent, which the
+    sender chooses freely. A script or an HTML page can be sent labeled image/png or
+    application/pdf and get stored. Read the real type from the file with finfo_file on the
+    temporary file, check the size, and store it outside the web root under a name the server
+    picks.
+  metadata:
+    cwe: 'CWE-434: Unrestricted Upload of File with Dangerous Type'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: in_array($_FILES[$K]['type'], ...)
+    - pattern: $_FILES[$K]['type'] == $X
+    - pattern: $_FILES[$K]['type'] === $X
+    - pattern: $_FILES[$K]['type'] != $X
+    - pattern: $_FILES[$K]['type'] !== $X
+    - pattern: str_starts_with($_FILES[$K]['type'], ...)
+    - pattern: strpos($_FILES[$K]['type'], ...)
+    - pattern: in_array($F['type'], ...)
+  - pattern-not-inside: |
+      function $FN(...) {
+        ...
+        $M = finfo_file(...);
+        ...
+      }
+  - pattern-not-inside: |
+      function $FN(...) {
+        ...
+        $M = finfo_buffer(...);
+        ...
+      }
+  - pattern-not-inside: |
+      function $FN(...) {
+        ...
+        $M = mime_content_type(...);
+        ...
+      }
+  - pattern-not-inside: |
+      function $FN(...) {
+        ...
+        $M = $FI->file(...);
+        ...
+      }
+  - pattern-not-inside: |
+      function $FN(...) {
+        ...
+        $M = getimagesize(...);
+        ...
+      }
+- id: gcr-ssrf-guard-misses-shared-range-python
+  languages:
+  - python
+  severity: WARNING
+  message: This address check blocks private addresses with is_private, which is False for the
+    100.64.0.0/10 shared range (carrier grade NAT). Cloud metadata services and internal hosts
+    live there, so a URL that resolves to one passes the check. Accept an address only when
+    is_global is True, which also refuses link local, reserved and loopback ranges.
+  metadata:
+    cwe: 'CWE-918: Server-Side Request Forgery (SSRF)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern: $IP.is_private
+  - pattern-inside: |
+      def $F(...):
+        ...
+  - pattern-either:
+    - pattern-inside: |
+        def $F(...):
+          ...
+          $A = <... socket.getaddrinfo(...) ...>
+          ...
+    - pattern-inside: |
+        def $F(...):
+          ...
+          for $I in socket.getaddrinfo(...):
+            ...
+          ...
+    - pattern-inside: |
+        def $F(...):
+          ...
+          $A = <... socket.gethostbyname(...) ...>
+          ...
+    - pattern-inside: |
+        def $F(...):
+          ...
+          $A = <... urlparse(...) ...>
+          ...
+    - pattern-inside: |
+        def $F(...):
+          ...
+          $A = <... urlsplit(...) ...>
+          ...
+  - pattern-not-inside: |
+      def $F(...):
+        ...
+        <... $Y.is_global ...>
+        ...
+- id: gcr-ssrf-guard-misses-shared-range-php
+  languages:
+  - php
+  severity: WARNING
+  message: This address check relies on FILTER_FLAG_NO_PRIV_RANGE and FILTER_FLAG_NO_RES_RANGE,
+    which still let the 100.64.0.0/10 shared range (carrier grade NAT) through, on PHP 8.5 too.
+    Cloud metadata services and internal hosts live there, so a URL that resolves to one passes.
+    Refuse 100.64.0.0/10 explicitly (and its IPv4 mapped IPv6 form) after the filter.
+  metadata:
+    cwe: 'CWE-918: Server-Side Request Forgery (SSRF)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern: filter_var($IP, FILTER_VALIDATE_IP, $FLAGS)
+  - metavariable-regex:
+      metavariable: $FLAGS
+      regex: (?s).*FILTER_FLAG_NO_PRIV_RANGE.*
+  - pattern-not-inside: |
+      function $F(...) {
+        ...
+        <... '100.64.0.0/10' ...>;
+        ...
+      }
+  - pattern-not-inside: |
+      function $F(...) {
+        ...
+        <... "100.64.0.0/10" ...>;
+        ...
+      }
+  - pattern-not-inside: |
+      function $F(...) {
+        ...
+        <... '100.64.' ...>;
+        ...
+      }
+- id: gcr-proxy-trusted-from-anywhere
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.py'
+    - '*.js'
+    - '*.ts'
+    - '*.mjs'
+    - '*.cjs'
+    - '*.conf'
+    - '*.ini'
+    - '*.env'
+    - '*.sh'
+    - '*.toml'
+    - '*.yml'
+    - '*.yaml'
+    - 'Dockerfile'
+    - '.htaccess'
+  severity: WARNING
+  message: The application takes the client address from X-Forwarded-For (or a like header) sent by
+    anybody, not only by its own load balancer. A caller can then set any address it likes, which
+    defeats per address rate limits, lockouts and allow lists, and puts false addresses in the
+    audit log. Trust the forwarding header only from the load balancer's own addresses.
+  metadata:
+    cwe: 'CWE-348: Use of Less Trusted Source'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - pattern-regex: forwarded_allow_ips\s*=\s*["']\*["']
+  - pattern-regex: --forwarded-allow-ips[= ]+["']?\*
+  - pattern-regex: FORWARDED_ALLOW_IPS\s*[=:]\s*["']?\*
+  - pattern-regex: trusted_hosts\s*=\s*["']\*["']
+  - pattern-regex: \.set\(\s*["']trust proxy["']\s*,\s*true\s*\)
+  - pattern-regex: (?m)^\s*set_real_ip_from\s+(0\.0\.0\.0/0|::/0)\s*;
+  - pattern-regex: (?m)^\s*RemoteIP(Internal|Trusted)Proxy\s+.*\b(0\.0\.0\.0/0|::/0)\b

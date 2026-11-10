@@ -1,0 +1,45 @@
+{
+  "id": "injection-php-path-info-reflected",
+  "class": "injection",
+  "safety": "read",
+  "severity_floor": "medium",
+  "title": "Extra path after a PHP script is written into the page unescaped",
+  "summary": "A PHP page accepts extra path after its own name (page.php/anything) and writes it back into the HTML without encoding it, usually through $_SERVER['PHP_SELF'] in a form action or a link. A link with markup in that extra path puts the markup on the page: a meta refresh that sends the visitor to any site, a fake sign in form, or script where the content security policy allows it.",
+  "needs": [],
+  "candidate_paths": [
+    "/index.php/gcrpi%22%3E%3Cgcrpi7q%3E",
+    "/login.php/gcrpi%22%3E%3Cgcrpi7q%3E",
+    "/admin.php/gcrpi%22%3E%3Cgcrpi7q%3E",
+    "/search.php/gcrpi%22%3E%3Cgcrpi7q%3E",
+    "/contact.php/gcrpi%22%3E%3Cgcrpi7q%3E",
+    "/register.php/gcrpi%22%3E%3Cgcrpi7q%3E",
+    "/profile.php/gcrpi%22%3E%3Cgcrpi7q%3E",
+    "/dashboard.php/gcrpi%22%3E%3Cgcrpi7q%3E",
+    "/forgot-password.php/gcrpi%22%3E%3Cgcrpi7q%3E",
+    "/reset-password.php/gcrpi%22%3E%3Cgcrpi7q%3E"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "{route}",
+        "follow": false
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist.  The marker only ever goes in the probe, so a page that shows it unescaped wrote the request's own path into its markup.",
+    "differential": "status_in(200) and body_contains('\"><gcrpi7q>') and 'html' in header('content-type')",
+    "retest": 2
+  },
+  "reproduce": "curl -sk \"https://host/index.php/x%22%3E%3Cb%3Etest%3C/b%3E\" and look for the literal text \"><b>test</b> in the page, unescaped (not &quot;&gt;&lt;b&gt;). Try the other script names the rule lists, and any other PHP page on the site. In a browser, a meta refresh in the same place sends the visitor to another site.",
+  "remediate": "Encode the value before writing it into HTML: htmlspecialchars($_SERVER['PHP_SELF'], ENT_QUOTES, 'UTF-8'). Better, do not use PHP_SELF or REQUEST_URI in markup at all: leave a form's action empty to post back to the same page, or write the script's fixed path. Turning off AcceptPathInfo in Apache also stops the extra path from reaching the script.",
+  "references": [
+    "https://owasp.org/www-community/attacks/xss/"
+  ],
+  "mappings": {
+    "cwe": "CWE-79",
+    "owasp": "A03:2021"
+  },
+  "rulesets": []
+}

@@ -14,7 +14,9 @@
     "/?returnUrl=https://canary-openredirect.example/",
     "/?dest=https://canary-openredirect.example/",
     "/login?next=https://canary-openredirect.example/",
-    "/logout?next=https://canary-openredirect.example/"
+    "/logout?next=https://canary-openredirect.example/",
+    "/%5Ccanary-openredirect.example/%2f..",
+    "/%2F%2Fcanary-openredirect.example/%2f.."
   ],
   "probe": [
     {
@@ -27,10 +29,10 @@
   ],
   "confirm": {
     "control": "A path that cannot exist, so the site's not found answer is known and a real redirect to the foreign host is told apart from it.",
-    "differential": "status_in(301, 302, 303, 307, 308) and \"canary-openredirect.example\" in header(\"location\")",
+    "differential": "status_in(301, 302, 303, 307, 308) and header_matches(\"location\", \"^\\\\s*(https?:)?[/\\\\\\\\]{2}canary-openredirect\\\\.example\")",
     "retest": 2
   },
-  "reproduce": "curl -sk -i 'https://host/?next=https://canary-openredirect.example/' and check the response is a 30x whose Location header points at canary-openredirect.example. Try the other parameter names (url, redirect, return, returnUrl, dest) and the login and logout paths. A redirect to an outside host means the parameter is an open redirect.",
+  "reproduce": "curl -sk -i 'https://host/?next=https://canary-openredirect.example/' and check the response is a 30x whose Location header points at canary-openredirect.example. Try the other parameter names (url, redirect, return, returnUrl, dest) and the login and logout paths. A path form also works on some servers: curl -sk -i 'https://host/%5Ccanary-openredirect.example/%2f..' answering with Location: /\\canary-openredirect.example/..., which a browser reads as the outside host. A redirect to an outside host means the parameter is an open redirect.",
   "remediate": "Do not redirect to a location taken from the request. Allow only relative paths, or an explicit allow list of hosts, and reject or ignore an absolute URL to another site.",
   "references": [],
   "mappings": {

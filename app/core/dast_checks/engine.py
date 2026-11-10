@@ -112,7 +112,7 @@ class Client:
 
 _ALLOWED_FUNCS = {"body_differs", "body_contains", "header", "reflected",
                   "status_in", "differ", "same", "status_of",
-                  "body_matches", "cookie_matches"}
+                  "body_matches", "cookie_matches", "header_matches"}
 _ALLOWED_CMP = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
                 ast.In, ast.NotIn)
 
@@ -264,6 +264,10 @@ def _env_for(response: dict, control: dict, oob_hit: bool, saved: dict = None) -
     def body_matches(pattern):
         return bool(_rule_regex(pattern).search(body[:MATCH_BODY_CHARS]))
 
+    def header_matches(name, pattern):
+        """True when the named response header matches the pattern."""
+        return bool(_rule_regex(pattern).search(headers.get(str(name).lower(), "")[:4000]))
+
     def cookie_matches(pattern):
         """True when any cookie the response set matches, attributes included."""
         rx = _rule_regex(pattern)
@@ -279,7 +283,7 @@ def _env_for(response: dict, control: dict, oob_hit: bool, saved: dict = None) -
                    "header": header, "reflected": reflected,
                    "status_in": status_in, "differ": differ, "same": same,
                    "status_of": status_of, "body_matches": body_matches,
-                   "cookie_matches": cookie_matches},
+                   "cookie_matches": cookie_matches, "header_matches": header_matches},
     }
     env.update(saved or {})
     return env

@@ -6,6 +6,33 @@ moved.
 
 ## 2026-11-10
 
+**New code and web checks from what outside AI pen testers proved.**  Five
+vendors tested a PHP application, and the weaknesses they proved were turned
+into checks that run on every scan for no model cost:
+
+- Dompdf set to run PHP inside the documents it renders, which turned a
+  company name into code execution.
+- The request's own path written into a page unescaped, usually
+  `$_SERVER['PHP_SELF']` in a form action.
+- A spreadsheet formula guard that looks only at the first character, so a
+  leading space gets past it.
+- An upload accepted on the content type the browser claims.
+- An address check that blocks private ranges but lets the 100.64.0.0/10
+  shared range through, where some cloud metadata lives (Python `is_private`,
+  and PHP's private and reserved range flags, PHP 8.5 included).
+- A forwarding header trusted from any address, which lets a caller pick
+  their own address past rate limits and lockouts.
+
+Two new web checks: a dependency lock file served from the web root, and extra
+path after a PHP script written into the page.  The open redirect check also
+tries the path form some servers redirect on, and no longer reports a redirect
+to the site's own sign in page that only carries the value along.  Code
+reasoning now names the access mistakes those testers found most: a child id
+never checked against its parent, a search or export that returns what the
+same caller is refused by id, an owner field set to any user, model spend open
+to a read only role, and sessions that outlive a deactivated user.  Press
+**Load curated rules** on the DAST Admin page after upgrading.
+
 **Site screenshots and ad-hoc clones can no longer be steered to an internal
 address.**  The screenshot browser checked each host it loaded, then looked the
 name up again on its own, so a name whose DNS changed in between could put a
