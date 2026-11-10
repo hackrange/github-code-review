@@ -285,7 +285,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
         context.update(active_page="external", rows=rows, totals=totals,
                        profiles=dast_engines.PROFILES, default_profile=dast_engines.DEFAULT_PROFILE,
                        scan_profiles=db.query(DastScanProfile).order_by(DastScanProfile.name).all(),
-                       auth_kinds=external_auth_mod.KINDS,
+                       auth_kinds=external_auth_mod.FORM_KINDS,
                        q=q, tag=tag, app=app, grade=grade, dast=dast, risk=risk,
                        scope=scope, all_tags=all_tags, apps=apps, opts=opts, paging=paging,
                        env=env, status=status, exposure=exposure, environments=envs,
@@ -724,7 +724,7 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             auth_b=external_auth_mod.describe(asset, "b"),
             tls_pins=sorted(tls_trust.pins_of(asset).items()),
             adhoc=dast_adhoc_mod.describe(asset),
-            auth_kinds=external_auth_mod.KINDS,
+            auth_kinds=external_auth_mod.FORM_KINDS,
             site_profile=external.profile_for(asset), proxy_label=external.proxy_shown(asset),
             has_shot=external.shot_path(asset.id).is_file(),
             exposures=external.EXPOSURES,
@@ -2652,3 +2652,196 @@ async def api_start(asset_id: int, request: Request, caller=Depends(_api_caller(
     with session_scope() as db:
         return JSONResponse(status_code=202,
                             content=external.scan_dict(db.get(ExternalDastScan, scan_id)))
+
+
+# ------------------------------------------------------------------ record a session
+
+_RECORD_OPS = {"click", "type", "key", "goto", "back", "reload", "scroll", "human", "shot", "totp"}
+_BASE32 = re.compile(r"^[A-Z2-7 ]{16,128}=*$")
+
+
+def _record_slot(value) -> str:
+    return "b" if str(value or "") == "b" else "a"
+
+
+@router.get("/external/{asset_id}/record")
+def record_page(asset_id: int, request: Request, slot: str = "a", rid: str = "",
+                user: User = Depends(current_user)):
+    """Start a recording, or drive the one already running."""
+    from app.core import session_recorder
+
+    with session_scope() as db:
+        _guard(db, user)
+        asset = _asset(db, asset_id)
+        context = _shared(db, user)
+        rec = None
+        if rid:
+            try:
+                rec = session_recorder.get(rid, asset_id, user.username)
+            except session_recorder.Busy as exc:
+                return redirect(_back(f"/external/{asset_id}/record?slot={_record_slot(slot)}",
+                                      str(exc), "error"))
+        context.update(active_page="external", asset=asset, slot=_record_slot(slot),
+                       rec=rec, rec_state=rec.last if rec else {},
+                       available=session_recorder.available(),
+                       idp_hosts=session_recorder.IDP_HOSTS,
+                       idle_minutes=session_recorder.IDLE_SECONDS // 60,
+                       start_url=f"https://{asset.host}/",
+                       current=external_auth_mod.describe(asset, _record_slot(slot)))
+        return page(request, "external_record.html", **context)
+
+
+@router.post("/external/{asset_id}/record/start")
+async def record_start(asset_id: int, request: Request, user: User = Depends(current_user)):
+    from starlette.concurrency import run_in_threadpool
+
+    from app.core import session_recorder
+    from app.core import settings_store as store
+
+    await check_csrf(request)
+    form = await request.form()
+    slot = _record_slot(form.get("slot"))
+    here = f"/external/{asset_id}/record?slot={slot}"
+    start_url = str(form.get("start_url") or "").strip()[:1000]
+    with session_scope() as db:
+        _guard(db, user)
+        asset = _asset(db, asset_id)
+        if external.blocked(db, asset):
+            return redirect(_back(here, "This site may not be scanned, so there is no "
+                                        "sign in to record.", "error"))
+        host = asset.host
+        domains = store.get(db, "web.company_domains") or []
+        opts = external.options(db)
+        site_proxy = external.proxy_of(asset)
+    try:
+        rec = await run_in_threadpool(session_recorder.start, asset_id, host, slot,
+                                      user.username, start_url or f"https://{host}/", domains,
+                                      opts["allow_private"], site_proxy)
+    except (ValueError, session_recorder.Busy) as exc:
+        return redirect(_back(here, str(exc), "error"))
+    with session_scope() as db:
+        record(db, "external.recording_started", actor=user.username, target=host,
+               detail=f"slot {slot}, from {start_url or 'the home page'}"[:300],
+               source_ip=client_ip(request))
+    return redirect(f"/external/{asset_id}/record?slot={slot}&rid={rec.id}")
+
+
+@router.get("/external/{asset_id}/record/{rid}/frame.jpg")
+def record_frame(asset_id: int, rid: str, user: User = Depends(current_user)):
+    from app.core import session_recorder
+
+    with session_scope() as db:
+        _guard(db, user)
+    try:
+        rec = session_recorder.get(rid, asset_id, user.username)
+    except session_recorder.Busy:
+        raise HTTPException(status_code=404, detail="That recording has ended.")
+    if not rec.frame.is_file():
+        raise HTTPException(status_code=404, detail="No picture yet.")
+    return Response(rec.frame.read_bytes(), media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
+@router.post("/external/{asset_id}/record/{rid}/input")
+async def record_input(asset_id: int, rid: str, request: Request,
+                       user: User = Depends(current_user)):
+    """One thing the person did in the recording: a click, some typing, a key."""
+    from starlette.concurrency import run_in_threadpool
+
+    from app.core import session_recorder
+
+    await check_csrf(request)
+    with session_scope() as db:
+        _guard(db, user)
+    try:
+        rec = session_recorder.get(rid, asset_id, user.username)
+    except session_recorder.Busy as exc:
+        return JSONResponse({"ok": False, "ended": True, "error": str(exc)}, status_code=410)
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Send JSON.")
+    if not isinstance(body, dict) or body.get("op") not in _RECORD_OPS:
+        raise HTTPException(status_code=400, detail="Unknown action.")
+    cmd = {"op": body["op"]}
+    for key in ("x", "y", "dy"):
+        if key in body:
+            try:
+                cmd[key] = int(body[key])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"{key} has to be a number.")
+    for key, limit in (("text", 500), ("key", 20), ("url", 1000)):
+        if key in body:
+            cmd[key] = str(body[key])[:limit]
+    if cmd["op"] == "totp":
+        secret = str(body.get("secret") or "").strip().upper().replace(" ", "")
+        if not _BASE32.fullmatch(secret):
+            raise HTTPException(status_code=400, detail=(
+                "The authenticator secret is the base32 key shown when the app is set up "
+                "(letters A to Z and digits 2 to 7)."))
+        rec.totp_secret = secret
+        cmd["secret"] = secret
+    reply = await run_in_threadpool(rec.send, cmd)
+    return JSONResponse({"ok": bool(reply.get("ok")), "error": reply.get("error", ""),
+                         "url": reply.get("url", ""), "title": reply.get("title", ""),
+                         "steps": reply.get("steps_kept", 0),
+                         "human_steps": reply.get("human_steps", 0)},
+                        headers={"Cache-Control": "no-store"})
+
+
+@router.post("/external/{asset_id}/record/{rid}/save")
+async def record_save(asset_id: int, rid: str, request: Request,
+                      user: User = Depends(current_user)):
+    from starlette.concurrency import run_in_threadpool
+
+    from app.core import session_recorder
+
+    await check_csrf(request)
+    form = await request.form()
+    with session_scope() as db:
+        _guard(db, user)
+    try:
+        rec = session_recorder.get(rid, asset_id, user.username)
+    except session_recorder.Busy as exc:
+        return redirect(_back(f"/external/{asset_id}", str(exc), "error"))
+    slot = rec.slot
+    keep_steps = str(form.get("keep_steps") or "") == "1"
+    try:
+        got = await run_in_threadpool(session_recorder.finish, rec)
+    except (ValueError, session_recorder.Busy) as exc:
+        return redirect(_back(f"/external/{asset_id}/record?slot={slot}", str(exc), "error"))
+    first = next((s.get("url") for s in got["steps"] if s.get("action") == "goto"), "")
+    if not keep_steps:
+        got["steps"], got["totp_secret"] = [], ""
+    steps = got["steps"]
+    replayable = bool(steps) and not any(s.get("human") for s in steps)
+    with session_scope() as db:
+        _guard(db, user)
+        asset = _asset(db, asset_id)
+        external_auth_mod.save_recorded(asset, got, user.username,
+                                        first or f"https://{asset.host}/", slot)
+        record(db, "external.recording_saved", actor=user.username, target=asset.host,
+               detail=(f"slot {slot}, {len(got['cookies'])} cookies, {len(steps)} steps, "
+                       + ("replayable" if replayable else "not replayable")),
+               source_ip=client_ip(request))
+    how = ("A scan signs in again by replaying the steps when the session expires."
+           if replayable else
+           "A step needed a person (such as a CAPTCHA), so a scan uses these cookies until "
+           "they expire, then says so.  Record again then.")
+    return redirect(_back(f"/external/{asset_id}#signin",
+                          f"Saved the recorded session: {len(got['cookies'])} cookies.  {how}"))
+
+
+@router.post("/external/{asset_id}/record/{rid}/cancel")
+async def record_cancel(asset_id: int, rid: str, request: Request,
+                        user: User = Depends(current_user)):
+    from app.core import session_recorder
+
+    await check_csrf(request)
+    with session_scope() as db:
+        _guard(db, user)
+    try:
+        session_recorder.cancel(session_recorder.get(rid, asset_id, user.username))
+    except session_recorder.Busy:
+        pass
+    return redirect(_back(f"/external/{asset_id}", "The recording was closed.  Nothing was saved."))

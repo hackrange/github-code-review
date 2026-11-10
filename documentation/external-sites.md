@@ -408,6 +408,57 @@ A nextgen-dast server's API takes a form login, or HTTP Basic, which is sent
 from an Authorization: Basic header.  A bearer token or a cookie has no field
 there, so such a scan is refused rather than run signed out.
 
+### Record a session
+
+Some sites cannot be signed into by posting a form: a bot check asks "are you
+human?", or single sign on walks through several pages and a one time code.
+**Record a session**, beside each account under **Scan sign in**, opens a real
+browser on this server and shows it on the page.  Click into the picture, type
+into the field you clicked (the box beside it sends text or a password), use
+the key buttons, and pass whatever needs a person.  When the site itself
+shows, **Save this session**.
+
+What is saved, encrypted, as a fourth kind, "Recorded in a browser":
+
+- the cookies the site set, which every engine, the screenshot and the curated
+  rules send as the session
+- the browser's user agent, which the scan then sends too, because a bot check
+  ties its pass to the client it cleared
+- the steps you took: pages, clicks, typing, keys.  Typing into a password
+  field is kept but never shown, and is taken out of everything a scan stores.
+
+Before each scan the steps are replayed in a headless browser, so the scan
+starts with a fresh session.  An authenticator app can be part of it: under
+**Authenticator code** give the base32 key from when the app was set up, and
+the recorder types the current code into the field you clicked; a replay makes
+a new code each time.  A step only a person can do, such as a CAPTCHA inside a
+frame, is marked as needing a person (clicks inside a frame are marked on their
+own, and **The last step needs a person** marks any other).  A recording with
+such a step is not replayed: the scan uses the saved cookies until they stop
+working.
+
+Either way the scan checks the session against the page the recording ended on
+before the engines lean on it.  When the bot check or the sign in page comes
+back, the Sign in row says so by name and asks for a new recording, instead of
+scanning a challenge page.
+
+The browser runs here, so the site sees this server's own address, which is
+what a pass tied to an address needs.  It may open pages only on the site, its
+subdomains, the company's domains and the common sign in providers (Okta,
+Microsoft, Duo, Ping, Auth0, OneLogin, Google), and everything it loads goes
+through the proxy that refuses private addresses, unless the site's own proxy
+or **allow private addresses** applies.  Only administrators can record, a
+recording answers only to the person and site that started it, at most two run
+at once, and each closes after ten minutes without a click or thirty in all.
+Starting and saving a recording are both in the audit log.
+
+A phishing resistant factor (a security key, a passkey, FastPass with device
+binding) cannot be recorded or replayed: it is bound to the browser and device
+that signs in, which is the point of it.  For those, have the identity team
+give a dedicated scan account a sign on rule that allows a code or a push from
+this server's address, for the scanned applications only, and record that
+account.
+
 ## The user agent
 
 Every request a scan, a screenshot or a telemetry read makes says it is the

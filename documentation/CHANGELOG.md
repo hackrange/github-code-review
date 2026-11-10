@@ -6,6 +6,16 @@ moved.
 
 ## 2026-11-10
 
+**Record a session.**  A site behind a bot check, or behind single sign on,
+can now be signed into by hand in a real browser on this server, shown on the
+site page.  Pass the check or the sign in, save, and the scan uses the cookies
+and user agent the browser was given, from this server's own address.  The
+steps are kept, so before each scan they are replayed to sign in fresh,
+authenticator codes included; a step only a person can do, such as a CAPTCHA,
+stops the replay and the saved cookies are used until they expire.  A scan
+checks the session first and says plainly when it needs recording again.  See
+Signing in for a scan in external-sites.md.
+
 **Saved scan profiles work everywhere a profile is picked.**  Bulk edit's
 default scan profile, Scan the ticked sites, and Schedule monthly scans now
 list the saved profiles beside the depths, and accept them.  A site whose

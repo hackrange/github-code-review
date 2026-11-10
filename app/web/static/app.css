@@ -1201,3 +1201,19 @@ tr.decided-out > td.decision-cell { opacity: 1; }
   align-items: center; padding: .5rem .8rem; background: var(--bg-soft);
   border-bottom: 1px solid var(--border); }
 .finding-bulk[hidden] { display: none; }
+
+/* Record a session: the browser on the server, drawn as a picture */
+.rec { display: flex; flex-direction: column; gap: .6rem; max-width: 1300px; }
+.rec-bar { display: flex; gap: .4rem; align-items: center; }
+.rec-url { flex: 1 1 auto; min-width: 0; }
+.rec-screen { border: 1px solid var(--line-strong, #888); border-radius: 6px; overflow: hidden;
+  background: var(--bg-inset, #f4f4f4); line-height: 0; outline: none; }
+.rec-screen:focus { box-shadow: 0 0 0 3px var(--brand, #2f6fde); }
+.rec-screen img { width: 100%; height: auto; cursor: crosshair; display: block; }
+.rec-tools { display: flex; flex-wrap: wrap; gap: .6rem; align-items: flex-end; }
+.rec-type { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+.rec-type input { min-width: 16rem; }
+.rec-keys { display: flex; flex-wrap: wrap; gap: .3rem; }
+.rec-actions { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
+.rec-actions form { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin: 0; }
+.rec-steps { margin: 0 0 .4rem 1.2rem; padding: 0; }

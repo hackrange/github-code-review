@@ -27,7 +27,10 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
 KINDS = {"": "Not signed in", "header": "Header", "cookie": "Session cookie",
-         "form": "Form login"}
+         "form": "Form login", "recorded": "Recorded in a browser"}
+# The kinds a person can type into the site's form.  A recorded sign in only
+# comes from Record a session, so the form can keep it but never make one.
+FORM_KINDS = {k: v for k, v in KINDS.items() if k != "recorded"}
 _HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}$")
 _FIELD_NAME = re.compile(r"^[A-Za-z0-9_.\[\]:-]{1,100}$")
 
@@ -91,6 +94,16 @@ def describe(asset, slot: str = "a") -> dict:
         out.update(login_url=data.get("login_url", ""), username=data.get("username", ""),
                    username_field=data.get("username_field", ""),
                    password_field=data.get("password_field", ""))
+    elif data["kind"] == "recorded":
+        from app.core import session_recorder
+
+        steps = data.get("steps") or []
+        out.update(cookie_names=[p.split("=", 1)[0].strip()
+                                 for p in data.get("cookie", "").split(";") if "=" in p],
+                   recorded_at=data.get("recorded_at", ""),
+                   steps=session_recorder.public_steps(steps),
+                   replayable=bool(steps) and not any(s.get("human") for s in steps),
+                   has_totp=bool(data.get("totp_secret")))
     return out
 
 
@@ -124,7 +137,13 @@ def save(asset, kind: str, values: dict, actor: str, parent_domain: str = "",
         return
     old = load(asset, slot) if getattr(asset, kind_attr) == kind else {}
     data = {}
-    if kind == "header":
+    if kind == "recorded":
+        # Only Record a session makes one.  The site's form keeps it as it is,
+        # so saving the form for another reason does not lose the recording.
+        if not old:
+            raise ValueError("Use Record a session to sign in through a browser.")
+        data = {k: v for k, v in old.items() if not k.startswith("_") and k != "kind"}
+    elif kind == "header":
         name = _clean_line(values.get("header_name") or old.get("header_name") or "", "Header name", 100)
         if not _HEADER_NAME.fullmatch(name):
             raise ValueError("Give the header's name, such as Authorization.")
@@ -178,6 +197,61 @@ def save(asset, kind: str, values: dict, actor: str, parent_domain: str = "",
     setattr(asset, at_attr, utcnow())
 
 
+def save_recorded(asset, recording: dict, actor: str, start_url: str,
+                  slot: str = "a") -> None:
+    """Keep what Record a session captured as the site's sign in."""
+    from app.core import session_recorder
+    from app.core.models import utcnow
+
+    kind_attr, data_attr, by_attr, at_attr = _SLOTS[slot]
+    steps = recording.get("steps") or []
+    data = {"cookie": session_recorder.cookie_header(recording.get("cookies") or []),
+            "user_agent": str(recording.get("user_agent") or "")[:500],
+            "steps": steps, "start_url": start_url[:1000],
+            "final_url": str(recording.get("final_url") or "")[:1000],
+            "recorded_at": utcnow().isoformat()}
+    if recording.get("totp_secret"):
+        data["totp_secret"] = recording["totp_secret"]
+    prior = load(asset, slot)
+    if prior.get("intent"):
+        data["intent"] = prior["intent"]
+    setattr(asset, kind_attr, "recorded")
+    setattr(asset, data_attr, _encrypt(data))
+    setattr(asset, by_attr, (actor or "")[:120])
+    setattr(asset, at_attr, utcnow())
+
+
+def check_live(data: dict, cookie: str, allow_private: bool = False) -> tuple:
+    """Whether a recorded session still gets past the site's front door.
+    -> (ok, a sentence).  A bot check answering, or the sign in page coming
+    back, means the scan would see only that, so it is said plainly."""
+    from app.core import external_probe
+
+    # The page the recording ended on, when it is the site's own: a sign in
+    # start page can show its form whether or not the session is good.
+    final = data.get("final_url") or ""
+    host = (data.get("_host") or "").lower()
+    final_host = (urlparse(final).hostname or "").lower()
+    url = (final if final_host and host and (final_host == host or final_host.endswith("." + host))
+           else data.get("start_url") or (f"https://{host}/" if host else ""))
+    if not url:
+        return True, ""
+    headers = {"Cookie": cookie}
+    if data.get("user_agent"):
+        headers["User-Agent"] = data["user_agent"]
+    got = external_probe.fetch(url, headers=headers, allow_private=allow_private)
+    if got.get("error") and not got.get("status"):
+        return False, f"the site did not answer: {str(got['error'])[:100]}"
+    body = got.get("body") or ""
+    check = external_probe.bot_check(body, got.get("status") or 0)
+    if check:
+        return False, (f"{check}'s bot check answers instead of the site, so the recorded "
+                       "pass has expired or is tied to something the scan cannot repeat")
+    if _login_form(body) is not None and (data.get("final_url") or "") != (got.get("final_url") or ""):
+        return False, "the sign in page comes back, so the recorded session has ended"
+    return True, ""
+
+
 # ------------------------------------------------------------------ secrets
 
 def secrets_of(data: dict, session_cookie: str = "") -> list:
@@ -197,6 +271,11 @@ def secrets_of(data: dict, session_cookie: str = "") -> list:
                     out.append(value)
     if data.get("password"):
         out.append(data["password"])
+    for step in data.get("steps") or []:
+        if step.get("secret") and step.get("text"):
+            out.append(step["text"])
+    if data.get("totp_secret"):
+        out.append(data["totp_secret"])
     if data.get("kind") == "header" and data.get("header_value", "").lower().startswith("basic "):
         try:
             pair = base64.b64decode(data["header_value"].split(" ", 1)[1]).decode()
@@ -387,7 +466,35 @@ def session_for(data: dict, allow_private: bool = False) -> dict:
         got = login(data, allow_private)
         out["ok"], out["cookie"] = got["ok"], got["cookie"]
         out["detail"] = got["detail"]
+    elif kind == "recorded":
+        out.update(_recorded_session(data, allow_private))
     return out
+
+
+def _recorded_session(data: dict, allow_private: bool) -> dict:
+    """A recorded sign in for a scan: the steps replayed when they can be,
+    else the cookies the recording kept, and either way checked against the
+    site before the engines lean on it."""
+    from app.core import external_probe, session_recorder
+
+    cookie, how = data.get("cookie", ""), "the recorded session"
+    steps = data.get("steps") or []
+    if steps and not any(s.get("human") for s in steps):
+        from app.core import settings_store
+        from app.core.db import session_scope
+
+        with session_scope() as db:
+            domains = settings_store.get(db, "web.company_domains") or []
+        got = session_recorder.replay(data, allow_private, external_probe.current_proxy(),
+                                      domains)
+        if got["ok"]:
+            cookie, how = got["cookie"], "signed in again by replaying the recorded steps"
+        else:
+            how = f"the recorded session (replaying the steps failed: {got['detail']})"
+    headers = [("User-Agent", data["user_agent"])] if data.get("user_agent") else []
+    ok, why = check_live(data, cookie, allow_private)
+    return {"cookie": cookie, "headers": headers, "ok": ok,
+            "detail": how if ok else f"{why}.  Record the session again from the site page"}
 
 
 def test_signin(slots: dict, allow_private: bool = False) -> list:
@@ -412,7 +519,8 @@ def test_signin(slots: dict, allow_private: bool = False) -> list:
         if not kind:
             out.append(row)
             continue
-        if kind == "form":
+        if kind in ("form", "recorded"):
+            row["live"] = True
             sess = session_for(data, allow_private)
             row["ok"], row["detail"] = sess["ok"], sess["detail"]
         else:

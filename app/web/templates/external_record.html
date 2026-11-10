@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Record a session &middot; {{ asset.host }} &middot; Git Code Review{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><h1>Record a session</h1>
+    <div class="faint small">{{ asset.host }}, {{ 'second account' if slot == 'b' else 'main account' }}.
+      A browser on this server opens the site.  Pass the sign in or the bot check by
+      hand, then save: the scan uses what the browser was given, from this server's
+      own address, and can replay your steps to sign in again.</div></div>
+  <div class="page-actions"><a class="btn" href="{{ base }}/external/{{ asset.id }}#signin">Back to the site</a></div>
+</div>
+
+{% if not available %}
+<div class="notice error">Playwright is not installed on this server, so it cannot open a browser.</div>
+{% elif not rec %}
+<div class="card">
+  <div class="card-head">Start</div>
+  <div class="card-body">
+    {% if current and current.kind %}<p class="small">This account signs in now with: <strong>{{ current.kind_name }}</strong>{% if current.recorded_at %}, recorded {{ current.recorded_at[:16].replace('T', ' ') }}{% endif %}.  Saving a new recording replaces it.</p>{% endif %}
+    <form method="post" action="{{ base }}/external/{{ asset.id }}/record/start">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="slot" value="{{ slot }}">
+      <label>Start at
+        <input type="url" name="start_url" value="{{ start_url }}" maxlength="1000" required>
+        <span class="faint small">A page on {{ asset.host }}, usually its sign in page.  The browser may also
+          open pages on the company's domains and on these sign in providers: {{ idp_hosts | join(', ') }}.</span></label>
+      <div class="faint small">Use a test account.  The recording stops after {{ idle_minutes }} minutes
+        without a click.  Nothing you type is shown again, and passwords are stored encrypted.</div>
+      <div class="modal-foot"><button class="btn primary" type="submit">Open the browser</button></div>
+    </form>
+  </div>
+</div>
+{% if current and current.steps %}
+<div class="card">
+  <div class="card-head">The saved steps</div>
+  <div class="card-body small">
+    <ol class="rec-steps">{% for s in current.steps %}<li>{{ s.action }}: {{ s.what }}{% if s.human %} <span class="badge pending">needs a person</span>{% endif %}</li>{% endfor %}</ol>
+    <div class="faint">{{ 'A scan replays these to sign in again.' if current.replayable else 'A step needs a person, so a scan uses the saved cookies until they expire.' }}</div>
+  </div>
+</div>
+{% endif %}
+{% else %}
+<div class="rec" id="recorder"
+     data-input="{{ base }}/external/{{ asset.id }}/record/{{ rec.id }}/input"
+     data-frame="{{ base }}/external/{{ asset.id }}/record/{{ rec.id }}/frame.jpg"
+     data-csrf="{{ csrf_token }}">
+  <div class="rec-bar">
+    <button class="btn small" type="button" data-rec-op="back" title="Back">&larr;</button>
+    <button class="btn small" type="button" data-rec-op="reload" title="Reload">&#x21bb;</button>
+    <input type="url" class="rec-url" data-rec-url value="{{ rec_state.url or '' }}" maxlength="1000" aria-label="Address">
+    <button class="btn small" type="button" data-rec-go>Go</button>
+  </div>
+  <div class="rec-screen" tabindex="0" data-rec-screen title="Click into the page, then type">
+    <img data-rec-img alt="The page in the recording browser" width="1280" height="800">
+  </div>
+  <div class="rec-tools">
+    <label class="rec-type">Type into the field you clicked
+      <input type="password" data-rec-text maxlength="500" autocomplete="off" placeholder="text or a password, then Send">
+      <button class="btn small" type="button" data-rec-send>Send</button></label>
+    <span class="rec-keys">
+      {% for k in ['Enter', 'Tab', 'Backspace', 'Escape', 'ArrowDown', 'ArrowUp'] %}<button class="btn small" type="button" data-rec-key="{{ k }}">{{ k }}</button>{% endfor %}
+      <button class="btn small" type="button" data-rec-scroll="600">Scroll down</button>
+      <button class="btn small" type="button" data-rec-scroll="-600">Scroll up</button>
+    </span>
+  </div>
+  <details class="rec-more">
+    <summary>Authenticator code, or a step only a person can do</summary>
+    <label>Authenticator secret (the base32 key from when the app was set up)
+      <input type="password" data-rec-totp maxlength="140" autocomplete="off">
+      <button class="btn small" type="button" data-rec-totp-send>Type the current code</button></label>
+    <div class="faint small">The code goes into the field you clicked, and a replay makes a fresh one each time.</div>
+    <button class="btn small" type="button" data-rec-human>The last step needs a person</button>
+    <span class="faint small">Marks a step a replay cannot do, such as a CAPTCHA.  Clicks inside a challenge frame are marked on their own.</span>
+  </details>
+  <div class="rec-status small" data-rec-status>{{ rec_state.title or '' }}</div>
+  <div class="rec-actions">
+    <form method="post" action="{{ base }}/external/{{ asset.id }}/record/{{ rec.id }}/save">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label class="check"><input type="checkbox" name="keep_steps" value="1" checked><span>Keep the steps, so a scan can sign in again by replaying them</span></label>
+      <button class="btn primary" type="submit">Save this session</button>
+    </form>
+    <form method="post" action="{{ base }}/external/{{ asset.id }}/record/{{ rec.id }}/cancel">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit">Close without saving</button>
+    </form>
+  </div>
+  <div class="faint small">Save once the site itself shows, past the sign in or the bot check.  The steps so far: <span data-rec-steps>0</span><span data-rec-human-count></span>.</div>
+</div>
+<script src="{{ base }}/static/external_record.js?v={{ asset_v('external_record.js') }}"></script>
+{% endif %}
+{% endblock %}
