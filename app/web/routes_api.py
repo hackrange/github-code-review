@@ -2598,6 +2598,16 @@ async def add_exclusion(request: Request, user: User = Depends(current_user)):
                 path = target.file_path or path
                 rule = target.rule or rule
 
+        # Again, now that the organization is final.  By value widens a rule
+        # to every organization after the check above has passed, and a rule
+        # about everything is an administrator's call whoever may write
+        # exclusions.  Only administrators can today, so this changes nothing
+        # yet; it is here so that granting the right to anybody else does not
+        # quietly let them hide a value across every team's repositories.
+        if organization == "*" and not rbac.can(user, "settings.write"):
+            raise HTTPException(status_code=403,
+                                detail="Name the organization this covers.")
+
         # What this decision was not made for.  On a connection carrying any
         # of these the finding comes back rather than being hidden.
         from app.core import settings_store as excl_store
