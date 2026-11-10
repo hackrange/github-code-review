@@ -226,7 +226,7 @@
       {% call bulk("external_auth_needed", "External auth needed") %}<select name="external_auth_needed"><option value="yes">Yes</option><option value="no">No</option></select>{% endcall %}
       {% call bulk("whitelist_needed", "Whitelist needed") %}<select name="whitelist_needed"><option value="yes">Yes</option><option value="no">No</option></select>{% endcall %}
       {% call bulk("change_frequency_days", "Change frequency, in days") %}<input type="number" name="change_frequency_days" min="1" max="3650" placeholder="empty clears it">{% endcall %}
-      {% call bulk("default_profile", "Default scan profile") %}<select name="default_profile"><option value="">quick (the product default)</option>{% for name in profiles %}<option value="{{ name }}">{{ name }}</option>{% endfor %}</select>{% endcall %}
+      {% call bulk("default_profile", "Default scan profile") %}<select name="default_profile"><option value="">quick (the product default)</option>{% if scan_profiles %}<optgroup label="Saved profiles">{% for p in scan_profiles %}<option value="{{ p.name }}">{{ p.name }} ({{ p.depth }} + rules)</option>{% endfor %}</optgroup><optgroup label="Depths">{% endif %}{% for name in profiles %}<option value="{{ name }}">{{ name }}</option>{% endfor %}{% if scan_profiles %}</optgroup>{% endif %}</select>{% endcall %}
       {% call bulk("no_scan", "No scan") %}<select name="no_scan"><option value="yes">Yes, never scan these</option><option value="no">No, they may be scanned</option></select>
         <input type="text" name="no_scan_reason" maxlength="300" placeholder="Why not, for Yes" style="margin-top:.3rem">{% endcall %}
       {% call bulk("tags", "Tags") %}<div class="bulk-mode"><select name="tags_mode"><option value="add">Add these</option><option value="remove">Remove these</option><option value="replace">Replace all tags with these</option></select>
@@ -265,7 +265,9 @@
       <label>Profile
         <select name="profile" form="pick">
           <option value="default" selected>each site's own default scan</option>
+          {% if scan_profiles %}<optgroup label="Saved profiles">{% for p in scan_profiles %}<option value="{{ p.name }}">{{ p.name }} ({{ p.depth }} + rules) for every site</option>{% endfor %}</optgroup><optgroup label="Depths">{% endif %}
           {% for name, what in profiles.items() %}<option value="{{ name }}">{{ name }} for every site</option>{% endfor %}
+          {% if scan_profiles %}</optgroup>{% endif %}
         </select>
         <div class="profile-help small">
           {% for name, what in profiles.items() %}<div><strong>{{ name }}</strong>: {{ what }}</div>{% endfor %}
@@ -293,7 +295,9 @@
         </select></label>
       <label>Profile
         <select name="bulk_profile" form="pick">
+          {% if scan_profiles %}<optgroup label="Saved profiles">{% for p in scan_profiles %}<option value="{{ p.name }}">{{ p.name }} ({{ p.depth }} + rules)</option>{% endfor %}</optgroup><optgroup label="Depths">{% endif %}
           {% for name, what in profiles.items() %}<option value="{{ name }}" {{ 'selected' if name == 'standard' }}>{{ name }}</option>{% endfor %}
+          {% if scan_profiles %}</optgroup>{% endif %}
         </select>
         <span class="faint small">Standard and up crawl the site, which is what fills in the
           url_paths, http_200_paths and unique_endpoints columns.</span></label>

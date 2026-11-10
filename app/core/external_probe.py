@@ -637,6 +637,8 @@ BOT_CHECKS = [
     ("Akamai", re.compile(r"_abck|bm-verify|akamai-bot", re.I)),
     ("PerimeterX", re.compile(r"px-captcha|_pxAppId|perimeterx", re.I)),
     ("DataDome", re.compile(r"captcha-delivery\.com|datadome", re.I)),
+    # Oracle's Zenedge: a 200 titled "Are you human?" served from /__zenedge/.
+    ("Zenedge", re.compile(r"/__zenedge/|zenedge&#x2F;c\?src=", re.I)),
 ]
 
 
@@ -661,6 +663,8 @@ CDN_SIGNS = [
     ("CloudFront", lambda h: "x-amz-cf-id" in h),
     ("Azure Front Door", lambda h: "x-azure-ref" in h),
     ("Sucuri", lambda h: "x-sucuri-id" in h),
+    ("Zenedge (Oracle)", lambda h: "x-zen-fury" in h or h.get("server", "").lower() == "zenedge"
+     or "zenedge" in h.get("x-cdn", "").lower()),
 ]
 
 

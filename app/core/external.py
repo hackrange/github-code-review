@@ -2262,6 +2262,31 @@ def _builtin(scan_id: int) -> None:
         _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy)
 
 
+def profile_choice(db, value) -> "str | None":
+    """A profile someone picked, as it is stored: a plain depth in lower case,
+    a saved profile's exact name, "" for none, or None when it is neither."""
+    from app.core import dast_engines
+
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.lower() in dast_engines.PROFILES:
+        return raw.lower()
+    if raw in saved_profile_names(db):
+        return raw[:80]
+    return None
+
+
+def needs_confirmation(db, profile) -> bool:
+    """Whether a scan with this profile sends attack payloads, so whoever
+    starts or schedules it has to confirm they may.  A saved profile counts by
+    its depth, and always runs the curated rules, so it always does."""
+    from app.core import dast_engines
+
+    depth, _rulesets, saved = resolve_profile(db, profile)
+    return saved or depth in dast_engines.ACTIVE_PROFILES
+
+
 def resolve_profile(db, profile) -> tuple:
     """A scan's chosen profile to (depth, ruleset names, whether it was saved).
 

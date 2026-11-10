@@ -39,6 +39,8 @@ BOT_CHECKS = [
     ("Akamai", r"bm-verify|akamai-bot"),
     ("PerimeterX", r"px-captcha|_pxAppId"),
     ("DataDome", r"captcha-delivery\.com"),
+    # Oracle's Zenedge: a 200 titled "Are you human?" served from /__zenedge/.
+    ("Zenedge", r"/__zenedge/|zenedge&#x2F;c\?src="),
 ]
 HIDE_AUTOMATION = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});

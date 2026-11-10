@@ -78,7 +78,12 @@ def next_run(sched, after: datetime, tz=None) -> datetime | None:
 
 
 def clean(data: dict, profiles, site_has_auth: bool) -> dict:
-    """A schedule as a form or the API sends it, checked.  Raises ValueError."""
+    """A schedule as a form or the API sends it, checked.  Raises ValueError.
+
+    profiles is every name a schedule may use: the depths, and the saved scan
+    profiles by their exact names."""
+    from app.core import dast_engines
+
     frequency = str(data.get("frequency") or "").strip().lower()
     if frequency not in FREQUENCIES:
         raise ValueError("How often is once, daily, weekly or monthly.")
@@ -110,8 +115,14 @@ def clean(data: dict, profiles, site_has_auth: bool) -> dict:
         if not 1 <= day <= 31:
             raise ValueError("The day of the month is 1 to 31.")
         out["day_of_month"] = day
-    profile = str(data.get("profile") or "").strip().lower()
-    if profile and profile not in profiles:
+    raw = str(data.get("profile") or "").strip()
+    if not raw:
+        profile = ""
+    elif raw.lower() in dast_engines.PROFILES:
+        profile = raw.lower()
+    elif raw in profiles:
+        profile = raw[:80]      # a saved profile, kept by its exact name
+    else:
         raise ValueError("Pick a scan profile.")
     out["profile"] = profile
     for key in ("authenticated", "ai_triage"):
@@ -167,7 +178,10 @@ def create(db, asset: ExternalAsset, data: dict, actor: str) -> ExternalScanSche
 
     if db.query(ExternalScanSchedule).filter_by(asset_id=asset.id).count() >= MAX_PER_SITE:
         raise ValueError(f"A site can have at most {MAX_PER_SITE} schedules.")
-    fields = clean(data, dast_engines.PROFILES, bool(asset.auth_kind))
+    from app.core import external
+
+    fields = clean(data, set(dast_engines.PROFILES) | external.saved_profile_names(db),
+                   bool(asset.auth_kind))
     sched = ExternalScanSchedule(asset_id=asset.id, created_by=(actor or "")[:120], **fields)
     sched.next_run_at = next_run(sched, utcnow())
     if sched.next_run_at is None:
@@ -213,7 +227,8 @@ def bulk_monthly(db, assets: list, profile: str, start: str, end: str,
     """
     from app.core import dast_engines, external
 
-    if profile not in dast_engines.PROFILES:
+    profile = external.profile_choice(db, profile)
+    if not profile:
         raise ValueError("Pick a scan profile.")
     times = window_slots(start, end)
     used = {}

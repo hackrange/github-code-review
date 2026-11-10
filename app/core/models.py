@@ -2412,7 +2412,7 @@ class ExternalAsset(Base):
     change_frequency_days = Column(Integer)
     # The scan profile a scan of this site starts with when nobody picks one.
     # Empty means the product's default, quick.
-    default_profile = Column(String(16), default="")
+    default_profile = Column(String(80), default="")
     # How long each scan engine may run on this site, {engine: minutes}, as
     # JSON.  Empty, or an engine left out, means the product default.  For a big
     # site where an engine keeps hitting its default limit, this lets it run
@@ -2699,7 +2699,7 @@ class ExternalDastScan(Base):
     error = Column(String(500), default="")
     # For a scan run here: baseline, quick, standard, thorough or premium,
     # the step it is on, and what each engine did (JSON).
-    profile = Column(String(16), default="")
+    profile = Column(String(80), default="")
     # The curated rulesets this scan ran, as JSON (["*"] for all).  Set from
     # the saved scan profile, so a scan records which enhanced checks it ran.
     curated_rulesets = Column(Text, default="")
@@ -2759,7 +2759,7 @@ class ExternalScanSchedule(Base):
     weekday = Column(Integer, default=0)
     # monthly: 1 to 31; past the end of a short month it runs on its last day.
     day_of_month = Column(Integer, default=1)
-    profile = Column(String(16), default="")
+    profile = Column(String(80), default="")
     # A scan config id when the schedule runs on Rapid7 InsightAppSec
     # instead of here.  The config holds the profile and the sign in then.
     ias_config = Column(String(64), default="")

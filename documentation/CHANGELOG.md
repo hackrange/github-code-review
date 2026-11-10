@@ -6,6 +6,20 @@ moved.
 
 ## 2026-11-10
 
+**Saved scan profiles work everywhere a profile is picked.**  Bulk edit's
+default scan profile, Scan the ticked sites, and Schedule monthly scans now
+list the saved profiles beside the depths, and accept them.  A site whose
+default was a saved profile could not be given a schedule at all, because the
+schedule check only knew the depths; it can now.  Starting or scheduling a
+saved profile asks for the same confirmation as an active scan, since it runs
+the curated rules.  Profile columns hold a saved profile's full name (up to
+80 characters) rather than 16; they are widened at the next start.
+
+**Oracle Zenedge's bot check is recognized.**  A site behind Zenedge answers
+every request with an "Are you human?" page.  The site page now names it as
+the bot check and the firewall, so a scan that only ever saw that page is not
+read as a clean site.
+
 **New code and web checks from what outside AI pen testers proved.**  Five
 vendors tested a PHP application, and the weaknesses they proved were turned
 into checks that run on every scan for no model cost:

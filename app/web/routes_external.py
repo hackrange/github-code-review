@@ -550,7 +550,7 @@ async def schedule_monthly(request: Request, user: User = Depends(current_user))
         if not every and not ids:
             return redirect(_back("/external", "Tick the sites to schedule, or pick every site.",
                                   "error"))
-        if profile in dast_engines.ACTIVE_PROFILES and not _checked(form, "bulk_confirm"):
+        if external.needs_confirmation(db, profile) and not _checked(form, "bulk_confirm"):
             return redirect(_back("/external", "Tick the box to confirm you are allowed to "
                                                "scan these sites this way.", "error"))
         query = db.query(ExternalAsset)
@@ -624,14 +624,16 @@ async def scan_many(request: Request, user: User = Depends(current_user)):
                 db.query(ExternalAsset).filter(ExternalAsset.id.in_(ids or [0]))}
         if not ids:
             return redirect(_back("/external", "Tick the sites to scan first.", "error"))
-        if profile != "default" and profile not in dast_engines.PROFILES:
-            return redirect(_back("/external", "Pick a scan profile.", "error"))
+        if profile != "default":
+            profile = external.profile_choice(db, profile)
+            if not profile:
+                return redirect(_back("/external", "Pick a scan profile.", "error"))
         chosen = {i: (each.get(i, dast_engines.DEFAULT_PROFILE) if profile == "default" else profile)
                   for i in ids}
         signs_in = db.query(ExternalAsset).filter(
             ExternalAsset.id.in_([i for i, p in chosen.items() if p != "baseline"] or [0]),
             ExternalAsset.auth_kind != "").count()
-        active = any(p in dast_engines.ACTIVE_PROFILES for p in chosen.values())
+        active = any(external.needs_confirmation(db, p) for p in set(chosen.values()))
         if (active or signs_in) and not _checked(form, "confirm"):
             return redirect(_back("/external", "Tick the box to confirm you are allowed to "
                                                "scan these sites this way.", "error"))
@@ -1482,7 +1484,7 @@ async def add_schedule(asset_id: int, request: Request, user: User = Depends(cur
             return redirect(_back(here, "Pick the InsightAppSec scan config to run.", "error"))
         if on_ias:
             profile, signs_in = "", False
-        if (on_ias or profile in dast_engines.ACTIVE_PROFILES
+        if (on_ias or external.needs_confirmation(db, profile)
                 or (signs_in and profile != "baseline")) and not _checked(form, "confirm"):
             return redirect(_back(here, "Tick the box to confirm you are allowed to scan this "
                                         "site this way, every time the schedule runs.", "error"))
@@ -2476,7 +2478,7 @@ async def api_add_schedule(asset_id: int, request: Request, caller=Depends(_api_
             raise HTTPException(status_code=409, detail="This site may not be scanned.")
         on_ias = bool(body.get("ias_config"))
         profile = "" if on_ias else (body.get("profile") or external.profile_for(asset))
-        if (on_ias or profile in dast_engines.ACTIVE_PROFILES
+        if (on_ias or (profile and external.needs_confirmation(db, profile))
                 or (body.get("authenticated") is True and profile != "baseline")) \
                 and body.get("confirm") is not True:
             raise HTTPException(status_code=400, detail=(
