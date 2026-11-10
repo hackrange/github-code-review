@@ -310,6 +310,14 @@ def _rule_text(rule: str) -> str:
     """
     if not rule or not rule.startswith("gcr-"):
         return ""
+    if rule.startswith("gcr-ai-"):
+        # Drafted from a confirmed finding and turned on by an administrator.
+        from app.core.db import session_scope
+        from app.core.models import SastRuleDraft
+        with session_scope() as db:
+            row = (db.query(SastRuleDraft.rule_yaml)
+                   .filter(SastRuleDraft.rule_id == rule).first())
+        return (row[0] or "")[:6000] if row else ""
     from app.core.scanner_config import RULES_DIR
 
     path = RULES_DIR / "semgrep-extra.yaml"

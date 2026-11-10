@@ -747,3 +747,527 @@ rules:
         ...
         <... $R.headers["content-length"] ...>
         ...
+
+# ---- Reasoning classes a pattern can decide on its own ------------------------
+#
+# The AI code reasoning pass asks a model about access control because a
+# signature cannot see a check that is missing.  Some of what it was asked
+# about can be seen without a model: a signature switched off, a secret
+# compared the slow way, a request body poured into a model, a model's answer
+# handed to a shell.  These rules catch those for free on every scan, so the
+# model's budget goes on what only reasoning can find.
+
+- id: gcr-jwt-signature-not-verified-python
+  languages:
+  - python
+  severity: ERROR
+  message: A JWT is decoded with its signature check switched off, or with the "none" algorithm allowed.
+    Anybody can then write their own token, with any user and any role in it, and it will be believed.
+  metadata:
+    cwe: 'CWE-347: Improper Verification of Cryptographic Signature'
+    category: security
+    confidence: HIGH
+  pattern-either:
+  - pattern: 'jwt.decode(..., options={..., "verify_signature": False, ...}, ...)'
+  - pattern: jwt.decode(..., verify=False, ...)
+  - pattern: jwt.decode(..., algorithms=[..., "none", ...], ...)
+
+- id: gcr-jwt-algorithm-from-token-python
+  languages:
+  - python
+  severity: ERROR
+  mode: taint
+  message: The algorithm used to check a JWT is read from the token itself.  An attacker picks the
+    algorithm, for example signing with the public key as an HMAC secret, and the check passes.
+  metadata:
+    cwe: 'CWE-347: Improper Verification of Cryptographic Signature'
+    category: security
+    confidence: HIGH
+  pattern-sources:
+  - pattern: jwt.get_unverified_header(...)
+  pattern-sinks:
+  - patterns:
+    - pattern-inside: jwt.decode(..., algorithms=$ALGS, ...)
+    - focus-metavariable: $ALGS
+
+- id: gcr-jwt-none-algorithm-js
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: A JWT check accepts the "none" algorithm, so a token with no signature at all is believed.
+  metadata:
+    cwe: 'CWE-347: Improper Verification of Cryptographic Signature'
+    category: security
+    confidence: HIGH
+  pattern-either:
+  - pattern: '$JWT.verify($T, $K, {..., algorithms: [..., "none", ...], ...}, ...)'
+  - pattern: '$JWT.verify($T, $K, {..., algorithms: [..., ''none'', ...], ...}, ...)'
+
+- id: gcr-secret-compared-not-constant-time-python
+  languages:
+  - python
+  severity: WARNING
+  message: A secret (a signature, token, HMAC or API key) is compared with ==.  The comparison stops at
+    the first wrong character, so the time it takes leaks how much of a guess was right.  Use
+    hmac.compare_digest.
+  metadata:
+    cwe: 'CWE-208: Observable Timing Discrepancy'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - patterns:
+      - pattern: $A == $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A == $B
+      - metavariable-regex:
+          metavariable: $B
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $B
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+  - metavariable-regex:
+      metavariable: $A
+      regex: (?i)(.*(signature|hmac|digest|api_?key|secret|token|otp|csrf).*|.*_key$)
+  - metavariable-regex:
+      metavariable: $B
+      regex: (?i).*(signature|hmac|digest|api_?key|secret|token|otp|csrf|expected|provided|given|header|_key).*
+  - metavariable-regex:
+      metavariable: $A
+      regex: (?i)^(?!.*(_id|id)$).*
+  # A lookup by a hash in the database is the right design, not a timing leak.
+  - pattern-not-inside: $Q.filter(...)
+  - pattern-not-inside: $Q.filter_by(...)
+  - pattern-not-inside: $Q.where(...)
+  - pattern-not-inside: $Q.exclude(...)
+  - pattern-not: $A == "..."
+  - pattern-not: $A == None
+  - pattern-not: $A != "..."
+  - pattern-not: $A != None
+  - pattern-not: re.$F(...) != $B
+  - pattern-not: re.$F(...) == $B
+
+- id: gcr-secret-compared-not-constant-time-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: A secret (a signature, token, HMAC or API key) is compared with ===.  The comparison stops at
+    the first wrong character, so the time it takes leaks how much of a guess was right.  Use
+    crypto.timingSafeEqual.
+  metadata:
+    cwe: 'CWE-208: Observable Timing Discrepancy'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - patterns:
+      - pattern: $A === $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A === $B
+      - metavariable-regex:
+          metavariable: $B
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A == $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A == $B
+      - metavariable-regex:
+          metavariable: $B
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A !== $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A !== $B
+      - metavariable-regex:
+          metavariable: $B
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $B
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+  - metavariable-regex:
+      metavariable: $A
+      regex: (?i)(.*(signature|hmac|digest|api_?key|secret|token|otp|csrf).*|.*_key$)
+  - metavariable-regex:
+      metavariable: $B
+      regex: (?i).*(signature|hmac|digest|api_?key|secret|token|otp|csrf|expected|provided|given|header|_key).*
+  - metavariable-regex:
+      metavariable: $A
+      regex: (?i)^(?!.*(_id|id)$).*
+  # A lookup by a hash in the database is the right design, not a timing leak.
+  - pattern-not-inside: $Q.where(...)
+  - pattern-not: $A === "..."
+  - pattern-not: $A === undefined
+  - pattern-not: $A === null
+  - pattern-not: $A !== undefined
+  - pattern-not: $A !== null
+  - pattern-not: typeof $A === "..."
+
+- id: gcr-secret-compared-not-constant-time-php
+  languages:
+  - php
+  severity: WARNING
+  message: A secret (a signature, token, HMAC or API key) is compared with == or ===.  The comparison stops at
+    the first wrong character, so the time it takes leaks how much of a guess was right.  Use
+    hash_equals.
+  metadata:
+    cwe: 'CWE-208: Observable Timing Discrepancy'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - patterns:
+      - pattern: $A === $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A === $B
+      - metavariable-regex:
+          metavariable: $B
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A == $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A == $B
+      - metavariable-regex:
+          metavariable: $B
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A !== $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A !== $B
+      - metavariable-regex:
+          metavariable: $B
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+    - patterns:
+      - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $B
+          regex: ((?i:.*(expected|stored|valid|computed|calculated|correct|known|configured|api_?key|secret|signature|hmac|digest|csrf|settings\.|config\.|env).*)|^(?![A-Z0-9_.]*(STARS|MASK|PLACEHOLDER|PREFIX|DEFAULT|EMPTY|FIELD|NAME|HEADER|PARAM|LENGTH|LEN|TTL))[A-Z0-9_.]*(TOKEN|KEY|SECRET)[A-Z0-9_]*$)
+  - metavariable-regex:
+      metavariable: $A
+      regex: (?i)(.*(signature|hmac|digest|api_?key|secret|token|otp|csrf).*|.*_key$)
+  - metavariable-regex:
+      metavariable: $B
+      regex: (?i).*(signature|hmac|digest|api_?key|secret|token|otp|csrf|expected|provided|given|header|_key).*
+  - metavariable-regex:
+      metavariable: $A
+      regex: (?i)^(?!.*(_id|id)$).*
+  # A lookup by a hash in the database is the right design, not a timing leak.
+  - pattern-not-inside: $Q->where(...)
+  - pattern-not: $A === ''
+  - pattern-not: $A === null
+  - pattern-not: $A == ''
+  - pattern-not: $A == null
+
+- id: gcr-security-token-from-weak-random-python
+  languages:
+  - python
+  severity: WARNING
+  message: A token, code or secret is made with the random module, whose output can be predicted from
+    earlier values.  Somebody who sees a few can work out the next reset code or session token.  Use
+    the secrets module.
+  metadata:
+    cwe: 'CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $T = <... random.$F(...) ...>
+    - pattern: $O.$T = <... random.$F(...) ...>
+  - metavariable-regex:
+      metavariable: $T
+      regex: (?i).*(token|otp|nonce|secret|reset|verification_code|api_?key|session_?id|salt|password).*
+  - metavariable-regex:
+      metavariable: $F
+      regex: ^(random|randint|randrange|choice|choices|sample|getrandbits|uniform)$
+
+- id: gcr-security-token-from-weak-random-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: A token, code or secret is made with Math.random, whose output can be predicted.  Somebody who
+    sees a few values can work out the next reset code or session token.  Use crypto.randomBytes or
+    crypto.randomUUID.
+  metadata:
+    cwe: 'CWE-338: Use of Cryptographically Weak Pseudo-Random Number Generator (PRNG)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: const $T = <... Math.random() ...>
+    - pattern: let $T = <... Math.random() ...>
+    - pattern: var $T = <... Math.random() ...>
+    - pattern: $T = <... Math.random() ...>
+    - pattern: '{..., $T: <... Math.random() ...>, ...}'
+  - metavariable-regex:
+      metavariable: $T
+      regex: (?i).*(token|otp|nonce|secret|reset|verificationcode|verification_code|apikey|api_key|sessionid|session_id|salt|password).*
+
+- id: gcr-mass-assignment-python
+  languages:
+  - python
+  severity: WARNING
+  message: The whole request body is poured into a model.  Any field the model has, such as role,
+    is_admin, owner or tenant, can be set by the caller just by sending it.  Name the fields that may
+    be set.
+  metadata:
+    cwe: 'CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: $M(**request.json)
+  - pattern: $M(**request.get_json(...))
+  - pattern: $M(**request.form)
+  - pattern: $M(**request.form.to_dict(...))
+  - pattern: $M(**request.data)
+  - pattern: $Q.update(**request.json)
+  - pattern: $Q.update(**request.data)
+  - pattern: $Q.update(**request.get_json(...))
+  - pattern: |
+      for $K, $V in request.json.items():
+          ...
+          setattr($O, $K, $V)
+  - pattern: |
+      for $K, $V in request.get_json(...).items():
+          ...
+          setattr($O, $K, $V)
+  - pattern: |
+      for $K, $V in request.data.items():
+          ...
+          setattr($O, $K, $V)
+
+- id: gcr-mass-assignment-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: The whole request body is poured into a record.  Any field it has, such as role, isAdmin,
+    owner or tenant, can be set by the caller just by sending it.  Pick the fields that may be set.
+  metadata:
+    cwe: 'CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: Object.assign($U, $REQ.body)
+  - pattern: $M.create($REQ.body)
+  - pattern: $M.create($REQ.body, ...)
+  - pattern: $M.findByIdAndUpdate($ID, $REQ.body, ...)
+  - pattern: $M.findByIdAndUpdate($ID, $REQ.body)
+  - pattern: $M.findOneAndUpdate($F, $REQ.body, ...)
+  - pattern: $M.updateOne($F, $REQ.body, ...)
+  - pattern: $M.update($REQ.body, ...)
+  - pattern: new $M($REQ.body)
+  - pattern: '{...$REQ.body}'
+
+- id: gcr-mass-assignment-php
+  languages:
+  - php
+  severity: WARNING
+  message: The whole request is poured into a model, or the model guards nothing.  Any column it has,
+    such as role, is_admin or tenant_id, can be set by the caller just by sending it.  Use
+    $request->validated() or name the fields.
+  metadata:
+    cwe: 'CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: $M::create($REQ->all())
+  - pattern: $M->update($REQ->all())
+  - pattern: $M->fill($REQ->all())
+  - pattern: $M::create($_POST)
+  - pattern: $M->fill($_POST)
+  - pattern: $guarded = [];
+
+- id: gcr-drf-modelviewset-allowany
+  languages:
+  - python
+  severity: ERROR
+  message: A model view set that can create, change and delete records lets anybody in, signed in or
+    not.  AllowAny on a ModelViewSet opens every write it has.
+  metadata:
+    cwe: 'CWE-862: Missing Authorization'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-inside: |
+      class $V(..., ModelViewSet, ...):
+          ...
+  - pattern-either:
+    - pattern: permission_classes = [AllowAny]
+    - pattern: permission_classes = (AllowAny,)
+    - pattern: permission_classes = []
+    - pattern: permission_classes = ()
+
+- id: gcr-flask-csrf-switched-off
+  languages:
+  - python
+  severity: WARNING
+  message: Request forgery protection is switched off for the whole application.  Another site the user
+    visits can make their browser change things here with their session.
+  metadata:
+    cwe: 'CWE-352: Cross-Site Request Forgery (CSRF)'
+    category: security
+    confidence: HIGH
+  pattern-either:
+  - pattern: $APP.config["WTF_CSRF_ENABLED"] = False
+  - pattern: $APP.config["WTF_CSRF_CHECK_DEFAULT"] = False
+  - pattern: $APP.config.update(..., WTF_CSRF_ENABLED=False, ...)
+  - pattern: WTF_CSRF_ENABLED = False
+
+- id: gcr-django-csrf-exempt-unsigned
+  languages:
+  - python
+  severity: WARNING
+  message: A view that accepts posts is exempt from request forgery checks, and nothing in it checks a
+    signature or token instead.  Another site can make a signed in user's browser call it.
+  metadata:
+    cwe: 'CWE-352: Cross-Site Request Forgery (CSRF)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern: |
+      @csrf_exempt
+      def $F($REQ, ...):
+          ...
+  - pattern-not: |
+      @csrf_exempt
+      def $F($REQ, ...):
+          ...
+          <... hmac.compare_digest(...) ...>
+          ...
+  - pattern-not: |
+      @csrf_exempt
+      def $F($REQ, ...):
+          ...
+          <... $X.verify(...) ...>
+          ...
+  - pattern-not: |
+      @csrf_exempt
+      def $F($REQ, ...):
+          ...
+          <... $X.construct_event(...) ...>
+          ...
+  - pattern-not: |
+      @csrf_exempt
+      def $F($REQ, ...):
+          ...
+          <... $REQ.headers["Authorization"] ...>
+          ...
+  - pattern-not: |
+      @csrf_exempt
+      def $F($REQ, ...):
+          ...
+          <... $REQ.META["HTTP_AUTHORIZATION"] ...>
+          ...
+
+- id: gcr-llm-output-executed-python
+  languages:
+  - python
+  severity: ERROR
+  mode: taint
+  message: A language model's answer reaches code execution, a shell or a database query.  Anybody who
+    can put text in front of the model, in a document, a page or a code comment, can steer what runs.
+  metadata:
+    cwe: 'CWE-94: Improper Control of Generation of Code (Code Injection)'
+    category: security
+    confidence: HIGH
+    references:
+    - OWASP LLM05:2025 Improper Output Handling
+  pattern-sources:
+  - pattern: $C.messages.create(...)
+  - pattern: $C.chat.completions.create(...)
+  - pattern: $C.responses.create(...)
+  - pattern: $C.completions.create(...)
+  - pattern: $M.generate_content(...)
+  - pattern: $M.invoke(...)
+  - pattern: ai.complete(...)
+  pattern-sinks:
+  - pattern: eval(...)
+  - pattern: exec(...)
+  - pattern: os.system(...)
+  - pattern: os.popen(...)
+  - patterns:
+    - pattern: subprocess.$F(...)
+    - metavariable-regex:
+        metavariable: $F
+        regex: ^(run|call|check_call|check_output|Popen)$
+  - patterns:
+    - pattern: $CUR.execute($SQL, ...)
+    - focus-metavariable: $SQL
+
+- id: gcr-exception-text-returned-python
+  languages:
+  - python
+  severity: WARNING
+  message: The text of an exception is sent back to the caller.  It can carry SQL, file paths, internal
+    host names or secrets.  Log it, and send a generic message with a request id.
+  metadata:
+    cwe: 'CWE-209: Generation of Error Message Containing Sensitive Information'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-inside: |
+      try:
+          ...
+      except $T as $E:
+          ...
+  # A ValueError the code raised itself with a sentence for the user is the
+  # usual way to say what was wrong with the input.  Broad catches and errors
+  # from the database, the disk or the network carry the internals.
+  - metavariable-regex:
+      metavariable: $T
+      regex: ^(Exception|BaseException|\w*(SQL|Database|Operational|Integrity|Programming|DataError|OS|IO|Connection|Request|HTTP|Timeout|Subprocess|CalledProcess|Runtime)\w*(Error|Exception)?)$
+  - pattern-either:
+    - pattern: 'return {..., $K: str($E), ...}'
+    - pattern: return jsonify(..., $K=str($E), ...)
+    - pattern: 'return jsonify({..., $K: str($E), ...}, ...)'
+    - pattern: 'return jsonify({..., $K: str($E), ...}), $CODE'
+    - pattern: return jsonify(..., $K=str($E), ...), $CODE
+    - pattern: 'return {..., $K: str($E), ...}, $CODE'
+    - pattern: raise HTTPException(..., detail=str($E), ...)
+    - pattern: 'return JSONResponse({..., $K: str($E), ...}, ...)'
+    - pattern: return Response(str($E), ...)
+    - pattern: 'return JsonResponse({..., $K: str($E), ...}, ...)'
+    - pattern: return traceback.format_exc()
+    - pattern: 'return {..., $K: traceback.format_exc(), ...}'

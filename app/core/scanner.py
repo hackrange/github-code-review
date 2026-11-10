@@ -962,6 +962,9 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
                         "kept": kept.get("repositories", 0)}
 
             scanned = set()
+            # Whether the code pass ran on each one's default branch, for the
+            # code reasoning pass.  A credentials only branch has no code scan.
+            code_ran = {}
             trouble = []
             counted = {"failed": 0, "skipped": 0, "branches": 0}
             try:
@@ -971,6 +974,7 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
                     status = entry.get("status", "ok")
                     if name and status == "ok":
                         scanned.add(name)
+                        code_ran[name] = "code" in (entry.get("passes_complete") or [])
                     elif name:
                         # Deliberately not added to `scanned`, including when
                         # it is partial.  Everything in that set has its absent
@@ -1067,7 +1071,7 @@ def run_scan(triggered_by: str = "", trigger: str = "manual",
 
             from app.core import analysis, code_reasoning
             analysis.auto_review(new_ids)
-            code_reasoning.after_scan(scanned)
+            code_reasoning.after_scan(code_ran)
 
             # The findings are in the database now, so the copies on disk have
             # done their job.  Removed here rather than in a finally, because

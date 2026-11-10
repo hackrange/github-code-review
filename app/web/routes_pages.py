@@ -4868,6 +4868,10 @@ def ai_page(request: Request, msg: str = "", kind: str = "", tab: str = "",
         has_cost = cfg.get("ai.provider") == "custom"
         from app.core import code_reasoning
         context["reasoning_budget"] = code_reasoning.budget(db, cfg)
+        from app.core.models import SastRuleDraft
+        context["sast_drafts"] = (db.query(SastRuleDraft)
+                                  .order_by(SastRuleDraft.state != "proposed",
+                                            SastRuleDraft.id.desc()).limit(200).all())
         tab = "cost" if tab == "cost" and has_cost else "settings"
         days = max(1, min(366, int(days or 30)))
         context.update(tab=tab, has_cost=has_cost, cost_days=days,

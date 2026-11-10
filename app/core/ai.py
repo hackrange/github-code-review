@@ -118,8 +118,9 @@ SETTINGS = {
                                          "use in a calendar month, in and out "
                                          "together."),
     "ai.code_reasoning_per_repo": (25, False,
-                                   "Most handlers asked about in one repository per "
-                                   "run, the likeliest first."),
+                                   "Most handlers not read before that are asked "
+                                   "about in one repository per scan, the likeliest "
+                                   "first.  The rest wait for the next scan."),
     # What the custom service charges, per million tokens, for the cost page.
     # Kept as text so 0.10 stays 0.10.  Empty is not counted.
     "ai.price_input":          ("", False, "Price per million input tokens."),

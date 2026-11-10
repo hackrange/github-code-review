@@ -1542,6 +1542,11 @@ async def save_connection(request: Request, user: User = Depends(current_user)):
         row.repositories = repositories
         row.branches = branches
         row.enabled = str(form.get("enabled", "")).lower() in {"1", "on", "true", "yes"}
+        # Only when the form that has the box was the one sent.  A tick box
+        # left unticked sends nothing, so without the marker any other way of
+        # saving a connection would switch reasoning off by accident.
+        if form.get("ai_reasoning_shown"):
+            row.ai_reasoning = _checked(form, "ai_reasoning")
         row.app_id = clean_text(form.get("app_id"), "App id", limit=60,
                                 required=False)
         row.app_installation = clean_text(form.get("app_installation"),
@@ -5465,6 +5470,42 @@ async def validate_many(request: Request, user: User = Depends(current_user)):
     return redirect(f"/ai/learned?batch={number}")
 
 
+@router.post("/ai/sast-drafts/{draft_id}/{action}")
+async def decide_sast_draft(draft_id: int, action: str, request: Request,
+                            user: User = Depends(current_user)):
+    """Turn a drafted semgrep rule on for every scan, or say no to it."""
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+    from urllib.parse import quote
+
+    from app.core.models import SastRuleDraft
+
+    if action not in ("enable", "reject"):
+        raise HTTPException(status_code=404, detail="No such action.")
+    with session_scope() as db:
+        row = db.get(SastRuleDraft, draft_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such draft.")
+        if action == "enable":
+            # Only a draft that passed its checks.  A failed one has no
+            # rule that was ever shown to work.
+            if row.state not in ("proposed", "rejected") or not row.rule_id:
+                return redirect("/ai?kind=error&msg=" + quote(
+                    "Only a draft that passed its checks can be turned on."))
+            row.state = "enabled"
+        else:
+            if row.state not in ("proposed", "enabled"):
+                return redirect("/ai?kind=error&msg=" + quote("Nothing to reject."))
+            row.state = "rejected"
+        row.decided_by, row.decided_at = user.username, utcnow()
+        record(db, f"sast_draft.{action}d" if action == "enable" else "sast_draft.rejected",
+               actor=user.username, target=row.rule_id or row.key,
+               detail=f"{row.category} in {row.language}", source_ip=client_ip(request))
+    return redirect("/ai?msg=" + quote(
+        "Turned on.  The next scan runs it." if action == "enable"
+        else "Turned off.  Scans no longer run it.") + "#rule-drafts")
+
+
 @router.post("/ai/learned/{rule_id}/accept")
 async def accept_learned(rule_id: int, request: Request,
                          user: User = Depends(current_user)):
@@ -6592,6 +6633,6 @@ async def run_code_reasoning(repo_id: int, request: Request,
                                        "warn"))
         record(db, "ai.code_reasoning_requested", actor=user.username, target=name,
                source_ip=client_ip(request))
-    code_reasoning.after_scan([name])
+    code_reasoning.after_scan([name], force=True)
     return redirect(_back_with(f"/repositories/{repo_id}",
                                "Queued.  New findings appear on this repository when it is done."))

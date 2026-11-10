@@ -317,7 +317,12 @@ def build(session, out_dir: Path, orgs=None, repos=None, connection=None,
     code["exclude_paths"] = _list(session, "code.exclude_paths")
     # Shipped with the product, not fetched: the registry can be unavailable
     # and these cover weaknesses the public packs miss outright.
-    code["extra_rules_path"] = str(RULES_DIR / "semgrep-extra.yaml")
+    # Plus any rule the model drafted from a confirmed finding and an
+    # administrator turned on.  The shipped file alone when there are none.
+    from app.config import settings as env_settings
+    from app.core import sast_rule_draft
+    code["extra_rules_path"] = str(sast_rule_draft.combined_rules_file(
+        session, RULES_DIR / "semgrep-extra.yaml", env_settings.data_dir))
     code["triage"] = True
     # Only rules somebody agreed to set aside.  A request that nobody has
     # approved does not reach the scanner, so its findings keep arriving.

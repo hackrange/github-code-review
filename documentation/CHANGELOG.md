@@ -6,6 +6,34 @@ moved.
 
 ## 2026-11-10
 
+**Code reasoning reads each piece of code once.**  It now runs after each scan
+on every branch that gets code scanning, not only the default branch.  A branch
+still on the commit it was last read at is not fetched at all.  On a branch
+that moved, only handlers whose code changed are asked about.  A fork or a copy
+of a repository reuses the answers already paid for.  An answer that came back
+unreadable is no longer asked for again after every scan.  The per repository
+setting is now new questions per scan, and handlers past it are read on the
+next scan instead of never.  A cached finding keeps pointing at the right line
+after lines are added above it.  Each connection has an **AI code reasoning**
+switch, on by default.
+
+**Confirmed reasoning findings turn into reusable rules.**  When code reasoning
+confirms a high finding, the model drafts one semgrep rule for that kind of
+mistake.  The draft has to match the code it came from, miss the fixed
+version, and stay quiet across that repository before it is offered.  It is
+listed on the AI page, switched off, for an administrator to turn on.  Then
+scans find that mistake for no tokens.
+
+**Sixteen new built in rules** for mistakes a pattern can see without reasoning:
+JWT signature checks switched off or the algorithm read from the token, secrets
+compared with `==` in Python, JavaScript and PHP, reset codes and tokens made
+with a non secure random, whole request bodies poured into models in Python,
+JavaScript and Laravel, a Django REST view set open to anybody, request forgery
+checks switched off or exempted with no signature check, a model's answer
+handed to a shell or a query, and exception text from broad or database errors
+sent back to the caller.  Each was run over about 2 GB of real code, and every
+false alarm found there is now a test case.
+
 **A scan of this site no longer locks everybody out.**  A web scan aimed at the
 site came in through the load balancer, and when the balancer was not listed as
 trusted every person shared the balancer's request budget, so the scan used it

@@ -1732,6 +1732,10 @@ class Connection(Base):
     # Anybody else this account's findings should go to.  A rota address, a
     # ticket queue, the vendor who maintains it.  Comma separated.
     notify_extra = Column(String(500), default="")
+    # Whether the AI code reasoning pass reads repositories under this
+    # account.  On unless somebody turns it off, which is how it behaved
+    # before there was a switch.
+    ai_reasoning = Column(Boolean, default=True, nullable=False)
 
     api_url = Column(String(300), default="https://api.github.com")
     web_url = Column(String(300), default="https://github.com")
@@ -2023,6 +2027,64 @@ class RepoAssessment(Base):
     created_at = Column(DateTime(timezone=True))
     started_by = Column(String(120), default="")
     started_at = Column(DateTime(timezone=True))
+
+
+class SastRuleDraft(Base):
+    """A semgrep rule the model drafted from a reasoning finding it was sure of.
+
+    The point is to pay for a kind of mistake once.  When the reasoning pass
+    confirms a high finding, the model is asked for a rule that catches the
+    same pattern, and from then on semgrep finds it everywhere for nothing.
+    One per kind of problem and language, ever: a second finding of the same
+    kind does not buy a second draft.
+
+    A draft is checked by running it, not by reading it: it has to match the
+    code it came from, miss the fixed version the model wrote beside it, and
+    not fire all over the repository it came from.  It is saved switched off
+    either way, and only reaches a scan once an administrator turns it on.
+    """
+
+    __tablename__ = "sast_rule_drafts"
+
+    id = Column(Integer, primary_key=True)
+    # "<category>:<language>", the thing that is drafted for at most once.
+    key = Column(String(80), nullable=False, unique=True, index=True)
+    rule_id = Column(String(120), default="")
+    category = Column(String(40), default="")
+    language = Column(String(20), default="")
+    rule_yaml = Column(Text, default="")
+    # proposed: passed every check, waiting for a person.  enabled: in scans.
+    # rejected: a person said no.  failed: did not pass the checks.
+    state = Column(String(16), default="proposed", index=True)
+    checks = Column(Text, default="")
+    origin_finding_id = Column(Integer)
+    origin_repository = Column(String(320), default="")
+    origin_matches = Column(Integer, default=0)
+    tokens = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    decided_by = Column(String(255), default="")
+    decided_at = Column(DateTime(timezone=True))
+
+
+class CodeReasoningHead(Base):
+    """The commit the code reasoning pass last finished reading on one branch.
+
+    A scan that finds the branch still on that commit does not read it again,
+    and does not even fetch it.  Only a branch that moved is read, and then
+    only the handlers whose code changed are asked about: the cache below
+    answers the rest.
+    """
+
+    __tablename__ = "code_reasoning_heads"
+    __table_args__ = (
+        UniqueConstraint("repository", "branch", name="uq_code_reasoning_head"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    repository = Column(String(320), nullable=False, index=True)
+    branch = Column(String(255), nullable=False)
+    head = Column(String(64), default="")
+    at = Column(DateTime(timezone=True), default=utcnow)
 
 
 class CodeReasoningCache(Base):

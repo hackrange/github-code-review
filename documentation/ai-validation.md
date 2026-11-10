@@ -130,6 +130,56 @@ finding goes back to the engine's grade, and its page says who decided what
 and that the code it was about has changed.  A credential's regrade is never
 lifted this way, because a secret's identity is the secret itself.
 
+## Code reasoning
+
+Pattern scanners find a dangerous call.  They cannot see a check that is
+missing, such as a handler that loads a record by its id without asking
+whether the caller may.  Code reasoning asks the model about exactly that, one
+request handler at a time, with the access checks it calls beside it.  Turn it
+on, and set its monthly token limit, on the AI page.
+
+### When it runs, and what it never reads twice
+
+It runs after each scan, on every branch of a repository that gets code
+scanning: the default branch when the code pass ran on it, and any other
+branch whose scan scope gives it every pass.  A credentials only branch, a Do
+Not Scan branch, and a branch sitting on the default branch's own commit are
+left out.
+
+- A branch still on the commit it was last read at is skipped without being
+  fetched.
+- On a branch that moved, only handlers whose code changed, or whose access
+  check helpers changed, are asked about.  Every other answer comes from the
+  cache.  Identical code in a fork or a copied repository reuses the answer.
+- New questions per repository per scan is a limit on handlers never read
+  before.  The rest are read on the next scan, each once.
+- An answer that came back unreadable is tried twice for the same code, then
+  left until the code changes.  A provider that was down does not count.
+- A connection can switch code reasoning off for all of its repositories, in
+  its settings.
+
+**Run code reasoning** on a repository page reads every branch even if it has not
+moved, and still asks nothing about code answered before.
+
+### Rules drafted from confirmed findings
+
+A semgrep rule costs nothing to run.  When code reasoning confirms a high
+finding, the model is asked once for a rule that catches the same mistake.
+There is one draft per kind of problem and language, ever.  The draft is run
+before anyone sees it.  It has to match the handler it came from, miss the
+fixed version the model wrote beside it, and match no more than 8 places in
+that repository.  A draft that passes is listed on the AI page under **Rules
+drafted from confirmed findings**, switched off.  An administrator reads it and
+turns it on, and from the next scan semgrep finds that mistake everywhere.
+The tokens a draft costs come out of the code reasoning monthly limit.
+
+The product also ships rules for the parts of these problems a pattern can see
+on its own: a JWT read without checking its signature, a secret compared with
+`==`, a reset code made with a non secure random, a whole request body poured
+into a model, a view set open to anybody, request forgery checks switched off,
+a model's answer handed to a shell or a query, and exception text sent back to
+the caller.
+
 ## What is sent
 
 Always:

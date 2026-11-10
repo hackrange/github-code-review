@@ -56,6 +56,7 @@
         <tr {% if not c.enabled %}class="faint"{% endif %}>
           <td class="small">{{ c.name }}
             {% if not c.enabled %}<span class="badge waived">off</span>{% endif %}
+            {% if not c.ai_reasoning %}<span class="badge waived" title="The AI code reasoning pass does not read this account">AI reasoning off</span>{% endif %}
             {% if c.api_url != 'https://api.github.com' %}
             <div class="faint mono" style="font-size:.75rem">{{ c.api_url }}</div>{% endif %}
           </td>
@@ -111,6 +112,7 @@
                        turned off showed it as on, and saving turned it back on
                        without anybody asking for that. #}
                     data-enabled="{{ '1' if c.enabled else '0' }}"
+                    data-ai_reasoning="{{ '1' if c.ai_reasoning else '0' }}"
                     data-sensitivity="{{ c.sensitivity or '' }}"
                     data-repositories="{{ c.repositories }}"
                     data-branches="{{ c.branches or '' }}">Edit</button>
@@ -498,6 +500,14 @@
         </label>
         <label class="check">
           <input type="checkbox" name="enabled" value="1" checked> Include it in scans
+        </label>
+        <input type="hidden" name="ai_reasoning_shown" value="1">
+        <label class="check">
+          <input type="checkbox" name="ai_reasoning" value="1" checked> AI code reasoning
+          <span class="faint small">Lets the AI code reasoning pass read the
+            branches of these repositories that get code scanning.  Only code
+            that changed since it was last read is sent.  Off sends none of
+            this account's code to the model for that pass.</span>
         </label>
       </div>
       <div class="modal-foot">

@@ -270,9 +270,12 @@
         touch stored data and take an id or do something privileged, and the
         model reads each one with the access checks it calls.  Nothing else in
         the repository is sent.  An answer is kept, so a handler nobody changed
-        is never asked about again.  What it finds is filed for a person to
-        confirm, and it never lowers or closes anything.  It needs sending code
-        switched on above.</p>
+        is never asked about again.  It runs after each scan, on every branch
+        that gets code scanning, and only on a branch that moved since it was
+        last read: a branch still on the same commit is not even fetched.  A
+        connection can switch it off for its repositories.  What it finds is
+        filed for a person to confirm, and it never lowers or closes anything.
+        It needs sending code switched on above.</p>
       <label>Monthly token limit
         <input type="number" name="ai.code_reasoning_monthly_tokens" min="0"
                max="2000000000" value="{{ values['ai.code_reasoning_monthly_tokens'] }}">
@@ -286,12 +289,14 @@
         month.  The pass checks before every question and stops when the next
         one would go over, then picks up again next month.  0 stops it
         altogether.</p>
-      <label>Handlers per repository
+      <label>New questions per repository per scan
         <input type="number" name="ai.code_reasoning_per_repo" min="1" max="500"
                value="{{ values['ai.code_reasoning_per_repo'] }}">
       </label>
-      <p class="faint small">The likeliest first.  Cached ones count toward
-        this but cost nothing.</p>
+      <p class="faint small">Handlers not read before, likeliest first, across
+        all of a repository's branches.  Ones answered before do not count and
+        cost nothing.  Whatever is left is read on the next scan, so a large
+        repository is covered over a few scans and nothing is read twice.</p>
     </div>
   </div>
 
@@ -301,6 +306,52 @@
   </div>
   {% endif %}
 </form>
+
+{% if sast_drafts %}
+<div class="card" id="rule-drafts">
+  <div class="card-head">Rules drafted from confirmed findings</div>
+  <div class="card-body">
+    <p class="faint small">When code reasoning confirms a high finding, the
+      model is asked once for a semgrep rule that catches the same mistake, so
+      the next one is found by a scan for no tokens at all.  Each draft was run
+      before it reached this list: it matches the code it came from, misses
+      the fixed version, and stays quiet across that repository.  None runs
+      until it is turned on here.</p>
+    <table>
+      <thead><tr><th>Rule</th><th>State</th><th>Checks</th><th></th></tr></thead>
+      <tbody>
+      {% for d in sast_drafts %}
+        <tr>
+          <td class="small"><strong>{{ d.category }}</strong> in {{ d.language }}
+            <div class="faint mono" style="font-size:.75rem">{{ d.rule_id or d.key }}</div>
+            {% if d.origin_finding_id %}<a class="small" href="{{ base }}/findings/{{ d.origin_finding_id }}">From finding {{ d.origin_finding_id }}</a>{% endif %}
+          </td>
+          <td><span class="badge {{ 'ok' if d.state == 'enabled' else ('waived' if d.state in ('rejected', 'failed') else '') }}">{{ d.state }}</span></td>
+          <td class="small">{{ d.checks }}
+            {% if d.rule_yaml %}<details><summary class="small">The rule</summary>
+              <pre class="mono small" style="white-space:pre-wrap">{{ d.rule_yaml }}</pre></details>{% endif %}
+          </td>
+          <td class="small">
+            {% if can_write %}
+              {% if d.state in ('proposed', 'rejected') %}
+              <form method="post" action="{{ base }}/ai/sast-drafts/{{ d.id }}/enable" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm primary" type="submit">Turn on</button></form>
+              {% endif %}
+              {% if d.state in ('proposed', 'enabled') %}
+              <form method="post" action="{{ base }}/ai/sast-drafts/{{ d.id }}/reject" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn sm" type="submit">{{ 'Turn off' if d.state == 'enabled' else 'Reject' }}</button></form>
+              {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 
 {% if can_write %}
 <div class="card">

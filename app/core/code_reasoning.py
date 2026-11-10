@@ -50,9 +50,17 @@ log = logging.getLogger("gcr.reasoning")
 
 ENGINE = "code-reasoning"
 PURPOSE = "code_reasoning"
-# Part of every cache digest.  Change it when the question changes, so old
-# answers to a different question are not reused.
+# Part of every cache digest, and frozen.  A handler that has been read once
+# is not read again until its code, or a helper it calls, changes.  A better
+# question is not a reason to pay for the whole estate a second time: new
+# rules reach a handler the next time somebody changes it.  Bumping this
+# would re-ask every handler in every repository, so do not.
 PROMPT_VERSION = "2"
+# A question whose answer never came back (cut off, unreadable, the service
+# down) is tried this many times for the same code, then left until the code
+# changes.  Without a limit the same unchanged handler is paid for after
+# every scan, forever.
+MAX_ATTEMPTS = 2
 
 CATEGORIES = {
     "object-authz": ("CWE-639", "An object is reached by its id without checking the caller may"),
@@ -205,10 +213,13 @@ def month_start(now: datetime | None = None) -> datetime:
 
 
 def used_this_month(session, now: datetime | None = None) -> int:
-    """Tokens this pass has spent since the first of the month, in and out."""
+    """Tokens this pass has spent since the first of the month, in and out.
+
+    Rule drafts count too: they are this pass's way of not paying again.
+    """
     total = (session.query(func.coalesce(func.sum(AIUsage.input_tokens), 0)
                            + func.coalesce(func.sum(AIUsage.output_tokens), 0))
-             .filter(AIUsage.purpose == PURPOSE)
+             .filter(AIUsage.purpose.in_((PURPOSE, "sast_rule")))
              .filter(AIUsage.at >= month_start(now)).scalar())
     return int(total or 0)
 
@@ -568,9 +579,14 @@ class Run:
         self.left = left
         self.calls = self.tokens = 0
         self.stopped = ""
+        # Whether the last question got an answer from the model at all.  A
+        # service that was down is not the code's fault and is not counted
+        # against it; an answer cut off or unreadable is.
+        self.answered = False
 
     def ask(self, system: str, prompt: str, answer: int):
         need = _estimate(system, prompt, answer)
+        self.answered = False
         if need > self.left:
             self.stopped = "the monthly token limit"
             return None
@@ -582,7 +598,10 @@ class Run:
         self.calls += 1
         self.tokens += spent
         self.left -= spent
-        if not out.get("ok") or out.get("cut_off"):
+        if not out.get("ok"):
+            return None
+        self.answered = True
+        if out.get("cut_off"):
             return None
         return _json(out.get("text"))
 
@@ -611,28 +630,64 @@ class Run:
         return isinstance(reply, dict) and str(reply.get("v") or "").lower() == "yes"
 
 
-def reason(session, cfg: dict, repository: str, root: Path) -> dict:
-    """Ask about one checkout.  -> {units, cached, asked, calls, tokens, findings, stopped}
+# How many handlers one checkout is looked through for.  Reading them costs no
+# tokens; only the ones not answered before are asked about, and those are
+# limited by the questions setting.
+MAX_UNITS = 2_000
+
+
+def reason(session, cfg: dict, repository: str, root: Path, limit: int | None = None) -> dict:
+    """Ask about one checkout.
+
+    -> {units, cached, asked, calls, tokens, found, stopped, left, unanswered}
 
     Cached answers are used without a question.  New answers are cached once
     they are in, high severity ones only after the second question agrees.
+    At most limit handlers are asked about (ai.code_reasoning_per_repo when
+    not given); the rest are left for the next scan, so a large branch is
+    covered over a few scans and nothing is ever asked about twice.
     """
-    per_repo = int(cfg.get("ai.code_reasoning_per_repo") or 0)
-    units = candidates(root, per_repo)
+    if limit is None:
+        limit = int(cfg.get("ai.code_reasoning_per_repo") or 0)
+    units = candidates(root, MAX_UNITS)
     left = budget(session, cfg)["left"]
     run = Run(cfg, left)
     found, cached, fresh = [], 0, []
-    known = {row.digest: row for row in session.query(CodeReasoningCache)
-             .filter(CodeReasoningCache.repository == repository)
-             .filter(CodeReasoningCache.digest.in_([digest_of(u) for u in units] or [""]))}
+    digests = {id(u): digest_of(u) for u in units}
+    # Any repository's answer will do.  The digest covers the path, the
+    # handler and every helper sent beside it, so a match is the same code,
+    # and a fork or a copy of a repository is not paid for twice.  This
+    # repository's own row wins when there is one.
+    known = {}
+    for row in (session.query(CodeReasoningCache)
+                .filter(CodeReasoningCache.digest.in_(list(digests.values()) or [""]))
+                .order_by(CodeReasoningCache.id)):
+        if row.repository == repository or row.digest not in known:
+            known[row.digest] = row
+    attempts = {}
     for unit in units:
-        row = known.get(digest_of(unit))
-        if row is not None:
-            cached += 1
-            for item in json.loads(row.result or "[]"):
-                found.append((unit, item))
-        else:
+        row = known.get(digests[id(unit)])
+        state = _cached(row)
+        if state is None:
             fresh.append(unit)
+            continue
+        if isinstance(state, int):
+            # Asked before with no usable answer.
+            if state >= MAX_ATTEMPTS:
+                cached += 1
+            else:
+                attempts[id(unit)] = state
+                fresh.append(unit)
+            continue
+        cached += 1
+        if row.repository != repository:
+            _remember(session, repository, unit, row.result)
+        for item in state:
+            found.append((unit, _place(item, unit)))
+
+    # Best first, so what a busy scan leaves for later is the least likely.
+    left = max(0, len(fresh) - max(0, limit))
+    fresh = fresh[:max(0, limit)]
 
     batches, current, size = [], [], 0
     for unit in fresh:
@@ -646,13 +701,21 @@ def reason(session, cfg: dict, repository: str, root: Path) -> dict:
     if current:
         batches.append(current)
 
-    asked = 0
+    asked = unanswered = 0
     for batch in batches:
         if run.stopped:
-            break
+            unanswered += len(batch)
+            continue
         answers = run.review(batch)
         for index, unit in enumerate(batch):
             if index not in answers:
+                # Asked and paid for, with nothing usable back.  Count it,
+                # unless the budget stopped it before the question went out.
+                if run.answered or answers:
+                    _remember(session, repository, unit,
+                              json.dumps({"failed": attempts.get(id(unit), 0) + 1}))
+                else:
+                    unanswered += 1
                 continue
             asked += 1
             kept = []
@@ -664,14 +727,64 @@ def reason(session, cfg: dict, repository: str, root: Path) -> dict:
                         continue
                 kept.append(item)
             if run.stopped and len(kept) < len(answers[index]):
+                unanswered += 1
                 continue
-            session.add(CodeReasoningCache(repository=repository, digest=digest_of(unit),
-                                           unit=f"{unit.path}:{unit.name}"[:500],
-                                           result=json.dumps(kept), at=utcnow()))
+            # Lines kept relative to the handler, so a cached answer still
+            # points at the right line after somebody adds lines above it.
+            _remember(session, repository, unit, json.dumps(
+                [dict(item, o=item["l"] - unit.start) for item in kept]))
             found += [(unit, item) for item in kept]
     session.flush()
     return {"units": len(units), "cached": cached, "asked": asked, "calls": run.calls,
-            "tokens": run.tokens, "found": found, "stopped": run.stopped}
+            "tokens": run.tokens, "found": found, "stopped": run.stopped,
+            "left": left, "unanswered": unanswered}
+
+
+def _cached(row):
+    """-> None (never asked), an int (failed attempts), or the list of findings."""
+    if row is None:
+        return None
+    try:
+        value = json.loads(row.result or "[]")
+    except ValueError:
+        return 1
+    if isinstance(value, dict):
+        try:
+            return int(value.get("failed") or 1)
+        except (TypeError, ValueError):
+            return 1
+    return value if isinstance(value, list) else 1
+
+
+def _place(item: dict, unit: Unit) -> dict:
+    """A cached finding with its line moved to where the handler is now."""
+    item = dict(item)
+    offset = item.pop("o", None)
+    if isinstance(offset, int):
+        item["l"] = unit.start + offset
+    elif not unit.start <= int(item.get("l") or 0) <= unit.end:
+        # Cached before offsets were kept, and the handler has moved since.
+        item["l"] = unit.start
+    return item
+
+
+def _remember(session, repository: str, unit: Unit, result: str) -> None:
+    """Keep an answer for this repository, replacing an earlier failed try."""
+    digest = digest_of(unit)
+    # Without flushing what is pending: a flush here takes the write lock for
+    # the rest of the pass, and the usage record, written on its own
+    # connection after every question, would wait on it and be lost.  Usage is
+    # what the monthly limit is counted from.
+    with session.no_autoflush:
+        row = (session.query(CodeReasoningCache)
+               .filter(CodeReasoningCache.repository == repository,
+                       CodeReasoningCache.digest == digest).one_or_none())
+    if row is None:
+        row = CodeReasoningCache(repository=repository, digest=digest)
+        session.add(row)
+    row.unit = f"{unit.path}:{unit.name}"[:500]
+    row.result = result
+    row.at = utcnow()
 
 
 # ---- keeping what was found ---------------------------------------------------
@@ -706,6 +819,14 @@ def record(session, repository: str, branch: str, found: list) -> list:
         if old is not None:
             if old.state == FindingState.OPEN:
                 old.last_found_at = now
+                # The same handler with the same problem on another branch is
+                # the same finding, seen in one more place.
+                try:
+                    on = json.loads(old.branches or "[]")
+                except ValueError:
+                    on = []
+                if branch and branch not in on:
+                    old.branches = json.dumps(on + [branch])
             continue
         cwe, plain = CATEGORIES[item["c"]]
         place = {"file": unit.path, "line": item["l"], "cwe": cwe.split("-")[1]}
@@ -740,15 +861,26 @@ def record(session, repository: str, branch: str, found: list) -> list:
 
 _lock = threading.Lock()
 _waiting: list = []
+# Whether the code pass ran on each queued repository's default branch.
+_code_ran: dict = {}
+# Queued by a person pressing the button: read even branches that have not
+# moved.  Handlers answered before still cost nothing.
+_forced: set = set()
 
 
-def after_scan(repositories) -> bool:
+def after_scan(repositories, force: bool = False) -> bool:
     """Queue a scan's repositories for the pass, when it is switched on.
 
-    -> True when something was queued.  Runs in its own thread, one
-    repository at a time, so a scan never waits on it.  Never raises.
+    repositories is the names, or {name: whether the code pass ran on its
+    default branch}.  -> True when something was queued.  Runs in its own
+    thread, one repository at a time, so a scan never waits on it.  Never
+    raises.
     """
-    names = sorted({r for r in repositories or [] if r})
+    if isinstance(repositories, dict):
+        flags = {r: bool(v) for r, v in repositories.items() if r}
+    else:
+        flags = {r: True for r in repositories or [] if r}
+    names = sorted(flags)
     if not names:
         return False
     try:
@@ -760,6 +892,9 @@ def after_scan(repositories) -> bool:
         log.exception("could not read the code reasoning settings")
         return False
     with _lock:
+        _code_ran.update(flags)
+        if force:
+            _forced.update(names)
         new = [n for n in names if n not in _waiting]
         _waiting.extend(new)
         starting = len(_waiting) == len(new)
@@ -774,18 +909,99 @@ def _drain() -> None:
             if not _waiting:
                 return
             repository = _waiting[0]
+            code_ran = _code_ran.pop(repository, True)
+            forced = repository in _forced
+            _forced.discard(repository)
         try:
-            run_one(repository)
+            run_one(repository, code_on_default=code_ran, force=forced)
         except Exception:        # noqa: BLE001
             log.exception("code reasoning failed on %s", repository)
         with _lock:
             _waiting.pop(0)
 
 
-def run_one(repository: str, actor: str = "code-reasoning") -> dict:
-    """Fetch the default branch, ask, file.  -> the run's numbers."""
+def _draft_candidates(repository: str, found: list, fresh: list) -> list:
+    """-> [(finding id, unit, item)] for new, confirmed high findings.
+
+    Only findings filed just now: a cached answer never starts a draft, so a
+    scan where nothing new was confirmed costs nothing here.  One per kind of
+    problem and language in a run.
+    """
+    from app.core import sast_rule_draft
+
+    new = {f.fingerprint: f.id for f in fresh}
+    out, seen = [], set()
+    for unit, item in found:
+        if item.get("s") != "high":
+            continue
+        finding_id = new.get(_fingerprint(repository, unit, item["c"]))
+        kind = (item["c"], sast_rule_draft.language_of(unit.path))
+        if finding_id is None or kind in seen or not kind[1]:
+            continue
+        seen.add(kind)
+        out.append((finding_id, unit, item))
+    return out
+
+
+def _draft_rules(cfg: dict, repository: str, wanted: list, root: Path, totals: dict) -> None:
+    """Ask for a reusable semgrep rule for each candidate.  Never raises."""
+    from app.core import sast_rule_draft
+
+    for finding_id, unit, item in wanted:
+        try:
+            with session_scope() as db:
+                left = budget(db, cfg)["left"]
+            done = sast_rule_draft.draft(cfg, finding_id, repository, unit, item, root, left)
+        except Exception:        # noqa: BLE001
+            log.exception("could not draft a rule for %s", repository)
+            continue
+        totals["tokens"] += done.get("tokens", 0)
+        if done.get("state") == "proposed":
+            totals["drafted"] += 1
+
+
+def branches_to_read(session, repo, code_on_default: bool = True) -> list:
+    """-> [(branch, head)] that get code scanning, default branch first.
+
+    The default branch when the code pass ran on it.  Any other branch whose
+    scan scope gives it every pass and is not Do Not Scan.  A branch sitting
+    on the default branch's own commit is the same code and is left out.
+    """
+    from app.core import scan_scope
+
+    try:
+        heads = json.loads(repo.branch_heads or "{}") or {}
+    except ValueError:
+        heads = {}
+    if not isinstance(heads, dict):
+        heads = {}
+    default = repo.default_branch or ""
+    rule = scan_scope.rule_for(session, repo.full_name)
+    out = []
+    if default and code_on_default and not rule.skipped(default) and rule.full_scan(default)[0]:
+        out.append((default, str(heads.get(default) or "")))
+    same = str(heads.get(default) or "")
+    for branch in sorted(heads):
+        sha = str(heads.get(branch) or "")
+        if (branch == default or not sha or (same and sha == same)
+                or rule.skipped(branch) or not rule.full_scan(branch)[0]):
+            continue
+        out.append((branch, sha))
+    return out
+
+
+def run_one(repository: str, actor: str = "code-reasoning", code_on_default: bool = True,
+            force: bool = False) -> dict:
+    """Read every branch of one repository that gets code scanning and has moved.
+
+    A branch still on the commit last read end to end is skipped without
+    being fetched.  force (a person pressing the button) reads it anyway, and
+    even then only handlers that were never answered cost a question.
+    -> the run's numbers.
+    """
     from app.core import recheck
     from app.core.audit import record as audit
+    from app.core.models import CodeReasoningHead, Connection
 
     with session_scope() as db:
         cfg = ai.config(db)
@@ -796,30 +1012,78 @@ def run_one(repository: str, actor: str = "code-reasoning") -> dict:
         repo = db.query(Repository).filter(Repository.full_name == repository).one_or_none()
         if repo is None:
             return {"skipped": "no such repository"}
-        branch, connection = repo.default_branch or "", repo.connection or ""
+        conn = None
+        if repo.connection_id:
+            conn = db.get(Connection, repo.connection_id)
+        if conn is None and repo.connection:
+            conn = db.query(Connection).filter(Connection.name == repo.connection).one_or_none()
+        if conn is not None and not conn.ai_reasoning:
+            return {"skipped": "switched off for this connection"}
+        connection = repo.connection or ""
+        targets = branches_to_read(db, repo, code_on_default)
+        done = {row.branch: row.head for row in db.query(CodeReasoningHead)
+                .filter(CodeReasoningHead.repository == repository)}
     if not cfg.get("ai.send_code"):
         return {"skipped": "sending code is switched off"}
 
-    with recheck.branch_tip(connection, repository, branch, in_memory=True) as (root, why):
-        if root is None:
-            return {"skipped": why}
+    allowance = int(cfg.get("ai.code_reasoning_per_repo") or 0)
+    totals = {"branches": 0, "unchanged": 0, "units": 0, "cached": 0, "asked": 0,
+              "calls": 0, "tokens": 0, "filed": 0, "stopped": "", "drafted": 0}
+    for branch, head in targets:
+        if head and done.get(branch) == head and not force:
+            totals["unchanged"] += 1
+            continue
+        if totals["stopped"]:
+            break
+        with recheck.branch_tip(connection, repository, branch, in_memory=True) as (root, why):
+            if root is None:
+                log.info("code reasoning skipped %s@%s: %s", repository, branch, why)
+                continue
+            with session_scope() as db:
+                result = reason(db, cfg, repository, Path(root), limit=allowance)
+                found = result.pop("found")
+                fresh = record(db, repository, branch, found)
+                wanted = _draft_candidates(repository, found, fresh)
+                allowance = max(0, allowance - result["asked"] - result["unanswered"])
+                totals["branches"] += 1
+                totals["filed"] += len(fresh)
+                for key in ("units", "cached", "asked", "calls", "tokens"):
+                    totals[key] += result[key]
+                totals["stopped"] = totals["stopped"] or result["stopped"]
+                # Read end to end: every handler answered, from the cache or
+                # just now.  Only then is the commit marked, so a branch cut
+                # short by the limits is picked up again next scan.
+                if head and not result["left"] and not result["unanswered"] \
+                        and not result["stopped"]:
+                    row = (db.query(CodeReasoningHead)
+                           .filter(CodeReasoningHead.repository == repository,
+                                   CodeReasoningHead.branch == branch).one_or_none())
+                    if row is None:
+                        row = CodeReasoningHead(repository=repository, branch=branch)
+                        db.add(row)
+                    row.head, row.at = head, utcnow()
+                if fresh:
+                    try:
+                        from app.core import notify
+                        if notify.enabled(db):
+                            notify.announce(db, fresh, scan_label=(
+                                f"Code reasoning on {repository} ({branch})"))
+                    except Exception:    # noqa: BLE001
+                        log.warning("could not send notifications for code reasoning",
+                                    exc_info=True)
+            # After the findings are saved, while the checkout is still here
+            # for the draft to be run against.
+            _draft_rules(cfg, repository, wanted, Path(root), totals)
+
+    if totals["branches"]:
         with session_scope() as db:
-            result = reason(db, cfg, repository, Path(root))
-            fresh = record(db, repository, branch, result.pop("found"))
-            result["filed"] = len(fresh)
             audit(db, "ai.code_reasoning", actor=actor, target=repository,
-                  outcome="warn" if result["stopped"] else "ok",
-                  detail=(f"{result['units']} handler(s): {result['cached']} cached, "
-                          f"{result['asked']} asked in {result['calls']} question(s), "
-                          f"{result['tokens']} tokens, {result['filed']} new finding(s)"
-                          + (f", stopped at {result['stopped']}" if result["stopped"] else ""))
+                  outcome="warn" if totals["stopped"] else "ok",
+                  detail=(f"{totals['branches']} branch(es) read, {totals['unchanged']} "
+                          f"unchanged, {totals['units']} handler(s): {totals['cached']} "
+                          f"cached, {totals['asked']} asked in {totals['calls']} "
+                          f"question(s), {totals['tokens']} tokens, {totals['filed']} new "
+                          f"finding(s), {totals['drafted']} rule draft(s)"
+                          + (f", stopped at {totals['stopped']}" if totals["stopped"] else ""))
                   [:200])
-            if fresh:
-                try:
-                    from app.core import notify
-                    if notify.enabled(db):
-                        notify.announce(db, fresh, scan_label=f"Code reasoning on {repository}")
-                except Exception:    # noqa: BLE001
-                    log.warning("could not send notifications for code reasoning",
-                                exc_info=True)
-    return result
+    return totals
