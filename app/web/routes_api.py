@@ -5497,7 +5497,9 @@ async def recheck_reasoning(request: Request, user: User = Depends(current_user)
     with session_scope() as db:
         record(db, "ai.code_reasoning_recheck_requested", actor=user.username,
                target="open reasoning findings", source_ip=client_ip(request))
-    threading.Thread(target=code_reasoning.recheck_open, args=(user.username,),
+    form = await request.form()
+    unconfirmed = str(form.get("unconfirmed", "")) == "1"
+    threading.Thread(target=code_reasoning.recheck_open, args=(user.username, unconfirmed),
                      name="reasoning-recheck", daemon=True).start()
     return redirect("/ai?msg=" + quote(
         "Checking the open reasoning findings again.  The audit log says what "

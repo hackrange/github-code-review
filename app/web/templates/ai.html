@@ -275,7 +275,9 @@
         last read: a branch still on the same commit is not even fetched.  A
         connection can switch it off for its repositories.  What it finds is
         filed for a person to confirm, and it never lowers or closes anything.
-        It needs sending code switched on above.</p>
+        It needs sending code switched on above.
+        {% if can_write and values['ai.code_reasoning'] %}<a href="#recheck">Check the findings
+        it already filed again</a>, below the Save button.{% endif %}</p>
       <label>Monthly token limit
         <input type="number" name="ai.code_reasoning_monthly_tokens" min="0"
                max="2000000000" value="{{ values['ai.code_reasoning_monthly_tokens'] }}">
@@ -308,7 +310,7 @@
 </form>
 
 {% if can_write and values['ai.code_reasoning'] %}
-<div class="card">
+<div class="card" id="recheck">
   <div class="card-head">Check the reasoning findings again</div>
   <div class="card-body">
     <p class="faint small">Every reasoning claim now has to survive a second look
@@ -318,10 +320,19 @@
       up a developer needs, and the rest are set aside with the check that was
       found, never closed.  About 5,000 tokens a finding, from the monthly
       limit, and a finding already checked again is skipped.</p>
-    <form method="post" action="{{ base }}/ai/reasoning/recheck">
+    <form method="post" action="{{ base }}/ai/reasoning/recheck" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn" type="submit">Check them again</button>
     </form>
+    <form method="post" action="{{ base }}/ai/reasoning/recheck" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="unconfirmed" value="1">
+      <button class="btn" type="submit">Check the unconfirmed ones again</button>
+    </form>
+    <p class="faint small">The second button takes the ones set aside as unconfirmed,
+      and lets the second look fetch what they were missing: the bodies of the
+      functions the handler calls, and the router and middleware that wrap it.
+      Ones it now confirms go back in the work list with the write-up.</p>
   </div>
 </div>
 {% endif %}

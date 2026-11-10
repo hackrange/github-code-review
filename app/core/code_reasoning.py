@@ -89,7 +89,7 @@ UNITS_PER_CALL = 4
 HELPER_CHARS = 2_500      # access check bodies sent beside one handler
 HELPERS_PER_UNIT = 3
 ANSWER_TOKENS = 900
-VERIFY_TOKENS = 300
+VERIFY_TOKENS = 350
 # The write-up a developer reads, asked once per kept finding and cached with
 # it, so a fork, a branch or the next scan reuses it for nothing.
 WRITEUP_TOKENS = 1_100
@@ -642,6 +642,135 @@ def permission_context(unit: Unit, root: Path) -> str:
     return "\n".join(hits)
 
 
+# What the second look may fetch beyond the handler: the bodies of functions
+# it calls that were not sent, and what wraps the route.  Both stay out of the
+# cache key, so unchanged code is never asked about again because of them.
+DEFINITIONS = 5
+DEFINITION_LINES = 24
+DEFINITION_CHARS = 6_000
+WRAPPER_CHARS = 2_000
+_LOOKUPISH = re.compile(r"(?i)(get|find|fetch|load|lookup|retrieve|read|by_id|query|owned|"
+                        r"scoped|for_user|visible)")
+_COMMON = {"len", "str", "int", "float", "dict", "list", "set", "tuple", "print", "isinstance",
+           "range", "get", "add", "append", "update", "filter", "first", "all", "json", "items",
+           "keys", "values", "format", "join", "split", "strip", "lower", "upper", "commit",
+           "flush", "execute", "one", "one_or_none", "scalar", "sorted", "min", "max", "sum",
+           "any", "open", "super", "type", "bool", "enumerate", "zip", "map", "next", "iter",
+           "hasattr", "getattr", "setattr", "push", "then", "catch", "send",
+           "status", "redirect", "render", "jsonify", "Response", "JSONResponse"}
+_WRAPS = re.compile(r"(APIRouter\(|Blueprint\(|include_router\(|register_blueprint|"
+                    r"before_request|add_middleware|\.use\(|dependencies\s*=|Route::|"
+                    r"->middleware\(|@login_required|@requires_auth|@permission_required|"
+                    r"permission_classes|authentication_classes|UseGuards|\[Authorize)")
+
+
+def _def_pattern(name: str, lang: str):
+    n = re.escape(name)
+    if lang == "python":
+        return re.compile(rf"^\s*(async\s+)?def\s+{n}\s*\(")
+    if lang == "php":
+        return re.compile(rf"function\s+&?\s*{n}\s*\(")
+    return re.compile(rf"(function\s+{n}\s*\(|(const|let|var)\s+{n}\s*=|"
+                      rf"^\s*(async\s+)?{n}\s*\([^)]*\)\s*\{{|{n}\s*:\s*(async\s*)?function)")
+
+
+def _source_files(root: Path, lang: str):
+    """(relative path, lines) for each file of this language in the checkout."""
+    seen = 0
+    for path in sorted(Path(root).rglob("*")):
+        if seen >= MAX_FILES:
+            return
+        if LANG_OF.get(path.suffix.lower()) != lang or path.is_symlink() or not path.is_file():
+            continue
+        rel = str(path.relative_to(root)).replace("\\", "/")
+        if any(part in SKIP_DIRS or part.startswith(".") for part in Path(rel).parts[:-1]):
+            continue
+        try:
+            if path.stat().st_size > MAX_FILE_BYTES:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        seen += 1
+        yield rel, text.split("\n")
+
+
+def definitions_context(unit: Unit, root: Path) -> str:
+    """The bodies of functions the handler calls that were not sent with it.
+
+    Access checks first, then the lookups that might scope by owner, so a
+    claim that "nothing checks the owner" can be tested against get_doc or
+    find_for_user rather than guessed about.
+    """
+    have = {n for n, _ in unit.helpers} | {n for n, _ in unit.extra} | {unit.name}
+    names = []
+    for m in _CALLS.finditer(unit.text):
+        name = m.group(1)
+        if name in have or name in _COMMON or len(name) < 3 or name in names:
+            continue
+        if name == "require" and Path(unit.path).suffix.lower() in (".js", ".mjs", ".cjs", ".ts"):
+            continue  # loads a module there, it checks nothing
+        names.append(name)
+    names.sort(key=lambda n: (0 if _AUTHISH.search(n) else 1 if _LOOKUPISH.search(n) else 2))
+    names = [n for n in names if _AUTHISH.search(n) or _LOOKUPISH.search(n)][:DEFINITIONS]
+    if not names:
+        return ""
+    lang = LANG_OF.get(Path(unit.path).suffix.lower())
+    patterns = {n: _def_pattern(n, lang) for n in names}
+    # rbac.in_scope is the one in rbac.py, not a namesake somewhere else.
+    qualified = {m.group(2): m.group(1).split(".")[-1]
+                 for m in re.finditer(r"\b([\w.]+)\.(\w+)\s*\(", unit.text)}
+    wanted_stems = {qualified[n] for n in names if n in qualified}
+    files = sorted(_source_files(root, lang),
+                   key=lambda f: 0 if Path(f[0]).stem in wanted_stems else 1)
+    found, total = {}, 0
+    for rel, lines in files:
+        for name, pattern in patterns.items():
+            if name in found:
+                continue
+            if name in qualified and Path(rel).stem != qualified[name] and any(
+                    Path(f[0]).stem == qualified[name] for f in files):
+                continue  # the qualified home exists; do not settle for a namesake
+            for i, line in enumerate(lines):
+                if pattern.search(line):
+                    body = "\n".join(f"{j + 1}: {lines[j]}"
+                                     for j in range(i, min(len(lines), i + DEFINITION_LINES)))
+                    chunk = f"# {name}, {rel}\n{body}"
+                    if total + len(chunk) <= DEFINITION_CHARS:
+                        found[name] = chunk
+                        total += len(chunk)
+                    break
+        if len(found) == len(names):
+            break
+    return "\n".join(found[n] for n in names if n in found)
+
+
+def wrappers_context(unit: Unit, root: Path) -> str:
+    """What wraps the route: router and app guards, in its file and where it is mounted."""
+    lang = LANG_OF.get(Path(unit.path).suffix.lower())
+    stem = Path(unit.path).stem
+    own, mounts, total = [], [], 0
+    for rel, lines in _source_files(root, lang):
+        for i, line in enumerate(lines, 1):
+            if not _WRAPS.search(line):
+                continue
+            if rel == unit.path:
+                if unit.start <= i <= unit.end:
+                    continue
+                chunk = f"{rel}:{i}: {line.strip()[:200]}"
+                target = own
+            elif re.search(rf"\b{re.escape(stem)}\b", line):
+                chunk = f"{rel}:{i}: {line.strip()[:200]}"
+                target = mounts
+            else:
+                continue
+            if total + len(chunk) > WRAPPER_CHARS:
+                break
+            target.append(chunk)
+            total += len(chunk)
+    return "\n".join(own + mounts)
+
+
 # ---- asking -------------------------------------------------------------------
 
 def digest_of(unit: Unit) -> str:
@@ -794,7 +923,16 @@ class Run:
         if context:
             prompt += _block(token, "where the permissions and roles it checks are defined",
                              mask(context))
-        hidden = unresolved_checks(unit)
+        defined = definitions_context(unit, root) if root is not None else ""
+        if defined:
+            prompt += _block(token, "bodies of functions it calls, from elsewhere in the "
+                                    "repository", mask(defined))
+        wrapping = wrappers_context(unit, root) if root is not None else ""
+        if wrapping:
+            prompt += _block(token, "router, app and middleware lines that wrap this route",
+                             mask(wrapping))
+        shown = defined + "\n" + "\n".join(b for _n, b in unit.helpers)
+        hidden = [n for n in unresolved_checks(unit) if f"# {n}," not in shown]
         if hidden:
             prompt += ("Access checks it calls that you were not shown: "
                        + ", ".join(hidden) + "\n")
@@ -1293,7 +1431,10 @@ def _short_claim(finding) -> str:
     return text.split(".  ", 1)[1].strip() if ".  " in text else text.strip()
 
 
-def recheck_open(actor: str = "code-reasoning") -> dict:
+RECHECKED_DEEPER = "Checked with definitions"
+
+
+def recheck_open(actor: str = "code-reasoning", unconfirmed: bool = False) -> dict:
     """Give every open reasoning finding the second look it never had.
 
     Findings filed before every claim was checked went on the model's first
@@ -1312,12 +1453,18 @@ def recheck_open(actor: str = "code-reasoning") -> dict:
         if not is_on(cfg) or not cfg.get("ai.send_code"):
             return dict(counts, stopped="code reasoning or sending code is switched off")
         left = budget(db, cfg)["left"]
-        rows = (db.query(Finding.id, Finding.repository, Finding.branch)
-                .filter(Finding.engines == ENGINE, Finding.state == FindingState.OPEN,
-                        Finding.excepted.is_(False))
-                .filter(Finding.triage_reason.is_(None)
-                        | ~Finding.triage_reason.contains(RECHECKED))
-                .order_by(Finding.repository, Finding.branch, Finding.id).all())
+        query = (db.query(Finding.id, Finding.repository, Finding.branch)
+                 .filter(Finding.engines == ENGINE, Finding.state == FindingState.OPEN,
+                         Finding.excepted.is_(False)))
+        if unconfirmed:
+            # The ones the first re-check could not settle, once more, now
+            # that the second look can fetch what it was missing.
+            query = query.filter(Finding.triage == "unconfirmed",
+                                 ~Finding.triage_reason.contains(RECHECKED_DEEPER))
+        else:
+            query = query.filter(Finding.triage_reason.is_(None)
+                                 | ~Finding.triage_reason.contains(RECHECKED))
+        rows = query.order_by(Finding.repository, Finding.branch, Finding.id).all()
         groups = {}
         for fid, repository, branch in rows:
             groups.setdefault((repository, branch or ""), []).append(fid)
@@ -1358,6 +1505,7 @@ def recheck_open(actor: str = "code-reasoning") -> dict:
                     continue
                 written = run.writeup(unit, item) if verdict["v"] == "real" else None
                 today = utcnow().strftime("%Y-%m-%d")
+                marker = RECHECKED_DEEPER if unconfirmed else RECHECKED
                 with session_scope() as db:
                     f = db.get(Finding, fid)
                     if verdict["v"] == "real":
@@ -1366,7 +1514,10 @@ def recheck_open(actor: str = "code-reasoning") -> dict:
                             plain = CATEGORIES.get(category, ("", ""))[1]
                             f.description = (f"{plain}.  {item['w']}\n\n"
                                              f"{writeup_text(item)}")[:6000]
-                        f.triage_reason = (f"{f.triage_reason}  {RECHECKED} on {today}: "
+                        if unconfirmed:
+                            # Back in the work list, now it holds up.
+                            f.triage = ""
+                        f.triage_reason = (f"{f.triage_reason}  {marker} on {today}: "
                                            "a second look that tried to prove it wrong "
                                            "could not.")[:2000]
                         counts["confirmed"] += 1
@@ -1374,9 +1525,12 @@ def recheck_open(actor: str = "code-reasoning") -> dict:
                         guarded = verdict["v"] == "guarded"
                         f.triage = "likely_fp" if guarded else "unconfirmed"
                         f.triage_reason = (
-                            (f"{RECHECKED} on {today}: a second look found what looks like "
+                            (f"{marker} on {today}: a second look found what looks like "
                              f"the check, {verdict['guard']}.  " if guarded else
-                             f"{RECHECKED} on {today}: a second look could not confirm it "
+                             f"{marker} on {today}: a second look could not confirm it "
+                             "from the code it was shown, including the functions it calls "
+                             "and what wraps the route.  " if unconfirmed else
+                             f"{marker} on {today}: a second look could not confirm it "
                              "from the code it was shown.  ")
                             + (verdict["why"] + "  " if verdict["why"] else "")
                             + "Set aside, not closed: a person should confirm and mark it "
