@@ -120,7 +120,10 @@ def _safe_clone(url: str, dest: Path) -> str:
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="/bin/true",
                GCM_INTERACTIVE="never")
     cmd = ["git", "-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never",
-           "-c", "core.askpass=/bin/true", "clone", "--depth", "1",
+           "-c", "core.askpass=/bin/true",
+           # The address was checked as typed.  A redirect would take the clone
+           # somewhere unchecked, an internal address included, so none is followed.
+           "-c", "http.followRedirects=false", "clone", "--depth", "1",
            "--single-branch", "--no-tags", url, str(dest)]
     try:
         r = subprocess.run(cmd, env=env, capture_output=True, text=True,

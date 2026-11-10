@@ -1031,6 +1031,13 @@ def playwright_shot(urls: list, out_path: Path, allow_private: bool = False,
     if headers:
         shot_env["GCR_SHOT_HEADERS"] = _json.dumps(
             {str(k): str(v) for k, v in headers.items()})
+    # With no proxy of its own to go through, the browser goes through one that
+    # connects only to public addresses, pinned to the address it checked, so
+    # a name that changes its DNS after the browser's own check cannot take
+    # the page onto an internal address.  Without mitmproxy it runs as before.
+    guard = None
+    want_guard = not allow_private and not current_proxy() and not any(
+        os.environ.get(k) for k in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"))
     try:
         for url in urls[:2]:
             tmp = scratch / "shot.png"
@@ -1039,9 +1046,15 @@ def playwright_shot(urls: list, out_path: Path, allow_private: bool = False,
                     "--timeout", str(timeout)]
             if allow_private:
                 argv.append("--allow-private")
-            if current_proxy():
-                argv += ["--proxy", current_proxy()]
             with SHOT_GATE:
+                if want_guard and guard is None:
+                    # Started inside the gate, so waiting pictures hold no proxy.
+                    from app.core import dast_proxy
+                    guard = dast_proxy.start_public_only(scratch) or False
+                if current_proxy():
+                    argv += ["--proxy", current_proxy()]
+                elif guard:
+                    argv += ["--proxy", guard.url]
                 try:
                     proc = subprocess.run(argv, capture_output=True, text=True,
                                           timeout=timeout + 30, cwd=scratch,
@@ -1078,6 +1091,8 @@ def playwright_shot(urls: list, out_path: Path, allow_private: bool = False,
             result.update(status="ok", detail=f"{got.get('engine', 'browser')}{passed}, from {got.get('url') or url}")
             return result
     finally:
+        if guard:
+            guard.stop()
         shutil.rmtree(scratch, ignore_errors=True)
     return result
 

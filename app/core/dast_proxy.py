@@ -21,6 +21,7 @@ from pathlib import Path
 log = logging.getLogger("gcr.dast_proxy")
 
 _ADDON = Path(__file__).resolve().parent / "dast_checks" / "mitm_addon.py"
+_PUBLIC_ONLY = Path(__file__).resolve().parent / "dast_checks" / "public_only_addon.py"
 
 
 def mitmdump() -> str:
@@ -121,4 +122,41 @@ def start(auth_headers: dict, hosts: list, upstream: str = "",
     except Exception:  # noqa: BLE001
         pass
     log.warning("scan proxy did not come up in time")
+    return None
+
+
+def start_public_only(workdir: Path) -> "Handle | None":
+    """Start a proxy that connects only to public addresses, pinned to the
+    address it checked, for the screenshot browser.  HTTPS passes through
+    unopened.  -> a Handle, or None when mitmproxy is not available or did not
+    come up, so the caller runs the browser as it did before."""
+    exe = mitmdump()
+    if not exe or not _PUBLIC_ONLY.is_file():
+        return None
+    port = _free_port()
+    confdir = Path(workdir) / "mitm"
+    confdir.mkdir(parents=True, exist_ok=True)
+    argv = [exe, "--listen-host", "127.0.0.1", "--listen-port", str(port),
+            "-s", str(_PUBLIC_ONLY), "-q", "--ignore-hosts", ".*",
+            "--set", "flow_detail=0", "--set", f"confdir={confdir}"]
+    try:
+        proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+    except Exception as exc:  # noqa: BLE001 - never let the proxy break a picture
+        log.warning("screenshot proxy did not start: %s", exc)
+        return None
+    for _ in range(50):
+        if proc.poll() is not None:
+            log.warning("screenshot proxy exited before it was ready")
+            return None
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                return Handle(f"http://127.0.0.1:{port}", proc)
+        except OSError:
+            time.sleep(0.2)
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
+    log.warning("screenshot proxy did not come up in time")
     return None

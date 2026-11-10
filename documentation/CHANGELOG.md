@@ -6,6 +6,16 @@ moved.
 
 ## 2026-11-10
 
+**Site screenshots and ad-hoc clones can no longer be steered to an internal
+address.**  The screenshot browser checked each host it loaded, then looked the
+name up again on its own, so a name whose DNS changed in between could put a
+page onto an internal address.  It now goes through a local proxy that connects
+only to public addresses, and only to the address it checked.  Secure pages
+pass through it unopened, so sites see the same browser as before.  When a
+site has its own proxy set, or allow private addresses is on, nothing changes.
+A git URL given for a site's code is no longer followed through a redirect,
+since only the address as typed was checked.
+
 **Reasoning findings say what to fix, and every claim is checked before it is
 filed.**  The finding page now shows what was found, which it never did: a
 finding read as its title and nothing else.  Code reasoning writes each finding
