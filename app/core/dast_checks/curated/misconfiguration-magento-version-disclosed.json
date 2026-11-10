@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "low",
+  "anonymous": true,
   "title": "Magento discloses its version",
   "summary": "The Magento version endpoint returns the platform edition and version to anyone. On its own this is low, but it tells an attacker which version the store runs, which is the first thing they use to pick a matching exploit, so it matters most on a store that is behind on patches.",
   "needs": [],

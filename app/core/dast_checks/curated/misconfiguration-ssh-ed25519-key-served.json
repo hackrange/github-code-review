@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "critical",
+  "anonymous": true,
   "title": "An SSH private key is served (/.ssh/id_ed25519)",
   "summary": "A private key is downloadable, which lets an attacker sign in as its owner.",
   "needs": [],

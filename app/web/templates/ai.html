@@ -307,6 +307,25 @@
   {% endif %}
 </form>
 
+{% if can_write and values['ai.code_reasoning'] %}
+<div class="card">
+  <div class="card-head">Check the reasoning findings again</div>
+  <div class="card-body">
+    <p class="faint small">Every reasoning claim now has to survive a second look
+      that tries to prove it wrong, with the access checks and permission
+      definitions beside it.  Findings filed before that went on the first
+      look.  This reads each open one again: confirmed ones get the full write
+      up a developer needs, and the rest are set aside with the check that was
+      found, never closed.  About 5,000 tokens a finding, from the monthly
+      limit, and a finding already checked again is skipped.</p>
+    <form method="post" action="{{ base }}/ai/reasoning/recheck">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit">Check them again</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
 {% if sast_drafts %}
 <div class="card" id="rule-drafts">
   <div class="card-head">Rules drafted from confirmed findings</div>

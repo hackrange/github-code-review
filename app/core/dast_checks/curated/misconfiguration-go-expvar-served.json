@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "The Go expvar debug endpoint is exposed",
   "summary": "The Go expvar endpoint is reachable, which returns the command line and memory statistics of the running process.",
   "needs": [],

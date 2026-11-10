@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "info",
+  "anonymous": true,
   "title": "PHP application is reachable (index.php is served)",
   "summary": "GET /index.php returns a real page rather than the not found page, so a PHP front controller is served here.  This marks the site as a PHP runtime to track for patching.  It does not identify the PHP build or confirm any CVE.",
   "needs": [],

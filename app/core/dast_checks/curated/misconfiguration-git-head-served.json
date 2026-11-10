@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A .git/HEAD file is served",
   "summary": "The git HEAD is downloadable, which proves the .git directory is exposed and the source history can be rebuilt.",
   "needs": [],

@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "critical",
+  "anonymous": true,
   "title": "Elasticsearch is reachable without signing in",
   "summary": "The Elasticsearch HTTP API answers unauthenticated, which exposes and lets an attacker read or change the indexed data.",
   "needs": [],

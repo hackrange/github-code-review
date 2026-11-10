@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "An Apache Druid console is exposed",
   "summary": "The Apache Druid console answers here without signing in, which lets its data and queries be reached.",
   "needs": [],

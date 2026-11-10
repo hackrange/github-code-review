@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "Directory listing is on for /backup/",
   "summary": "The web server lists the contents of /backup/, which hands an attacker a map of files that were never meant to be browsed.",
   "needs": [],

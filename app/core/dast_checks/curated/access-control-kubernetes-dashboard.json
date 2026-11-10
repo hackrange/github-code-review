@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A Kubernetes dashboard is exposed",
   "summary": "The Kubernetes dashboard answers here, which commonly leads to control of the cluster when it is reachable without authentication.",
   "needs": [],

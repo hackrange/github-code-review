@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "Spring Boot actuator index is exposed",
   "summary": "The /actuator index lists every management endpoint the application exposes, which maps the way into env, heap dumps and more.",
   "needs": [],

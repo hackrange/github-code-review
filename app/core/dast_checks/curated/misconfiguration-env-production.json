@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "An environment file is served (/.env.production)",
   "summary": "An environment file holds database credentials, API keys and other secrets in plain text.",
   "needs": [],

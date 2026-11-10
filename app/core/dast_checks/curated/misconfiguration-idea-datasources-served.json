@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A JetBrains dataSources.xml is served",
   "summary": "The IDE data sources file is downloadable, which names the databases the project connects to and their JDBC URLs.",
   "needs": [],

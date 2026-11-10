@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "nginx stub status is exposed",
   "summary": "The nginx status page leaks connection and request volumes about the site.",
   "needs": [],

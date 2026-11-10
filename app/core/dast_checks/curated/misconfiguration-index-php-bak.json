@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A PHP source backup is served (/index.php.bak)",
   "summary": "A backup of a PHP file is downloadable as source rather than run, which reveals the application code.",
   "needs": [],

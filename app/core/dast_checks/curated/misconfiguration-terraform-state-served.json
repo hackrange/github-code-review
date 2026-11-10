@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "critical",
+  "anonymous": true,
   "title": "A Terraform state file is served",
   "summary": "The Terraform state is downloadable.  It records the infrastructure and commonly holds secrets in plain text.",
   "needs": [],

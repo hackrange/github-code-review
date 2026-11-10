@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "HashiCorp Consul is reachable without signing in",
   "summary": "The Consul agent API answers unauthenticated, which exposes the service catalog and the key value store and can change them.",
   "needs": [],

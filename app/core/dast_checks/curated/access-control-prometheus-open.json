@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "Prometheus is reachable without signing in",
   "summary": "Prometheus answers unauthenticated, which exposes metrics and the targets and internal addresses it scrapes.",
   "needs": [],

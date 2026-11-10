@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A docker-compose.yml is served",
   "summary": "The compose file is downloadable, which names the services, images and often the environment variables the stack runs with.",
   "needs": [],

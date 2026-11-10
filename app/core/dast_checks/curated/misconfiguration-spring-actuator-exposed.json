@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "Spring Boot Actuator is exposed, leaking configuration and secrets",
   "summary": "A Spring Boot Actuator endpoint is answering without a login. The env and configprops endpoints print the application's configuration, which usually includes database passwords, API keys and other secrets, and the heapdump endpoint hands over a full memory dump that carries every secret the process holds. An outsider who reaches these reads the credentials and can often move on to take over the service. This check only reports it when the response is an actuator payload, not a plain page.",
   "needs": [],

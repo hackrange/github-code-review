@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "low",
+  "anonymous": true,
   "title": "A Prometheus metrics endpoint is public",
   "summary": "The metrics endpoint answers unauthenticated, which leaks internal paths, counts and sometimes versions.",
   "needs": [],

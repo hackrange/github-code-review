@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "critical",
+  "anonymous": true,
   "title": "Laravel Ignition debug mode is exposed",
   "summary": "The Ignition debug endpoint answers and reports it can run commands, the condition behind CVE-2021-3129, remote code execution.",
   "needs": [],

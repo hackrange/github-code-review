@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "Apache Airflow is reachable without signing in",
   "summary": "The Airflow API answers unauthenticated, which exposes the pipelines and can run or change them.",
   "needs": [],

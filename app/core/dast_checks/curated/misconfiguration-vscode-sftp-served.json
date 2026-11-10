@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "A VS Code sftp.json with credentials is served",
   "summary": "The editor's SFTP deploy config is downloadable and commonly carries the host, user and password of the deploy target.",
   "needs": [],

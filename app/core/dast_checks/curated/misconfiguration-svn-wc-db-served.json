@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A Subversion wc.db is served (/.svn/wc.db)",
   "summary": "The Subversion working copy database is downloadable, which names every file in the repository and lets the source be rebuilt.",
   "needs": [],

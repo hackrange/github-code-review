@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "An Alibaba Nacos console is exposed",
   "summary": "The Nacos console is reachable.  Nacos has a known authentication bypass that opens its configuration and user store.",
   "needs": [],

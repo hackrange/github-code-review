@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "A Hadoop YARN ResourceManager is reachable",
   "summary": "The YARN ResourceManager API answers unauthenticated.  It can be made to run a job, a known path to code execution on the cluster.",
   "needs": [],

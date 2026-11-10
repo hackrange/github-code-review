@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "low",
+  "anonymous": true,
   "title": "The GraphiQL explorer is exposed",
   "summary": "The GraphiQL in browser explorer is served, which hands anyone an interactive client for the GraphQL API.",
   "needs": [],

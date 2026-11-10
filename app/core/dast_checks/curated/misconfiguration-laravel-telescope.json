@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "Laravel Telescope is exposed",
   "summary": "The Telescope debugger is reachable, which shows requests, queries, and the data passing through the app.",
   "needs": [],

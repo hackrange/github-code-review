@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "low",
+  "anonymous": true,
   "title": "A CircleCI config is served (/.circleci/config.yml)",
   "summary": "The CI config is downloadable, which names the build steps, services and sometimes the paths and context the pipeline runs with.",
   "needs": [],

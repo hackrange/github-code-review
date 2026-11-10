@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A Traefik API is reachable",
   "summary": "The Traefik API answers unauthenticated, which lists the routers, services and middlewares, mapping the internal network.",
   "needs": [],

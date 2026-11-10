@@ -1,0 +1,46 @@
+{
+  "id": "misconfiguration-openapi-spec-exposed",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "low",
+  "anonymous": true,
+  "title": "The API's OpenAPI description is served to anyone",
+  "summary": "The machine readable description of the API, every path, method and parameter, is served without signing in.  It is the first thing an automated attacker fetches, because it turns guessing into a list: AI pentest agents pull it and then walk each write method and each id parameter in turn.  It is not a weakness on its own, but it removes the cost of finding the ones that are.  This check sends no session and reports only a document that is really an OpenAPI or Swagger description with paths in it.",
+  "needs": [],
+  "candidate_paths": [
+    "/openapi.json",
+    "/swagger.json",
+    "/v3/api-docs",
+    "/v2/api-docs",
+    "/api/openapi.json",
+    "/api/swagger.json",
+    "/api/v1/swagger.json",
+    "/api/v2/swagger.json",
+    "/api/v1/openapi.json",
+    "/swagger/v1/swagger.json",
+    "/api-docs"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "{route}"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status == 200 and (body_contains(\"\\\"openapi\\\"\") or body_contains(\"\\\"swagger\\\"\")) and body_contains(\"\\\"paths\\\"\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/openapi.json (and the other candidate paths this check tried) with no session.  A JSON document with an openapi or swagger version and a paths object is the finding.",
+  "remediate": "Serve the API description only to signed in developers, or only on an internal host.  If it must be public, make sure every path it lists enforces its own authorization, since this document is how those paths are found.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-200",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "api"
+  ]
+}

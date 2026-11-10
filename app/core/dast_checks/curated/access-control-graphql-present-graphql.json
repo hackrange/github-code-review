@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "info",
+  "anonymous": true,
   "title": "GraphQL endpoint present, introspection disabled (/graphql)",
   "summary": "A GraphQL endpoint answers here and explicitly refuses introspection. This is good inventory: the service is in use and hardened against schema disclosure. No action is needed beyond keeping it off.",
   "needs": [],

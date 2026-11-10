@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A Eureka service registry is reachable",
   "summary": "The Eureka registry answers unauthenticated, which lists the internal services, their hosts and ports, mapping the internal network.",
   "needs": [],

@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "A MySQL client config is served (/.my.cnf)",
   "summary": "The MySQL client config is downloadable, which commonly carries the database user and password in plain text.",
   "needs": [],

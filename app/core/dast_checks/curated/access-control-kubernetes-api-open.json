@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "critical",
+  "anonymous": true,
   "title": "The Kubernetes API lists namespaces without signing in",
   "summary": "The Kubernetes API server lists its namespaces to a caller with no credentials.  Anonymous access is allowed past the public endpoints, so the cluster can be read and often changed.",
   "needs": [],

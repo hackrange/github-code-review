@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A phpinfo page is served (/i.php)",
   "summary": "A phpinfo page leaks the full PHP configuration, paths, and loaded modules.",
   "needs": [],

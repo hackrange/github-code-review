@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "low",
+  "anonymous": true,
   "title": "A Travis CI config is served (/.travis.yml)",
   "summary": "The CI config is downloadable, which names the build steps and environment the pipeline runs with.",
   "needs": [],

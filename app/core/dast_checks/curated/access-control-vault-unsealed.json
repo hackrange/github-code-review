@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "HashiCorp Vault lists its secret engines without a token",
   "summary": "Vault lists its secret engines to a caller with no token, so anonymous requests get past its access control.  The health endpoint answering, which it does by default, is not this finding.",
   "needs": [],

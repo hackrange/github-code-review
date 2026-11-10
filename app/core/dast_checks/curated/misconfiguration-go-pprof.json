@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "The Go pprof debug endpoint is exposed",
   "summary": "The Go profiling endpoint is reachable, which returns memory and goroutine dumps that leak internals and can be abused to exhaust the server.",
   "needs": [],

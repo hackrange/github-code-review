@@ -585,6 +585,29 @@
 
 {% if f.title %}<div class="card"><div class="card-body">{{ f.title }}</div></div>{% endif %}
 
+{# What the engine, or the code reasoning pass, wrote about it.  This was
+   never shown, so a finding whose whole explanation lives here read as a
+   title and nothing else.  Plain text with its line breaks; never markup. #}
+{% set said = (f.description or '').strip() %}
+{% if said and said != (f.title or '').strip() %}
+<div class="card" id="what-was-found">
+  <div class="card-head">What was found</div>
+  <div class="card-body">
+    {% if said | length > 1600 and 'code-reasoning' not in (f.engines or '') %}
+    <details><summary class="small">{{ said[:300] }}&hellip;</summary>
+      <div class="finding-text">{{ said }}</div></details>
+    {% else %}
+    <div class="finding-text">{{ said }}</div>
+    {% endif %}
+    {% if 'code-reasoning' in (f.engines or '') %}
+    <p class="faint small">Written by the code reasoning pass from the handler and the
+      access checks it calls.  It reads only the code it was shown, so the points
+      under What to confirm are where a person should look before deciding.</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
   <div class="card-head">Details</div>
   <div class="card-body">

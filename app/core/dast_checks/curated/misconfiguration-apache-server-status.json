@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "Apache mod_status is exposed",
   "summary": "The server status page lists active requests, client addresses and the URLs being served, which leaks traffic and internal paths.",
   "needs": [],

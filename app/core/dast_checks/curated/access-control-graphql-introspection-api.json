@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "GraphQL introspection is on (/api/graphql)",
   "summary": "Introspection hands an attacker the full schema: every type, field and mutation, which maps the whole attack surface.",
   "needs": [],

@@ -45,6 +45,10 @@
       "minLength": 1,
       "description": "Plain language: what weakness this finds and why it matters."
     },
+    "anonymous": {
+      "type": "boolean",
+      "description": "Send every request without the scan's session.  Use it for any rule about what somebody who is not signed in can see."
+    },
     "needs": {
       "type": "array",
       "items": {

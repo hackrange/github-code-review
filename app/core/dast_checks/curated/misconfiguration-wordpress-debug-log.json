@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "WordPress debug log is served",
   "summary": "debug.log often holds stack traces, file paths and sometimes secrets.",
   "needs": [],

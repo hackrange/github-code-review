@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "A SQL database dump is served (/backup.sql)",
   "summary": "A database dump is downloadable, which hands over the data and the schema.",
   "needs": [],

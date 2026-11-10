@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "critical",
+  "anonymous": true,
   "title": "Jenkins script console is reachable",
   "summary": "The Jenkins Groovy script console is open without a sign in, and it runs code on the server.  A sign in page at /script is not this finding.",
   "needs": [],

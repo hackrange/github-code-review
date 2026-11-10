@@ -6,6 +6,26 @@ moved.
 
 ## 2026-11-10
 
+**Reasoning findings say what to fix, and every claim is checked before it is
+filed.**  The finding page now shows what was found, which it never did: a
+finding read as its title and nothing else.  Code reasoning writes each finding
+up for the developer: what it is, who can reach it, how it would be exploited,
+the impact, how to fix it and what to confirm.  Every claim, not only the high
+ones, must now survive a second look that tries to prove it wrong.  That look
+sees the access checks the handler calls, and where the permissions and roles
+it checks are granted, and a claim it cannot confirm is not filed.  **Check them
+again** on the AI page gives the findings filed before this the same look:
+confirmed ones get the write-up, and the rest are set aside with the check that
+was found, never closed.
+
+**Web checks about what anybody can see now look as anybody.**  In a signed in
+scan, 149 checks for exposed files, consoles and admin tools sent the scan's
+own session, so a page open only to the signed in account could be reported as
+open to the world.  They now send no session.  Press **Load curated rules** on
+the DAST Admin page after upgrading so the saved rules pick this up.  Two new
+checks: a SCIM user directory that answers without credentials, and an
+OpenAPI or Swagger description served to anyone.
+
 **Code reasoning reads each piece of code once.**  It now runs after each scan
 on every branch that gets code scanning, not only the default branch.  A branch
 still on the commit it was last read at is not fetched at all.  On a branch

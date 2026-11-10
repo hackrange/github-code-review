@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "An etcd server is reachable",
   "summary": "The etcd API answers here.  etcd holds the cluster's configuration and secrets, so reachable without authentication it is a critical exposure.",
   "needs": [],

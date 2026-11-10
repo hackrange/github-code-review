@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "Apache mod_info is exposed",
   "summary": "The server info page lists the server configuration and loaded modules.",
   "needs": [],

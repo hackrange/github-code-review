@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "Spring Cloud Gateway routes are exposed",
   "summary": "The gateway actuator lists its routes, which maps the internal services it forwards to and can be changed when writable.",
   "needs": [],

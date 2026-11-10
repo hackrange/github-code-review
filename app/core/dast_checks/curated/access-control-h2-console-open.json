@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "The H2 database console is exposed",
   "summary": "The H2 web console is reachable.  It connects to a database and is a known path to code execution.",
   "needs": [],

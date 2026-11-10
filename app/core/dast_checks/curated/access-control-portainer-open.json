@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "Portainer lists its Docker environments without signing in",
   "summary": "The Portainer API lists the Docker environments it manages to a caller with no credentials.  Portainer controls Docker, so this is control of the hosts.",
   "needs": [],

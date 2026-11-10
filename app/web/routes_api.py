@@ -5480,6 +5480,30 @@ async def validate_many(request: Request, user: User = Depends(current_user)):
     return redirect(f"/ai/learned?batch={number}")
 
 
+@router.post("/ai/reasoning/recheck")
+async def recheck_reasoning(request: Request, user: User = Depends(current_user)):
+    """Give every open reasoning finding the second look it never had.
+
+    In a thread: it fetches each branch and asks a question per finding, and
+    on the event loop that would freeze the site for everybody.
+    """
+    await check_csrf(request)
+    rbac.require(user, "settings.write")
+    import threading
+    from urllib.parse import quote
+
+    from app.core import code_reasoning
+
+    with session_scope() as db:
+        record(db, "ai.code_reasoning_recheck_requested", actor=user.username,
+               target="open reasoning findings", source_ip=client_ip(request))
+    threading.Thread(target=code_reasoning.recheck_open, args=(user.username,),
+                     name="reasoning-recheck", daemon=True).start()
+    return redirect("/ai?msg=" + quote(
+        "Checking the open reasoning findings again.  The audit log says what "
+        "it found when it is done."))
+
+
 @router.post("/ai/sast-drafts/{draft_id}/{action}")
 async def decide_sast_draft(draft_id: int, action: str, request: Request,
                             user: User = Depends(current_user)):

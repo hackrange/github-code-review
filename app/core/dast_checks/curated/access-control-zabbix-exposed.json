@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A Zabbix interface is exposed",
   "summary": "The Zabbix web interface is reachable, which is monitoring with a history of authentication and SQL flaws.",
   "needs": [],

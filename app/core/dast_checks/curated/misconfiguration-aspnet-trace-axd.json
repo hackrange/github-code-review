@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "ASP.NET tracing is exposed (/trace.axd)",
   "summary": "The ASP.NET trace handler answers here, which shows the details of recent requests including headers, cookies and session values.",
   "needs": [],

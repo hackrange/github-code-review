@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "An object storage bucket lists its contents",
   "summary": "The site returns a bucket listing, which means the storage behind it is public and every object key can be read.",
   "needs": [],

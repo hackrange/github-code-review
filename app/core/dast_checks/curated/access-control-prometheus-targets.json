@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "Prometheus targets are exposed",
   "summary": "The Prometheus targets API answers unauthenticated, which lists the internal services and addresses it scrapes.",
   "needs": [],

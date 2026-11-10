@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "critical",
+  "anonymous": true,
   "title": "The Docker engine API is reachable",
   "summary": "The Docker remote API answers unauthenticated, which is control of the host: an attacker can start a container that mounts the disk.",
   "needs": [],

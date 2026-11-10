@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "low",
+  "anonymous": true,
   "title": "The Drupal CHANGELOG is served",
   "summary": "The Drupal changelog is downloadable, which names the exact version so known issues can be looked up.",
   "needs": [],

@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A Vim swap file is served (/.index.php.swp)",
   "summary": "A Vim swap file is downloadable, which carries a copy of the source being edited and can be recovered to the original.",
   "needs": [],

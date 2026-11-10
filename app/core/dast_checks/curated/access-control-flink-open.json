@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "An Apache Flink dashboard is reachable",
   "summary": "The Flink REST API answers unauthenticated.  Flink can be made to run a job, a known path to code execution on the cluster.",
   "needs": [],

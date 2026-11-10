@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "A vector database is exposed without authentication",
   "summary": "A vector database (Chroma, Qdrant or Weaviate) is answering without a login. These stores hold the embeddings that encode the organization's documents, so an outsider who reaches it can read the whole knowledge base and write poisoned vectors that steer the AI's answers. The major vector databases ship with no authentication by default.",
   "needs": [],

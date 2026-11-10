@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "Open WebUI lets anyone in (open signup or no authentication)",
   "summary": "This Open WebUI instance reports from its public config that signup is open, or that authentication is turned off entirely.  Either way a stranger who can reach it can use the AI, which runs on the organization's model keys or hardware, and keep an account as a foothold.",
   "needs": [],

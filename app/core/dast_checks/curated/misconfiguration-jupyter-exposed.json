@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "Jupyter notebook server is exposed without a token",
   "summary": "A Jupyter server is answering its authenticated API without a token or password, so anyone who can reach it can open a notebook, run code and read files on the host.  An open Jupyter server is arbitrary code execution on the machine it runs on.",
   "needs": [],

@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "Spring Boot actuator env is exposed",
   "summary": "The /actuator/env endpoint lists every configuration property, including database URLs, credentials and keys.",
   "needs": [],

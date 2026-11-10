@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A Laravel log is served (/storage/logs/laravel.log)",
   "summary": "The application log is downloadable, which carries stack traces, query values and other data from live requests.",
   "needs": [],

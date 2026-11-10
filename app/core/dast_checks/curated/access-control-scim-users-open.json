@@ -1,0 +1,43 @@
+{
+  "id": "access-control-scim-users-open",
+  "class": "access-control",
+  "safety": "read",
+  "severity_floor": "high",
+  "anonymous": true,
+  "title": "The SCIM user directory answers without signing in",
+  "summary": "The SCIM provisioning endpoint lists user accounts to a caller who sent no credentials.  SCIM is the interface an identity provider uses to create, change and disable accounts, so an open user list names every account and their login, and on most products the same endpoint accepts changes with the same lack of a check.  AI pentest agents probe SCIM paths early in a scan for this reason.  This check sends no session and asks for one record only, and it reports only a real SCIM list response that carries a user name.",
+  "needs": [],
+  "candidate_paths": [
+    "/scim/v2/Users?count=1",
+    "/scim/Users?count=1",
+    "/api/scim/v2/Users?count=1",
+    "/scim/v1/Users?count=1",
+    "/api/v1/scim/v2/Users?count=1",
+    "/identity/scim/v2/Users?count=1"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "{route}"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status == 200 and body_contains(\"urn:ietf:params:scim:api:messages:2.0:ListResponse\") and body_contains(\"\\\"userName\\\"\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s 'https://host/scim/v2/Users?count=1' with no Authorization header and no cookie.  A SCIM ListResponse with a Resources entry carrying userName is the finding.  A 401 or 403 is the expected answer.",
+  "remediate": "Require the provisioning bearer token on every SCIM endpoint, including reads, and return 401 without one.  Issue that token only to the identity provider, give it an expiry, and allow it only from the provider's addresses.  ServiceProviderConfig, Schemas and ResourceTypes may stay public; Users and Groups may not.",
+  "references": [
+    "https://www.rfc-editor.org/rfc/rfc7644"
+  ],
+  "mappings": {
+    "cwe": "CWE-306",
+    "owasp": "A01:2021"
+  },
+  "rulesets": [
+    "api"
+  ]
+}

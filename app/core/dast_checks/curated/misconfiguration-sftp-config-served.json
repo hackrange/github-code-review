@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "An SFTP deployment config is served (/sftp-config.json)",
   "summary": "The editor's SFTP config is downloadable, which carries the host, user and password it deploys with in plain text.",
   "needs": [],

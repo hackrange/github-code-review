@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "low",
+  "anonymous": true,
   "title": "Spring actuator /actuator/beans is exposed",
   "summary": "A Spring Boot actuator endpoint is open to the internet and reveals how the application is wired and configured.",
   "needs": [],

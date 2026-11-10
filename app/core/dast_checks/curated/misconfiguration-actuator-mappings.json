@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "Spring Boot actuator mappings are exposed",
   "summary": "The /actuator/mappings endpoint lists every route the application serves, mapping its whole surface for an attacker.",
   "needs": [],

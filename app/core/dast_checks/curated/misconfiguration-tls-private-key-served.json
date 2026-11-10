@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "critical",
+  "anonymous": true,
   "title": "A TLS private key is served (/server.key)",
   "summary": "A private key is downloadable, which lets an attacker impersonate the site's certificate.",
   "needs": [],

@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "A backup or dump file is served (/backup.zip)",
   "summary": "A backup or database dump served to the internet hands over source code or data in one request.",
   "needs": [],

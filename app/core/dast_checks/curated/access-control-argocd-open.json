@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "An Argo CD API answers unauthenticated",
   "summary": "The Argo CD API returns its version without a sign in, which usually means the GitOps controller is exposed.",
   "needs": [],

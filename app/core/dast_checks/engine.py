@@ -382,9 +382,11 @@ def run_rule(spec: dict, ctx: dict) -> dict:
             out["status"], out["detail"] = "error", f"{type(exc).__name__}: {exc}"[:200]
         return out
 
+    # anonymous: the rule is about what an outsider sees, so the scan's own
+    # session never goes with it.
     client = Client(base_url, domains, spec["safety"], budget,
                     allow_private=bool(ctx.get("allow_private")),
-                    headers=ctx.get("headers"))
+                    headers=None if spec.get("anonymous") else ctx.get("headers"))
 
     # A rule with {route} in its probe is aimed somewhere: at a fixed list the
     # rule itself carries (candidate_paths, for a check with several known paths

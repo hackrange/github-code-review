@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "Adobe AEM leaks repository content (DefaultGetServlet)",
   "summary": "Adobe Experience Manager is serving its content repository as JSON to anyone, through the default GET servlet. An unauthenticated visitor can read internal pages, user and group nodes and configuration by adding a .json selector to a path, which is how large amounts of internal data get pulled from an AEM site.",
   "needs": [],

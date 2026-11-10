@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "critical",
+  "anonymous": true,
   "title": "Spring Boot actuator heap dump is downloadable",
   "summary": "The /actuator/heapdump endpoint returns a full memory dump of the running application, which carries live secrets, tokens and session data.",
   "needs": [],

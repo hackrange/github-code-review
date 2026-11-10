@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "Spring Boot actuator thread dump is exposed",
   "summary": "The /actuator/threaddump endpoint returns every thread and its stack, which leaks internal class and method names and sometimes data in flight.",
   "needs": [],

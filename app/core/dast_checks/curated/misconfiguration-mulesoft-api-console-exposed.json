@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "MuleSoft APIkit console is exposed",
   "summary": "A MuleSoft APIkit application is serving its auto-generated API Console to anyone. The console publishes the whole API definition, every resource, method, parameter and schema, and lets a visitor call the API from the browser. It is meant for development and should be off in production.",
   "needs": [],

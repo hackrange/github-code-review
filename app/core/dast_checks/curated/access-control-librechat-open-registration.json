@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "LibreChat allows open self-registration",
   "summary": "This LibreChat instance returns registrationEnabled true from its public config, so anyone who can reach it can create an account. On a self-hosted AI tool that means a stranger can sign in and run their own work on the organization's paid model API keys, and use the account as a foothold.",
   "needs": [],

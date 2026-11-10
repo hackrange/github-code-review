@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "An Apache Spark master is reachable",
   "summary": "The Spark master answers unauthenticated, which lists applications and workers and can be made to submit a job.",
   "needs": [],

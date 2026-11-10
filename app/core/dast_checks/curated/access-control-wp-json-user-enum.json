@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "WordPress user accounts are listed through the REST API",
   "summary": "The WordPress REST users endpoint returns the account list, which names the users and their login slugs to anyone without signing in.",
   "needs": [],

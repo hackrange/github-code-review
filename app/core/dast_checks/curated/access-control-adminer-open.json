@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "low",
+  "anonymous": true,
   "title": "Adminer sign in page is reachable from the internet",
   "summary": "Adminer is an administrative interface and its sign in page answers from the internet.  This proves it is exposed, not that it can be used without a password.",
   "needs": [],

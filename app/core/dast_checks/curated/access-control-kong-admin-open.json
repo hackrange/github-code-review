@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "The Kong admin API is reachable",
   "summary": "The Kong admin API answers unauthenticated, which is full control of the gateway: its routes, services and plugins.",
   "needs": [],

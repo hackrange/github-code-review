@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "Ollama API is exposed without authentication",
   "summary": "An Ollama server is answering without any login.  Ollama has no built-in authentication, so anyone who can reach it can run its models on the organization's hardware, pull and register models, and read what is installed.  Exposed Ollama servers are actively taken over to run attackers' work on someone else's compute.",
   "needs": [],

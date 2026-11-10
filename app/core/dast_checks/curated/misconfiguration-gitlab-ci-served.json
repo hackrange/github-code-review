@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "low",
+  "anonymous": true,
   "title": "A .gitlab-ci.yml is served",
   "summary": "The CI pipeline definition is downloadable, which reveals the build, the deploy steps and sometimes variable names.",
   "needs": [],

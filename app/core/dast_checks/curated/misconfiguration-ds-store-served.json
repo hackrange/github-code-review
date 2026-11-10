@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "low",
+  "anonymous": true,
   "title": "A .DS_Store file is served",
   "summary": "A .DS_Store file is downloadable, which lists the names of the files in its directory and reveals the layout of the site.",
   "needs": [],

@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "critical",
+  "anonymous": true,
   "title": "A WordPress wp-config backup is served (/wp-config.php.bak)",
   "summary": "A backup of wp-config.php is downloadable as source, which hands over the database name, user and password in plain text.",
   "needs": [],

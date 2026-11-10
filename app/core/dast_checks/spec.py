@@ -214,6 +214,12 @@ def validate(spec: dict) -> dict:
         raise SpecError(f"A timing probe may wait at most {MAX_DELAY_SECONDS} "
                         "seconds.")
 
+    # A rule about what anybody can see has to look as anybody.  In a signed
+    # in scan the session would otherwise ride along, and a page that is only
+    # open to the signed in user would read as open to the world.
+    if "anonymous" in spec and not isinstance(spec["anonymous"], bool):
+        raise SpecError("anonymous must be true or false.")
+
     _check_destructive(spec)
 
     cleaned = dict(spec)

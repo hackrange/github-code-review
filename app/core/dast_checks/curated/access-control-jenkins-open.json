@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "medium",
+  "anonymous": true,
   "title": "A Jenkins server is exposed",
   "summary": "A Jenkins server answers here and reveals its version in a header.  Exposed Jenkins is a frequent path to code execution.",
   "needs": [],

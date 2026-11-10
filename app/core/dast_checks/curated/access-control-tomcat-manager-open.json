@@ -3,6 +3,7 @@
   "class": "access-control",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "Tomcat Web Application Manager is reachable without signing in",
   "summary": "Tomcat Web Application Manager is an administrative interface.  Reachable without authentication, it is a direct path into the data or the server.",
   "needs": [],

@@ -3,6 +3,7 @@
   "class": "misconfiguration",
   "safety": "read",
   "severity_floor": "high",
+  "anonymous": true,
   "title": "A Composer auth.json is served",
   "summary": "The Composer auth file is downloadable, which carries the registry tokens and HTTP credentials it authenticates with.",
   "needs": [],

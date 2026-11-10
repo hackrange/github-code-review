@@ -1031,7 +1031,7 @@ table.heat .heat-actions .btn { margin-left: .3rem; }
 /* ---- what a model said about a finding ----------------------------------- */
 /* Plain text with the line breaks the model wrote, so the numbered steps and
    section names read as they were written without trusting it with markup. */
-.ai-answer {
+.ai-answer, .finding-text {
     white-space: pre-wrap; word-break: break-word; max-width: 90ch;
     line-height: 1.5; padding: .6rem .8rem; border-radius: 4px;
     background: var(--bg-soft); font-size: .92rem;
