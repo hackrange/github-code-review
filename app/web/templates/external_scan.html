@@ -69,7 +69,7 @@
     <tbody>
     {% for e in view.engines %}
       <tr><td>{{ e.name }}</td>
-        <td class="small"><span class="badge {{ {'ok':'ok','skipped':'waived','failed':'critical','timeout':'pending','stopped':'pending'}.get(e.status, 'info') }}">{{ e.status }}</span> {{ e.detail }}{% if e.reached %}<span class="faint">, {{ e.reached | thousands }} address{{ '' if e.reached == 1 else 'es' }} answered</span>{% endif %}{% if e.requests %}<span class="faint">, {{ e.requests | thousands }} request{{ '' if e.requests == 1 else 's' }} sent</span>{% endif %}
+        <td class="small"><span class="badge {{ {'ok':'ok','skipped':'waived','failed':'critical','timeout':'pending','stopped':'pending','warn':'high'}.get(e.status, 'info') }}">{{ e.status }}</span> {{ e.detail }}{% if e.reached %}<span class="faint">, {{ e.reached | thousands }} address{{ '' if e.reached == 1 else 'es' }} answered</span>{% endif %}{% if e.requests %}<span class="faint">, {{ e.requests | thousands }} request{{ '' if e.requests == 1 else 's' }} sent</span>{% endif %}
           {% for r in e.repos or [] %}<div class="faint">{{ r.repository }}{% if r.branch %} ({{ r.branch }}){% endif %}: {{ r.routes }} routes{% if r.host_in_code %}, host named in {{ r.host_in_code | join(', ') }}{% endif %}{% if r.error %}, {{ r.error }}{% endif %}</div>{% endfor %}</td>
         <td class="small nowrap">{{ e.seconds // 60 }}m {{ e.seconds % 60 }}s</td></tr>
     {% endfor %}

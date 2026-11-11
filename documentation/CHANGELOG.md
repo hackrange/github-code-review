@@ -4,6 +4,19 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-11-11
+
+**A firewall's bot check is no longer reported as findings.**  Some firewalls,
+Oracle Zenedge among them, answer every address with a 200 "Are you human?"
+page that changes size on every request.  The not found check never matched
+it, so nikto reported hundreds of files that were not there, and curated rules
+called GraphQL, Swagger and ColdFusion pages confirmed.  Now an address that
+answers with a known bot check page is left out, it is not counted as reached,
+and a curated rule never confirms on one.  The scan page and the PDF say how
+many were left out and that the scan did not reach the application.  A
+curated rule's evidence now gives the control's real status.  Scans that ran
+before this keep their findings; scan the site again.
+
 ## 2026-11-10
 
 **Record a session.**  A site behind a bot check, or behind single sign on,

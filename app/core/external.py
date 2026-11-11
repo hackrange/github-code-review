@@ -2697,13 +2697,25 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
     # Nothing an engine echoed back of the sign in is kept.
     findings = external_auth.redact(findings, secrets)
     engines = external_auth.redact(engines, secrets)
-    findings, dropped = drop_soft_404(findings, url, opts["allow_private"])
-    if dropped:
+    soft_stats = {}
+    findings, dropped = drop_soft_404(findings, url, opts["allow_private"], soft_stats)
+    challenged = soft_stats.get("challenged", 0)
+    if dropped - challenged:
+        n = dropped - challenged
         engines.append({"tool": "verify", "name": "Soft 404 check", "status": "ok",
                         "seconds": 0,
-                        "detail": f"left out {dropped} finding{'s' if dropped != 1 else ''} "
+                        "detail": f"left out {n} finding{'s' if n != 1 else ''} "
                                   "for paths that answer not found, or with the same "
                                   "page as one that cannot exist"})
+    if challenged:
+        engines.append({"tool": "verify", "name": "Bot check", "status": "warn",
+                        "seconds": 0,
+                        "detail": f"left out {challenged} finding"
+                                  f"{'s' if challenged != 1 else ''} for paths that "
+                                  f"answered with {soft_stats['bot_check']}'s bot check "
+                                  "page instead of the site.  The scan did not reach "
+                                  "the application there.  Let the scanner through the "
+                                  "firewall, or scan the origin, for a real result."})
     csp = (base["telemetry"].get("headers") or {}).get("content-security-policy", "")
     findings, lowered = soften_blocked_xss(findings, csp)
     if lowered:
@@ -2763,7 +2775,8 @@ REFLECTED = re.compile(r"xss|cross.site.script|reflect|crlf|header injection|res
                        r"|CWE-79\b|CWE-113\b", re.I)
 
 
-def drop_soft_404(findings: list, base_url: str, allow_private: bool = False) -> tuple:
+def drop_soft_404(findings: list, base_url: str, allow_private: bool = False,
+                  stats: dict = None) -> tuple:
     """Leave out path findings whose page is the site's not found page.
 
     One request to an address that cannot exist gives the site's answer for
@@ -2828,13 +2841,27 @@ def drop_soft_404(findings: list, base_url: str, allow_private: bool = False) ->
             body, cut = got["body"], len(got["body"]) >= SOFT_404_BODY
             loc = got["headers"].get("location", "")
             to_login = 300 <= got["status"] < 400 and bool(_LOGIN_URL.search(loc))
-            seen[url] = (got["status"], to_login, got["status"] == 200 and any(
+            # A firewall's bot check ("Are you human?") answers in place of
+            # the site, with a page that changes on every request, so it never
+            # matches the control.  The path was not reached at all.
+            challenge = (external_probe.bot_check(body, got["status"])
+                         if got["status"] == 200 else "")
+            seen[url] = (got["status"], to_login, challenge, got["status"] == 200 and any(
                 same(norm(body, *echoed), cut, mark, mark_cut)
                 # Bodies cut at the limit all have its length, so only a
                 # whole page can be matched on size.
                 or html and not (cut or mark_cut) and abs(len(body) - size) < 16
                 for mark, size, mark_cut in controls))
-        status, to_login, soft = seen[url]
+        status, to_login, challenge, soft = seen[url]
+        if challenge:
+            # Nothing the scanner said about this address is about the site:
+            # not that a file is there, and not what the page holds, which is
+            # the firewall's own page.
+            dropped += 1
+            if stats is not None:
+                stats["bot_check"] = challenge
+                stats["challenged"] = stats.get("challenged", 0) + 1
+            continue
         # Nothing is there: a claim that a file or page was found is only the
         # site's not found page.  What the page itself carries stays: input
         # it echoes back, or a key in it, is on the 404 page too.

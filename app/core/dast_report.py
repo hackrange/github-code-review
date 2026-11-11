@@ -422,6 +422,9 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
     for e in skipped:
         limitations.append(f"{e.get('name') or e.get('tool')} did not complete: "
                            f"{e.get('detail') or e.get('status')}.")
+    for e in engines:
+        if e.get("status") == "warn" and e.get("tool") == "verify":
+            limitations.append(f"{e.get('name')}: {e.get('detail')}")
     if scan.authenticated:
         kinds = {"header": "a header", "cookie": "a session cookie", "form": "a form login"}
         signin = next((e for e in engines if e.get("tool") == "signin"), None)

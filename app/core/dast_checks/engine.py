@@ -415,6 +415,11 @@ def run_rule(spec: dict, ctx: dict) -> dict:
             last = control = None
             for _attempt in range(retest):
                 last = _run_probe(spec, client, route, oob_value)
+                if _bot_checked(last):
+                    # A firewall answered instead of the site, with a page that
+                    # differs on every request, so any differential would pass.
+                    out["detail"] = f"{_bot_checked(last)}'s bot check answered, not the site"
+                    break
                 control = (_control_response(client)
                            if spec["safety"] != "oob" else {})
                 oob_hit = bool(oob and token and oob.hit(token))
@@ -424,7 +429,7 @@ def run_rule(spec: dict, ctx: dict) -> dict:
                 else:
                     break
             if confirmations == retest and confirmations > 0:
-                out["findings"].append(_finding(spec, client, last, route))
+                out["findings"].append(_finding(spec, client, last, route, control))
                 break   # one solid finding per rule; the rest is noise
     except Refused as exc:
         out["status"] = "refused"
@@ -547,7 +552,7 @@ def _run_jwt(spec: dict, ctx: dict, domains, budget: Budget) -> list:
         # The endpoint must really be behind the session; the differential then
         # confirms, per attempt, that the forgery got the signed in response and
         # the signed out one did not, so a public page stays silent.
-        if resp_authed.get("status") != 200:
+        if resp_authed.get("status") != 200 or _bot_checked(resp_authed):
             continue
         resp_anon = anon.request("GET", path)
         for mode in modes:
@@ -623,13 +628,13 @@ def _run_two_account(spec: dict, ctx: dict, domains, budget: Budget) -> list:
             resp_b = live(b, "b", url)
             # It must be the second account's real object: a 200 that is not a
             # sign in or session expired wall.
-            if resp_b.get("status") != 200 or _looks_authless(resp_b):
+            if resp_b.get("status") != 200 or _looks_authless(resp_b) or _bot_checked(resp_b):
                 break
             resp_a = live(a, "a", url)
             resp_anon = anon.request("GET", url)
             # The first account must have reached the real object too; a sign in
             # wall is not access and there would be nothing to compare.
-            if _looks_authless(resp_a):
+            if _looks_authless(resp_a) or _bot_checked(resp_a):
                 resp_a = None
                 break
             env = _env_for(resp_a, {}, False,
@@ -976,7 +981,17 @@ def _run_probe(spec: dict, client: Client, route: str, oob_value: str) -> dict:
     return last
 
 
-def _finding(spec: dict, client: Client, response: dict, route: str) -> dict:
+def _bot_checked(resp) -> str:
+    """Whose bot check answered instead of the site, or empty."""
+    from app.core.external_probe import bot_check
+    resp = resp or {}
+    if resp.get("status") != 200:
+        return ""
+    return bot_check(resp.get("body") or "", 200)
+
+
+def _finding(spec: dict, client: Client, response: dict, route: str,
+             control: dict = None) -> dict:
     """A finding that stands on evidence, with how to repeat it and how to fix."""
     from app.core import dast_engines
 
@@ -985,9 +1000,16 @@ def _finding(spec: dict, client: Client, response: dict, route: str) -> dict:
         evidence = ("Confirmed by an out of band callback: the site was made to "
                     "reach our unique address, which proves it, and re-tested.")
     else:
+        got, ctl = response.get("status"), (control or {}).get("status")
+        if ctl and ctl != got:
+            told = f"and {ctl} for the control"
+        elif ctl:
+            told = "here, with a different page than the control's"
+        else:
+            told = "here"
         evidence = (f"Confirmed against a control (a request that cannot "
                     f"succeed) and re-tested.  The site answered status "
-                    f"{response.get('status')} here but not for the control.")
+                    f"{got} {told}.")
     f = dast_engines._finding(
         tool=f"rule:{spec['id']}", title=spec.get("title", spec["id"]),
         severity=spec.get("severity_floor", "medium"), url=url,

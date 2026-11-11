@@ -208,7 +208,11 @@ def verify(records: list, controls: dict, fetch, first=()) -> int:
         status = int(got.get("status") or 0)
         if rec.get("s") is None and status:
             rec["s"] = status
+        # A firewall's bot check changes on every request, so it never matches
+        # the control's page; it is still not the site's.
+        from app.core.external_probe import bot_check
         rec["r"] = (status == 200 and bool(got.get("body")) and
+                    not bot_check(got["body"], status) and
                     (control["status"] != 200 or fingerprint(got["body"]) != control["fp"]))
         rec.pop("v", None)
     return done
