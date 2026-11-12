@@ -39,6 +39,11 @@
       });
       /* Same reason as the groups above: the generic code copies values into
        * fields, and a checkbox is a state rather than a value. */
+      var sites = (trigger.getAttribute("data-site_groups") || "")
+        .split(",").filter(function (x) { return x; });
+      form.querySelectorAll("[data-site-group-pick]").forEach(function (box) {
+        box.checked = sites.indexOf(box.getAttribute("data-site-group-pick")) !== -1;
+      });
       var pin = form.querySelector("[data-role-pin]");
       if (pin) {
         pin.checked = !!trigger.getAttribute("data-role_pinned");
@@ -64,6 +69,22 @@
       form.setAttribute("action", base + "/groups/save");
       if (head) {
         head.childNodes[0].nodeValue = id ? "Edit group " : "Add a group ";
+      }
+    });
+  });
+})();
+
+/* The External sites group panel adds one and edits one. */
+(function () {
+  "use strict";
+  var form = document.getElementById("site-group-form");
+  if (!form) { return; }
+  var head = form.querySelector(".modal-head");
+  document.querySelectorAll('[data-modal="site-group-modal"]').forEach(function (trigger) {
+    trigger.addEventListener("click", function () {
+      if (head) {
+        head.childNodes[0].nodeValue = trigger.getAttribute("data-group_id")
+          ? "Edit External sites group " : "Add an External sites group ";
       }
     });
   });

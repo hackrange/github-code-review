@@ -35,7 +35,7 @@ from app.core.db import session_scope
 from app.core.models import utcnow as m_utcnow
 from app.core.models import (
     DastScanProfile, DastServer, ExternalAsset, ExternalAssetRepo,
-    ExternalAssetTag, ExternalDastScan, User,
+    ExternalAssetTag, ExternalDastScan, SiteGroup, User,
 )
 from app.web.render import notice_class, page
 from app.web.security import (
@@ -73,6 +73,30 @@ def _guard(db, user) -> None:
         raise HTTPException(status_code=404, detail=NOT_FOUND)
     if not external.enabled(db):
         raise HTTPException(status_code=404, detail=NOT_FOUND)
+
+
+def _view_guard(db, user) -> None:
+    """Somebody who may look at external sites, while the module is on.
+
+    An administrator, or anybody whose group was given a site.  Only the
+    pages and files that show a site go through this; every change, scan and
+    sign in still goes through _guard.
+    """
+    if not external.enabled(db):
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
+    if not rbac.can_view_external(user):
+        raise HTTPException(status_code=404, detail=NOT_FOUND)
+
+
+def _seen(db, user, asset_id: int) -> ExternalAsset:
+    """A site this person may look at.  A site outside their groups is the
+    same 404 as one that does not exist, so ids say nothing."""
+    _view_guard(db, user)
+    asset = (rbac.visible_external_assets(db, user)
+             .filter(ExternalAsset.id == asset_id).one_or_none())
+    if asset is None:
+        raise HTTPException(status_code=404, detail="No such site.")
+    return asset
 
 
 def _asset(db, asset_id: int) -> ExternalAsset:
@@ -157,14 +181,16 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
               user: User = Depends(current_user)):
     """Every external site, newest problems first."""
     with session_scope() as db:
-        _guard(db, user)
+        _view_guard(db, user)
+        manage = rbac.can(user, "external.manage")
         q = clean_text(q, "Search", limit=200, required=False).lower()
         tag = clean_text(tag, "Tag", limit=100, required=False)
         app = clean_text(app, "Application", limit=200, required=False)
         opts = external.options(db)
         mapper = external.Mapper(db, user)
         envs = external.environments(db)
-        assets = db.query(ExternalAsset).order_by(ExternalAsset.host).all()
+        assets = (rbac.visible_external_assets(db, user)
+                  .order_by(ExternalAsset.host).all())
         blocked = external.blocked_hosts(db)
         every_link = {a.id: mapper.links(a) for a in assets}
         scanning = external.running_scans(db)
@@ -259,8 +285,9 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                   # every page link keeps both.
                   "query": urlencode(filters + ([("per_page", size)] if size != PAGE_SIZES[0] else [])),
                   "filters": urlencode(filters)}
-        all_tags = sorted({t.tag for t in db.query(ExternalAssetTag.tag).distinct()},
-                          key=str.casefold)
+        # Only the tags on the sites shown, so a group's list names nothing
+        # from a site outside it.
+        all_tags = sorted({t for a in assets for t in a.tag_list()}, key=str.casefold)
         apps = sorted({a.application for a in assets if a.application}, key=str.casefold)
         totals = {
             "sites": len(assets), "shown": matched,
@@ -274,7 +301,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
             "no_scan": sum(1 for a in assets if external.is_blocked(a.host, blocked, a.no_scan)),
             "mapped": sum(1 for a in assets if any(l["linked"] for l in every_link[a.id])),
         }
-        servers = db.query(DastServer).order_by(DastServer.name).all()
+        servers = db.query(DastServer).order_by(DastServer.name).all() if manage else []
         # Screenshots taken before thumbnails existed, or by a server
         # without Playwright, get theirs made in the background; until then
         # those rows load the full picture.
@@ -283,6 +310,9 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
         from app.core import dast_engines
 
         context.update(active_page="external", rows=rows, totals=totals,
+                       can_manage=manage,
+                       groups=(db.query(SiteGroup).order_by(SiteGroup.name).all()
+                               if manage else []),
                        profiles=dast_engines.PROFILES, default_profile=dast_engines.DEFAULT_PROFILE,
                        scan_profiles=db.query(DastScanProfile).order_by(DastScanProfile.name).all(),
                        auth_kinds=external_auth_mod.FORM_KINDS,
@@ -292,7 +322,10 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                        statuses=external.STATUSES, exposures=external.EXPOSURES,
                        servers=servers,
                        running=sum(1 for a in assets if a.telemetry_status == "running"),
-                       scanning=len(scanning), max_concurrent=external._slots.limit(),
+                       # Only the shown sites' scans, so a group's page says
+                       # nothing about sites outside it.
+                       scanning=sum(1 for a in assets if a.id in scanning),
+                       max_concurrent=external._slots.limit(),
                        flash=clean_notice(request.query_params.get("msg", ""), limit=300),
                        flash_kind=notice_class(request.query_params.get("kind", "")))
         return page(request, "external.html", **context)
@@ -481,6 +514,14 @@ def _bulk_changes(form) -> dict:
     if on("tags"):
         changes["tags"] = (str(form.get("tags_mode") or "add"),
                            str(form.get("tags") or "").replace(";", ",").split(","))
+    if on("groups"):
+        ids = []
+        for raw in form.getlist("group"):
+            try:
+                ids.append(int(raw))
+            except (TypeError, ValueError):
+                raise ValueError("Pick groups from the list.")
+        changes["groups"] = (str(form.get("groups_mode") or "add"), ids)
     if on("comments"):
         changes["comments"] = (str(form.get("comments_mode") or "replace"),
                                clean_text(form.get("comments"), "Comments", limit=4000, required=False))
@@ -679,8 +720,7 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
     from app.core import ai, dast_engines, settings_store
 
     with session_scope() as db:
-        _guard(db, user)
-        asset = _asset(db, asset_id)
+        asset = _seen(db, user, asset_id)
         opts = external.options(db)
         links = external.Mapper(db, user).links(asset)
         names = [l["full_name"] for l in links]
@@ -711,8 +751,11 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
         busy = (asset.telemetry_status == "running" or asset.ai_status == "running"
                 or active_scan is not None
                 or any(s.ai_status == "running" for s in page_scans))
+        manage = rbac.can(user, "external.manage")
         context = _shared(db, user)
         context.update(
+            can_manage=manage,
+            groups=(db.query(SiteGroup).order_by(SiteGroup.name).all() if manage else []),
             active_page="external", asset=asset, tele=external.telemetry_of(asset),
             tags=asset.tag_list(), links=links, counts=counts,
             risk=external.combined_risk(asset, linked),
@@ -738,8 +781,8 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             environments=external.environments(db), statuses=external.STATUSES,
             scan_views=[external.scan_dict(s) for s in page_scans],
             risk_trends=external.risk_trends(db, asset.id),
-            servers=db.query(DastServer).order_by(DastServer.name).all(),
-            ias=_ias_choices(db, asset),
+            servers=db.query(DastServer).order_by(DastServer.name).all() if manage else [],
+            ias=_ias_choices(db, asset) if manage else {"ready": False},
             profiles=dast_engines.PROFILES, active=dast_engines.ACTIVE_PROFILES,
             scan_profiles=db.query(DastScanProfile).order_by(DastScanProfile.name).all(),
             plans=dast_engines.PLANS, engines=dast_engines.installed(),
@@ -760,8 +803,7 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
 @router.get("/external/{asset_id}/screenshot.png")
 def screenshot(asset_id: int, user: User = Depends(current_user)):
     with session_scope() as db:
-        _guard(db, user)
-        _asset(db, asset_id)
+        _seen(db, user, asset_id)
     path = external.shot_path(asset_id)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="No screenshot.")
@@ -774,8 +816,7 @@ def screenshot_proxy(asset_id: int, user: User = Depends(current_user)):
     """The second screenshot, taken through the exposure proxy, the other
     vantage in the exposure check."""
     with session_scope() as db:
-        _guard(db, user)
-        _asset(db, asset_id)
+        _seen(db, user, asset_id)
     path = external.shot_proxy_path(asset_id)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="No screenshot.")
@@ -790,8 +831,7 @@ def screenshot_thumb(asset_id: int, v: str = "", user: User = Depends(current_us
     this one for a day.  Without a thumbnail yet it answers with the full
     screenshot, kept only briefly so the small one replaces it soon."""
     with session_scope() as db:
-        _guard(db, user)
-        _asset(db, asset_id)
+        _seen(db, user, asset_id)
     if external.thumb_fresh(asset_id):
         return FileResponse(external.thumb_path(asset_id), media_type="image/jpeg",
                             headers={"Cache-Control": "private, max-age=86400"})
@@ -819,6 +859,19 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
             if form.get("with_picks"):
                 external.set_picks(db, asset, external.parse_picks(form.getlist("pick")),
                                    user.username, user)
+            if form.get("with_groups"):
+                before_groups = asset.group_names()
+                ids = []
+                for raw in form.getlist("group"):
+                    try:
+                        ids.append(int(raw))
+                    except (TypeError, ValueError):
+                        raise ValueError("Pick groups from the list.")
+                external.set_groups(asset, external.group_rows(db, ids))
+                if asset.group_names() != before_groups:
+                    record(db, "external.groups_set", actor=user.username, target=asset.host,
+                           detail=(", ".join(asset.group_names()) or "none")[:300],
+                           source_ip=client_ip(request))
             if form.get("with_fields"):
                 external.set_manual(asset, {key: form.get(f"f:{key}") or ""
                                             for key in external.FIELD_KEYS}, replace=True)
@@ -1303,8 +1356,7 @@ def _decide_bulk(asset_id, scan_id, form, request, user, here):
 def scan_proof(asset_id: int, scan_id: int, name: str, user: User = Depends(current_user)):
     """A finding's proof screenshot (for example what one account sees)."""
     with session_scope() as db:
-        _guard(db, user)
-        _asset(db, asset_id)
+        _seen(db, user, asset_id)
         _scan(db, asset_id, scan_id)   # 404s if the scan is not this site's
     path = external.proof_path(scan_id, name)
     if not path.is_file():
@@ -1318,8 +1370,7 @@ def scan_report(asset_id: int, scan_id: int, request: Request,
                 user: User = Depends(current_user)):
     """The PDF report on one scan this server ran, typeset now."""
     with session_scope() as db:
-        _guard(db, user)
-        asset = _asset(db, asset_id)
+        asset = _seen(db, user, asset_id)
         scan = _scan(db, asset_id, scan_id)
         pdf, name = _report(db, asset, scan, user)
         record(db, "external.report", actor=user.username, target=asset.host,
@@ -1332,8 +1383,7 @@ def scan_report(asset_id: int, scan_id: int, request: Request,
 @router.get("/external/{asset_id}/scans/{scan_id}.json")
 def scan_json(asset_id: int, scan_id: int, user: User = Depends(current_user)):
     with session_scope() as db:
-        _guard(db, user)
-        asset = _asset(db, asset_id)
+        asset = _seen(db, user, asset_id)
         scan = _scan(db, asset_id, scan_id)
         body = external.scan_dict(scan, findings=True)
         body["code_behind"] = external.code_behind(db, user, scan, asset)
@@ -1348,8 +1398,7 @@ def scan_page(asset_id: int, scan_id: int, request: Request, sev: str = "",
     from app.core import ai
 
     with session_scope() as db:
-        _guard(db, user)
-        asset = _asset(db, asset_id)
+        asset = _seen(db, user, asset_id)
         scan = _scan(db, asset_id, scan_id)
         from app.core import external_decisions
 
@@ -1384,6 +1433,7 @@ def scan_page(asset_id: int, scan_id: int, request: Request, sev: str = "",
         scope = (_dast_paths.scoping(_dast_paths.load(scan.paths).get("paths") or [])
                  if scan.paths_count is not None else None)
         context.update(active_page="external", asset=asset, scan=scan, view=view,
+                       can_manage=rbac.can(user, "external.manage"),
                        data_profile=data_profile,
                        scope=scope, blocked_text=_dast_paths.blocked_text(scope or {}),
                        code=external.code_behind(db, user, scan, asset),

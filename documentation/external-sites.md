@@ -7,7 +7,31 @@ dynamic (DAST) scans against them, and maps each site to the repositories
 behind it, so a finding on the live site and a finding in its code can be
 read together.
 
-It is for administrators only, and it is off until somebody turns it on.
+Administrators add, change and scan sites.  Other people can be let in to
+look at some of them through External sites groups (see below).  It is off
+until somebody turns it on.
+
+## Who sees which sites
+
+Administrators see every site.  Anybody else sees only the sites given to an
+**External sites group** they are in, and only to look: the site page, its
+scans, their PDF reports and JSON.  Everything that changes a site or points
+a scanner at it stays with administrators, and a site outside a person's
+groups answers the same 404 as one that does not exist.
+
+External sites groups are their own kind of group, on Users, Groups, below
+the scanning groups.  A scanning group decides what code somebody sees; an
+External sites group decides which sites.  The two can share a name, so
+Digital Engineering can be both, and being in an External sites group never
+changes what someone sees of the code.  A site in no group is seen by
+administrators only.
+
+1. Users, Groups, **Add an External sites group**: a name and what it is.
+2. External sites: give the group its sites, on one site's **Edit**, or tick
+   several and use **Edit the ticked sites**, Groups, to give, take away or
+   replace.
+3. Users, an account's **Edit**: tick the External sites groups the person is
+   in.  None ticked, they see no sites, only their code findings.
 
 ## Turning it on
 

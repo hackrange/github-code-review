@@ -108,6 +108,11 @@ PERMISSIONS = {
         "waiver.request",
         "scan.run",
         "repo.read",
+        # Looking at the external sites given to one of this person's groups,
+        # their scans and the reports.  Read only: adding, editing, scanning
+        # and signing in stay with external.manage.  See
+        # visible_external_assets.
+        "external.read",
         # A developer can ask for a noisy rule to be set aside.  Somebody else
         # has to agree, the same as an exception.
         "rule.mute.request",
@@ -130,6 +135,7 @@ PERMISSIONS = {
         "findings.read", "findings.export",
         "trend.read", "report.generate",
         "repo.read", "repo.propose",
+        "external.read",
     },
 }
 
@@ -149,6 +155,44 @@ def require(user: User, permission: str) -> None:
     if not can(user, permission):
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="Not allowed")
+
+
+def visible_external_assets(session: OrmSession, user: User):
+    """The external sites this person may look at, as a query.
+
+    Administrators see every site.  Anybody else sees the sites given to an
+    External sites group they are in, and nothing else.  Those groups are
+    apart from the scanning groups, which decide only what code somebody sees.
+    A site in no group is administrators only, and a login on the code host
+    reaches no site.
+    Looking is all it gives; changing a site or scanning it is
+    external.manage.
+    """
+    from app.core.models import ExternalAsset, external_asset_site_groups as link
+
+    query = session.query(ExternalAsset)
+    if can(user, "external.manage"):
+        return query
+    group_ids = [g.id for g in (getattr(user, "site_groups", None) or [])]
+    if not can(user, "external.read") or not group_ids:
+        return query.filter(False)
+    return query.filter(ExternalAsset.id.in_(
+        session.query(link.c.asset_id).filter(link.c.site_group_id.in_(group_ids))))
+
+
+def can_view_external(user: User) -> bool:
+    """Whether external sites are open to this person at all: an
+    administrator, or a member of an External sites group."""
+    if can(user, "external.manage"):
+        return True
+    return can(user, "external.read") and bool(getattr(user, "site_groups", None))
+
+
+def sees_external(session: OrmSession, user: User) -> bool:
+    """Whether the External sites page has anything for this person."""
+    if can(user, "external.manage"):
+        return True
+    return visible_external_assets(session, user).limit(1).count() > 0
 
 
 def in_scan_group(user: User) -> bool:

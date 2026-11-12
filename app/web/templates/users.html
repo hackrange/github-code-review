@@ -12,6 +12,10 @@
     <button class="btn primary" type="button" data-modal="group-modal"
             data-group_id="" data-name="" data-description=""
             data-entries="">Add a group</button>
+    {% if external_on %}
+    <button class="btn" type="button" data-modal="site-group-modal"
+            data-group_id="" data-name="" data-description="">Add an External sites group</button>
+    {% endif %}
     {% else %}
     <button class="btn primary" type="button" data-modal="user-modal"
             data-user_id="" data-username="" data-role="reader"
@@ -72,6 +76,9 @@
                 <span class="badge medium">nothing assigned</span>
               {% endif %}
             {% endif %}
+            {% if external_on and u.site_groups and u.role.value != 'admin' %}
+              <div style="margin-top:.2rem">{% for g in u.site_groups %}<span class="badge info" title="External sites group">{{ g.name }}</span> {% endfor %}
+              <span class="faint">external sites</span></div>{% endif %}
           </td>
           <td class="small faint nowrap">{{ u.last_login_at | dt('%Y-%m-%d') if u.last_login_at else 'never' }}</td>
           <td>{% if u.disabled %}<span class="badge waived">off</span>
@@ -86,7 +93,8 @@
                       data-email="{{ u.email }}"
                       data-github_login="{{ u.github_login or '' }}"
                       data-role_pinned="{{ '1' if u.role_pinned else '' }}"
-                      data-groups="{% for g in u.groups %}{{ g.id }}{{ ',' if not loop.last }}{% endfor %}">Edit</button>
+                      data-groups="{% for g in u.groups %}{{ g.id }}{{ ',' if not loop.last }}{% endfor %}"
+                      data-site_groups="{% for g in u.site_groups %}{{ g.id }}{{ ',' if not loop.last }}{% endfor %}">Edit</button>
               {% if can_impersonate and not u.disabled and u.id != user.id %}
               {# Seeing what somebody sees is the only way to answer "why is
                  this repository not on their findings page".  Read only, and
@@ -194,6 +202,56 @@
     repositories, then hand it to whoever works on it.</div>
   {% endif %}
 </div>
+{% if external_on %}
+<div class="card" id="site-groups">
+  <div class="card-head">External sites groups</div>
+  <div class="small faint" style="margin:.4rem 1rem .8rem">
+    Who may look at which external sites.  These are kept apart from the
+    scanning groups above: a scanning group decides what code somebody sees,
+    and an External sites group decides which sites, so the two can share a
+    name.  Give a group its sites on the External sites page, on one site's
+    Edit or with Edit the ticked sites, and put people in it in Edit account.
+    Members can view the sites, their scans and reports; only administrators
+    change or scan them.
+  </div>
+  {% if site_groups %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Group</th><th>Sites</th><th>People</th><th></th></tr></thead>
+      <tbody>
+      {% for g in site_groups %}
+        <tr>
+          <td class="small">{{ g.name }}
+            {% if g.description %}<div class="faint">{{ g.description }}</div>{% endif %}</td>
+          <td class="small">{% if g.sites %}<a href="{{ base }}/external">{{ g.sites | length }} site{{ '' if g.sites | length == 1 else 's' }}</a>
+            <div class="faint mono">{% for a in g.sites[:5] %}{{ a.host }}<br>{% endfor %}{% if g.sites | length > 5 %}and {{ g.sites | length - 5 }} more{% endif %}</div>
+            {% else %}<span class="faint">none given yet</span>{% endif %}</td>
+          <td class="small">
+            {% for member in g.members %}<span class="badge">{{ member.username }}</span> {% endfor %}
+            {% if not g.members %}<span class="faint">nobody yet</span>{% endif %}</td>
+          <td class="nowrap">
+            {% if can_write %}
+            <button class="btn sm" type="button" data-modal="site-group-modal"
+                    data-group_id="{{ g.id }}" data-name="{{ g.name }}"
+                    data-description="{{ g.description }}">Edit</button>
+            <form method="post" action="{{ base }}/site-groups/{{ g.id }}/delete"
+                  style="display:inline"
+                  data-confirm="Delete the External sites group {{ g.name }}? Its members stop seeing its sites.  The sites stay.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn sm danger" type="submit">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">No External sites groups yet.</div>
+  {% endif %}
+</div>
+{% endif %}
 {% endif %}
 
 {% if can_write %}
@@ -226,6 +284,33 @@
     </form>
   </div>
 </div>
+
+{% if external_on %}
+<div class="modal-backdrop" id="site-group-modal" hidden>
+  <div class="modal">
+    <form method="post" action="{{ base }}/site-groups/save" id="site-group-form">
+      <div class="modal-head">External sites group
+        <button type="button" class="modal-close" data-close-modal>&times;</button></div>
+      <div class="modal-body">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="group_id">
+        <label>Name
+          <input type="text" name="name" required maxlength="120" placeholder="Digital Engineering">
+          <span class="faint small">May be the same as a scanning group's name.  They stay two groups.</span>
+        </label>
+        <label>What it is
+          <input type="text" name="description" maxlength="500"
+                 placeholder="The sites Digital Engineering runs">
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn" data-close-modal>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
 
 <div class="modal-backdrop" id="user-modal" hidden>
   <div class="modal">
@@ -294,6 +379,25 @@
             </label>
             {% endfor %}
           </div>
+        </label>
+        {% endif %}
+        {% if external_on %}
+        <label>External sites groups
+          <span class="faint small">The external sites this person may look
+            at.  Apart from the scanning groups above: ticking one here never
+            changes what code they see.  None ticked, they see no sites.</span>
+          {% if site_groups %}
+          <div class="check-grid">
+            {% for g in site_groups %}
+            <label class="check">
+              <input type="checkbox" name="site_groups" value="{{ g.id }}"
+                     data-site-group-pick="{{ g.id }}">
+              {{ g.name }}
+              {% if g.description %}<span class="faint small">{{ g.description }}</span>{% endif %}
+            </label>
+            {% endfor %}
+          </div>
+          {% else %}<span class="faint small">None yet.  Add one on the Groups tab.</span>{% endif %}
         </label>
         {% endif %}
       </div>

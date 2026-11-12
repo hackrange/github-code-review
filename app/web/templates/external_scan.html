@@ -11,6 +11,7 @@
       {% if view.recorded_by %}by {{ view.recorded_by }}{% endif %}
       {% if scan.scanned_at %}&middot; {{ scan.scanned_at | dt('%Y-%m-%d %H:%M') }}{% endif %}</div></div>
   <div class="page-actions">
+    {% if can_manage %}
     {% if scan.status in ('queued','running') %}
     <form method="post" action="{{ here }}/stop" style="display:inline" data-confirm="Stop this scan?">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -28,10 +29,11 @@
       <button class="btn" type="submit" {{ 'disabled' if not ai_ready or scan.ai_status == 'running' or scan.summary_only }}
               title="{{ 'Pull the full results in first, then they can be triaged' if scan.summary_only else ('Have the model sort these findings against the code findings behind the site' if ai_ready else 'Set up a model on the AI analysis page first') }}">AI triage</button></form>
     {% endif %}
+    {% endif %}
     {% if scan.status == 'done' and not scan.summary_only and (scan.source == 'builtin' or scan.provider == 'insightappsec') %}<a class="btn primary" href="{{ here }}/report.pdf">PDF report</a>{% endif %}
     <a class="btn" href="{{ here }}.json">JSON</a>
     {% if view.result_url and view.result_url.startswith('http') %}<a class="btn" rel="noopener noreferrer" target="_blank" href="{{ view.result_url }}">Open on the server</a>{% endif %}
-    {% if scan.status not in ('queued','running') %}
+    {% if scan.status not in ('queued','running') and can_manage %}
     <form method="post" action="{{ here }}/delete" style="display:inline" data-confirm="Remove this scan from the history?">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn" type="submit">Remove</button></form>
@@ -117,14 +119,14 @@
       <div class="small" style="margin-top:.3rem">
         <span class="mono">{{ l.full_name }}</span>
         <span class="faint">0 of {{ l.routes_total }} routes reached</span>
-        <form method="post" action="{{ base }}/external/{{ asset.id }}/repos" style="display:inline">
+        {% if can_manage %}<form method="post" action="{{ base }}/external/{{ asset.id }}/repos" style="display:inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="repository" value="{{ l.full_name }}">
           <input type="hidden" name="action" value="hide">
           <input type="hidden" name="back" value="/external/{{ asset.id }}/scans/{{ scan.id }}">
           <button class="btn sm" type="submit"
                   data-confirm="Un-pin {{ l.full_name }} from {{ asset.host }}?  It will not be linked to this site again, by hand or automatically, until someone pins it back.">Un-pin</button>
-        </form>
+        </form>{% endif %}
       </div>
       {% endfor %}
     </div>
@@ -145,12 +147,12 @@
             {% if c.link_reasons %}<div class="faint">also: {{ c.link_reasons | join('; ') }}</div>{% endif %}</td>
           <td class="nowrap">{% if c.linked %}<span class="badge ok" title="{{ c.link_reasons | join('; ') }}">{{ 'pinned' if c.link_source == 'manual' else 'linked' }}</span>
             {% else %}
-            <form method="post" action="{{ base }}/external/{{ asset.id }}/repos" style="display:inline">
+            {% if can_manage %}<form method="post" action="{{ base }}/external/{{ asset.id }}/repos" style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <input type="hidden" name="repository" value="{{ c.full_name }}">
               <input type="hidden" name="action" value="link">
               <input type="hidden" name="back" value="/external/{{ asset.id }}/scans/{{ scan.id }}">
-              <button class="btn xs" type="submit" title="Link this repository to {{ asset.host }}.  Later scans read its routes and the site page counts its findings.">Pin</button></form>
+              <button class="btn xs" type="submit" title="Link this repository to {{ asset.host }}.  Later scans read its routes and the site page counts its findings.">Pin</button></form>{% endif %}
             {% endif %}</td></tr>
       {% endfor %}
       </tbody></table></div>
@@ -158,11 +160,11 @@
     <div class="faint small">No repository declares enough of the paths this site really served to be named.
       {% if not code.indexed %}No repository has had its routes read yet: they are read when a code scan runs.{% endif %}</div>
     {% endif %}
-    {% if scan.status == 'done' and code.has_paths %}
+    {% if scan.status == 'done' and code.has_paths %}{% if can_manage %}
     <form method="post" action="{{ here }}/rematch" style="margin-top:.5rem">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn xs" type="submit" title="Match these paths again against every repository's routes as they are now.  Nothing is sent to the site.">Match again</button>
-      <span class="faint small">Confidence comes from how specific the shared paths are and how many repositories share them.  It never reaches 100: pin a repository to say it is right.</span></form>
+      <span class="faint small">Confidence comes from how specific the shared paths are and how many repositories share them.  It never reaches 100: pin a repository to say it is right.</span></form>{% endif %}
     {% endif %}
   </div>
 </div>
@@ -195,7 +197,7 @@
     {% if removed_count %}<a class="small" href="{{ here }}?verdict=removed" style="font-weight:400;margin-left:.5rem" title="Taken out by the model as likely false positives, or because the address answered not found">{{ removed_count }} taken out</a>{% endif %}
     {% if sev or verdict %}<a class="small" href="{{ here }}" style="font-weight:400;margin-left:.5rem">show all</a>{% endif %}</div>
   {% if findings %}
-  {% set can_decide = scan.status == 'done' and not scan.summary_only %}
+  {% set can_decide = can_manage and scan.status == 'done' and not scan.summary_only %}
   {% if can_decide %}
   <div class="finding-bulk" data-finding-bulk hidden>
     <span data-finding-count>0 ticked</span>
@@ -237,14 +239,14 @@
             <span class="faint">{{ 'all scans' if d.persist else 'this scan only' }}</span>
             {% if d.kind == 'exception' %}<div class="faint">until {{ d.expires[:10] }}</div>{% endif %}
             <div class="faint" title="{{ d.reason }}">{{ d.by }}: {{ d.reason[:90] }}{{ '...' if d.reason | length > 90 }}</div>
-            <form method="post" action="{{ here }}/findings/{{ f.key }}/undo" style="display:inline"
+            {% if can_manage %}<form method="post" action="{{ here }}/findings/{{ f.key }}/undo" style="display:inline"
                   data-confirm="{{ ('Remove the exception?' if d.kind == 'exception' else 'Revert to what the scan found?') ~ ('  This takes it back on every scan of the site.' if d.persist else '  This takes it back on this scan only.') }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn xs" type="submit">{{ 'Remove exception' if d.kind == 'exception' else 'Revert to original' }}</button></form>
             <button class="btn xs" type="button" data-modal="decide-modal" data-key="{{ f.key }}" data-kind="{{ d.kind }}"
                     data-severity="{{ d.severity or f.severity }}" data-reason="{{ d.reason }}" data-expires="{{ (d.expires or '')[:10] }}"
-                    data-persist="{{ '1' if d.persist else '' }}" data-finding_title="{{ f.title }}">Change</button>
-          {% elif scan.status == 'done' %}
+                    data-persist="{{ '1' if d.persist else '' }}" data-finding_title="{{ f.title }}">Change</button>{% endif %}
+          {% elif scan.status == 'done' and can_manage %}
             <div class="decide-buttons">
               <button class="btn xs" type="button" data-modal="decide-modal" data-key="{{ f.key }}" data-kind="false_positive" data-finding_title="{{ f.title }}" title="Not a real problem: left out of the counts and the report">False positive</button>
               <button class="btn xs" type="button" data-modal="decide-modal" data-key="{{ f.key }}" data-kind="severity" data-severity="{{ f.severity }}" data-finding_title="{{ f.title }}" title="Give it another severity, used everywhere from now on">Change sev</button>
@@ -266,9 +268,9 @@
         <td><strong>{{ f.title }}</strong>{% if f.evidence %}<div class="small mono faint" style="white-space:pre-wrap;word-break:break-word">{{ f.evidence }}</div>{% endif %}</td>
         <td class="small mono" style="word-break:break-all">{{ f.url }}</td>
         <td class="small">{% if f.removed_why == 'not_found' %}The address answered not found, so nothing is there.{% else %}<span class="badge ai">AI</span> {{ f.ai_why or 'Called a likely false positive.' }}{% endif %}</td>
-        <td><form method="post" action="{{ here }}/findings/{{ f.key }}/restore" style="display:inline">
+        <td>{% if can_manage %}<form method="post" action="{{ here }}/findings/{{ f.key }}/restore" style="display:inline">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button class="btn xs" type="submit" title="Show it as found again">Put back</button></form></td>
+          <button class="btn xs" type="submit" title="Show it as found again">Put back</button></form>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody></table></div>
@@ -277,20 +279,21 @@
   <div class="empty">Rapid7 found {{ total }}: {{ scan.critical or 0 }} critical, {{ scan.high or 0 }} high,
     {{ scan.medium or 0 }} medium, {{ scan.low or 0 }} low and {{ scan.info or 0 }} informational.
     Only the counts are kept here for older scans.
-    {% if scan.provider == 'insightappsec' and scan.status in ('done','failed') %}
+    {% if scan.provider == 'insightappsec' and scan.status in ('done','failed') and can_manage %}
     <div style="margin-top:.6rem"><form method="post" action="{{ here }}/ias_pull" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn primary" type="submit">Pull full results from InsightAppSec</button></form></div>
     <div class="small faint" style="margin-top:.4rem">Brings the findings in here so their detail, a PDF report and AI triage all work without signing in to Rapid7.</div>{% endif %}
     {% if scan.result_url %}<div class="small" style="margin-top:.4rem"><a href="{{ scan.result_url }}" target="_blank" rel="noopener">Or see them in InsightAppSec</a>.</div>{% endif %}</div>
   {% elif scan.status == 'done' %}<div class="empty">Nothing found.
-    {% if view.profile == 'baseline' %}<div style="margin-top:.6rem"><a class="btn primary" href="{{ base }}/external/{{ asset.id }}#scan">Run a deeper scan</a></div>{% endif %}
+    {% if view.profile == 'baseline' and can_manage %}<div style="margin-top:.6rem"><a class="btn primary" href="{{ base }}/external/{{ asset.id }}#scan">Run a deeper scan</a></div>{% endif %}
     {% if view.profile == 'baseline' %}<div class="small faint" style="margin-top:.4rem">A baseline scan only reads
       headers, cookies, TLS, open ports and a list of files that should never be served.  The quick
       profile and up also run testssl and nuclei, and standard and up crawl the site and try attack
       payloads.</div>{% endif %}</div>
   {% else %}<div class="empty">No findings yet.</div>{% endif %}
 </div>
+{% if can_manage %}
 <div class="modal-backdrop" id="decide-modal" hidden>
   <div class="modal"><form method="post" action="{{ here }}/findings/form/decide" data-one-action="{{ here }}/findings/form/decide" data-bulk-action="{{ here }}/findings/bulk/decide">
     <div class="modal-head">Decide on this finding <button type="button" class="modal-close" data-close-modal>&times;</button></div>
@@ -324,5 +327,6 @@
 </div>
 
 {% if view.note %}<div class="card"><div class="card-head">Note</div><div class="card-body small" style="white-space:pre-wrap">{{ view.note }}</div></div>{% endif %}
+{% endif %}
 <script src="{{ base }}/static/external.js?v={{ asset_v('external.js') }}"></script>
 {% endblock %}

@@ -634,6 +634,7 @@ def bulk_update(db, assets: list, changes: dict, actor: str, user=None) -> list:
         proxy        a proxy address, or "" to remove it
         auth         (kind, {values}) as Edit takes it; kind "" removes it
         repositories (add | replace | clear, [(repository id, branch)])
+        groups       (add | remove | replace, [group id]), who may view
 
     Every site is checked before any is written; the first one that will not
     take a change raises ValueError naming it, and the caller rolls back.
@@ -654,6 +655,15 @@ def bulk_update(db, assets: list, changes: dict, actor: str, user=None) -> list:
     repos = changes.get("repositories")
     if repos and repos[0] not in ("add", "replace", "clear"):
         raise ValueError("Repositories are added, replaced or cleared.")
+    groups = changes.get("groups")
+    picked_groups = []
+    if groups:
+        mode, ids = groups
+        if mode not in ("add", "remove", "replace"):
+            raise ValueError("Groups are given, taken away or replaced.")
+        picked_groups = group_rows(db, ids)
+        if mode != "replace" and not picked_groups:
+            raise ValueError("Tick at least one group.")
     changed = []
     for asset in assets:
         try:
@@ -691,6 +701,8 @@ def bulk_update(db, assets: list, changes: dict, actor: str, user=None) -> list:
                 kind, values = changes["auth_b"]
                 external_auth.save(asset, kind, values, actor, asset.parent_domain,
                                    slot="b")
+            if groups:
+                set_groups(asset, picked_groups, groups[0])
             if repos:
                 mode, picks = repos
                 if mode == "add":
@@ -915,6 +927,42 @@ def _branch_list(raw) -> list:
     except ValueError:
         return []
     return [b for b in value if isinstance(b, str)] if isinstance(value, list) else []
+
+
+def group_rows(db, ids) -> list:
+    """The External sites groups with these ids.  An id that is not one is
+    refused rather than skipped, so a stale form cannot half apply."""
+    from app.core.models import SiteGroup
+
+    wanted = list(dict.fromkeys(int(i) for i in ids or []))
+    if not wanted:
+        return []
+    rows = db.query(SiteGroup).filter(SiteGroup.id.in_(wanted)).all()
+    if len(rows) != len(wanted):
+        raise ValueError("A group picked is no longer there.  Reload the page.")
+    return rows
+
+
+def set_groups(asset: ExternalAsset, rows: list, mode: str = "replace") -> None:
+    """Give a site to groups, take it from them, or set exactly which."""
+    have = {g.id: g for g in asset.groups}
+    if mode == "add":
+        for g in rows:
+            if g.id not in have:
+                asset.groups.append(g)
+    elif mode == "remove":
+        drop = {g.id for g in rows}
+        for g in list(asset.groups):
+            if g.id in drop:
+                asset.groups.remove(g)
+    else:
+        keep = {g.id for g in rows}
+        for g in list(asset.groups):
+            if g.id not in keep:
+                asset.groups.remove(g)
+        for g in rows:
+            if g.id not in have:
+                asset.groups.append(g)
 
 
 def set_tags(asset: ExternalAsset, tags) -> None:

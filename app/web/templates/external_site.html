@@ -16,6 +16,7 @@
       {% if blocked %}<span class="badge waived">no scan</span> <span class="small faint">{{ blocked }}</span>{% endif %}</div>
   </div>
   <div class="page-actions">
+    {% if can_manage %}
     <form method="post" action="{{ base }}/external/{{ asset.id }}/refresh" style="display:inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="btn" type="submit" {{ 'disabled' if asset.telemetry_status == 'running' }}>Refresh telemetry</button></form>
@@ -23,6 +24,7 @@
     {% elif not blocked %}<button class="btn primary" type="button" data-modal="scan-modal">Run a scan</button>{% endif %}
     <button class="btn" type="button" data-modal="record-modal">Record a scan</button>
     <button class="btn" type="button" data-modal="edit-modal">Edit</button>
+    {% endif %}
     <a class="btn" href="{{ base }}/external">All sites</a>
   </div>
 </div>
@@ -33,7 +35,7 @@
   <span><strong>{{ 'Queued' if active_scan.status == 'queued' else 'Scanning' }}</strong>{% if active_scan.profile %}, {{ active_scan.profile }} profile{% endif %}
     on {{ active_scan.server_name }}{% if active_scan.step %}: {{ active_scan.step }}{% endif %}.  This updates as it runs.</span>
   <a class="btn sm" href="{{ base }}/external/{{ asset.id }}/scans/{{ active_scan.id }}">Watch it</a>
-  {% if active_scan.source != 'recorded' %}
+  {% if active_scan.source != 'recorded' and can_manage %}
   <form method="post" action="{{ base }}/external/{{ asset.id }}/scans/{{ active_scan.id }}/stop" style="display:inline"
         data-confirm="Stop the scan of {{ asset.host }}?">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -125,6 +127,8 @@
         <tr><th>Default scan</th><td>{{ site_profile }}{% if not asset.default_profile %} <span class="faint small">(the product default)</span>{% endif %}</td></tr>
         <tr><th>Change frequency</th><td>{{ ('every %d days' % asset.change_frequency_days) if asset.change_frequency_days else '' }}{% if not asset.change_frequency_days %}<span class="faint">nobody has said</span>{% endif %}</td></tr>
         <tr><th>Scanning</th><td>{% if blocked %}<strong>Not to be scanned.</strong> {{ blocked }}{% else %}Allowed{% endif %}</td></tr>
+        {% if can_manage %}
+        <tr><th>External sites groups</th><td>{% if asset.groups %}{{ asset.group_names() | join(', ') }}{% else %}<span class="faint">none, administrators only</span>{% endif %}</td></tr>
         <tr><th>Proxy</th><td>{% if proxy_label %}<span class="mono">{{ proxy_label }}</span>
             <div class="faint small">Pages, screenshots, sign in and engines go through it.  DNS, ports and TLS are read directly.</div>
           {% else %}<span class="faint">none, direct from this server</span>{% endif %}</td></tr>
@@ -148,8 +152,12 @@
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button class="btn sm" type="submit">Clear saved certificates</button></form>
           </td></tr>{% endif %}
+        {% else %}
+        <tr><th>Scan sign in</th><td>{{ 'Set' if auth and auth.kind else 'None, scans see only the public site' }}</td></tr>
+        {% endif %}
         {% if asset.notes %}<tr><th>Comments</th><td class="small" style="white-space:pre-wrap">{{ asset.notes }}</td></tr>{% endif %}
       </tbody></table>
+      {% if can_manage %}
       {% if (auth and auth.kind) or (auth_b and auth_b.kind) %}
       <form method="post" action="{{ base }}/external/{{ asset.id }}/test-signin" style="margin-top:.6rem">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -159,6 +167,7 @@
       <form method="post" action="{{ base }}/external/{{ asset.id }}/delete" data-confirm="Remove {{ asset.host }} and every scan recorded against it?" style="margin-top:.6rem">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="btn sm danger" type="submit">Remove this site</button></form>
+      {% endif %}
       </div>
     </div>
 
@@ -234,10 +243,10 @@
             {% for c in review.correlations %}<div style="margin:.25rem 0">{{ c.dast }} &harr; <span class="mono">{{ c.sast }}</span><div class="faint">{{ c.why }}</div></div>{% endfor %}</div>{% endif %}
           {% if review.next_steps %}<div class="small" style="margin-top:.5rem"><strong>Next</strong><ol>{% for s in review.next_steps %}<li>{{ s }}</li>{% endfor %}</ol></div>{% endif %}
         {% else %}<div class="faint small">Reads the last dynamic scan and the open findings in the code behind the site together, and says where they agree.</div>{% endif %}
-        <form method="post" action="{{ base }}/external/{{ asset.id }}/ai" style="margin-top:.5rem">
+        {% if can_manage %}<form method="post" action="{{ base }}/external/{{ asset.id }}/ai" style="margin-top:.5rem">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button class="btn sm" type="submit" {{ 'disabled' if not ai_ready or asset.ai_status == 'running' }}
-                  title="{{ '' if ai_ready else 'Set up a model on the AI analysis page first' }}">{{ 'Read it again' if review else 'Ask for a risk read' }}</button></form>
+                  title="{{ '' if ai_ready else 'Set up a model on the AI analysis page first' }}">{{ 'Read it again' if review else 'Ask for a risk read' }}</button></form>{% endif %}
       </div>
     </div>
 
@@ -305,7 +314,8 @@
             <td class="small">{% if s.ai.status %}{{ s.ai.status }}{% if s.ai.input_tokens %}<div class="faint">{{ (s.ai.input_tokens + s.ai.output_tokens) | thousands }} tokens{% if s.ai.cost %}, {{ s.ai.cost }}{% endif %}</div>{% endif %}{% endif %}</td>
             <td class="nowrap">
               {% set back = '/external/' ~ asset.id ~ ('?scans=' ~ scan_page if scan_page > 1 else '') %}
-              {% if s.status in ('queued', 'running') %}
+              {% if not can_manage %}
+              {% elif s.status in ('queued', 'running') %}
               <form method="post" action="{{ base }}/external/{{ asset.id }}/scans/{{ s.id }}/stop" style="display:inline"
                     data-confirm="Stop this scan?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -349,19 +359,19 @@
             <td class="small nowrap">{{ x.next_run_at[:16] | replace('T', ' ') if x.next_run_at else '' }}{% if x.next_run_at %} UTC{% endif %}</td>
             <td class="small">{% if x.last_run_at %}{{ x.last_run_at[:16] | replace('T', ' ') }}
               <div class="faint">{% if x.last_scan_id %}<a href="{{ base }}/external/{{ asset.id }}/scans/{{ x.last_scan_id }}">{{ x.last_result }}</a>{% else %}{{ x.last_result }}{% endif %}</div>{% else %}<span class="faint">not yet</span>{% endif %}</td>
-            <td class="nowrap">
+            <td class="nowrap">{% if can_manage %}
               <form method="post" action="{{ base }}/external/{{ asset.id }}/schedules/{{ x.id }}/{{ 'pause' if x.enabled else 'resume' }}" style="display:inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 {% if x.enabled or x.frequency != 'once' %}<button class="btn sm" type="submit">{{ 'Pause' if x.enabled else 'Resume' }}</button>{% endif %}</form>
               <form method="post" action="{{ base }}/external/{{ asset.id }}/schedules/{{ x.id }}/delete" style="display:inline"
                     data-confirm="Remove this schedule?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="btn sm" type="submit">Remove</button></form></td>
+                <button class="btn sm" type="submit">Remove</button></form>{% endif %}</td>
           </tr>
         {% endfor %}
         </tbody></table></div>
       {% else %}<div class="empty">No scheduled scans.</div>{% endif %}
-      {% if not blocked %}<div class="card-body"><button class="btn sm" type="button" data-modal="schedule-modal">Add a schedule</button></div>{% endif %}
+      {% if not blocked and can_manage %}<div class="card-body"><button class="btn sm" type="button" data-modal="schedule-modal">Add a schedule</button></div>{% endif %}
     </div>
 
     {% set linked = links | selectattr('linked') | list %}
@@ -377,6 +387,7 @@
       {% if links %}
       {# Rows tick into this one form, so several can be unpinned or removed
          at once.  Each row keeps its own buttons in its own form. #}
+      {% if can_manage %}
       <form method="post" action="{{ base }}/external/{{ asset.id }}/repos" id="repos-bulk"
             class="card-body repos-bulk" style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -386,13 +397,14 @@
         <button class="btn sm danger" name="action" value="hide" type="submit" data-repos-needs-tick
                 title="Never link these repositories to this site">Remove selected</button>
       </form>
+      {% endif %}
       <div class="table-scroll"><table>
-        <thead><tr><th><input type="checkbox" data-repos-check-all aria-label="Select every repository"></th><th>Repository</th><th>Why</th><th>Open findings</th><th></th></tr></thead>
+        <thead><tr><th>{% if can_manage %}<input type="checkbox" data-repos-check-all aria-label="Select every repository">{% endif %}</th><th>Repository</th><th>Why</th><th>Open findings</th><th></th></tr></thead>
         <tbody>
         {% for l in links %}
           <tr>
-            <td><input type="checkbox" name="repository" value="{{ l.full_name }}" form="repos-bulk"
-                       data-repos-tick aria-label="Select {{ l.full_name }}"></td>
+            <td>{% if can_manage %}<input type="checkbox" name="repository" value="{{ l.full_name }}" form="repos-bulk"
+                       data-repos-tick aria-label="Select {{ l.full_name }}">{% endif %}</td>
             <td class="small"><a href="{{ base }}/repositories/{{ l.id }}">{{ l.full_name }}</a>
               <div>{% if l.source == 'manual' %}<span class="badge ok">picked</span>{% elif l.linked %}<span class="badge ok">linked</span>{% else %}<span class="badge pending">suggested</span>{% endif %}
                 <span class="faint">{{ l.score }}</span></div>
@@ -401,14 +413,14 @@
             <td class="nowrap">{% set c = counts.get(l.full_name, {}) %}
               {%- for level in ['critical','high','medium','low'] %}{% if c.get(level) %}<a class="badge {{ level }}" href="{{ base }}/findings?repo={{ l.full_name | urlencode }}&state=open&severity={{ level }}">{{ c[level] }}</a> {% endif %}{% endfor %}
               {%- if not c %}<span class="faint small">none</span>{% endif %}</td>
-            <td class="nowrap">
+            <td class="nowrap">{% if can_manage %}
               <form method="post" action="{{ base }}/external/{{ asset.id }}/repos" style="display:inline">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="repository" value="{{ l.full_name }}">
                 {% if not l.linked %}<button class="btn sm" name="action" value="link" type="submit">Link</button>{% endif %}
                 {% if l.source in ('manual', 'code') %}<button class="btn sm" name="action" value="forget" type="submit" title="Back to being worked out">Unpin</button>{% endif %}
                 <button class="btn sm" name="action" value="hide" type="submit" title="Never link this repository to this site">Not this one</button>
-              </form></td>
+              </form>{% endif %}</td>
           </tr>
         {% endfor %}
         </tbody></table></div>
@@ -433,6 +445,7 @@
 </div>
 {% endif %}
 
+{% if can_manage %}
 <div class="modal-backdrop" id="edit-modal" hidden>
   <div class="modal wide"><form method="post" action="{{ base }}/external/{{ asset.id }}/edit" enctype="multipart/form-data">
     <div class="modal-head">Edit {{ asset.host }} <button type="button" class="modal-close" data-close-modal>&times;</button></div>
@@ -444,6 +457,10 @@
       <label>Tags <input type="text" name="tags" maxlength="1000" value="{{ tags | join(', ') }}">
         <span class="faint small">Comma separated.  A tag that matches a repository's application name suggests it, but does not link it.</span></label>
       {{ detail_fields(asset, environments, statuses, picks_json, profiles, scan_profiles) }}
+      {% if groups %}<input type="hidden" name="with_groups" value="1">
+      <div class="field"><div class="bulk-label">External sites groups that may view this site</div>
+        <div class="check-grid">{% for g in groups %}<label class="check"><input type="checkbox" name="group" value="{{ g.id }}" {{ 'checked' if g in asset.groups }}> {{ g.name }}</label>{% endfor %}</div>
+        <span class="faint small">Members can view this site, its scans and reports.  Nobody but an administrator can change or scan it.</span></div>{% endif %}
       <label class="check"><input type="checkbox" name="no_scan" value="1" {{ 'checked' if asset.no_scan }}>
         <span>No scan.  We are not allowed to scan this host{% if asset.kind == 'domain' %} or anything under it{% endif %}.</span></label>
       <label>Why not <input type="text" name="no_scan_reason" maxlength="300" value="{{ asset.no_scan_reason }}" placeholder="Vendor hosted SaaS"></label>
@@ -714,6 +731,7 @@
       <button class="btn" type="button" data-close-modal>Cancel</button></div>
   </form></div>
 </div>
+{% endif %}
 <script src="{{ base }}/static/external.js?v={{ asset_v('external.js') }}"></script>
 <script src="{{ base }}/static/external_repos.js?v={{ asset_v('external_repos.js') }}"></script>
 {% endblock %}

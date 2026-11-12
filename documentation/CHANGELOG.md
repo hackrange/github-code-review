@@ -4,6 +4,18 @@ Newest first.  Written for somebody deciding whether to upgrade, so every entry
 says what is different for a person using the product rather than which files
 moved.
 
+## 2026-11-12
+
+**Let a team see its own external sites.**  External sites groups, a new kind
+of group on Users, Groups, say which sites their members may look at.  Give a
+group its sites on a site's Edit, or many at once with Edit the ticked sites,
+and put people in it in Edit account.  Members see those sites, their scans,
+the PDF reports and the JSON, read only: adding, changing and scanning stay
+with administrators, and any other site is a 404.  They are kept apart from
+the scanning groups, so a group can share a scanning group's name, Digital
+Engineering say, and giving a team its sites never changes what code it sees.
+Sites with no group are seen by administrators only, as before.
+
 ## 2026-11-11
 
 **A firewall's bot check is no longer reported as findings.**  Some firewalls,

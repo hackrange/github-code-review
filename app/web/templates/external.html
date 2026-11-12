@@ -11,7 +11,7 @@
       combined risk reads the live site and its code together.  A host marked
       no scan is never scanned from here, and neither is anything under a
       domain marked that way.</div></div>
-  <div class="page-actions">
+  {% if can_manage %}<div class="page-actions">
     <button class="btn primary" type="button" data-modal="add-modal">Add sites</button>
     <form method="post" action="{{ base }}/external/import" style="display:inline"
           data-confirm="Add every company domain from Settings and every host in a repository's web addresses?">
@@ -27,8 +27,11 @@
     <a class="btn" href="{{ base }}/dast-admin">DAST Admin</a>
     <a class="btn" href="{{ base }}/external-servers">DAST servers</a>
     <a class="btn" href="{{ base }}/external.csv">CSV</a>
-  </div>
+  </div>{% endif %}
 </div>
+{% if not can_manage %}<div class="notice info"><div>These are the sites given to your
+  groups.  You can look at each one, its scans and their reports.  Adding, changing
+  and scanning sites is done by an administrator.</div></div>{% endif %}
 
 {% set here = base ~ '/external' %}
 <div class="stats" data-live="list-stats">
@@ -109,13 +112,13 @@
   <div class="table-scroll">
     <table>
       <thead><tr>
-        <th><input type="checkbox" data-tick-all aria-label="Tick every site shown"></th><th>Site</th><th>Telemetry</th><th>Last dynamic scan</th>
+        <th>{% if can_manage %}<input type="checkbox" data-tick-all aria-label="Tick every site shown">{% endif %}</th><th>Site</th><th>Telemetry</th><th>Last dynamic scan</th>
         <th>Code behind it</th><th>Combined risk</th>
       </tr></thead>
       <tbody>
       {% for r in rows %}{% set a = r.a %}
         <tr>
-          <td><input type="checkbox" name="id" value="{{ a.id }}" form="pick" aria-label="Pick {{ a.host }}">
+          <td>{% if can_manage %}<input type="checkbox" name="id" value="{{ a.id }}" form="pick" aria-label="Pick {{ a.host }}">{% endif %}
             <a href="{{ base }}/external/{{ a.id }}" style="display:block;margin-top:.3rem">
             {%- if a.screenshot in ('ok', 'blank') or r.has_shot %}<img class="shot-thumb" loading="lazy" alt="Screenshot of {{ a.host }}" decoding="async" width="128" height="80" src="{{ base }}/external/{{ a.id }}/thumb.jpg?v={{ a.telemetry_at.timestamp() | int if a.telemetry_at else 0 }}" {% if a.screenshot == 'blank' %}title="The page is blank"{% endif %}>
               {%- if a.screenshot == 'blank' %}<div class="faint small" style="text-align:center">blank page</div>
@@ -126,6 +129,7 @@
             {% if a.application %}<div class="small">{{ a.application }}</div>{% endif %}
             <div style="margin-top:.2rem">{% for t in r.tags %}<a class="badge" href="{{ here }}?tag={{ t | urlencode }}">{{ t }}</a> {% endfor %}</div>
             {% if r.blocked %}<span class="badge waived" title="{{ a.no_scan_reason or 'under a domain marked no scan' }}">no scan</span>{% endif %}
+            {% if can_manage and a.groups %}<div class="small faint" style="margin-top:.2rem" title="The groups whose members may view this site">groups: {{ a.group_names() | join(', ') }}</div>{% endif %}
             <div style="margin-top:.2rem"><span class="badge {{ 'high' if (a.environment or '').startswith('prod') else 'info' }}" {% if a.environment not in environments %}title="No longer in the environments list"{% endif %}>{{ environments.get(a.environment, a.environment) }}</span>
               {% if a.status == 'obsolete' %}<span class="badge waived">obsolete</span>{% endif %}
               {% if a.external_auth_needed %}<span class="badge info" title="External auth needed">ext auth</span>{% endif %}
@@ -151,7 +155,7 @@
             {% if r.scan %}
               <div style="margin-bottom:.35rem"><a class="badge pending" href="{{ base }}/external/{{ a.id }}/scans/{{ r.scan.id }}">{{ 'queued' if r.scan.status == 'queued' else 'scanning' }}{% if r.scan.profile %}, {{ r.scan.profile }}{% endif %}</a>
                 {% if r.scan.step %}<div class="faint">{{ r.scan.step }}</div>{% endif %}
-                {% if r.scan.source != 'recorded' %}
+                {% if r.scan.source != 'recorded' and can_manage %}
                 <form method="post" action="{{ base }}/external/{{ a.id }}/scans/{{ r.scan.id }}/stop" style="display:inline"
                       data-confirm="Stop the scan of {{ a.host }}?">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -170,7 +174,7 @@
             {% elif r.blocked %}<span class="faint">not to be scanned</span>
             {% else %}<span class="badge pending">never scanned</span>{% endif %}
             {% if r.next_run %}<div class="faint" title="Next scheduled scan">next scheduled: {{ r.next_run | dt('%Y-%m-%d %H:%M') }}</div>{% endif %}
-            {% if not r.blocked and a.status != 'obsolete' and not r.scan %}
+            {% if can_manage and not r.blocked and a.status != 'obsolete' and not r.scan %}
               <div style="margin-top:.3rem"><a class="btn sm" href="{{ base }}/external/{{ a.id }}#scan">Scan</a></div>{% endif %}</td>
           <td class="small nowrap">
             {% if r.links %}<a href="{{ base }}/external/{{ a.id }}#code" title="{{ r.links | map(attribute='full_name') | join(', ') }}">{{ r.links | length }} repo{{ '' if r.links | length == 1 else 's' }}</a>
@@ -185,7 +189,7 @@
       </tbody>
     </table>
   </div>
-  <div class="card-body" style="display:flex;gap:.4rem;flex-wrap:wrap">
+  {% if can_manage %}<div class="card-body" style="display:flex;gap:.4rem;flex-wrap:wrap">
     <button class="btn sm" type="submit" form="pick" formaction="{{ here }}/refresh" data-needs-tick>Refresh telemetry</button>
     <button class="btn sm" type="button" data-modal="bulk-edit-modal" data-needs-tick>Edit the ticked sites</button>
     <button class="btn sm" type="button" data-modal="scan-many-modal" data-needs-tick>Scan the ticked sites</button>
@@ -193,16 +197,19 @@
     <button class="btn sm danger" type="submit" form="pick" formaction="{{ here }}/delete-many" data-needs-tick
             data-ext-confirm="Remove the ticked sites and every scan recorded against them?">Delete the ticked sites</button>
     <span class="faint small" data-tick-count style="align-self:center"></span>
-  </div>
+  </div>{% endif %}
   {{ pager() }}
   {% elif totals.sites %}
   <div class="empty">Nothing matches that.  <a href="{{ here }}">Show every site</a></div>
+  {% elif not can_manage %}
+  <div class="empty">No sites have been given to your groups yet.</div>
   {% else %}
   <div class="empty">No sites yet.  Add some, or import the company domains from
     Settings and the web addresses already on repositories.</div>
   {% endif %}
 </div>
 
+{% if can_manage %}
 {% macro bulk(name, label) %}
 <div class="bulk-row" data-bulk-field="{{ name }}">
   <label class="check bulk-apply"><input type="checkbox" name="apply_{{ name }}" value="1"><span>Change</span></label>
@@ -231,6 +238,9 @@
         <input type="text" name="no_scan_reason" maxlength="300" placeholder="Why not, for Yes" style="margin-top:.3rem">{% endcall %}
       {% call bulk("tags", "Tags") %}<div class="bulk-mode"><select name="tags_mode"><option value="add">Add these</option><option value="remove">Remove these</option><option value="replace">Replace all tags with these</option></select>
         <input type="text" name="tags" maxlength="1000" placeholder="comma separated"></div>{% endcall %}
+      {% if groups %}{% call bulk("groups", "External sites groups that may view") %}<div class="bulk-mode"><select name="groups_mode"><option value="add">Give these groups</option><option value="remove">Take these groups away</option><option value="replace">Replace with exactly these</option></select></div>
+        <div class="check-grid">{% for g in groups %}<label class="check"><input type="checkbox" name="group" value="{{ g.id }}"> {{ g.name }}</label>{% endfor %}</div>
+        <div class="faint small">Members of these External sites groups can view these sites, their scans and reports.  They cannot change or scan them.  The groups are kept on Users, Groups, apart from the scanning groups.</div>{% endcall %}{% endif %}
       {% call bulk("comments", "Comments") %}<div class="bulk-mode"><select name="comments_mode"><option value="replace">Replace with</option><option value="append">Add a line</option></select>
         <textarea name="comments" rows="2" maxlength="4000"></textarea></div>{% endcall %}
       {% call bulk("proxy", "Proxy") %}<div class="bulk-mode"><select name="proxy_mode"><option value="set">Set to</option><option value="clear">Remove it</option></select>
@@ -345,5 +355,6 @@
     </form>
   </div>
 </div>
+{% endif %}
 <script src="{{ base }}/static/external.js?v={{ asset_v('external.js') }}"></script>
 {% endblock %}

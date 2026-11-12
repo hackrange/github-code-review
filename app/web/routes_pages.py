@@ -232,8 +232,11 @@ def _shared(db, user: User) -> dict:
         "can_see_schedules": rbac.can(user, "schedule.read"),
         "can_see_exclusions": rbac.can(user, "exclusion.read"),
         "can_see_report_files": rbac.can(user, "report.files"),
-        # External sites: administrators, and only while it is switched on.
-        "can_see_external": _external_on(db) and rbac.can(user, "external.manage"),
+        # External sites, only while it is switched on: administrators, and
+        # anybody whose account may view them and whose group was given one.
+        "external_on": _external_on(db),
+        "can_see_external": _external_on(db) and rbac.sees_external(db, user),
+        "can_manage_external": _external_on(db) and rbac.can(user, "external.manage"),
     }
 
 
@@ -3614,7 +3617,7 @@ def users(request: Request, msg: str = "", kind: str = "", tab: str = "",
     if once:
         msg = _oneshot.take(once, user.id) or msg
 
-    from app.core.models import ScanGroup
+    from app.core.models import ScanGroup, SiteGroup
 
     with session_scope() as db:
         rows = db.query(User).order_by(User.username).all()
@@ -3622,9 +3625,13 @@ def users(request: Request, msg: str = "", kind: str = "", tab: str = "",
             # Load these while the session is open, or the template gets
             # nothing back.
             _ = [g.name for g in row.groups]
+            _ = [g.name for g in row.site_groups]
         groups = db.query(ScanGroup).order_by(ScanGroup.name).all()
         for group in groups:
             _ = len(group.members or [])
+        site_groups = db.query(SiteGroup).order_by(SiteGroup.name).all()
+        for group in site_groups:
+            _ = (len(group.members or []), len(group.sites or []))
         # What each login actually reaches, so a developer seeing an empty
         # portal is a question somebody can answer from this page rather than
         # a mystery.  A login nobody has scanned yet resolves to nothing, and
@@ -3637,7 +3644,7 @@ def users(request: Request, msg: str = "", kind: str = "", tab: str = "",
         context = _shared(db, user)
         context.update(active_page="users", rows=rows,
                        reach=reach,
-                       groups=groups,
+                       groups=groups, site_groups=site_groups,
                        tab=("groups" if tab == "groups" else "accounts"),
                        roles=[r.value for r in UserRole],
                        can_write=rbac.can(user, "user.write"),

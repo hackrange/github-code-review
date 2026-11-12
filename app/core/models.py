@@ -195,6 +195,11 @@ class User(Base):
                           cascade="all, delete-orphan")
     groups = relationship("ScanGroup", secondary="user_groups",
                           back_populates="members")
+    # External sites groups: which sites this person may look at.  Separate
+    # from the scanning groups above, so being in one never narrows or widens
+    # what they see of the code.
+    site_groups = relationship("SiteGroup", secondary="user_site_groups",
+                               back_populates="members", lazy="selectin")
     # Which sessions belong to this person.  Named explicitly because a
     # session now points at users twice: whose it is, and whose view it is
     # borrowing.  Without this SQLAlchemy cannot tell which one this means.
@@ -2481,12 +2486,67 @@ class ExternalAsset(Base):
 
     tags = relationship("ExternalAssetTag", cascade="all, delete-orphan",
                         lazy="selectin", order_by="ExternalAssetTag.tag")
+    # The External sites groups whose members may look at this site, its
+    # scans and their reports.  Only an administrator changes a site or scans
+    # it; see rbac.visible_external_assets.
+    groups = relationship("SiteGroup", secondary="external_asset_site_groups",
+                          back_populates="sites", lazy="selectin",
+                          order_by="SiteGroup.name")
 
     def tag_list(self) -> list:
         return [t.tag for t in self.tags]
 
+    def group_names(self) -> list:
+        return [g.name for g in self.groups]
+
     def __repr__(self) -> str:
         return f"<ExternalAsset {self.host}>"
+
+
+# Which External sites groups may look at which sites.  A site in no group is
+# seen by administrators only, which is how every site started.
+external_asset_site_groups = Table(
+    "external_asset_site_groups", Base.metadata,
+    Column("asset_id", Integer, ForeignKey("external_assets.id", ondelete="CASCADE"),
+           primary_key=True),
+    Column("site_group_id", Integer, ForeignKey("site_groups.id", ondelete="CASCADE"),
+           primary_key=True, index=True),
+)
+
+# Who is in which External sites group.
+user_site_groups = Table(
+    "user_site_groups", Base.metadata,
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"),
+           primary_key=True),
+    Column("site_group_id", Integer, ForeignKey("site_groups.id", ondelete="CASCADE"),
+           primary_key=True, index=True),
+)
+
+
+class SiteGroup(Base):
+    """A named set of external sites, and the people who may look at them.
+
+    Its own kind of group, apart from ScanGroup.  A scanning group says which
+    code somebody sees; this says which external sites.  The two can share a
+    name, Digital Engineering say, and still be separate: giving a team its
+    sites never changes what it sees of the code.  Members only look; an
+    administrator adds, changes and scans sites.
+    """
+
+    __tablename__ = "site_groups"
+
+    id = Column(Integer, primary_key=True)
+    # Unique among External sites groups only.
+    name = Column(String(120), nullable=False, unique=True, index=True)
+    description = Column(Text, default="")
+    created_by = Column(String(120), default="")
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    members = relationship("User", secondary=user_site_groups,
+                           back_populates="site_groups")
+    sites = relationship("ExternalAsset", secondary=external_asset_site_groups,
+                         back_populates="groups")
 
 
 class ExternalAssetTag(Base):

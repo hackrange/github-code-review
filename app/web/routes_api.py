@@ -2975,6 +2975,98 @@ def _apply_groups(db, row: User, form) -> None:
                   if wanted else [])
 
 
+def _apply_site_groups(db, row: User, form) -> None:
+    """Put the account in exactly the External sites groups that were ticked.
+
+    Only while External sites is switched on, when the form draws that
+    section, so a save made while it is off leaves what was set alone.
+    """
+    from app.core import external
+    from app.core.models import SiteGroup
+
+    if not external.enabled(db):
+        return
+    wanted = set()
+    for raw in form.getlist("site_groups"):
+        for piece in str(raw).split(","):
+            piece = piece.strip()
+            if piece.isdigit():
+                wanted.add(int(piece))
+    row.site_groups = (db.query(SiteGroup).filter(SiteGroup.id.in_(wanted)).all()
+                       if wanted else [])
+
+
+@router.post("/site-groups/save")
+async def save_site_group(request: Request, user: User = Depends(current_user)):
+    """Add an External sites group, or change one.
+
+    Apart from the scanning groups: this one says which external sites its
+    members may look at, and a scanning group of the same name is a different
+    group.  Sites are given to it on the External sites page.
+    """
+    await check_csrf(request)
+    rbac.require(user, "user.write")
+
+    from app.core.models import SiteGroup
+
+    form = await request.form()
+    name = clean_text(form.get("name"), "Name", limit=120)
+    description = clean_text(form.get("description"), "What it is", limit=500,
+                             required=False)
+    group_id = str(form.get("group_id", "")).strip()
+
+    with session_scope() as db:
+        row = None
+        if group_id:
+            row = db.query(SiteGroup).filter(
+                SiteGroup.id == clean_int(group_id, "Group")).one_or_none()
+            if row is None:
+                raise HTTPException(status_code=404, detail="No such group.")
+        clash = db.query(SiteGroup).filter(SiteGroup.name == name).one_or_none()
+        if clash is not None and (row is None or clash.id != row.id):
+            raise HTTPException(
+                status_code=409,
+                detail=f"There is already an External sites group called {name}.")
+        if row is None:
+            row = SiteGroup(name=name, created_by=user.username)
+            db.add(row)
+        row.name = name
+        row.description = description
+        db.flush()
+        record(db, "site_group.saved", actor=user.username, target=name,
+               detail=f"{len(row.sites or [])} site(s)", source_ip=client_ip(request))
+
+    return redirect("/users?tab=groups&msg=Saved.&kind=ok")
+
+
+@router.post("/site-groups/{group_id}/delete")
+async def delete_site_group(group_id: int, request: Request,
+                            user: User = Depends(current_user)):
+    """Remove an External sites group.  Its members stop seeing its sites;
+    the sites themselves stay."""
+    await check_csrf(request)
+    rbac.require(user, "user.write")
+
+    from urllib.parse import quote
+
+    from app.core.models import SiteGroup
+
+    with session_scope() as db:
+        row = db.query(SiteGroup).filter(SiteGroup.id == group_id).one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="No such group.")
+        name = row.name
+        members = len(row.members or [])
+        db.delete(row)
+        record(db, "site_group.deleted", actor=user.username, target=name,
+               detail=f"{members} member(s) lose its sites", source_ip=client_ip(request))
+
+    message = f"Deleted the External sites group {name}."
+    if members:
+        message += f" {members} account(s) no longer see its sites."
+    return redirect(f"/users?tab=groups&msg={quote(message)}&kind=ok")
+
+
 @router.post("/groups/save")
 async def save_group(request: Request, user: User = Depends(current_user)):
     """Add a scanning group, or change one.
@@ -3140,6 +3232,7 @@ async def add_user(request: Request, user: User = Depends(current_user)):
         db.flush()
 
         _apply_groups(db, row, form)
+        _apply_site_groups(db, row, form)
         record(db, "user.added", actor=user.username, target=username,
                detail=f"{role.value}, {source.value}", source_ip=client_ip(request))
 
@@ -3195,6 +3288,7 @@ async def save_user(user_id: int, request: Request,
         row.email = email
         row.github_login = github_login
         _apply_groups(db, row, form)
+        _apply_site_groups(db, row, form)
         record(db, "user.changed", actor=user.username, target=row.username,
                detail=f"role {role.value}"
                       + (", held against the provider" if row.role_pinned else ""),
