@@ -107,6 +107,61 @@ def session_scope():
         session.close()
 
 
+class WriteRefused(Exception):
+    """Something other than a SELECT was sent on a read only session."""
+
+
+def _select_only(conn, cursor, statement, parameters, context, executemany):
+    if not str(statement or "").lstrip().upper().startswith("SELECT"):
+        raise WriteRefused("Only SELECT is allowed here.")
+
+
+@contextlib.contextmanager
+def read_only_session(seconds: int = 0):
+    """A session that can only SELECT.  Nothing is ever committed.
+
+    Three locks, so no one of them has to be perfect.  The database itself is
+    told the connection is read only.  Every statement is checked before it
+    goes and anything that is not a SELECT raises.  And the session is rolled
+    back, never committed.  The connection is thrown away afterwards rather
+    than handed back to the pool, so the read only setting cannot leak into
+    a request that is allowed to write.
+    """
+    from sqlalchemy.orm import Session as OrmSession
+
+    conn = engine().connect()
+    try:
+        if settings.uses_sqlite:
+            conn.exec_driver_sql("PRAGMA query_only = ON")
+            if seconds:
+                # SQLite has no statement timeout, so a handler that is
+                # called every few thousand steps stops it instead.
+                deadline = time.monotonic() + seconds
+                raw = conn.connection.driver_connection
+                raw.set_progress_handler(
+                    lambda: 1 if time.monotonic() > deadline else 0, 10000)
+        else:
+            conn.exec_driver_sql("SET SESSION TRANSACTION READ ONLY")
+            if seconds:
+                try:        # MariaDB's name for it.  MySQL ignores this.
+                    conn.exec_driver_sql(
+                        f"SET SESSION max_statement_time = {int(seconds)}")
+                except Exception:  # noqa: BLE001
+                    conn.rollback()
+        conn.rollback()
+        event.listen(conn, "before_cursor_execute", _select_only)
+        session = OrmSession(bind=conn, autoflush=False, expire_on_commit=False,
+                             future=True)
+        try:
+            yield session
+        finally:
+            session.rollback()
+            session.close()
+    finally:
+        conn.invalidate()
+        conn.close()
+
+
 def wait_for_database(attempts: int = 30, delay: float = 2.0) -> None:
     """Give the database server time to come up.
 

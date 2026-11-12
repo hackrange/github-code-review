@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
+from app.config import settings
 from app.core import live, rbac
 from app.core.audit import record
 from app.core.db import session_scope
@@ -5448,6 +5450,135 @@ async def test_ai(request: Request, user: User = Depends(current_user)):
     return redirect("/ai?msg=" + quote(
         f"{result.get('model') or result['provider']} answered in "
         f"{result['duration_ms'] / 1000:.1f}s: {result['text'][:80]}"))
+
+
+def _ask_admin(user: User) -> None:
+    """The question box is for administrators and nobody else.
+
+    Checked here on every call, not by hiding the button.  An administrator
+    looking at the site as somebody else is that somebody else here, so they
+    are refused too.
+    """
+    if (user is None or user.disabled or user.role != UserRole.ADMIN
+            or getattr(user, "impersonated_by", "")):
+        raise HTTPException(status_code=403, detail="Not allowed")
+
+
+def ask_available(user: User) -> bool:
+    """Whether to offer the question box: an administrator, with AI set up."""
+    if (user is None or user.disabled or user.role != UserRole.ADMIN
+            or getattr(user, "impersonated_by", "")):
+        return False
+    import time
+
+    now = time.monotonic()
+    if now - _AI_READY["at"] < 15:
+        return _AI_READY["ready"]
+    from app.core import ai
+    from app.core.db import read_only_session
+
+    try:
+        with read_only_session() as db:
+            cfg = ai.config(db)
+        ready = ai.enabled(cfg) and not ai.missing(cfg)
+    except Exception:  # noqa: BLE001 - a missing button is not worth a 500
+        log.warning("could not tell whether AI is set up", exc_info=True)
+        ready = False
+    _AI_READY.update(at=now, ready=ready)
+    return ready
+
+
+# Whether AI is set up, for a few seconds, so every page does not ask.
+_AI_READY = {"at": -1000.0, "ready": False}
+
+
+def _ask_pdf(question: str, answer: str, results: list) -> bytes:
+    from weasyprint import HTML
+
+    from app.config import APP_NAME
+    from app.core import ask
+    from app.web.render import render_partial
+    from app.web.routes_pages import report_url_fetcher
+
+    tables = [{"title": r["title"], "columns": r["columns"],
+               "rows": r["rows"][:ask.PDF_ROWS],
+               "cut": len(r["rows"]) > ask.PDF_ROWS or r["truncated"]}
+              for r in results if not r["error"] and r["columns"]]
+    html = render_partial("ask_pdf.html", app_name=APP_NAME, question=question,
+                          answer=answer, tables=tables,
+                          now=datetime.now(timezone.utc))
+    return HTML(string=html, url_fetcher=report_url_fetcher("")).write_pdf()
+
+
+@router.post("/ai/ask")
+async def ai_ask(request: Request, user: User = Depends(current_user)):
+    """A plain question about the data.  Read only, administrators only.
+
+    Nothing here writes to the database: the lookups run on a session that
+    can only SELECT, and neither the usage table nor the audit log is
+    written.  The question and the queries go to the server log instead.
+    """
+    await check_csrf(request)
+    _ask_admin(user)
+
+    from fastapi.responses import JSONResponse
+
+    from app.core import ai, ask
+    from app.core.db import read_only_session
+
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = None
+    if not isinstance(body, dict) or not isinstance(body.get("question"), str):
+        return JSONResponse({"error": "Send a question."}, status_code=400)
+    if not ask.allow(user.username):
+        return JSONResponse({"error": "That is a lot of questions.  Wait a few "
+                                      "minutes and ask again."}, status_code=429)
+
+    with read_only_session() as db:
+        cfg = ai.config(db)
+    if not ai.enabled(cfg) or ai.missing(cfg):
+        return JSONResponse({"error": "AI is not set up."}, status_code=400)
+
+    log.info("ask by %s from %s: %.200r", user.username, client_ip(request),
+             body["question"])
+    try:
+        out = await run_in_threadpool(ask.ask, cfg, user, body["question"],
+                                      body.get("history"), _ask_pdf)
+    except ask.AskError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception:  # noqa: BLE001 - never a stack trace on the page
+        ref = secrets.token_hex(4)
+        log.exception("ask failed, reference %s", ref)
+        return JSONResponse({"error": f"Something went wrong.  Reference {ref}."},
+                            status_code=500)
+    for q in out["queries"]:
+        log.info("ask by %s ran: %.500s %s", user.username, q["sql"],
+                 q["error"] or "ok")
+    for item in out["files"]:
+        item["href"] = f"{settings.base_path}/ai/ask/file/{item.pop('token')}"
+    out["links"] = [{"label": link["label"],
+                     "href": f"{settings.base_path}{link['href']}"}
+                    for link in out["links"]]
+    return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/ai/ask/file/{token}")
+def ai_ask_file(token: str, user: User = Depends(current_user)):
+    """A CSV or PDF made for an answer, to the person who asked, for half an hour."""
+    _ask_admin(user)
+
+    from fastapi.responses import Response
+
+    from app.core import ask
+
+    item = ask.take_file(user.username, token)
+    if item is None:
+        raise HTTPException(status_code=404, detail="That file is gone.  Ask again.")
+    return Response(content=item["body"], media_type=item["media"], headers={
+        "Content-Disposition": 'attachment; filename="%s"' % item["name"],
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.post("/ai/models")

@@ -34,6 +34,15 @@
       {% if last_scan %}
         <span class="small faint nowrap">Last scan {{ last_scan }}</span>
       {% endif %}
+      {% if ask_ai %}
+      {# Ask the data.  Read only; the panel and its script only exist for an
+         administrator with AI set up, and the route checks that again. #}
+      <button type="button" class="ask-toggle" id="ask-toggle" aria-expanded="false"
+              aria-controls="ask-panel" title="Ask AI about the data">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1l1.4 3.6L13 6 9.4 7.4 8 11 6.6 7.4 3 6l3.6-1.4L8 1zm4.5 7.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8zM4 10.5l.55 1.45L6 12.5l-1.45.55L4 14.5l-.55-1.45L2 12.5l1.45-.55L4 10.5z"/></svg>
+        <span>Ask AI</span>
+      </button>
+      {% endif %}
       <a href="{{ base }}/account">{{ user.username }}
         <span class="faint">({{ user.role.value }})</span></a>
       <a href="{{ base }}/logout">Sign out</a>
@@ -230,6 +239,26 @@
   </div>
 </div>
 
+{% if ask_ai %}
+<section class="ask-panel" id="ask-panel" hidden aria-label="Ask AI">
+  <header class="ask-head">
+    <strong>Ask AI</strong>
+    <span class="faint small">Read only. Answers come from this tool's data.</span>
+    <button type="button" class="ask-clear" id="ask-clear" title="Start over">Clear</button>
+    <button type="button" class="ask-close" id="ask-close" aria-label="Close">&times;</button>
+  </header>
+  <div class="ask-log" id="ask-log" aria-live="polite">
+    <div class="ask-msg bot">Ask about repositories, findings, packages, owners or sites.
+For example: Which repos have CVE-2026-1234?  Which repos does John Baker own?
+Ask for a CSV or a PDF and one is made to download.</div>
+  </div>
+  <form class="ask-form" id="ask-form" autocomplete="off">
+    <textarea id="ask-input" rows="2" maxlength="500" placeholder="Ask a question" aria-label="Question"></textarea>
+    <button class="btn primary sm" type="submit" id="ask-send">Ask</button>
+  </form>
+</section>
+<script src="{{ base }}/static/ask.js?v={{ asset_v('ask.js') }}"></script>
+{% endif %}
 <script src="{{ base }}/static/app.js?v={{ asset_v('app.js') }}"></script>
 </body>
 </html>

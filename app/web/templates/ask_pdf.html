@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+{# An Ask AI answer as a document: the question, the answer, and the rows it
+   came from.  The rows are the query results, not anything the model wrote. #}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ question }}</title>
+<style>
+  @page {
+    size: letter landscape;
+    margin: 12mm 12mm 14mm 12mm;
+    @bottom-left {
+      content: "{{ app_name }}, {{ now.strftime('%Y-%m-%d %H:%M') }} UTC";
+      font-family: "DejaVu Sans", sans-serif; font-size: 7pt; color: #8a8a8a;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: "DejaVu Sans", sans-serif; font-size: 7pt; color: #8a8a8a;
+    }
+  }
+  body { font-family: "DejaVu Sans", sans-serif; font-size: 9pt; color: #1a1a1a; margin: 0; }
+  h1 { font-size: 14pt; margin: 0 0 3mm; }
+  h2 { font-size: 11pt; margin: 6mm 0 2mm; }
+  .answer { white-space: pre-wrap; line-height: 1.5; margin: 0 0 4mm; }
+  .meta { color: #5a5a5a; font-size: 8pt; }
+  table { width: 100%; border-collapse: collapse; font-size: 7.5pt; }
+  th, td { text-align: left; padding: 1mm 1.5mm; border-bottom: .3mm solid #dcdcdc; vertical-align: top; word-break: break-word; }
+  th { color: #5a5a5a; font-weight: 600; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+</style>
+</head>
+<body>
+<h1>{{ question }}</h1>
+<p class="meta">From {{ app_name }} data, read only.</p>
+<div class="answer">{{ answer }}</div>
+{% for t in tables %}
+<h2>{{ t.title }}</h2>
+<table>
+  <thead><tr>{% for c in t.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for row in t.rows %}
+    <tr>{% for v in row %}<td>{{ '' if v is none else v }}</td>{% endfor %}</tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% if t.cut %}<p class="meta">More rows than shown.  The CSV holds up to 5,000.</p>{% endif %}
+{% endfor %}
+</body>
+</html>

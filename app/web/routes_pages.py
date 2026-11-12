@@ -237,7 +237,16 @@ def _shared(db, user: User) -> dict:
         "external_on": _external_on(db),
         "can_see_external": _external_on(db) and rbac.sees_external(db, user),
         "can_manage_external": _external_on(db) and rbac.can(user, "external.manage"),
+        # The question box in the top bar.  Administrators with AI set up only;
+        # the route checks again on every question.
+        "ask_ai": _ask_available(user),
     }
+
+
+def _ask_available(user) -> bool:
+    from app.web.routes_api import ask_available
+
+    return ask_available(user)
 
 
 def _external_on(db) -> bool:

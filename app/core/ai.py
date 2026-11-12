@@ -328,7 +328,8 @@ def low_effort(cfg: dict) -> dict:
 
 
 def complete(cfg: dict, system: str, prompt: str, *, max_tokens: int = None,
-             timeout: float = None, purpose: str = "other") -> dict:
+             timeout: float = None, purpose: str = "other",
+             record: bool = True) -> dict:
     """Ask once.  -> {ok, text, error, provider, model, input_tokens,
     output_tokens, cache_read_tokens, cache_write_tokens, finish, cut_off,
     duration_ms}
@@ -338,7 +339,8 @@ def complete(cfg: dict, system: str, prompt: str, *, max_tokens: int = None,
     the caller is a page and a stack trace is not something to show on one.
 
     Every call that actually went out is written to the usage table, under
-    purpose, good or bad.
+    purpose, good or bad, unless record is False.  The admin question box
+    passes False because it must never write to the database; it logs instead.
     """
     provider = cfg.get("ai.provider") or "disabled"
     out = {"ok": False, "text": "", "error": "", "provider": provider,
@@ -369,7 +371,12 @@ def complete(cfg: dict, system: str, prompt: str, *, max_tokens: int = None,
     if out["ok"] and not (out.get("text") or "").strip():
         out["ok"] = False
         out["error"] = "The model answered with nothing."
-    _record(out, purpose)
+    if record:
+        _record(out, purpose)
+    else:
+        log.info("AI %s: %s %s ok=%s in=%s out=%s %sms", purpose, provider,
+                 out.get("model") or "", out["ok"], out.get("input_tokens"),
+                 out.get("output_tokens"), out["duration_ms"])
     return out
 
 
