@@ -29,25 +29,31 @@
         node.hidden = editing;
       });
 
-      /* Tick the groups this person is already in.  The generic modal code
-       * copies values into fields by name, and a set of checkboxes is not a
-       * field with a value. */
-      var mine = (trigger.getAttribute("data-groups") || "")
-        .split(",").filter(function (x) { return x; });
-      form.querySelectorAll("[data-group-pick]").forEach(function (box) {
-        box.checked = mine.indexOf(box.getAttribute("data-group-pick")) !== -1;
-      });
-      /* Same reason as the groups above: the generic code copies values into
-       * fields, and a checkbox is a state rather than a value. */
-      var sites = (trigger.getAttribute("data-site_groups") || "")
-        .split(",").filter(function (x) { return x; });
-      form.querySelectorAll("[data-site-group-pick]").forEach(function (box) {
-        box.checked = sites.indexOf(box.getAttribute("data-site-group-pick")) !== -1;
-      });
-      var pin = form.querySelector("[data-role-pin]");
-      if (pin) {
-        pin.checked = !!trigger.getAttribute("data-role_pinned");
-      }
+      /* Tick the groups this person is already in, and the pin.
+       *
+       * After the generic modal code, not before it.  That code runs second
+       * on the same click: it puts every tick box back to the template's
+       * default, then reads data-groups="3,5" as a yes or no for the first
+       * box named groups.  Ticking them here first meant all of it was
+       * undone, and a person's scanning groups opened unticked, so saving
+       * the account quietly took them out of every group.  An External
+       * sites group only looked kept when its id happened to be 1. */
+      setTimeout(function () {
+        var mine = (trigger.getAttribute("data-groups") || "")
+          .split(",").filter(function (x) { return x; });
+        form.querySelectorAll("[data-group-pick]").forEach(function (box) {
+          box.checked = mine.indexOf(box.getAttribute("data-group-pick")) !== -1;
+        });
+        var sites = (trigger.getAttribute("data-site_groups") || "")
+          .split(",").filter(function (x) { return x; });
+        form.querySelectorAll("[data-site-group-pick]").forEach(function (box) {
+          box.checked = sites.indexOf(box.getAttribute("data-site-group-pick")) !== -1;
+        });
+        var pin = form.querySelector("[data-role-pin]");
+        if (pin) {
+          pin.checked = !!trigger.getAttribute("data-role_pinned");
+        }
+      }, 0);
       if (head) {
         head.childNodes[0].nodeValue = editing ? "Edit account " : "Add an account ";
       }

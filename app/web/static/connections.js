@@ -40,13 +40,18 @@
       }
 
       /* Several labels can apply at once, so they are tick boxes rather than a
-       * field the generic filler understands. */
+       * field the generic filler understands.  Ticked after that filler, which
+       * runs second on the same click and puts every tick box back to the
+       * template's default: done first, the labels opened unticked and
+       * saving the connection quietly cleared them. */
       var carried = (trigger.getAttribute("data-sensitivity") || "")
         .split(",").map(function (t) { return t.trim().toLowerCase(); });
-      form.querySelectorAll('[name^="sensitivity:"]').forEach(function (box) {
-        var label = box.getAttribute("name").slice("sensitivity:".length);
-        box.checked = carried.indexOf(label.trim().toLowerCase()) !== -1;
-      });
+      setTimeout(function () {
+        form.querySelectorAll('[name^="sensitivity:"]').forEach(function (box) {
+          var label = box.getAttribute("name").slice("sensitivity:".length);
+          box.checked = carried.indexOf(label.trim().toLowerCase()) !== -1;
+        });
+      }, 0);
     });
   });
 
