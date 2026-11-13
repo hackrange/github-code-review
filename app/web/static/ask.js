@@ -79,8 +79,63 @@
     return wrap;
   }
 
+  function figures(report) {
+    var box = el("div", "ask-figures");
+    var sev = report.severity || {};
+    [["critical", "Critical"], ["high", "High"], ["medium", "Medium"], ["low", "Low"]]
+      .forEach(function (pair) {
+        var f = el("div", "ask-figure sev-" + pair[0]);
+        f.appendChild(el("strong", "", String(sev[pair[0]] || 0)));
+        f.appendChild(el("span", "", pair[1]));
+        box.appendChild(f);
+      });
+    var urgent = report.urgent || {};
+    var notes = [];
+    if (urgent.live_credentials) { notes.push(urgent.live_credentials + " credential(s) confirmed working"); }
+    if (urgent.malicious_packages) { notes.push(urgent.malicious_packages + " malicious package(s)"); }
+    if (urgent.known_exploited) { notes.push(urgent.known_exploited + " known exploited"); }
+    var wrap = el("div", "");
+    wrap.appendChild(box);
+    wrap.appendChild(el("div", "small faint", (report.findings || 0) + " findings in " +
+      (report.repositories || 0) + " repositories" + (notes.length ? ".  Urgent: " + notes.join(", ") : "")));
+    return wrap;
+  }
+
+  function diffBlock(d) {
+    var box = el("div", "ask-diff");
+    box.appendChild(el("div", "ask-diff-head", (d.vuln_id || "") + "  " + (d.repository || "") +
+      " on " + (d.branch || "") + ", " + (d.file || "") + (d.line ? ":" + d.line : "")));
+    if (d.error) {
+      box.appendChild(el("div", "small faint", d.error));
+      return box;
+    }
+    box.appendChild(el("div", "small faint",
+      (d.mode === "fixed" ? "The fix: " : "Changes since it was found: ") +
+      (d.before_commit || "") + " (" + (d.before_at || "") + ") to " + (d.after_commit || "") +
+      (d.after_at ? " (" + d.after_at + ")" : " (now)")));
+    if (d.commits && d.commits.length) {
+      box.appendChild(el("div", "small faint", "Commits: " + d.commits.join("; ")));
+    }
+    if (d.note) { box.appendChild(el("div", "small", d.note)); }
+    if (d.diff) {
+      var pre = el("pre", "ask-diff-body");
+      d.diff.split("\n").forEach(function (line) {
+        var cls = "";
+        if (line.indexOf("@@") === 0) { cls = "hunk"; }
+        else if (line.indexOf("+") === 0 && line.indexOf("+++") !== 0) { cls = "add"; }
+        else if (line.indexOf("-") === 0 && line.indexOf("---") !== 0) { cls = "del"; }
+        pre.appendChild(el("span", cls, line + "\n"));
+      });
+      box.appendChild(pre);
+      if (d.truncated) { box.appendChild(el("div", "small faint", "Cut at 400 lines.")); }
+    }
+    return box;
+  }
+
   function answer(data) {
     var msg = add("bot", data.answer || "");
+    if (data.report) { msg.appendChild(figures(data.report)); }
+    (data.diffs || []).forEach(function (d) { msg.appendChild(diffBlock(d)); });
     if (data.files && data.files.length) {
       var files = el("div", "ask-files");
       data.files.forEach(function (f) {
@@ -121,7 +176,7 @@
     busy = true;
     send.disabled = true;
     add("user", question);
-    var waiting = add("bot pending", "Looking that up...");
+    var waiting = add("bot pending", "Looking that up.  A report or a diff can take a minute...");
     fetch(base + "/ai/ask", {
       method: "POST",
       credentials: "same-origin",

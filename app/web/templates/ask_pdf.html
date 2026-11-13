@@ -1,6 +1,8 @@
 <!DOCTYPE html>
-{# An Ask AI answer as a document: the question, the answer, and the rows it
-   came from.  The rows are the query results, not anything the model wrote. #}
+{# An Ask AI answer as a document.  Everything in the tables, the report
+   sections and the diffs comes from the data, not from the model; only the
+   answer paragraph is the model's.  Wide results print as one card per row,
+   and every cell may wrap, so nothing runs off the page. #}
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -18,24 +20,153 @@
       font-family: "DejaVu Sans", sans-serif; font-size: 7pt; color: #8a8a8a;
     }
   }
+  * { box-sizing: border-box; }
   body { font-family: "DejaVu Sans", sans-serif; font-size: 9pt; color: #1a1a1a; margin: 0; }
-  h1 { font-size: 14pt; margin: 0 0 3mm; }
-  h2 { font-size: 11pt; margin: 6mm 0 2mm; }
+  h1 { font-size: 15pt; margin: 0 0 2mm; }
+  h2 { font-size: 11.5pt; margin: 7mm 0 2mm; padding-bottom: 1mm; border-bottom: .4mm solid #1a1a1a; }
+  h3 { font-size: 10pt; margin: 4mm 0 1.5mm; }
+  p { margin: 0 0 2mm; line-height: 1.45; }
   .answer { white-space: pre-wrap; line-height: 1.5; margin: 0 0 4mm; }
-  .meta { color: #5a5a5a; font-size: 8pt; }
-  table { width: 100%; border-collapse: collapse; font-size: 7.5pt; }
-  th, td { text-align: left; padding: 1mm 1.5mm; border-bottom: .3mm solid #dcdcdc; vertical-align: top; word-break: break-word; }
+  .meta, .soft { color: #5a5a5a; font-size: 8pt; }
+  .wrap { overflow-wrap: anywhere; word-break: break-word; }
+
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7.5pt; }
+  th, td { text-align: left; padding: 1mm 1.5mm; border-bottom: .3mm solid #dcdcdc;
+           vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
   th { color: #5a5a5a; font-weight: 600; }
   thead { display: table-header-group; }
   tr { page-break-inside: avoid; }
+
+  .card { border: .3mm solid #dcdcdc; border-radius: 1.5mm; padding: 1.5mm 2.5mm;
+          margin: 0 0 2mm; page-break-inside: avoid; font-size: 7.5pt; }
+  .card .kv { display: flex; gap: 2mm; padding: .4mm 0; }
+  .card .k { flex: 0 0 38mm; color: #5a5a5a; font-weight: 600; overflow-wrap: anywhere; }
+  .card .v { flex: 1; overflow-wrap: anywhere; word-break: break-word; white-space: pre-wrap; }
+
+  .figures { display: flex; gap: 3mm; margin: 2mm 0 3mm; }
+  .figure { flex: 1; border: .3mm solid #dcdcdc; border-radius: 1.5mm; padding: 2mm; text-align: center; }
+  .figure .n { font-size: 16pt; font-weight: 700; }
+  .figure .l { font-size: 7.5pt; color: #5a5a5a; }
+  .crit .n { color: #a3121f; } .high .n { color: #c2410c; } .med .n { color: #9a6700; }
+  .urgent { border-left: 1.2mm solid #a3121f; background: #fdeceb; padding: 2mm 3mm; margin: 0 0 2mm; }
+  .rec { display: flex; gap: 3mm; margin: 0 0 2mm; page-break-inside: avoid; }
+  .rec .when { flex: 0 0 24mm; font-weight: 700; font-size: 8pt; }
+  .rec .what { font-weight: 600; }
+  .sev { font-weight: 700; text-transform: capitalize; }
+  .sev-critical { color: #a3121f; } .sev-high { color: #c2410c; } .sev-medium { color: #9a6700; }
+
+  .diff { font-family: "DejaVu Sans Mono", monospace; font-size: 7pt; border: .3mm solid #dcdcdc;
+          border-radius: 1.5mm; padding: 1.5mm; margin: 1mm 0 3mm; }
+  .diff div { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; padding: 0 1mm; }
+  .diff .add { background: #e6f4ea; color: #14532d; }
+  .diff .del { background: #fdeceb; color: #7f1d1d; }
+  .diff .hunk { color: #1f4f82; background: #eaf1f8; }
 </style>
 </head>
 <body>
-<h1>{{ question }}</h1>
-<p class="meta">From {{ app_name }} data, read only.</p>
-<div class="answer">{{ answer }}</div>
+<h1 class="wrap">{{ question }}</h1>
+<p class="meta">From {{ app_name }} data, read only.  Produced {{ now.strftime('%d %B %Y') }}.</p>
+
+<h2>{{ 'Report summary' if report else 'Answer' }}</h2>
+<div class="answer wrap">{{ answer }}</div>
+
+{% if report %}
+<h2>The numbers</h2>
+<p>{{ report.summary | sentence_spaced }}</p>
+<div class="figures">
+  <div class="figure crit"><div class="n">{{ report.severity.critical }}</div><div class="l">Critical</div></div>
+  <div class="figure high"><div class="n">{{ report.severity.high }}</div><div class="l">High</div></div>
+  <div class="figure med"><div class="n">{{ report.severity.medium }}</div><div class="l">Medium</div></div>
+  <div class="figure"><div class="n">{{ report.severity.low }}</div><div class="l">Low</div></div>
+  <div class="figure"><div class="n">{{ report.findings }}</div><div class="l">Findings in {{ report.repositories }} repositor{{ 'y' if report.repositories == 1 else 'ies' }}</div></div>
+</div>
+<p class="soft">Counts are the scanners' own severities.  A person's override shows in the list below.</p>
+{% if report.urgent.live_credentials %}<div class="urgent">{{ report.urgent.live_credentials }} credential{{ '' if report.urgent.live_credentials == 1 else 's' }} confirmed still working.</div>{% endif %}
+{% if report.urgent.malicious_packages %}<div class="urgent">{{ report.urgent.malicious_packages }} package{{ '' if report.urgent.malicious_packages == 1 else 's' }} identified as malicious.</div>{% endif %}
+{% if report.urgent.known_exploited %}<div class="urgent">{{ report.urgent.known_exploited }} finding{{ '' if report.urgent.known_exploited == 1 else 's' }} on the known exploited list.</div>{% endif %}
+{% if report.capped %}<p class="soft">The scope was cut at 5,000 findings.</p>{% endif %}
+
+{% if report.recommendations %}
+<h2>What to do first</h2>
+{% for r in report.recommendations %}
+<div class="rec"><div class="when">{{ r.priority }}</div>
+  <div><div class="what">{{ r.title }}</div><div>{{ r.detail | sentence_spaced }}</div></div></div>
+{% endfor %}
+{% endif %}
+
+{% if report.worst %}
+<h2>Top risks</h2>
+<table>
+  <colgroup><col style="width:9%"><col style="width:31%"><col style="width:20%"><col style="width:26%"><col style="width:14%"></colgroup>
+  <thead><tr><th>Severity</th><th>Finding</th><th>Repository</th><th>Where</th><th>Id</th></tr></thead>
+  <tbody>
+  {% for w in report.worst %}
+  <tr>
+    <td class="sev sev-{{ w.severity }}">{{ w.severity }}</td>
+    <td>{{ w.title }}{% if w.flags %}<br><strong>{{ w.flags }}</strong>{% endif %}{% if w.advisory %}<br><span class="soft">{{ w.advisory }}{{ (', ' ~ w.cwe) if w.cwe }}</span>{% elif w.cwe %}<br><span class="soft">{{ w.cwe }}</span>{% endif %}</td>
+    <td>{{ w.repository }}{% if w.branch %}<br><span class="soft">{{ w.branch }}</span>{% endif %}</td>
+    <td>{{ w.package ~ (' (fixed in ' ~ w.fixed_in ~ ')' if w.fixed_in else '') if w.package else w.location }}</td>
+    <td>{{ w.id }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% for section in report.classes %}
+<h2>{{ section.severity | capitalize }} findings by kind of weakness ({{ section.total }})</h2>
+{% for g in section.groups %}
+<h3>{{ g.name }} ({{ g.count }})</h3>
+<p>{{ g.what | sentence_spaced }}</p>
+<p><strong>What to do.</strong>  {{ g.todo | sentence_spaced }}</p>
+<p class="soft wrap">In {{ g.repositories | join(', ') }}</p>
+{% endfor %}
+{% endfor %}
+
+{% if report.actions %}
+<h2>Upgrades that clear the most</h2>
+<table>
+  <colgroup><col style="width:28%"><col style="width:26%"><col style="width:18%"><col style="width:18%"><col style="width:10%"></colgroup>
+  <thead><tr><th>Repository</th><th>Package</th><th>From</th><th>To</th><th>Clears</th></tr></thead>
+  <tbody>
+  {% for a in report.actions %}
+  <tr><td>{{ a.repository }}</td><td>{{ a.package or a.image }}</td><td>{{ a.version }}</td><td>{{ a.fixed_in }}</td><td>{{ a.advisories }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if report.themes %}
+<h2>Observations</h2>
+{% for t in report.themes %}<h3>{{ t.title }}</h3><p>{{ t.detail | sentence_spaced }}</p>{% endfor %}
+{% endif %}
+{% endif %}
+
+{% for d in diffs %}
+<h2 class="wrap">{{ d.vuln_id }}: {{ d.title }}</h2>
+<p class="wrap"><strong>{{ d.repository }}</strong> on {{ d.branch }}, {{ d.file }}{{ (':' ~ d.line) if d.line }}</p>
+{% if d.error %}
+<p class="soft">{{ d.error }}</p>
+{% else %}
+<p class="soft">{{ 'The fix' if d.mode == 'fixed' else 'Changes since it was found' }}: {{ d.before_commit }} ({{ d.before_at }}) to {{ d.after_commit }}{{ (' (' ~ d.after_at ~ ')') if d.after_at else ' (now)' }}.</p>
+{% if d.commits %}<p class="soft wrap">Commits: {{ d.commits | join('; ') }}</p>{% endif %}
+{% if d.note %}<p>{{ d.note | sentence_spaced }}</p>{% endif %}
+{% if d.lines %}
+<div class="diff">{% for l in d.lines %}<div class="{{ l.kind }}">{{ l.text }}</div>{% endfor %}</div>
+{% if d.truncated %}<p class="soft">The diff was cut at 400 lines.</p>{% endif %}
+{% endif %}
+{% endif %}
+{% endfor %}
+
 {% for t in tables %}
-<h2>{{ t.title }}</h2>
+<h2 class="wrap">{{ t.title }}</h2>
+{% if t.cards %}
+  {% for row in t.rows %}
+  <div class="card">
+    {% for v in row %}<div class="kv"><div class="k">{{ t.columns[loop.index0] }}</div><div class="v">{{ '' if v is none else v }}</div></div>{% endfor %}
+  </div>
+  {% endfor %}
+{% else %}
 <table>
   <thead><tr>{% for c in t.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
   <tbody>
@@ -44,7 +175,8 @@
   {% endfor %}
   </tbody>
 </table>
-{% if t.cut %}<p class="meta">More rows than shown.  The CSV holds up to 5,000.</p>{% endif %}
+{% endif %}
+{% if t.cut %}<p class="soft">More rows than shown.  The CSV holds up to 5,000.</p>{% endif %}
 {% endfor %}
 </body>
 </html>

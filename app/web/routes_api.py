@@ -5492,7 +5492,8 @@ def ask_available(user: User) -> bool:
 _AI_READY = {"at": -1000.0, "ready": False}
 
 
-def _ask_pdf(question: str, answer: str, results: list) -> bytes:
+def _ask_pdf(question: str, answer: str, results: list, report=None,
+             diffs=None) -> bytes:
     from weasyprint import HTML
 
     from app.config import APP_NAME
@@ -5500,13 +5501,29 @@ def _ask_pdf(question: str, answer: str, results: list) -> bytes:
     from app.web.render import render_partial
     from app.web.routes_pages import report_url_fetcher
 
-    tables = [{"title": r["title"], "columns": r["columns"],
-               "rows": r["rows"][:ask.PDF_ROWS],
-               "cut": len(r["rows"]) > ask.PDF_ROWS or r["truncated"]}
-              for r in results if not r["error"] and r["columns"]]
+    tables = []
+    if not report:
+        for r in results:
+            if r["error"] or not r["columns"]:
+                continue
+            tables.append({"title": r["title"], "columns": r["columns"],
+                           "rows": r["rows"][:ask.PDF_ROWS],
+                           "cut": len(r["rows"]) > ask.PDF_ROWS or r["truncated"],
+                           # Past this many columns a row reads better as a card
+                           # than as a table that runs off the page.
+                           "cards": len(r["columns"]) > ask.PDF_TABLE_COLUMNS})
+    shown = []
+    for d in diffs or []:
+        lines = []
+        for line in (d.get("diff") or "").splitlines():
+            kind = ("add" if line.startswith("+") and not line.startswith("+++")
+                    else "del" if line.startswith("-") and not line.startswith("---")
+                    else "hunk" if line.startswith("@@") else "")
+            lines.append({"text": line, "kind": kind})
+        shown.append(dict(d, lines=lines))
     html = render_partial("ask_pdf.html", app_name=APP_NAME, question=question,
-                          answer=answer, tables=tables,
-                          now=datetime.now(timezone.utc))
+                          answer=answer, tables=tables, report=report,
+                          diffs=shown, now=datetime.now(timezone.utc))
     return HTML(string=html, url_fetcher=report_url_fetcher("")).write_pdf()
 
 

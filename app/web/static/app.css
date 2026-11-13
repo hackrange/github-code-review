@@ -1269,3 +1269,18 @@ tr.decided-out > td.decision-cell { opacity: 1; }
     background: var(--bg); color: var(--text);
 }
 @media (max-width: 640px) { .ask-toggle span { display: none; } }
+.ask-figures { display: flex; gap: .4rem; margin-top: .5rem; white-space: normal; }
+.ask-figure { flex: 1; text-align: center; border: 1px solid var(--border); border-radius: var(--radius);
+    padding: .25rem; background: var(--bg); }
+.ask-figure strong { display: block; font-size: 1.1rem; }
+.ask-figure span { font-size: .72rem; color: var(--text-soft); }
+.ask-figure.sev-critical strong, .ask-figure.sev-high strong { color: var(--bad); }
+.ask-figure.sev-medium strong { color: var(--warn); }
+.ask-diff { margin-top: .6rem; white-space: normal; }
+.ask-diff-head { font-weight: 600; font-size: .82rem; overflow-wrap: anywhere; }
+.ask-diff-body { max-height: 18rem; overflow: auto; margin: .3rem 0 0; padding: .4rem;
+    font-family: var(--mono); font-size: .74rem; line-height: 1.35; white-space: pre;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); }
+.ask-diff-body .add { background: var(--ok-bg); color: var(--ok); }
+.ask-diff-body .del { background: var(--bad-bg); color: var(--bad); }
+.ask-diff-body .hunk { color: var(--info); }
