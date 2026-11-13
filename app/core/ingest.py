@@ -1476,9 +1476,13 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         verify_on = bool((document.get("scan") or {}).get(
             "live_verification_enabled"))
         checked = any("trufflehog" in str(name).lower() for name in engines)
+        # The Azure verifier records on the row itself when it actually probed
+        # a credential, so a token it tried and could not confirm reads as
+        # ATTEMPTED on its own evidence, not as a bare, misleading UNCHECKED.
+        azure_attempted = bool(row.get("verification_attempted"))
         if finding.verified:
             finding.verification_status = CredentialVerification.VERIFIED
-        elif checked and verify_on:
+        elif azure_attempted or (checked and verify_on):
             finding.verification_status = CredentialVerification.ATTEMPTED
         else:
             finding.verification_status = CredentialVerification.UNCHECKED

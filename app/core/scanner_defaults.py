@@ -82,6 +82,15 @@ TEMPLATE = {
                     "include_detectors": [],
                     "exclude_detectors": []
                 },
+                "azure": {
+                    # Reading an Azure token's own expiry, and a SAS token's
+                    # se=, is always done: it sends nothing and a token past
+                    # its expiry is dead whatever a server would say.  The live
+                    # probe, which sends the credential to Microsoft for one
+                    # read only call, is off by default and turned on per scan.
+                    "verify": False,
+                    "timeout_seconds": 6
+                },
                 "gitleaks": {
                     "config_path": "gitleaks-extra.toml",
                     "redact_in_engine": False,

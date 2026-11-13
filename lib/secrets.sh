@@ -561,6 +561,19 @@ _mule_key_location() {
 # of these.  The same UUID anywhere else, as a client_id say, keeps it
 # reported.  Prints the kind, or nothing.  A file nobody can read decides
 # nothing.
+# Whether a value is shaped like an Azure credential the verifier can read:
+# a three part JWT (an Entra access token), or a shared access signature, which
+# always carries a sig= and at least one of the other SAS parameters.  A cheap
+# gate so only these few values are ever forked out to the Python verifier; the
+# verifier itself decides whether a JWT is actually an Azure one.
+_looks_azure() {
+  local s="$1"
+  [[ "$s" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$ ]] && return 0
+  [[ "$s" == *"sig="* && ( "$s" == *"sv="* || "$s" == *"se="* \
+        || "$s" == *"sr="* || "$s" == *"sp="* ) ]] && return 0
+  return 1
+}
+
 _mule_identifier() {
   local dir="$1" file="$2" commit="$3" secret="$4"
   [[ -n "$dir" && -n "$file" && -n "$secret" ]] || return 0
@@ -644,7 +657,16 @@ derive_secret_facts() {
   # forked per finding to answer the same question every time.
   local now_epoch; now_epoch=$(date -u +%s)
 
-  local line secret fp merge redacted slen
+  # The Azure verifier, set up once.  Offline classification and expiry reading
+  # cost nothing and never leave the host, so they run for every Azure shaped
+  # value.  The live probe sends the credential to Microsoft, so it is opt in
+  # (scan.secrets.azure.verify, default off) and read only.
+  local az_py; az_py=$(ghscan_python)
+  local -a az_flags=()
+  cfg_bool '.scan.secrets.azure.verify' false && az_flags+=(--probe)
+  az_flags+=(--timeout "$(cfg_num '.scan.secrets.azure.timeout_seconds' 6)")
+
+  local line secret fp merge redacted slen azure
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     secret=$(printf '%s' "$line" | jq -r '._secret // ""')
@@ -708,6 +730,18 @@ derive_secret_facts() {
       "$(printf '%s' "$line" | jq -r '.file // ""')" \
       "$(printf '%s' "$line" | jq -r '.commit // ""')" "$secret")
 
+    # Azure credential facts, and a live verdict when the probe is on.  Only
+    # asked for a value that is shaped like an Azure token or SAS, so a plain
+    # secret is never forked out to the verifier.  The secret goes in on stdin,
+    # not the argument list, so it never reaches the process table.  Any
+    # trouble yields {}, which merges nothing.
+    azure='{}'
+    if [[ -n "$az_py" ]] && _looks_azure "$secret"; then
+      azure=$(printf '%s' "$secret" \
+        | "$az_py" -I "$GHSCAN_HOME/lib/azure_verify.py" "${az_flags[@]}" 2>/dev/null)
+      [[ -z "$azure" ]] && azure='{}'
+    fi
+
     printf '%s' "$line" | jq -c \
       --arg fp "$fp" --arg merge "$merge" --arg redacted "$redacted" \
       --argjson slen "$slen" --argjson pp "$pp" --argjson live "$live" \
@@ -715,7 +749,7 @@ derive_secret_facts() {
       --argjson objkey "$object_key" --arg muleid "$mule_id" \
       --argjson mulechecked "$mule_checked" --arg mulekey "$mule_key" \
       --argjson now "$now_epoch" --argjson idc "$JWT_IDENTITY_CLAIMS" \
-      --argjson prc "$JWT_PRIVILEGE_CLAIMS" '
+      --argjson prc "$JWT_PRIVILEGE_CLAIMS" --argjson azure "$azure" '
       # A JSON web token is not opaque.  Two of its three parts are base64 of
       # plain JSON and anybody holding the token can read them without the
       # key, which is the whole reason a leaked one matters more than a
@@ -930,6 +964,11 @@ derive_secret_facts() {
           mule_key_location: (if $mule then $mulekey else "" end)
         }
       + ($s | jwt_facts)
+      # The facts from the Azure verifier come last, so a live result can set
+      # verified on a value no other engine confirmed.  It only ever adds
+      # verified true, so a credential trufflehog already confirmed is never
+      # pulled back down.
+      + $azure
       | del(._secret)
       | del(._match)'
   done <&${bfd}
