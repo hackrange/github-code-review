@@ -574,6 +574,46 @@ _looks_azure() {
   return 1
 }
 
+# The whole signed URL behind a bare Azure Storage URL, read back out of the
+# file it was found in.  TruffleHog reports a SAS as two pieces: Raw is the
+# blob URL with no query, and RawV2 glues a fragment of the query on with the
+# start of it cut off (?skoid=...&s goes missing).  Neither carries the se=,
+# sp= and sr= the verifier needs, and Raw is what the finding is keyed on, so
+# changing what _secret holds would re-key every SAS finding already filed.
+# Instead the query is read from the file, for the verifier only: it is never
+# merged onto the finding, which keeps only the facts the verifier returns.
+# Prints the full URL, or nothing when the file does not hold it.
+_bare_storage_url() {
+  [[ "$1" =~ ^https://[A-Za-z0-9.-]+\.core\.(windows\.net|usgovcloudapi\.net|chinacloudapi\.cn|cloudapi\.de)/[^?[:space:]]+$ ]]
+}
+
+_sas_full_url() {
+  local dir="$1" file="$2" commit="$3" url="$4"
+  _bare_storage_url "$url" && [[ -n "$file" ]] || return 0
+  # Never a step out of the clone, whichever way the file is named.
+  [[ "$file" == ".."/* || "$file" == *"/../"* || "$file" == *"/.." ]] && return 0
+
+  local body=""
+  if [[ -n "$commit" && -n "$dir" ]]; then
+    body=$(git -C "$dir" show "$commit:$file" 2>/dev/null | head -c "$_DIGEST_SCAN_BYTES")
+  elif [[ -n "$dir" && -f "$dir/$file" ]]; then
+    body=$(head -c "$_DIGEST_SCAN_BYTES" -- "$dir/$file" 2>/dev/null)
+  elif [[ -n "$dir" && "$file" == "$dir"/* && -f "$file" ]]; then
+    # A branch-head scan can name the file by its path in the clone.
+    body=$(head -c "$_DIGEST_SCAN_BYTES" -- "$file" 2>/dev/null)
+  fi
+  [[ -n "$body" && "$body" == *"$url?"* ]] || return 0
+
+  # The first place the URL carries a query.  A JSON writer may escape the
+  # ampersands, so those are put back before the query is cut at the first
+  # character no URL query holds unescaped.
+  local rest="${body#*"$url?"}"
+  rest="${rest:0:4096}"
+  rest="${rest//\\u0026/\&}"
+  rest="${rest%%[\"\'<>\\[:space:]]*}"
+  if [[ -n "$rest" ]]; then printf '%s?%s' "$url" "$rest"; fi
+}
+
 _mule_identifier() {
   local dir="$1" file="$2" commit="$3" secret="$4"
   [[ -n "$dir" && -n "$file" && -n "$secret" ]] || return 0
@@ -736,8 +776,16 @@ derive_secret_facts() {
     # not the argument list, so it never reaches the process table.  Any
     # trouble yields {}, which merges nothing.
     azure='{}'
-    if [[ -n "$az_py" ]] && _looks_azure "$secret"; then
-      azure=$(printf '%s' "$secret" \
+    local az_value="$secret"
+    # Two jq forks per value, so only for a value already shaped like a bare
+    # storage URL, which is a handful of findings and not every secret.
+    if [[ -n "$az_py" ]] && _bare_storage_url "$az_value"; then
+      az_value=$(_sas_full_url "$dir" \
+        "$(printf '%s' "$line" | jq -r '.file // ""')" \
+        "$(printf '%s' "$line" | jq -r '.commit // ""')" "$secret")
+    fi
+    if [[ -n "$az_py" && -n "$az_value" ]] && _looks_azure "$az_value"; then
+      azure=$(printf '%s' "$az_value" \
         | "$az_py" -I "$GHSCAN_HOME/lib/azure_verify.py" "${az_flags[@]}" 2>/dev/null)
       [[ -z "$azure" ]] && azure='{}'
     fi

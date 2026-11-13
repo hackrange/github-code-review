@@ -894,6 +894,29 @@
         {% if f.token_claims %}
         <tr><th>All claims</th><td class="mono small faint">{{ f.token_claims }}</td></tr>
         {% endif %}
+        {# An Azure Storage shared access signature: what its own query says.
+           The host, the grant and the expiry, never the signature. #}
+        {% elif f.token_kind == 'azure_sas' %}
+        <tr><th>Signature</th><td>
+          <span class="badge ok">read</span>
+          {% if f.token_expired is none %}
+            <span class="badge critical">no expiry read</span>
+          {% elif f.token_expired %}
+            <span class="badge info">expired</span>
+          {% else %}
+            <span class="badge critical">still valid</span>
+          {% endif %}
+          <div class="faint small">
+            {% if f.token_expired %}
+              It stopped working on {{ f.token_expires_at | dt('%Y-%m-%d') }}.
+            {% elif f.token_expired is not none %}
+              It works until {{ f.token_expires_at | dt('%Y-%m-%d') }} unless the
+              key that signed it is rotated.
+            {% endif %}
+          </div>
+        </td></tr>
+        {% if f.token_audience %}<tr><th>Storage host</th><td class="mono small">{{ f.token_audience }}</td></tr>{% endif %}
+        {% if f.token_privilege_claims %}<tr><th>Grants</th><td class="mono small">{{ f.token_privilege_claims }}</td></tr>{% endif %}
         {% elif f.kind.value == 'credential' and f.rule in ('jwt', 'jwt-token') %}
         <tr><th>Token</th><td>
           <span class="badge unknown">not a token</span>

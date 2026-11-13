@@ -1250,6 +1250,31 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                 if not (finding.triage_reason or "").startswith("The token expired"):
                     finding.triage_reason = note
 
+            # A Power Platform file link that has run out.  Power Apps writes a
+            # short lived, read only SAS for each image into an exported canvas
+            # app, and the export keeps the copy long after the day it worked.
+            # Expired, read only, one file, on Microsoft's own storage: it
+            # opens nothing and never belonged to anybody here, so it is info.
+            # The rule lives in risk.inert_platform_sas so the likelihood says
+            # the same thing.  A person's grade or an admin rule still wins.
+            if (finding.kind == FindingKind.CREDENTIAL
+                    and risk.inert_platform_sas(finding)):
+                if finding.severity != Severity.INFO:
+                    finding.engine_severity = (finding.engine_severity
+                                               or finding.severity.value)
+                    finding.severity = Severity.INFO
+                when = (finding.token_expires_at.strftime("%Y-%m-%d")
+                        if finding.token_expires_at else "a date in the past")
+                finding.triage_reason = (
+                    "This is a read only link to one file in Power Platform "
+                    "storage.  Power Apps creates these links for a day at a "
+                    "time when an app is exported.  It expired on %s, so it "
+                    "opens nothing now and is graded info." % when)
+            elif (finding.triage_reason or "").startswith(
+                    "This is a read only link to one file in Power Platform"):
+                # No longer true of this finding, so the note goes with it.
+                finding.triage_reason = ""
+
             # A Mule secure properties value, ![...], is ciphertext.  It opens
             # nothing without the key the app is started with, so when the
             # scan looked through the repository and found no key, it is info.
@@ -1520,6 +1545,27 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             finding.token_kind = ("mule_encrypted" if row.get("mule_ciphertext")
                                   else "")
             finding.token_expired = None
+            # An Azure Storage shared access signature the verifier read.  Its
+            # query says when it stops (se=), what it allows (sp=) and over
+            # what (sr=), and the signature covers all three.  Kept in the
+            # token columns so the grade below and the likelihood in risk.py
+            # read the same stored facts: the host as the audience, the grant
+            # as the privilege.  Field names and the host only; the signature
+            # never reaches the scanner's output, let alone this table.
+            if (row.get("azure_kind") or "") == "sas":
+                expired = row.get("azure_expired")
+                finding.token_kind = "azure_sas"
+                finding.token_alg = ""
+                finding.token_issuer = ""
+                finding.token_claims = ""
+                finding.token_identity_claims = ""
+                finding.token_issued_at = None
+                finding.token_expires_at = _when(row.get("azure_expires_at"))
+                finding.token_expired = None if expired is None else bool(expired)
+                finding.token_audience = str(row.get("azure_resource") or "")[:255]
+                finding.token_privilege_claims = "sp=%s, sr=%s" % (
+                    str(row.get("azure_sas_permissions") or "")[:32],
+                    str(row.get("azure_sas_scope") or "")[:8])
 
     def _names(value) -> str:
         """A claim name list as text.  Names only; values never come here."""

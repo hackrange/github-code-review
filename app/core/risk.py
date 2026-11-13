@@ -34,6 +34,8 @@ grade on a finding stays where it is until a person changes it, which is what
 
 from __future__ import annotations
 
+import re
+
 from app.core.models import Severity
 
 # --- the vocabularies --------------------------------------------------------
@@ -205,6 +207,38 @@ def impact_of(finding, context: dict = None) -> tuple:
 
 # --- whether anybody can -----------------------------------------------------
 
+# Power Platform's own storage.  Power Apps, Dataverse and the canvas app
+# packager hand out short lived, read only links to single files on accounts
+# named dsprd<region>, and an exported canvas app keeps a copy of each one in
+# References/Resources.json.  Microsoft owns the account, not the customer.
+_PLATFORM_SAS_HOST = re.compile(r"^dsprd[a-z0-9]+\.blob\.core\.windows\.net$")
+
+
+def inert_platform_sas(finding) -> bool:
+    """A SAS that is dead, harmless, and was never somebody's secret.
+
+    Every one of these must hold, from what the scanner read out of the value
+    itself and the signature covers, so none can be faked without the key:
+    it has passed its own se= expiry, it grants read and nothing else (sp=r),
+    it covers one blob (sr=b), and it is on Power Platform's own storage.
+    A credential a provider confirmed live is never one, whatever it says.
+
+    Deliberately narrow.  An expired SAS on a customer storage account, a
+    writable one, or one over a whole container keeps its grade: the expiry
+    alone is evidence, but this is the case the grading was asked to settle.
+    """
+    if getattr(finding, "verified", False):
+        return False
+    if (getattr(finding, "token_kind", "") or "") != "azure_sas":
+        return False
+    if getattr(finding, "token_expired", None) is not True:
+        return False
+    if (getattr(finding, "token_privilege_claims", "") or "") != "sp=r, sr=b":
+        return False
+    host = (getattr(finding, "token_audience", "") or "").strip().lower()
+    return bool(_PLATFORM_SAS_HOST.match(host))
+
+
 def _day(value) -> str:
     """A date somebody can read, or an honest shrug."""
     try:
@@ -269,6 +303,11 @@ def likelihood_of(finding) -> tuple:
     # contradicts the reason for the downgrade.  Getting this backwards would
     # have promoted a few thousand tokens sitting in load test logs, which is
     # the noise this was meant to remove.
+    if inert_platform_sas(finding):
+        return UNLIKELY, ("a read only link to one Power Platform file that "
+                          "expired on "
+                          + _day(getattr(finding, "token_expires_at", None))
+                          + ", so it opens nothing now")
     if ((getattr(finding, "token_kind", "") or "") == "jwt"
             and getattr(finding, "token_expired", None) is True):
         return UNLIKELY, ("the token says it expired on "

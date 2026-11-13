@@ -218,7 +218,20 @@ triage_findings() {
     | group_by(._key)
     | map(
         (map(select(.verified == true)) | first) as $v
-        | (.[0]) as $f
+        # One bare storage URL can sit in many commits, each export carrying
+        # a fresh signature.  The Azure facts come from the most dangerous of
+        # them: one still in date first, then one granting more than read on
+        # one blob.  Otherwise an old expired copy could speak for a new live
+        # one and lower a finding that should not be.
+        | (map(select((.azure_kind // "") != ""))
+           | sort_by([(.azure_expired == true),
+                      ((.azure_sas_permissions // "r") == "r"
+                       and (.azure_sas_scope // "b") == "b")])
+           | first) as $az
+        | (.[0]
+           + (if $az == null then {} else
+                ($az | with_entries(select(.key | startswith("azure_"))))
+              end)) as $f
         | $f + {
             engines:    (map(.engine) | unique),
             detectors:  (map(.detector) | unique),

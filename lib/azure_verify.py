@@ -160,6 +160,11 @@ def inspect(secret: str) -> dict:
             out["_probe_method"], out["_bearer"] = "GET", True
     elif kind == "sas":
         se, host, url = _sas_facts(secret)
+        # What the signature lets its holder do (sp) and over what (sr: b one
+        # blob, c a container, s a share...).  Both are plain query fields the
+        # signature covers, so they are as trustworthy as se= and cannot be
+        # widened without the key.  Recorded so a grade can rest on them.
+        out["azure_sas_permissions"], out["azure_sas_scope"] = _sas_grant(secret)
         if se is not None:
             out["azure_expires_at"] = _iso(se)
             out["azure_expired"] = se < _now()
@@ -186,6 +191,22 @@ def _sas_facts(secret: str):
         # Only a full, path bearing URL on a storage host is probeable.
         url = "https://%s%s?%s" % (host, split.path, split.query)
     return se, (host if is_storage else ""), url
+
+
+def _sas_grant(secret: str):
+    """(sp, sr) of a SAS, each '' when absent or given more than once."""
+    s = secret.strip()
+    query = urlsplit(s).query if "://" in s else ""
+    if not query:
+        query = s.split("?", 1)[1] if "?" in s else s
+    params = parse_qs(query, keep_blank_values=True)
+
+    def one(name):
+        values = params.get(name) or []
+        # Two of the same field is not a SAS any service would honor, and
+        # guessing which one counts is how a grade gets argued down wrongly.
+        return unquote(values[0]).strip() if len(values) == 1 else ""
+    return one("sp"), one("sr")
 
 
 def _parse_azure_time(value: str):
@@ -312,7 +333,8 @@ def verify(secret: str, do_probe: bool = False, timeout: float = _TIMEOUT) -> di
 
     Fields the secrets pass merges onto the finding:
       azure_kind, azure_expired, azure_expires_at, azure_resource, azure_live,
-      azure_status, azure_detail.
+      azure_status, azure_detail, and for a SAS azure_sas_permissions (sp)
+      and azure_sas_scope (sr).
       verification_attempted  true when a live probe actually ran.
       verified                true only when a provider confirmed it live.
       verification_error      the reason it is not a confirmed live credential.
@@ -320,7 +342,9 @@ def verify(secret: str, do_probe: bool = False, timeout: float = _TIMEOUT) -> di
     facts = inspect(secret)
     kind = facts["azure_kind"]
     result = {k: facts[k] for k in ("azure_kind", "azure_expired",
-                                    "azure_expires_at", "azure_resource")}
+                                    "azure_expires_at", "azure_resource",
+                                    "azure_sas_permissions", "azure_sas_scope")
+              if k in facts}
     if not kind:
         return {}  # nothing to say; caller merges nothing
     result["verification_attempted"] = False
