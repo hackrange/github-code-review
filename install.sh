@@ -315,6 +315,25 @@ if (( UPGRADE )); then
   # root owned work directory that docker created, and every scan on it fails.
   ensure_container_dir "$REPORTS"
   ensure_container_dir "$WORK"
+
+  # Automatic backups need a password, and an install from before they existed
+  # has none, which would leave it with no nightly backup and no backup before
+  # a delete of all findings.  This adds the two keys when they are missing and
+  # never changes a value that is already there.
+  BACKUPS="$(existing GCR_BACKUP_PATH || echo "$HERE/backups")"
+  ensure_container_dir "$BACKUPS"
+  chmod 700 "$BACKUPS" 2>/dev/null || true
+  if ! grep -q '^GCR_BACKUP_PASSWORD=.' "$ENV_FILE"; then
+    {
+      printf '\n# Added by install.sh --upgrade on %s.\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      printf '# Automatic backups are encrypted with this.  Copy it somewhere other\n'
+      printf '# than this server, or a lost server takes its backups with it.\n'
+      grep -q '^GCR_BACKUP_PATH=' "$ENV_FILE" || printf 'GCR_BACKUP_PATH=%s\n' "$BACKUPS"
+      printf 'GCR_BACKUP_PASSWORD=%s\n' "$(random_secret 40)"
+    } >> "$ENV_FILE"
+    ok "a backup password was added to $ENV_FILE for the nightly backups"
+    hint "Copy GCR_BACKUP_PASSWORD from $ENV_FILE somewhere safe, off this server"
+  fi
   export COMPOSE_PROFILES="$DB_PROFILE"
 
   say "Rebuilding"
