@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-{# An Ask AI answer as a document.  Everything in the tables, the report
-   sections and the diffs comes from the data, not from the model; only the
-   answer paragraph is the model's.  Wide results print as one card per row,
-   and every cell may wrap, so nothing runs off the page. #}
+{# The data behind an Ask AI answer.  Neither the question asked nor the chat
+   answer is printed.  Tables, report sections, diffs and commits come from
+   the data; the only model words are the notes marked AI.  Wide results print
+   as one card per row, and every cell may wrap, so nothing runs off the page. #}
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>{{ question }}</title>
+<title>{{ title }}</title>
 <style>
   @page {
     size: letter landscape;
@@ -26,7 +26,6 @@
   h2 { font-size: 11.5pt; margin: 7mm 0 2mm; padding-bottom: 1mm; border-bottom: .4mm solid #1a1a1a; }
   h3 { font-size: 10pt; margin: 4mm 0 1.5mm; }
   p { margin: 0 0 2mm; line-height: 1.45; }
-  .answer { white-space: pre-wrap; line-height: 1.5; margin: 0 0 4mm; }
   .meta, .soft { color: #5a5a5a; font-size: 8pt; }
   .wrap { overflow-wrap: anywhere; word-break: break-word; }
 
@@ -61,17 +60,19 @@
   .diff .add { background: #e6f4ea; color: #14532d; }
   .diff .del { background: #fdeceb; color: #7f1d1d; }
   .diff .hunk { color: #1f4f82; background: #eaf1f8; }
+  .diff .file { font-weight: 700; border-top: .3mm solid #dcdcdc; margin-top: 1mm; padding-top: .8mm; }
+  .commit { margin: 0 0 4mm; }
+  .commit-head { font-weight: 700; overflow-wrap: anywhere; }
+  .ai-note { border-left: 1mm solid #1f4f82; background: #eaf1f8; padding: 1.2mm 2.5mm; margin: 1mm 0; }
+  .ai-label { font-size: 7pt; color: #1f4f82; font-weight: 700; text-transform: uppercase; letter-spacing: .3mm; }
 </style>
 </head>
 <body>
-<h1 class="wrap">{{ question }}</h1>
-<p class="meta">From {{ app_name }} data, read only.  Produced {{ now.strftime('%d %B %Y') }}.</p>
-
-<h2>{{ 'Report summary' if report else 'Answer' }}</h2>
-<div class="answer wrap">{{ answer }}</div>
+<h1 class="wrap">{{ title }}</h1>
+<p class="meta">From {{ app_name }}, read only.  Produced {{ now.strftime('%d %B %Y') }}.</p>
 
 {% if report %}
-<h2>The numbers</h2>
+<h2>Summary</h2>
 <p>{{ report.summary | sentence_spaced }}</p>
 <div class="figures">
   <div class="figure crit"><div class="n">{{ report.severity.critical }}</div><div class="l">Critical</div></div>
@@ -157,6 +158,48 @@
 {% endif %}
 {% endif %}
 {% endfor %}
+
+{% if activity %}
+<p class="meta">Commits {{ ('by ' ~ activity.authors | join(' or ')) if activity.authors else 'by anyone' }} since {{ activity.since }} ({{ activity.days }} days){{ (', touching ' ~ activity.paths | join(', ')) if activity.paths }}.  Read from the repositories, merges left out.</p>
+{% if activity.concerns %}
+<h2>Security notes</h2>
+<div class="ai-note"><div class="ai-label">AI review of the diffs below</div>
+{% for c in activity.concerns %}<p class="wrap">{{ c | sentence_spaced }}</p>{% endfor %}</div>
+{% endif %}
+{% if activity.findings %}
+<h2>New findings in these repositories since {{ activity.since }}</h2>
+<table>
+  <colgroup><col style="width:9%"><col style="width:33%"><col style="width:22%"><col style="width:22%"><col style="width:14%"></colgroup>
+  <thead><tr><th>Severity</th><th>Finding</th><th>Repository</th><th>Where</th><th>Id</th></tr></thead>
+  <tbody>
+  {% for f in activity.findings %}
+  <tr><td class="sev sev-{{ f.severity }}">{{ f.severity }}</td>
+      <td>{{ f.title }}<br><span class="soft">{{ f.kind }}, {{ f.state }}, first found {{ f.first_found }}{{ (', by ' ~ f.author) if f.author }}</span></td>
+      <td>{{ f.repository }}<br><span class="soft">{{ f.branch }}</span></td>
+      <td>{{ f.where }}</td><td>{{ f.id }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% for repo in activity.repositories %}
+<h2 class="wrap">{{ repo.repository }}</h2>
+{% if repo.error %}<p class="soft">{{ repo.error }}</p>{% endif %}
+{% if repo.note %}<p class="soft">{{ repo.note }}</p>{% endif %}
+{% for c in repo.commits %}
+<div class="commit">
+  <div class="commit-head">{{ c.sha }}  {{ c.date }}  {{ c.author }}: {{ c.subject }}</div>
+  {% if c.branches %}<div class="soft">On {{ c.branches }}</div>{% endif %}
+  {% if c.summary %}<div class="ai-note"><span class="ai-label">AI summary</span>  {{ c.summary }}</div>{% endif %}
+  {% if c.files %}<div class="soft wrap">{{ c.files | join(';  ') }}</div>{% endif %}
+  {% if c.lines %}
+  <div class="diff">{% for l in c.lines %}<div class="{{ l.kind }}">{{ l.text }}</div>{% endfor %}</div>
+  {% if c.truncated %}<p class="soft">Diff shortened.  The full change is in the repository.</p>{% endif %}
+  {% endif %}
+</div>
+{% endfor %}
+{% if repo.more %}<p class="soft">More commits than fit in one answer.  Ask about this repository on its own.</p>{% endif %}
+{% endfor %}
+{% endif %}
 
 {% for t in tables %}
 <h2 class="wrap">{{ t.title }}</h2>

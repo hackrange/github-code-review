@@ -5492,8 +5492,26 @@ def ask_available(user: User) -> bool:
 _AI_READY = {"at": -1000.0, "ready": False}
 
 
-def _ask_pdf(question: str, answer: str, results: list, report=None,
-             diffs=None) -> bytes:
+def _diff_lines(text: str) -> list:
+    out = []
+    for line in (text or "").splitlines():
+        kind = ("add" if line.startswith("+") and not line.startswith("+++")
+                else "del" if line.startswith("-") and not line.startswith("---")
+                else "hunk" if line.startswith("@@")
+                else "file" if line.startswith("diff --git") else "")
+        out.append({"text": line, "kind": kind})
+    return out
+
+
+def _ask_pdf(title: str, results: list, report=None, diffs=None,
+             activity=None) -> bytes:
+    """The data behind an answer, as a document.
+
+    Only data: the report's numbers, the diffs, the commits and the rows.  The
+    question that was typed and the chat answer are left out on purpose; the
+    only model words are the one line summaries beside each commit, labeled
+    as such.
+    """
     from weasyprint import HTML
 
     from app.config import APP_NAME
@@ -5502,7 +5520,7 @@ def _ask_pdf(question: str, answer: str, results: list, report=None,
     from app.web.routes_pages import report_url_fetcher
 
     tables = []
-    if not report:
+    if not report and not activity:
         for r in results:
             if r["error"] or not r["columns"]:
                 continue
@@ -5512,18 +5530,15 @@ def _ask_pdf(question: str, answer: str, results: list, report=None,
                            # Past this many columns a row reads better as a card
                            # than as a table that runs off the page.
                            "cards": len(r["columns"]) > ask.PDF_TABLE_COLUMNS})
-    shown = []
-    for d in diffs or []:
-        lines = []
-        for line in (d.get("diff") or "").splitlines():
-            kind = ("add" if line.startswith("+") and not line.startswith("+++")
-                    else "del" if line.startswith("-") and not line.startswith("---")
-                    else "hunk" if line.startswith("@@") else "")
-            lines.append({"text": line, "kind": kind})
-        shown.append(dict(d, lines=lines))
-    html = render_partial("ask_pdf.html", app_name=APP_NAME, question=question,
-                          answer=answer, tables=tables, report=report,
-                          diffs=shown, now=datetime.now(timezone.utc))
+    shown = [dict(d, lines=_diff_lines(d.get("diff"))) for d in diffs or []]
+    if activity:
+        activity = dict(activity, repositories=[
+            dict(repo, commits=[dict(c, lines=_diff_lines(c.get("diff")))
+                                for c in repo["commits"]])
+            for repo in activity["repositories"]])
+    html = render_partial("ask_pdf.html", app_name=APP_NAME, title=title,
+                          tables=tables, report=report, diffs=shown,
+                          activity=activity, now=datetime.now(timezone.utc))
     return HTML(string=html, url_fetcher=report_url_fetcher("")).write_pdf()
 
 

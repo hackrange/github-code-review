@@ -1284,3 +1284,10 @@ tr.decided-out > td.decision-cell { opacity: 1; }
 .ask-diff-body .add { background: var(--ok-bg); color: var(--ok); }
 .ask-diff-body .del { background: var(--bad-bg); color: var(--bad); }
 .ask-diff-body .hunk { color: var(--info); }
+.ask-activity { margin-top: .6rem; white-space: normal; }
+.ask-concerns { margin: .4rem 0; padding: .4rem .6rem; border-left: 3px solid var(--info);
+    background: var(--info-bg); font-size: .82rem; }
+.ask-repo { margin-top: .6rem; }
+.ask-commit { margin: .25rem 0; font-size: .8rem; }
+.ask-commit summary { cursor: pointer; overflow-wrap: anywhere; }
+.ask-diff-body .file { font-weight: 600; }

@@ -65,17 +65,37 @@ def _utc(value):
     return value.astimezone(timezone.utc)
 
 
+# The only git commands Ask AI may run.  Every one of them reads.  Nothing
+# that writes to a repository, local or remote, is on the list, so no answer,
+# however it is worded and whatever a repository contains, can push, commit,
+# tag or change a branch anywhere.
+READ_ONLY_GIT = frozenset({"clone", "fetch", "rev-list", "rev-parse", "log", "diff", "show"})
+
+
+class GitRefused(Exception):
+    """A git command that is not a read."""
+
+
 def _git(args: list, cwd: Path, cred: list, timeout: int = GIT_TIMEOUT,
          deadline: float = 0) -> tuple:
-    """-> (ok, stdout, short error).  Never raises, never echoes a credential."""
+    """-> (ok, stdout, short error).  Never raises, never echoes a credential.
+
+    Raises GitRefused for anything that is not on READ_ONLY_GIT, which is a
+    bug in this module and never something a question can cause.
+    """
+    if not args or args[0] not in READ_ONLY_GIT:
+        raise GitRefused("git %s is not a read" % (args[0] if args else ""))
     if deadline:
         left = deadline - time.monotonic()
         if left < 2:
             return False, "", "out of time for this question"
         timeout = min(timeout, left)
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="/bin/false")
+    # No hooks, and nowhere to push even if something tried.
+    guard = ["-c", "core.hooksPath=/dev/null", "-c", "remote.origin.pushurl=no-push://",
+             "-c", "remote.pushDefault=", "-c", "push.default=nothing"]
     try:
-        done = subprocess.run(["git", "-C", str(cwd)] + cred + args,
+        done = subprocess.run(["git", "-C", str(cwd)] + guard + cred + args,
                               capture_output=True, text=True, timeout=timeout,
                               env=env, errors="replace")
     except subprocess.TimeoutExpired:
@@ -88,9 +108,53 @@ def _git(args: list, cwd: Path, cred: list, timeout: int = GIT_TIMEOUT,
     return True, done.stdout, ""
 
 
+LOCKFILES = ("package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml",
+             "poetry.lock", "pipfile.lock", "gemfile.lock", "go.sum", "composer.lock",
+             "cargo.lock", "packages.lock.json", "gradle.lockfile", "uv.lock")
+
+
+def _is_lockfile(path: str) -> bool:
+    return path.rsplit("/", 1)[-1].lower() in LOCKFILES
+
+
+def _hunks_naming(lines: list, package: str) -> list:
+    """A lock file diff cut down to the parts about one package.
+
+    A lock file can change by thousands of lines in one upgrade, nearly all of
+    it other packages moving along.  The header stays, and each hunk stays
+    only if it names the package.
+    """
+    head, hunks, current = [], [], None
+    for line in lines:
+        if line.startswith("@@"):
+            current = [line]
+            hunks.append(current)
+        elif current is None:
+            head.append(line)
+        else:
+            current.append(line)
+    wanted = package.lower()
+    kept = [h for h in hunks if any(wanted in l.lower() for l in h[1:])]
+    if not kept:
+        return []
+    return head + [l for h in kept for l in h]
+
+
+def reach(db, connection_name: str) -> dict:
+    """How to read one account's repositories: provider, address, token."""
+    from app.core import connections as connection_store, scanner_config
+
+    connection = (connection_store.by_name(db, connection_name)
+                  if connection_name else None)
+    return {"provider": getattr(connection, "provider", None) or "github",
+            "web": ((connection.web_url if connection is not None else None)
+                    or "https://github.com").rstrip("/"),
+            "token": scanner_config.scanner_env(
+                db, {}, connection=connection).get("GHSCAN_TOKEN", "")}
+
+
 def load(finding_ids: list) -> list:
     """The findings to diff, and how to reach each one's code.  SELECT only."""
-    from app.core import connections as connection_store, scanner_config
     from app.core.db import read_only_session
     from app.core.models import Finding, FindingKind, Repository
 
@@ -102,7 +166,9 @@ def load(finding_ids: list) -> list:
         rows.sort(key=lambda r: order.get(r.id, 0))
         for f in rows:
             item = {"finding_id": f.id, "vuln_id": f.vuln_id,
-                    "repository": f.repository, "file": f.file_path or "",
+                    "repository": f.repository,
+                    # A dependency finding names its manifest, not a file.
+                    "file": (f.file_path or f.manifest_path or "").strip(),
                     "line": f.line or 0, "title": (f.title or "")[:200],
                     "kind": getattr(f.kind, "value", str(f.kind)),
                     "state": getattr(f.state, "value", str(f.state)),
@@ -113,6 +179,7 @@ def load(finding_ids: list) -> list:
                 out.append(item)
                 continue
             if f.package_name:
+                item["package_name"] = f.package_name
                 item["package"] = "%s %s%s" % (
                     f.package_name, f.package_version or "",
                     (", fixed in " + f.fixed_in) if f.fixed_in else "")
@@ -124,13 +191,7 @@ def load(finding_ids: list) -> list:
                 repo = db.query(Repository).filter(
                     Repository.full_name == f.repository).one_or_none()
                 item["branch"] = repo.default_branch if repo else ""
-            connection = (connection_store.by_name(db, f.connection)
-                          if f.connection else None)
-            item["provider"] = getattr(connection, "provider", None) or "github"
-            item["web"] = ((connection.web_url if connection is not None else None)
-                           or "https://github.com").rstrip("/")
-            item["token"] = scanner_config.scanner_env(
-                db, {}, connection=connection).get("GHSCAN_TOKEN", "")
+            item.update(reach(db, f.connection))
             out.append(item)
     return out
 
@@ -223,10 +284,16 @@ def _one(item: dict, work: Path, deadline: float = 0) -> None:
             item["error"] = why or "The diff could not be read."
             return
         lines = diff.splitlines()
+        changed = bool(lines)
+        if item.get("package_name") and _is_lockfile(item["file"]):
+            lines = _hunks_naming(lines, item["package_name"])
         item["commits"] = commits
         item["truncated"] = len(lines) > MAX_LINES
         item["diff"] = mask("\n".join(lines[:MAX_LINES]))
-        if not lines:
+        if changed and not lines:
+            item["note"] = ("The lock file changed between those two moments, but "
+                            "no part of the change names %s." % item["package_name"])
+        elif not lines:
             item["note"] = ("The file did not change between those two moments.  "
                             "The finding may have gone because of a change "
                             "somewhere else, or because the rule changed.")
