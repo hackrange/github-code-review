@@ -112,6 +112,10 @@ review_code() {
     local mule; mule=$(run_mule_check "$dir" "$name" "" "")
     [[ "$mule" != "[]" ]] && findings=$(code_merge "$findings" "$mule")
   fi
+  if [[ "$(code_languages "$dir")" == *powerplatform* ]]; then
+    local ppc; ppc=$(run_powerplatform_check "$dir" "$name" "" "")
+    [[ "$ppc" != "[]" ]] && findings=$(code_merge "$findings" "$ppc")
+  fi
   printf '%s' "$findings"
 }
 

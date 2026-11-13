@@ -445,6 +445,17 @@ code_languages() {
   # reads them.
   find "$dir" -type d \( -name .git -o -name node_modules -o -name target \) -prune -o \
        -type f -path '*/src/main/mule/*.xml' -print -quit 2>/dev/null | grep -q . && langs+=" mule"
+  # Power Platform exports: Power Pages site metadata, canvas app source and
+  # flow definitions.  Nothing else here knows what any of it means.
+  find "$dir" -type d \( -name .git -o -name node_modules \) -prune -o \
+       -type f \( -name '*.tablepermission.yml' -o -name '*.pa.yaml' -o -name '*.fx.yaml' \
+                  -o -path '*/table-permissions/*.yml' \) -print -quit 2>/dev/null \
+    | grep -q . && langs+=" powerplatform"
+  if [[ "$langs" != *powerplatform* ]] && grep -rlq --include='*.json' \
+       --exclude-dir=.git --exclude-dir=node_modules \
+       -e 'workflowdefinition.json' "$dir" 2>/dev/null; then
+    langs+=" powerplatform"
+  fi
   printf '%s' "${langs# }"
 }
 
@@ -464,6 +475,27 @@ run_mule_check() {
     cat "$out"
   else
     log_warn "[$repo] the Mule check did not run: $(tail -1 "$GHSCAN_TMPROOT/mulecheck.log" 2>/dev/null)"
+    echo '[]'
+  fi
+}
+
+# run_powerplatform_check <dir> <full_name> <branch> <web> -> findings JSON
+#
+# Power Pages table permissions and web roles, canvas app HtmlText formulas and
+# Power Automate flow definitions.  Semgrep reads them as plain YAML and JSON
+# and finds nothing.  See lib/powerplatform_check.py.
+run_powerplatform_check() {
+  local dir="$1" repo="$2" branch="$3" web="$4"
+  cfg_bool '.scan.code_analysis.powerplatform_check' true || { echo '[]'; return 0; }
+  local python; python=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
+  [[ -n "$python" ]] || { log_debug "no python, so Power Platform exports are not read"; echo '[]'; return 0; }
+  local out; out=$(tmp_file ppcheck)
+  with_timeout 300 "$python" -I "$GHSCAN_HOME/lib/powerplatform_check.py" "$dir" "$repo" "$branch" \
+    "$web" "$(provider_link_parts)" > "$out" 2>"$GHSCAN_TMPROOT/ppcheck.log" || true
+  if jq -e 'type == "array"' "$out" >/dev/null 2>&1; then
+    cat "$out"
+  else
+    log_warn "[$repo] the Power Platform check did not run: $(tail -1 "$GHSCAN_TMPROOT/ppcheck.log" 2>/dev/null)"
     echo '[]'
   fi
 }

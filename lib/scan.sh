@@ -782,6 +782,12 @@ scan_one_repo() {
                            "$(cfg '.github.web_url' 'https://github.com')")
       [[ "$mule" != "[]" ]] && CODE_FINDINGS_JSON=$(code_merge "$CODE_FINDINGS_JSON" "$mule")
     fi
+    # Power Platform exports, which nothing above reads either.
+    if [[ "$(code_languages "$clone_dir")" == *powerplatform* ]]; then
+      local ppc; ppc=$(run_powerplatform_check "$clone_dir" "$full_name" "$default_branch" \
+                         "$(cfg '.github.web_url' 'https://github.com')")
+      [[ "$ppc" != "[]" ]] && CODE_FINDINGS_JSON=$(code_merge "$CODE_FINDINGS_JSON" "$ppc")
+    fi
     # GitHub's CodeQL alerts.  Under the vulnerability sources setting, because
     # that is where an install already said whether it wants them.
     if cfg_json '.scan.vulnerabilities.sources // []' | jq -e 'index("github_code_scanning")' >/dev/null; then
