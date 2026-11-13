@@ -49,6 +49,25 @@ the HtmlText property.  Nothing here names a table, a role id or a site.
       A Create CSV table action, with nothing in the flow neutralizing cells
       that begin with = + - @.  Low.
 
+  powerplatform.flow-odata-filter-injection
+      A $filter that pastes a record or caller value between single quotes
+      without doubling quotes in it.  Low.
+
+  powerplatform.flow-owner-reads-caller-key
+      A caller started flow that reads rows or files with its owner's
+      connection by a key (filter, id, file) the caller sent.  Medium when it
+      responds with the result, low otherwise.
+
+  powerplatform.flow-file-trigger-bulk-write
+      A flow started by a new file that loops over the file and writes each
+      row somewhere trusted.  Medium.
+
+  powerplatform.pages-no-content-security-policy
+      A Power Pages site with site settings but no Content-Security-Policy.
+
+  A flow marked Draft (StateCode 0) in its workflow.yml is graded one level
+  lower, and the finding says it is off.
+
   powerplatform.canvas-htmltext-unencoded
       A canvas app HtmlText formula that joins data values into markup without
       EncodeHTML.  The control renders links and markup.  Low.
@@ -93,6 +112,17 @@ WRITE_OPS = {
 MAIL_OPS = {"sendemailv2", "sendemail", "sendemailfromsharedmailboxv2",
             "sendemailfromsharedmailbox", "sendemailnotification", "sendmailv3",
             "sendemailwithoptions", "sendanemailv2"}
+# Operations that read rows or files by a key.
+READ_OPS = {"getitems", "getitem", "listrecords", "getrecord", "getfilecontent",
+            "getfilecontentbypath", "getfilemetadata", "getfilemetadatabypath",
+            "listrows", "getrow", "getrowv2", "executeprocedure_v2", "getfileitems"}
+# Triggers that start when somebody drops a file into a library or folder.
+FILE_TRIGGERS = {"getonnewfileitems", "getonupdatedfileitems", "onnewfile", "onnewfilev2",
+                 "onnewfiles", "onnewfilesv2", "onupdatedfile", "onupdatedfilev2",
+                 "onnewfilev3", "onupdatedfilev3"}
+KEY_PARAM = re.compile(r"(^|/)(\$filter|id|itemid|recordid|file|path|fileid)$", re.I)
+FILTER_QUOTED = re.compile(r"'\s*@\{([^{}]*)\}\s*'")
+
 # Triggers whose caller supplies the inputs (as opposed to a record or a timer).
 CALLER_KINDS = {"powerapp", "powerappv2", "http", "powerpages", "button",
                 "virtualagent", "skills"}
@@ -333,6 +363,23 @@ def check_site(root_dir: str, site: str) -> list:
                     f"Table permission '{perm}' grants Global read to "
                     f"{', '.join(authd)}, and open registration is on, so signing up "
                     "is all it takes to list every row.", {"read"})
+
+    # No Content-Security-Policy site setting: the browser runs any script a
+    # page or a stored value manages to inject.  Only when the export carries
+    # site settings at all, so a partial export is not reported.
+    if settings and not any(k.startswith("http/content-security-policy") and
+                            not k.endswith("report-only") for k in settings):
+        anchor = os.path.join(site, "website.yml")
+        hits.append({
+            "rule": "pages-no-content-security-policy", "severity": "low", "cwe": "693",
+            "file": _rel(root_dir, anchor if os.path.isfile(anchor) else folder),
+            "line": 1, "title": "Power Pages site sets no Content Security Policy",
+            "message": ("None of this site's settings is HTTP/Content-Security-Policy, so "
+                        "the browser will run any script that reaches a page, from a "
+                        "custom page script, a template or a stored value.  Add the "
+                        "setting with script-src limited to the site and the hosts it "
+                        "really uses (Power Pages supports a nonce for its own scripts)."),
+            "matched": "no HTTP/Content-Security-Policy site setting"})
     return hits
 
 
@@ -382,7 +429,40 @@ def _params(act: dict) -> dict:
     return params if isinstance(params, dict) else {}
 
 
+def _flow_off(path: str) -> bool:
+    """A solution export keeps the flow's state in workflow.yml beside it.
+    StateCode 0 is Draft (off); 1 is Activated."""
+    meta = os.path.join(os.path.dirname(path), "workflow.yml")
+    if not os.path.isfile(meta):
+        return False
+    m = re.search(r"^\s*StateCode\s*:\s*['\"]?(\d+)", _read(meta) or "", re.M)
+    return bool(m) and m.group(1) == "0"
+
+
+def _embedded(doc_text: str) -> dict:
+    """connection name -> runtimeSource, from the flow file's connectionReferences."""
+    try:
+        doc = json.loads(doc_text)
+    except ValueError:
+        return {}
+    refs = (doc.get("properties") or {}).get("connectionReferences") or {}
+    return {str(k): str((v or {}).get("runtimeSource") or "").lower()
+            for k, v in refs.items() if isinstance(v, dict)}
+
+
 def check_flow(root_dir: str, path: str, text: str, definition: dict) -> list:
+    hits = _check_flow(root_dir, path, text, definition)
+    if hits and _flow_off(path):
+        for hit in hits:
+            hit["severity"] = {"high": "medium", "medium": "low"}.get(hit["severity"],
+                                                                        hit["severity"])
+            hit["message"] += ("  This flow is turned off (Draft) in this export, so the "
+                               "grade is one level lower; it applies in full once the "
+                               "flow is turned on.")
+    return hits
+
+
+def _check_flow(root_dir: str, path: str, text: str, definition: dict) -> list:
     rel = _rel(root_dir, path)
     hits = []
     triggers = definition.get("triggers") or {}
@@ -465,6 +545,73 @@ def check_flow(root_dir: str, path: str, text: str, definition: dict) -> list:
                                 "against an allow list."),
                     "matched": f"recipients {name} {key}"})
 
+    sources = _embedded(text)
+    triggered_by_file = any(
+        isinstance(t, dict) and str(((t.get("inputs") or {}).get("host") or {})
+                                    .get("operationId") or "").lower() in FILE_TRIGGERS
+        for t in triggers.values())
+    responds = any(str(a.get("type") or "").lower() == "response" for _n, a in acts)
+    for name, act in acts:
+        op = _op(act)
+        params = _params(act)
+        line = _line_of(text, f'"{name}"')
+        host = (act.get("inputs") or {}).get("host") if isinstance(act.get("inputs"), dict) else {}
+        conn = str((host or {}).get("connectionName") or "")
+        for key, value in params.items():
+            if not isinstance(value, str):
+                continue
+            # B: a value pasted inside quotes in an OData filter.
+            if key.lower().endswith("$filter"):
+                pasted = [m.group(1) for m in FILTER_QUOTED.finditer(value)
+                          if FLOW_DATA.search(m.group(1))
+                          and "replace(" not in m.group(1).lower()]
+                if pasted:
+                    hits.append({
+                        "rule": "flow-odata-filter-injection", "severity": "low",
+                        "cwe": "943", "file": rel, "line": line,
+                        "title": "OData filter built by pasting a value inside quotes",
+                        "message": (f"Action '{name}' builds its $filter by pasting "
+                                    f"{pasted[0].strip()[:60]} between single quotes.  A value "
+                                    "with a quote in it ends the string and adds its own "
+                                    "conditions (for example ' or 1 eq 1 or 'a' eq '), which "
+                                    "changes which rows the flow reads.  Double any single "
+                                    "quote first: replace(value, , '')."),
+                        "matched": f"odata filter {name}"})
+            # C: the owner's connection reads by a key the caller chose.
+            if (caller and op in READ_OPS and KEY_PARAM.search(key)
+                    and re.search(r"triggerBody\s*\(\s*\)", value)
+                    and sources.get(conn, "embedded") != "invoker"):
+                hits.append({
+                    "rule": "flow-owner-reads-caller-key",
+                    "severity": "medium" if responds else "low", "cwe": "639",
+                    "file": rel, "line": line,
+                    "title": "Flow reads data by a key the caller picks, with the owner's rights",
+                    "message": (f"Action '{name}' reads with the flow owner's connection, and "
+                                f"its {key.split('/')[-1]} comes from the trigger input.  This "
+                                "flow is started by a caller (a Power App, Power Pages or an "
+                                "HTTP request), and nothing in it checks that the key belongs "
+                                "to that caller, so anyone who may run it can read another "
+                                "person's rows" + (" and get them back in the response." if
+                                responds else ".") + "  Take the key from the caller's own "
+                                "identity on the server side (for example the signed in user's "
+                                "email from the trigger headers), or run the connection as the "
+                                "caller."),
+                    "matched": f"owner reads caller key {name} {key}"})
+        # D: rows from an uploaded file written somewhere trusted, in a loop.
+        if triggered_by_file and op in WRITE_OPS and _in_loop(definition.get("actions"), name):
+            hits.append({
+                "rule": "flow-file-trigger-bulk-write", "severity": "medium", "cwe": "345",
+                "file": rel, "line": line,
+                "title": "Any file dropped in the watched folder is written in as trusted data",
+                "message": (f"This flow starts when a file is created, loops over what is in "
+                            f"it, and writes each row with action '{name}' using the owner's "
+                            "connection.  Nothing checks who uploaded the file, validates the "
+                            "rows, or limits how many there are, so anyone who can upload to "
+                            "that folder decides what is written.  Check the uploader against "
+                            "an allow list, validate each row, cap the row count, and keep the "
+                            "folder's upload rights to the people who own the data."),
+                "matched": f"file trigger bulk write {name}"})
+
     if not CSV_GUARD.search(body):
         for name, act in acts:
             if str(act.get("type") or "").lower() != "table":
@@ -483,6 +630,22 @@ def check_flow(root_dir: str, path: str, text: str, definition: dict) -> list:
                             "single quote in the Select step."),
                 "matched": f"csv {name}"})
     return hits
+
+
+def _in_loop(actions: dict, target: str, inside: bool = False) -> bool:
+    for name, act in (actions or {}).items():
+        if not isinstance(act, dict):
+            continue
+        if name == target:
+            return inside
+        looping = inside or str(act.get("type") or "").lower() in ("foreach", "until")
+        for sub in [act.get("actions"), (act.get("else") or {}).get("actions"),
+                    (act.get("default") or {}).get("actions")] + \
+                   [c.get("actions") for c in (act.get("cases") or {}).values()
+                    if isinstance(c, dict)]:
+            if sub and _in_loop(sub, target, looping):
+                return True
+    return False
 
 
 # --- Canvas apps -------------------------------------------------------------
