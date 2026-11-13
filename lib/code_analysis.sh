@@ -479,6 +479,49 @@ run_mule_check() {
   fi
 }
 
+# code_pass_branch <dir> <full_name> <branch> <web> <out file>
+#
+# The code engines over whatever <dir> has checked out, for a branch other
+# than the default.  The same engines the default branch gets, minus two:
+# credentials, because the history walk already reads every branch, and
+# CodeQL, because GitHub keeps its alerts for the default branch only.
+# Returns 0 when the pass finished, so the caller can say this branch was read.
+code_pass_branch() {
+  local dir="$1" repo="$2" branch="$3" web="$4" out="$5"
+  local sg; sg=$(tmp_file semgrep_branch)
+  # run_semgrep reports through these; the default pass's answer is kept.
+  local keep_ok="${GHSCAN_CODE_COMPLETE:-true}" keep_why="${GHSCAN_CODE_INCOMPLETE:-}"
+  GHSCAN_CODE_COMPLETE=true; GHSCAN_CODE_INCOMPLETE=""
+  run_semgrep "$dir" "$repo" "$sg"
+  local ok="$GHSCAN_CODE_COMPLETE" why="$GHSCAN_CODE_INCOMPLETE"
+  GHSCAN_CODE_COMPLETE="$keep_ok"; GHSCAN_CODE_INCOMPLETE="$keep_why"
+  local rows; rows=$(normalize_semgrep "$sg" "$repo" "$branch" "$web")
+  [[ "$rows" == \[* ]] || rows='[]'
+  if cfg_bool '.scan.code_analysis.second_engine' true; then
+    local langs; langs=$(code_languages "$dir")
+    local -a extras=()
+    [[ "$langs" == *go* ]] && extras+=("$(run_gosec "$dir" "$repo" "$branch" "$web")")
+    [[ "$langs" == *python* ]] && extras+=("$(run_bandit "$dir" "$repo" "$branch" "$web")")
+    [[ "$langs" == *javascript* ]] && extras+=("$(run_njsscan "$dir" "$repo" "$branch" "$web")")
+    (( ${#extras[@]} > 0 )) && rows=$(code_merge "$rows" "${extras[@]}")
+  fi
+  local langs2; langs2=$(code_languages "$dir")
+  if [[ "$langs2" == *mule* ]]; then
+    local mule; mule=$(run_mule_check "$dir" "$repo" "$branch" "$web")
+    [[ "$mule" != "[]" ]] && rows=$(code_merge "$rows" "$mule")
+  fi
+  if [[ "$langs2" == *powerplatform* ]]; then
+    local ppc; ppc=$(run_powerplatform_check "$dir" "$repo" "$branch" "$web")
+    [[ "$ppc" != "[]" ]] && rows=$(code_merge "$rows" "$ppc")
+  fi
+  printf '%s' "$rows" > "$out"
+  if [[ "$ok" != "true" ]]; then
+    log_warn "[$repo] code pass on branch $branch did not finish: ${why:-unknown}"
+    return 1
+  fi
+  return 0
+}
+
 # run_powerplatform_check <dir> <full_name> <branch> <web> -> findings JSON
 #
 # Power Pages table permissions and web roles, canvas app HtmlText formulas and

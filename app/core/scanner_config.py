@@ -315,6 +315,9 @@ def build(session, out_dir: Path, orgs=None, repos=None, connection=None,
     # big repository on two processes while sixty cores watch.
     code["jobs"] = max(1, _int(session, "code.jobs", 2))
     code["exclude_paths"] = _list(session, "code.exclude_paths")
+    code["branches"] = bool(store.get(session, "code.branches"))
+    code["branches_max"] = max(0, _int(session, "code.branches_max", 5))
+    code["branches_days"] = max(0, _int(session, "code.branches_days", 90))
     # Shipped with the product, not fetched: the registry can be unavailable
     # and these cover weaknesses the public packs miss outright.
     # Plus any rule the model drafted from a confirmed finding and an

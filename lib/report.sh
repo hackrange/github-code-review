@@ -309,6 +309,10 @@ report_build() {
           # finding whose rule is missing, so a rule withdrawn upstream is not
           # read as everything it found being fixed.
           code_rules_loaded: (.code_rules_loaded // []),
+          # The branches whose code this run read.  Ingest holds open a code
+          # finding on none of them, so dropping this would close findings
+          # on branches nobody looked at.  null means not said.
+          code_branches_read: (.code_branches_read // null),
           dast: (.dast // null),
           secret_counts: {
             reported:   (.secrets.reported | length),

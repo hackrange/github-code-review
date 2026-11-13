@@ -383,6 +383,18 @@ def _normalize_match(value) -> str:
     return text[:200]
 
 
+def _branches_of(finding) -> set:
+    """The branches a finding was last seen on, from its list or its one name."""
+    try:
+        names = json.loads(finding.branches or "[]")
+    except (TypeError, ValueError):
+        names = []
+    out = {str(n).strip() for n in names if str(n).strip()} if isinstance(names, list) else set()
+    if not out and (finding.branch or "").strip():
+        out.add(finding.branch.strip())
+    return out
+
+
 def number_occurrences(rows) -> None:
     """Mark each code finding as the nth identical match in its file.
 
@@ -924,6 +936,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
     # them.  A finding is only ever closed by the pass that would have found
     # it, so this is what decides that.
     passes_done = {}
+    # Per repository, the branches whose code this run read, and the branches
+    # that exist.  Only from a scanner that sends them.
+    code_read = {}
+    branches_now = {}
     # The semgrep rules each repository's run had.  Empty means unknown.
     rules_loaded = {}
 
@@ -1006,6 +1022,12 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         if isinstance(loaded, list) and loaded:
             rules_loaded[full_name] = {str(name).strip() for name in loaded
                                        if str(name).strip()}
+        read_list = entry.get("code_branches_read")
+        if isinstance(read_list, list):
+            code_read[full_name] = {str(b).strip() for b in read_list if str(b).strip()}
+        if isinstance(entry.get("branches_present"), list) and entry["branches_present"]:
+            branches_now[full_name] = {str(b).strip() for b in entry["branches_present"]
+                                       if str(b).strip()}
         declared = entry.get("passes_complete")
         if isinstance(declared, list):
             passes_done[full_name] = {str(name).strip() for name in declared
@@ -1842,6 +1864,20 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                     and finding.repository in partial_code):
                 counts["held_open"] = counts.get("held_open", 0) + 1
                 continue
+            # A code finding on branches this run did not read is not fixed,
+            # it is unread.  The code pass reads the default branch and a
+            # capped number of others, so one that lives only on a branch past
+            # the cap, too old, or whose pass failed says nothing by its
+            # absence.  It closes once none of its branches exists any more,
+            # which is the branch going away, not silence.
+            if finding.kind == FindingKind.CODE and finding.repository in code_read:
+                on = _branches_of(finding)
+                if on and not (on & code_read[finding.repository]):
+                    present = branches_now.get(finding.repository)
+                    if present is None or (on & present):
+                        counts["held_open"] = counts.get("held_open", 0) + 1
+                        counts["code_branch_held"] = counts.get("code_branch_held", 0) + 1
+                        continue
             # The rule that found it was not in this run's semgrep packs.
             #
             # The packs come from semgrep's registry on every scan, and a rule

@@ -222,6 +222,19 @@ DEFAULTS = {
     "secrets.resolve_authors": (True, False,
                                 "Find the account behind each commit that introduced a credential."),
     "code.enabled":            (True, False, "Run static analysis."),
+    # The default branch is always read.  These add the other branches whose
+    # code differs from it, so a weakness that lives only on a branch is found
+    # and a finding the branch still holds is not closed for silence.
+    "code.branches":           (True, False,
+                                "Also run static analysis on branches whose code "
+                                "differs from the default branch (full scan scope "
+                                "only)."),
+    "code.branches_max":       (5, False,
+                                "The most other branches per repository the code "
+                                "pass reads, newest first."),
+    "code.branches_days":      (90, False,
+                                "Only branches with a commit in this many days. "
+                                "0 for any age."),
     # security-audit is deliberately not here.  94% of its rules are already
     # in p/default and nothing high fidelity is unique to it, so a new install
     # loses nothing worth having by starting without it.  It is one tick away.
@@ -571,7 +584,8 @@ SECTIONS = [
                   "branches.stale_days"]),
     ("Detection", ["secrets.enabled", "secrets.verify", "secrets.min_entropy",
                    "secrets.resolve_authors", "secrets.exclude_paths",
-                   "code.enabled", "code.rulesets",
+                   "code.enabled", "code.rulesets", "code.branches",
+                   "code.branches_max", "code.branches_days",
                    "sbom.enabled", "sbom.enrich", "sbom.scan_branches",
                    "sbom.denied_licenses", "sbom.flagged_licenses",
                    "vulns.enabled", "vulns.min_severity", "access.enabled",

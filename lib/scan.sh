@@ -63,6 +63,83 @@ scope_skipped_branches() {
 }
 
 # Per-repository worker
+# code_pass_other_branches <clone dir> <full_name> <default branch> <web>
+#
+# Called from inside scan_one_repo, and reads its locals: branches (the ones
+# this run walked), same_branches (on the default branch's tree),
+# BRANCH_DATES_JSON.  Appends to CODE_BRANCHES_READ_JSON and writes
+# BRANCH_CODE_MANIFEST.  Leaves the clone on the default branch.
+#
+# Which branches: ones that ship (full scan scope), that are not on the
+# default branch's tree, with a commit within code.branches_days, newest
+# first, at most code.branches_max of them.  Two branches with the same tree
+# are read once and both named.
+code_pass_other_branches() {
+  local dir="$1" repo="$2" default="$3" web="$4"
+  local max_n max_days now
+  max_n=$(cfg '.scan.code_analysis.branches_max' '5')
+  max_days=$(cfg '.scan.code_analysis.branches_days' '90')
+  [[ "$max_n" =~ ^[0-9]+$ ]] || max_n=5
+  [[ "$max_days" =~ ^[0-9]+$ ]] || max_days=90
+  (( max_n > 0 )) || return 0
+  now=$(date +%s)
+  local -A tree_of=() date_of=()
+  local b t d
+  for b in "${branches[@]}"; do
+    [[ "$b" == "$default" ]] && continue
+    [[ " ${same_branches[*]} " == *" $b "* ]] && continue
+    scope_full_scan "$repo" "$b" || continue
+    t=$(git -C "$dir" rev-parse "${b}^{tree}" 2>/dev/null || echo "")
+    [[ -n "$t" ]] || continue
+    d=$(printf '%s' "$BRANCH_DATES_JSON" | jq -r --arg b "$b" '.[$b] // 0' 2>/dev/null || echo 0)
+    [[ "$d" =~ ^[0-9]+$ ]] || d=0
+    if (( max_days > 0 )) && (( d > 0 )) && (( (now - d) / 86400 > max_days )); then
+      continue
+    fi
+    tree_of["$b"]="$t"; date_of["$b"]="$d"
+  done
+  (( ${#tree_of[@]} > 0 )) || return 0
+  # Newest first, then one read per distinct tree.
+  local -a ordered=()
+  mapfile -t ordered < <(for b in "${!tree_of[@]}"; do printf '%s\t%s\n' "${date_of[$b]}" "$b"; done \
+                          | sort -t$'\t' -k1,1nr -k2,2 | cut -f2-)
+  local -A first_for=() also=()
+  local -a picked=()
+  for b in "${ordered[@]}"; do
+    t="${tree_of[$b]}"
+    if [[ -n "${first_for[$t]:-}" ]]; then
+      also["${first_for[$t]}"]+="$b"$'\n'
+      continue
+    fi
+    (( ${#picked[@]} >= max_n )) && continue
+    first_for["$t"]="$b"; picked+=("$b")
+  done
+  (( ${#picked[@]} > 0 )) || return 0
+  local skipped=$(( ${#ordered[@]} - ${#picked[@]} ))
+  log_info "[$repo] code analysis on ${#picked[@]} more branch(es): ${picked[*]}"
+  BRANCH_CODE_MANIFEST=$(tmp_file branch_code_manifest)
+  local man='[]' rows also_json read_json="$CODE_BRANCHES_READ_JSON"
+  for b in "${picked[@]}"; do
+    git -C "$dir" checkout --quiet --force "$b" 2>/dev/null || {
+      log_warn "[$repo] could not check out $b for code analysis"; continue; }
+    rows=$(tmp_file "branch_code_rows")
+    also_json=$(printf '%s' "${also[$b]:-}" | jq -R 'select(length>0)' | jq -sc '.')
+    if code_pass_branch "$dir" "$repo" "$b" "$web" "$rows"; then
+      man=$(jq -c --arg b "$b" --argjson also "$also_json" --arg rows "$rows" \
+              '. + [{branch: $b, also: $also, rows: $rows}]' <<<"$man")
+      read_json=$(jq -c --arg b "$b" --argjson also "$also_json" \
+                    '(. // []) + [$b] + $also | unique' <<<"$read_json")
+    fi
+  done
+  git -C "$dir" checkout --quiet --force "$default" 2>/dev/null || \
+    log_warn "[$repo] could not return to $default after branch code analysis"
+  printf '%s' "$man" > "$BRANCH_CODE_MANIFEST"
+  CODE_BRANCHES_READ_JSON="$read_json"
+  if (( skipped > 0 )); then
+    log_info "[$repo] $skipped other branch(es) share a tree with one read, or are past the code.branches_max of $max_n"
+  fi
+}
+
 scan_one_repo() {
   local repo_json="$1" results_dir="$2" work_root="$3"
   local full_name default_branch size_kb slug started
@@ -76,6 +153,7 @@ scan_one_repo() {
   SBOM_JSON='null'; LICENSE_JSON='null'; POLICY_JSON='null'; VULNS_JSON='[]'
   SBOM_BY_BRANCH_JSON='[]'; ACCESS_JSON='null'
   PULLS_JSON='[]'; CLONE_TRAFFIC_JSON='null'; CODE_FINDINGS_JSON='[]'; CODEQL_UNREAD=''; CODE_RULES_LOADED_JSON='[]'
+  CODE_BRANCHES_READ_JSON='null'; BRANCH_CODE_MANIFEST=''
   MISCONFIG_JSON='[]'; WORKFLOW_JSON='[]'
   # Whether a dynamic pass could ever run here.  null until the question is
   # asked, so a report from before this existed and a repository nobody asked
@@ -171,7 +249,8 @@ scan_one_repo() {
       --argjson default_routes "${DEFAULT_ROUTES_JSON:-null}" \
       --argjson branches_present "${BRANCHES_PRESENT_JSON:-[]}" \
       --argjson branch_dates "${BRANCH_DATES_JSON:-{\}}" \
-      --argjson code_rules "${CODE_RULES_LOADED_JSON:-[]}" '
+      --argjson code_rules "${CODE_RULES_LOADED_JSON:-[]}" \
+      --argjson code_branches_read "${CODE_BRANCHES_READ_JSON:-null}" '
       {
         repository: $repo[0],
         status: $status,
@@ -196,6 +275,11 @@ scan_one_repo() {
         # The semgrep rules this run had, so a finding whose rule was not among
         # them is held open rather than read as fixed.
         code_rules_loaded: $code_rules,
+        # Every branch whose code this run read: the default branch, the
+        # branches on its tree, and the other branches the code pass checked
+        # out.  null when the code pass did not run.  A code finding on none
+        # of these is held open.
+        code_branches_read: $code_branches_read,
         secrets: $secrets[0],
         sbom: $sbom[0],
         sbom_by_branch: $sbom_branches[0],
@@ -798,6 +882,18 @@ scan_one_repo() {
         "$(cfg '.github.web_url' 'https://github.com')" "$cq_in" "$cq_out"
       CODE_FINDINGS_JSON=$(cat "$cq_out")
     fi
+    # The other branches whose code is not the default branch's.  Each is
+    # checked out and read by the same engines, and what it finds is folded
+    # into the default branch's rows further down, once those have been
+    # stamped with the branches they speak for.  Which branches were read is
+    # reported, so a finding that lives only on a branch this run did not
+    # read is held open rather than closed for silence.
+    CODE_BRANCHES_READ_JSON="$SAME_BRANCHES_JSON"
+    if (( need_clone )) && cfg_bool '.scan.code_analysis.branches' true \
+       && (( ${#branches[@]} > 1 )); then
+      code_pass_other_branches "$clone_dir" "$full_name" "$default_branch" \
+        "$(cfg '.github.web_url' 'https://github.com')"
+    fi
     local nc; nc=$(printf '%s' "$CODE_FINDINGS_JSON" | jq 'length')
     if (( nc > 0 )); then
       log_warn "[$full_name] $nc code vulnerability finding(s), $(printf '%s' "$CODE_FINDINGS_JSON" | jq '[.[]|select(.severity=="critical")]|length') critical, semgrep used ${GHSCAN_SEMGREP_RULESETS:-an unknown number of} rulesets"
@@ -1041,6 +1137,23 @@ scan_one_repo() {
       | jq -c --argjson b "$SAME_BRANCHES_JSON" '[ .[]? | . + {branches: $b} ]' \
       || printf '%s' "${!_stamp}")"
   done
+  # Now the other branches' code findings, folded in as one row per finding
+  # with every branch it was seen on.  See lib/branch_code.py.
+  if [[ -n "${BRANCH_CODE_MANIFEST:-}" && -s "$BRANCH_CODE_MANIFEST" ]]; then
+    local bc_py bc_in bc_out
+    bc_py=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
+    bc_in=$(json_file "$CODE_FINDINGS_JSON" code_default)
+    if [[ -n "$bc_py" ]] && bc_out=$("$bc_py" -I "$GHSCAN_HOME/lib/branch_code.py" \
+          "$bc_in" "$BRANCH_CODE_MANIFEST" 2>"$GHSCAN_TMPROOT/branchcode.log") \
+       && [[ "$bc_out" == \[* ]]; then
+      CODE_FINDINGS_JSON="$bc_out"
+    else
+      # Without the merge the branch rows are not sent, and the branches are
+      # not named as read, so nothing they held is closed.
+      log_warn "[$full_name] branch code findings could not be merged: $(tail -1 "$GHSCAN_TMPROOT/branchcode.log" 2>/dev/null)"
+      CODE_BRANCHES_READ_JSON="$SAME_BRANCHES_JSON"
+    fi
+  fi
 
   # --- pull request history -------------------------------------------------
   if cfg_bool '.scan.pull_history.enabled' true; then
