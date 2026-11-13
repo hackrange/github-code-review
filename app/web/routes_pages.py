@@ -2905,7 +2905,7 @@ def finding_assessment_pdf(finding_id: int, request: Request,
     Typeset on download rather than stored, so the logo, the name on the
     cover and the footer are always the ones set today.
     """
-    from app.core import assessment, settings_store
+    from app.core import assessment, notify, settings_store
 
     with session_scope() as db:
         row = rbac.visible_finding(db, user, finding_id)
@@ -2916,7 +2916,7 @@ def finding_assessment_pdf(finding_id: int, request: Request,
         if not (report and report["ready"]):
             raise HTTPException(status_code=404, detail="No report yet.")
         organization = settings_store.get(db, "report.organization_name", "") or ""
-        context = assessment.document_context(report)
+        context = assessment.document_context(report, base_url=notify.base_url(db))
         context.update(
             title="Security Assessment: %s" % row.repository,
             organization_name=organization,
@@ -2960,7 +2960,7 @@ def finding_assessment_docx(finding_id: int, request: Request,
     """The same security report as a Word document, for the people who will
     edit it, comment on it and pass it on.  Built on download, like the PDF,
     from the stored report: no model is asked anything here."""
-    from app.core import assessment, settings_store
+    from app.core import assessment, notify, settings_store
 
     with session_scope() as db:
         row = rbac.visible_finding(db, user, finding_id)
@@ -2970,7 +2970,7 @@ def finding_assessment_docx(finding_id: int, request: Request,
             db, row.repository, row.branch or _default_branch(db, row.repository)))
         if not (report and report["ready"]):
             raise HTTPException(status_code=404, detail="No report yet.")
-        context = assessment.document_context(report)
+        context = assessment.document_context(report, base_url=notify.base_url(db))
         context.update(
             organization_name=settings_store.get(db, "report.organization_name", "") or "",
             logo=(settings_store.get(db, "report.logo", "") or "").strip(),

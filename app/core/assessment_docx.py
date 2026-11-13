@@ -175,6 +175,48 @@ class _Doc:
             para.alignment = align
         return para
 
+    def _link_run(self, para, text, url):
+        """A clickable external hyperlink inside an existing paragraph."""
+        r_id = para.part.relate_to(
+            url,
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+            is_external=True)
+        link = OxmlElement("w:hyperlink")
+        link.set(qn("r:id"), r_id)
+        run = OxmlElement("w:r")
+        rpr = OxmlElement("w:rPr")
+        color = OxmlElement("w:color")
+        color.set(qn("w:val"), "0B5FA5")
+        rpr.append(color)
+        under = OxmlElement("w:u")
+        under.set(qn("w:val"), "single")
+        rpr.append(under)
+        sz = OxmlElement("w:sz")
+        sz.set(qn("w:val"), "18")  # 9pt
+        rpr.append(sz)
+        run.append(rpr)
+        t = OxmlElement("w:t")
+        t.text = text
+        run.append(t)
+        link.append(run)
+        para._p.append(link)
+        return link
+
+    def identity(self, item):
+        """Finding number, platform id and a clickable link, under a heading."""
+        para = self.doc.add_paragraph()
+        para.paragraph_format.space_after = Pt(4)
+        label = "Finding %s" % item["id"]
+        if item.get("finding_id") is not None:
+            label += "   ·   ID %s" % item["finding_id"]
+        run = para.add_run(label)
+        run.font.size, run.font.color.rgb = Pt(9), GRAY
+        if item.get("finding_link"):
+            sep = para.add_run("   ·   ")
+            sep.font.size, sep.font.color.rgb = Pt(9), GRAY
+            self._link_run(para, "View this finding", item["finding_link"])
+        return para
+
     def labeled(self, label, text):
         para = self.doc.add_paragraph()
         r = para.add_run(label + "  ")
@@ -418,6 +460,7 @@ def build(context: dict) -> bytes:
     D.h("5.  Detailed Findings")
     for i in items:
         D.h(f"{i['id']}  {i['title']}", 3)
+        D.identity(i)
         info = [("Rating", i["rating"] + ("  (waived)" if i.get("waived") else ""))]
         if i.get("location"):
             info.append(("Location", i["location"]))

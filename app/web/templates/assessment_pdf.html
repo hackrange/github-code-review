@@ -99,6 +99,8 @@
   .finding { margin-bottom: 6mm; }
   .finding table { margin-bottom: 3mm; break-inside: avoid; }
   .finding h3 { break-after: avoid; }
+  .finding .idline { font-size: 9pt; color: #555b66; margin: 0 0 2mm 0; break-after: avoid; }
+  .finding .idline a { color: #0b5fa5; text-decoration: none; }
   table.heat { break-inside: avoid; }
   .finding .label { font-weight: 700; }
 </style>
@@ -247,6 +249,8 @@
 {% for i in items %}
 <div class="finding">
   <h3>{{ i.id }}  {{ i.title }}</h3>
+  <p class="idline">Finding {{ i.id }}{% if i.finding_id is not none %}  &middot;  ID {{ i.finding_id }}{% endif %}
+    {%- if i.finding_link %}  &middot;  <a href="{{ i.finding_link }}">View this finding</a>{% endif %}</p>
   <table>
     <tr><td class="k">Rating</td><td><span class="badge r-{{ i.rating | lower }}">{{ i.rating }}</span>
       {%- if i.waived %}  <strong>Waived</strong>{% endif %}</td></tr>

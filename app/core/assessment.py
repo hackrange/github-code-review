@@ -1656,10 +1656,17 @@ def matrix(items: list) -> list:
     return rows
 
 
-def document_context(view_: dict) -> dict:
-    """What the PDF template needs, from a stored report."""
+def document_context(view_: dict, base_url: str = "") -> dict:
+    """What the PDF template needs, from a stored report.
+
+    base_url is where this installation is reachable (the notify.base_url
+    setting).  Given it, each item gets a clickable link to its own finding,
+    so a reader of the report can open the finding it is about.  Without it,
+    the item still carries its platform finding id, just no link.
+    """
     result = view_["result"]
     items = result["items"]
+    base = (base_url or "").strip().rstrip("/")
     tally = {r: sum(1 for i in items if i["rating"] == r and not i.get("waived"))
              for r in RATINGS}
     waived = {r: sum(1 for i in items if i["rating"] == r and i.get("waived"))
@@ -1677,6 +1684,16 @@ def document_context(view_: dict) -> dict:
         item.setdefault("cvss", "")
         item.setdefault("cvss_score", None)
         item["cvss_band"] = report_standards.cvss_band(item.get("cvss_score"))
+        # The platform finding this item is about, and a link to it.  A review
+        # item names its recorded finding; a scanner group names its members,
+        # of which the first is the one the item leads with.
+        primary = (item.get("recorded") or {}).get("id")
+        if primary is None:
+            ids = item.get("finding_ids") or []
+            primary = ids[0] if ids else None
+        item["finding_id"] = primary
+        item["finding_link"] = (f"{base}/findings/{primary}"
+                                if base and primary is not None else "")
     retests = [i for i in items if i.get("retest") and i["rating"] != "Informational"]
     return {"r": result, "items": items, "tally": tally, "waived_tally": waived,
             "matrix": matrix(items), "impact_words": IMPACT_WORDS,
