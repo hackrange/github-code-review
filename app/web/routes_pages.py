@@ -301,6 +301,12 @@ def _sort_order(sort: str, direction: str):
     return [ordered, Finding.id.asc()]
 
 
+def _backup_ready() -> bool:
+    """Whether a bulk delete could take its backup first."""
+    from app.core import autobackup
+    return autobackup.configured()
+
+
 def _expiry_window(days: int) -> dict:
     """What an expiry picker may offer: the default, and both ends of it.
 
@@ -1666,6 +1672,8 @@ def findings(request: Request, user: User = Depends(current_user)):
             # screen.
             all_total=(_visible_count()
                        if rbac.can(user, "findings.delete") else 0),
+            backup_ready=(_backup_ready()
+                          if rbac.can(user, "findings.delete") else False),
             **_expiry_window(90),
         )
         return page(request, "findings.html", **context)
@@ -4716,6 +4724,7 @@ def backup_page(request: Request, msg: str = "", kind: str = "",
                 user: User = Depends(current_user)):
     """Take a copy of this installation, or put one back."""
     rbac.require(user, "settings.write")
+    from app.core import autobackup
     from app.core import backup as backup_store
     from app.core.models import Base
 
@@ -4737,6 +4746,9 @@ def backup_page(request: Request, msg: str = "", kind: str = "",
             counts=counts,
             total_rows=sum(counts.values()),
             min_password=backup_store.MIN_PASSWORD,
+            auto_backups=autobackup.listing(),
+            auto_configured=autobackup.configured(),
+            auto_keep=autobackup.KEEP,
             message=clean_notice(msg, limit=300),
             message_kind="error" if kind == "error" else "ok")
         return page(request, "backup.html", **context)

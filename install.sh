@@ -433,6 +433,14 @@ SECRET_KEY="$(existing GCR_SECRET_KEY || true)"
 [[ -n "$SECRET_KEY" ]] || SECRET_KEY="$(random_secret 48)"
 ENCRYPTION_KEY="$(existing GCR_ENCRYPTION_KEY || true)"
 [[ -n "$ENCRYPTION_KEY" ]] || ENCRYPTION_KEY="$(random_secret 48)"
+# Automatic backups: nightly, and just before all findings are deleted.  The
+# password stays in .env and never in the database, since a password that went
+# down with the database would open nothing.
+BACKUP_PASSWORD="$(existing GCR_BACKUP_PASSWORD || true)"
+[[ -n "$BACKUP_PASSWORD" ]] || BACKUP_PASSWORD="$(random_secret 40)"
+BACKUPS="$(existing GCR_BACKUP_PATH || echo "$HERE/backups")"
+ensure_container_dir "$BACKUPS"
+chmod 700 "$BACKUPS" 2>/dev/null || true
 
 umask 077
 cat > "$ENV_FILE" <<ENVEOF
@@ -480,6 +488,13 @@ GCR_OUT_PATH=$REPORTS
 # Where repositories are cloned while a scan runs.  Wants real disk.  Nothing
 # is kept here between runs.
 GCR_WORK_PATH=$WORK
+
+# Automatic backups land here, the newest five nightly and the newest five
+# taken before a delete of all findings.  They are encrypted with
+# GCR_BACKUP_PASSWORD.  Copy that password somewhere other than this server,
+# or a lost server takes the only way into its backups with it.
+GCR_BACKUP_PATH=$BACKUPS
+GCR_BACKUP_PASSWORD=$BACKUP_PASSWORD
 TZ=$(cat /etc/timezone 2>/dev/null || echo UTC)
 ENVEOF
 chmod 600 "$ENV_FILE"

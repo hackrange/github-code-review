@@ -25,7 +25,8 @@
     <a class="btn" href="{{ base }}/findings/export?{{ page_query }}{% if page_query %}&{% endif %}format=json">Export as JSON</a>
     {% endif %}
     {% if can_delete and all_total %}
-    <button type="button" class="btn danger" data-modal="delete-all-modal">Delete all findings</button>
+    <button type="button" class="btn danger" data-modal="delete-all-modal"
+            title="Every finding in the database, not only the ones on screen">Delete ALL {{ all_total }} findings in the database</button>
     {% endif %}
   </div>
   {% endif %}
@@ -774,18 +775,32 @@
 
 <div class="modal-backdrop" id="delete-all-modal" hidden>
   <div class="modal">
-    <div class="modal-head">Delete every finding
+    <div class="modal-head">Delete ALL findings in the entire database
       <button type="button" class="modal-close" data-close-modal>&times;</button></div>
     <div class="modal-body">
       <div class="notice bad">
         <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5A6.5 6.5 0 1 0 8 14.5 6.5 6.5 0 0 0 8 1.5zm.75 3v5h-1.5v-5h1.5zm0 6.2v1.5h-1.5v-1.5h1.5z"/></svg>
-        <div>All <strong>{{ all_total }}</strong> findings go, not the
-          {{ total }} on screen, and every exception recorded against them goes
-          with them.  This does not undo.</div>
+        <div><strong>This is not the current view.</strong>  Your filters are
+          ignored.  Every finding in the database goes: all
+          <strong>{{ all_total }}</strong>, across every organization and
+          repository, not just the {{ total }} on screen.  Every exception,
+          AI review and grade recorded against them goes too.</div>
       </div>
-      <p class="small faint">The scan history, repositories, exclusions and
-        settings all stay.  The next scan refills this list from the code as it
-        stands today.</p>
+      <p class="small"><strong>Only want what is on screen gone?</strong>
+        Cancel, use <em>Select all {{ total }} matching these filters</em>,
+        then <em>Delete the selected</em>.</p>
+      {% if backup_ready %}
+      <p class="small faint">A full encrypted backup is taken first and listed
+        on the Backup and restore page, so this can be put back.  The scan
+        history, repositories, exclusions and settings all stay.</p>
+      {% else %}
+      <div class="notice warn">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+        <div>No backup password is set, so the backup this takes first cannot
+          be written and the delete will be refused.  See the Backup and
+          restore page.</div>
+      </div>
+      {% endif %}
       <label>Type <strong>DELETE</strong> to confirm
         <input type="text" id="delete-confirm" name="confirm" value=""
                form="delete-all-form" autocomplete="off" spellcheck="false"
@@ -795,7 +810,7 @@
     <div class="modal-foot">
       <button type="button" class="btn" data-close-modal>Cancel</button>
       <button type="submit" class="btn danger" id="delete-all-go"
-              form="delete-all-form" disabled>Delete all {{ all_total }}</button>
+              form="delete-all-form" disabled>Delete ALL {{ all_total }} in the database</button>
     </div>
   </div>
 </div>

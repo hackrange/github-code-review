@@ -149,6 +149,15 @@ services:
       GCR_SECRET_KEY: ${GCR_SECRET_KEY:-}
       GCR_ENCRYPTION_KEY: ${GCR_ENCRYPTION_KEY:-}
 
+      # ---- backups ----------------------------------------------------------
+      # The nightly backup, and the one taken before deleting all findings,
+      # are encrypted with this.  install.sh writes one.  Keep a copy away
+      # from this server: a backup is only as good as the password to it.
+      # Blank switches automatic backups off, and deleting all findings is
+      # then refused because it cannot take one first.
+      GCR_BACKUP_PASSWORD: ${GCR_BACKUP_PASSWORD:-}
+      GCR_BACKUP_DIR: /backups
+
       # How people sign in, how long sessions last and which addresses the
       # load balancer connects from are all set on the Settings page and kept
       # in the database.  The three below are only a fallback for the very
@@ -179,6 +188,11 @@ services:
 
       # The session key, and the SQLite file if you run without MariaDB.
       - gcr-data:/data
+
+      # Automatic backups, the newest five of each kind.  On the host rather
+      # than in a volume, so they outlive the container and the database and
+      # can be copied somewhere else.
+      - ${GCR_BACKUP_PATH:-./backups}:/backups
 
       # Vulnerability feeds and the grype database.  Losing this only costs a
       # download, but it is a few hundred MB of one.

@@ -511,6 +511,29 @@ async def delete_many(request: Request, user: User = Depends(current_user)):
     elif not wanted and not matching:
         raise HTTPException(status_code=400, detail="Nothing was selected.")
 
+    # A delete of the whole list, or of everything a filter matches, takes a
+    # backup first.  Nothing else can bring those rows back: on 2026-11-13 a
+    # delete of every finding was meant for one view, and the rows came back
+    # only by carving them out of the database files.  No backup, no delete.
+    saved = None
+    if everything or matching:
+        from app.core import autobackup
+
+        try:
+            saved = await run_in_threadpool(
+                autobackup.take, "before-delete", user.username)
+        except autobackup.NotConfigured as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Nothing was deleted.  A backup is taken before a "
+                       f"bulk delete, and this one could not be.  {exc}")
+        except Exception:  # noqa: BLE001 - details go to the log, not the page
+            log.exception("backup before bulk delete failed")
+            raise HTTPException(
+                status_code=503,
+                detail="Nothing was deleted.  The backup taken before a bulk "
+                       "delete failed; the server log says why.")
+
     with session_scope() as db:
         # Through the scope filter every time, so a list of ids from somewhere
         # else deletes nothing rather than somebody else's findings.
@@ -540,7 +563,8 @@ async def delete_many(request: Request, user: User = Depends(current_user)):
             db.flush()
 
         record(db, "finding.deleted", actor=user.username,
-               target=f"{removed} findings", detail=scope,
+               target=f"{removed} findings",
+               detail=scope + (f", backup {saved['name']}" if saved else ""),
                source_ip=client_ip(request))
 
         # The report files are the thing other people read.  Leaving them
@@ -550,6 +574,9 @@ async def delete_many(request: Request, user: User = Depends(current_user)):
 
     note = (f"{removed} finding(s) deleted. The next scan files them again if "
             "the code still matches.")
+    if saved:
+        note += (f"  A backup was taken first ({saved['name']}); it is on the "
+                 "Backup and restore page.")
     return redirect(f"/findings?msg={quote(note)}&kind=ok")
 
 
@@ -3587,6 +3614,31 @@ async def create_backup(request: Request, user: User = Depends(current_user)):
         headers={"Content-Disposition":
                  f'attachment; filename="git-code-review-backup-{stamp}.zip"',
                  "Cache-Control": "no-store"})
+
+
+@router.get("/backup/files/{name}")
+def download_saved_backup(name: str, request: Request,
+                          user: User = Depends(current_user)):
+    """One of the automatic backups, to keep somewhere else or restore.
+
+    Only a name the listing holds right now is served, so nothing typed into
+    the address is ever joined onto a path.
+    """
+    rbac.require(user, "settings.write")
+
+    from fastapi.responses import FileResponse
+
+    from app.core import autobackup
+
+    path = autobackup.path_of(name)
+    if path is None:
+        raise HTTPException(status_code=404, detail="No such backup.")
+    with session_scope() as db:
+        record(db, "backup.downloaded", actor=user.username, target=path.name,
+               source_ip=client_ip(request))
+    return FileResponse(path, media_type="application/zip", filename=path.name,
+                        headers={"Cache-Control": "no-store",
+                                 "X-Content-Type-Options": "nosniff"})
 
 
 @router.post("/backup/restore")

@@ -252,6 +252,17 @@ def start() -> None:
                        replace_existing=True, misfire_grace_time=120,
                        coalesce=True, max_instances=1)
 
+    # The nightly backup.  Early morning, after the evening sweep and the
+    # overnight bulk window have usually finished, though it only reads and is
+    # safe beside a scan.  Without a backup password it logs why and skips.
+    from app.core import autobackup
+
+    _scheduler.add_job(autobackup.nightly,
+                       CronTrigger(hour=5, minute=30, timezone=_zone()),
+                       id="nightly-backup", replace_existing=True,
+                       misfire_grace_time=6 * 3600, coalesce=True,
+                       max_instances=1)
+
     # Organizations nobody has a connection for.  Weekly is plenty, since a new
     # organization is rare and the check asks GitHub about every token.  It
     # does nothing unless it is switched on, so arming it always is harmless.

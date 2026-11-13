@@ -52,6 +52,44 @@
   </div>
 </div>
 
+<div class="card" id="automatic">
+  <div class="card-head"><span class="head-text">Automatic backups</span></div>
+  {% if not auto_configured %}
+  <div class="notice bad">
+    <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5 15 14H1L8 1.5zm-.75 4.7h1.5v3.6h-1.5V6.2zm0 4.6h1.5v1.5h-1.5v-1.5z"/></svg>
+    <div><strong>Switched off: no backup password is set.</strong>  Put
+      GCR_BACKUP_PASSWORD (at least {{ min_password }} characters) in .env and
+      recreate the container.  Until then there is no nightly backup, and
+      deleting all findings is refused because it cannot take one first.</div>
+  </div>
+  {% endif %}
+  <p class="small faint">One every night at 05:30, and one just before any
+    delete of all findings or of everything a filter matches.  The newest
+    {{ auto_keep }} of each kind are kept.  They are the same encrypted file as
+    the one above, under the password in GCR_BACKUP_PASSWORD, so any of them
+    goes back through <a href="#put-one-back">Put one back</a>.  Keep a copy of
+    that password somewhere other than this server.</p>
+  {% if auto_backups %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Taken (UTC)</th><th>Kind</th><th>Size</th><th></th></tr></thead>
+      <tbody>
+        {% for b in auto_backups %}
+        <tr>
+          <td>{{ b.taken_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+          <td>{{ 'Nightly' if b.kind == 'nightly' else 'Before a delete' }}</td>
+          <td>{{ '%.1f'|format(b.bytes / 1048576) }} MB</td>
+          <td><a class="btn sm" href="{{ base }}/backup/files/{{ b.name|urlencode }}">Download</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif auto_configured %}
+  <p class="small faint">None yet.  The first one is taken tonight.</p>
+  {% endif %}
+</div>
+
 <div class="card" id="whats-in-it">
   <div class="card-head"><span class="head-text">What goes in</span></div>
   <div class="table-scroll">
