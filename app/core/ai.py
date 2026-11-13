@@ -86,6 +86,12 @@ SETTINGS = {
     "ai.max_output_tokens":    (26000, False,
                                 "The most the service writes in one answer, "
                                 "reasoning included."),
+    # The service's limit on one request, what is sent and what comes back
+    # together.  Long jobs size every question to fit under it and split the
+    # work into more questions rather than send one that would not fit.
+    "ai.max_request_tokens":   (86000, False,
+                                "The most one request may use, sent and answered "
+                                "together."),
     "ai.tokens_per_minute":    (40000, False,
                                 "Tokens a long job may use in a minute, in and out "
                                 "together. 0 for no limit."),
@@ -193,6 +199,8 @@ def read_form(form, text, number, url, checked) -> dict:
         "ai.timeout": number(form.get("ai.timeout") or 300, "Time limit", 30, 1800),
         "ai.max_output_tokens": number(form.get("ai.max_output_tokens") or 26000,
                                        "Service answer limit", 1000, 200000),
+        "ai.max_request_tokens": number(form.get("ai.max_request_tokens") or 86000,
+                                        "Request limit", 8000, 2_000_000),
         "ai.tokens_per_minute": number(form.get("ai.tokens_per_minute") or 0,
                                        "Tokens per minute", 0, 10_000_000),
         "ai.context_lines": number(form.get("ai.context_lines") or 40,

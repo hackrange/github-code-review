@@ -1289,7 +1289,7 @@ def _draw(repository: str, branch: str, connection: str, actor: str) -> None:
     served = site.get("urls") or []
     send_code = bool(cfg.get("ai.send_code"))
 
-    with recheck.branch_tip(connection, repository, branch) as (root, why):
+    with recheck.branch_tip(connection, repository, branch, in_memory=True) as (root, why):
         if root is None:
             _finish(repository, status="failed",
                     error=f"Could not fetch the default branch: {why}")

@@ -281,7 +281,7 @@ def memory_dir() -> str:
 
 @contextlib.contextmanager
 def branch_tip(connection_name: str, repository: str, branch: str,
-               in_memory: bool = False):
+               in_memory: bool = False, memory_only: bool = False):
     """A read only copy of one branch tip, gone again on the way out.
 
     -> yields (path, "") on success, (None, why) when it could not be fetched.
@@ -292,6 +292,12 @@ def branch_tip(connection_name: str, repository: str, branch: str,
     usually going to carry on without the code and say so.
     """
     from app.core import connections as connection_store, scanner_config
+
+    # Where the copy may go is settled before anything is fetched.
+    if memory_only and not memory_dir():
+        yield None, ("there is not enough shared memory (/dev/shm) to hold the "
+                     "code, and this job never writes code to disk")
+        return
 
     with session_scope() as db:
         connection = (connection_store.by_name(db, connection_name)
@@ -308,7 +314,9 @@ def branch_tip(connection_name: str, repository: str, branch: str,
 
     # in_memory asks for shared memory, and falls back to the usual temp
     # directory when there is none.  Either way the copy is gone on the way out.
-    where = memory_dir() if in_memory else ""
+    # memory_only has no fallback: the code never touches a disk, and with no
+    # room in memory there is no copy at all.
+    where = memory_dir() if (in_memory or memory_only) else ""
     with tempfile.TemporaryDirectory(prefix="gcr-read-", dir=where or None) as tmp:
         work = Path(tmp)
         token_file = work / "token"

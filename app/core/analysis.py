@@ -491,7 +491,7 @@ def _code(f, cfg: dict, branch: str, connection: str) -> tuple:
         return "", [], ["No code was sent: this finding is not tied to a file."]
 
     context = max(5, min(200, int(cfg.get("ai.context_lines") or 40)))
-    with recheck.branch_tip(connection, f["repository"], branch) as (root, why):
+    with recheck.branch_tip(connection, f["repository"], branch, in_memory=True) as (root, why):
         if root is None:
             return "", [], [f"No code was sent: the branch could not be "
                             f"fetched ({why})."]

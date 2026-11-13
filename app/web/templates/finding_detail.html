@@ -277,6 +277,7 @@
        only when AI analysis is set up. #}
     {% if report and report.ready %}
       <a class="btn" href="{{ base }}/findings/{{ f.id }}/assessment.pdf">Download security report</a>
+      <a class="btn" href="{{ base }}/findings/{{ f.id }}/assessment.docx">Download as Word</a>
     {% endif %}
     {% if can_assess and not (report and report.running) %}
       <form method="post" action="{{ base }}/findings/{{ f.id }}/assessment"

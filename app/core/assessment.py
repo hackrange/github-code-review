@@ -52,6 +52,8 @@ from app.core.db import session_scope
 from app.core.models import (Finding, FindingKind, FindingState, RepoAssessment,
                              Repository, utcnow)
 
+from app.core import report_standards
+
 log = logging.getLogger("gcr.assessment")
 
 # One report at a time.  Each holds a copy of a branch and a run of questions
@@ -66,7 +68,7 @@ MAX_GROUPS = 40
 # A planning figure for one reviewed group's answer, in tokens.  The prompt
 # holds each field to a word limit, and this is comfortably over what that
 # comes to.
-ITEM_TOKENS = 450
+ITEM_TOKENS = 900
 # The share of the service's answer limit an answer is planned to use.  The
 # rest is left for the model's thinking, which counts against the same limit.
 ANSWER_SHARE = 0.4
@@ -76,8 +78,16 @@ MAX_BATCH_CHARS = 40_000
 MAX_SNIPPET_CHARS = 3_000
 MAX_SNIPPETS = 3
 OVERVIEW_CHARS = 40_000
+# Characters per token when planning what is sent.  Code runs denser than
+# prose, so this errs on the side of fewer characters per question.
+CHARS_PER_TOKEN = 3
+# Room kept free in every request for the wrapper the service adds.
+REQUEST_SAFETY = 2_000
+# The masked lines shown in the report beside each issue.
+DISPLAY_CONTEXT = 4
+MAX_DISPLAY_CHARS = 1_600
 # The summary and overview answers are short, and planned as such.
-OVERVIEW_TOKENS = 2_500
+OVERVIEW_TOKENS = 6_000
 SUMMARY_TOKENS = 2_500
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4,
@@ -497,10 +507,20 @@ ITEM_FIELDS = """\
  "title": "what is wrong, in under twelve words, plain language",
  "likelihood": 1 to 5,
  "impact": 1 to 5,
- "what": "what was found, at most 60 words",
+ "cvss": "the CVSS 3.1 base vector for this issue as it stands in this code, such as \
+AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N, or empty for a false positive",
+ "what": "what is wrong and how the code gets there, at most 90 words",
  "evidence": "what in the code or data shows it, naming files and lines, at most 60 words",
  "why": "what could happen to the business, at most 60 words",
- "fixes": ["up to four concrete steps, each at most 25 words"]}"""
+ "attack": ["three to five short steps telling how an attacker would abuse it, \
+in plain words a non expert follows, each at most 30 words; empty for a false positive"],
+ "fixes": ["up to four concrete steps, each at most 25 words"],
+ "fix_example": "a short example of the corrected code or setting, at most 12 lines, \
+or empty when a fix is not code; never a secret value",
+ "status": "confirmed_in_source when the code you were shown proves it, or \
+needs_runtime when it depends on a setting or system you were not shown",
+ "runtime_check": "for needs_runtime, what to check in the running system, at most 30 words",
+ "retest": "one safe step that proves the fix worked, at most 30 words"}"""
 
 STYLE = """\
 Write for business owners who do not work in security: US English, about a \
@@ -630,6 +650,11 @@ class _Asker:
         if cfg.get("ai.provider") != "custom":
             cap = min(cap, _int(cfg.get("ai.max_tokens"), 1000, 10_000_000, 16000))
         self.cap = cap
+        # One request, sent and answered together, may not pass this.  The
+        # custom service writes up to its own answer limit whatever is asked,
+        # so the room left for what is sent is the limit less that answer.
+        self.limit = _int(cfg.get("ai.max_request_tokens"), 8000, 10_000_000, 86000)
+        self.custom = cfg.get("ai.provider") == "custom"
         self.pacer = _Pacer(cfg.get("ai.tokens_per_minute") or 0)
         self.calls = self.input_tokens = self.output_tokens = 0
         self.provider = self.model = ""
@@ -638,10 +663,28 @@ class _Asker:
     def batch_size(self) -> int:
         return max(1, min(MAX_BATCH, int(self.cap * ANSWER_SHARE) // ITEM_TOKENS))
 
+    def input_room(self, system: str = "") -> int:
+        """Characters that may be sent with this system prompt in one request."""
+        answer = self.cap if self.custom else min(self.cap, self.limit // 3)
+        tokens = self.limit - answer - REQUEST_SAFETY - len(system) // CHARS_PER_TOKEN
+        return max(2_000, tokens * CHARS_PER_TOKEN)
+
+    def fits(self, system: str, prompt: str) -> bool:
+        return len(prompt) <= self.input_room(system)
+
     def ask(self, system: str, prompt: str, planned_out: int) -> tuple:
-        """-> (parsed object or None, problem, cut_off)."""
-        self.pacer.wait(len(system + prompt) // 4 + planned_out)
-        answer = ai.complete(self.cfg, system, prompt, max_tokens=self.cap,
+        """-> (parsed object or None, problem, cut_off).
+
+        A question that would not fit in one request is not sent: it comes
+        back as cut off, which is what makes the caller split it.
+        """
+        if not self.fits(system, prompt):
+            return None, "too large for one request", True
+        sent = (len(system) + len(prompt)) // CHARS_PER_TOKEN
+        out_cap = self.cap if self.custom else max(
+            1000, min(self.cap, self.limit - sent - REQUEST_SAFETY))
+        self.pacer.wait(sent + planned_out)
+        answer = ai.complete(self.cfg, system, prompt, max_tokens=out_cap,
                              purpose=PURPOSE)
         self.calls += 1
         self.input_tokens += answer.get("input_tokens") or 0
@@ -679,7 +722,69 @@ def _clean_item(raw: dict, fallback: dict | None = None) -> dict:
         "why": tidy(raw.get("why"), 600),
         "fixes": [tidy(x, 300) for x in fixes[:4] if str(x or "").strip()],
     }
+    attack = raw.get("attack") if isinstance(raw.get("attack"), list) else []
+    item["attack"] = ([] if verdict == "false_positive" else
+                      [tidy(x, 300) for x in attack[:5] if str(x or "").strip()])
+    item["fix_example"] = _code_text(raw.get("fix_example"))
+    status = str(raw.get("status") or "").strip().lower()
+    item["status"] = status if status in ("confirmed_in_source", "needs_runtime") else ""
+    item["runtime_check"] = (tidy(raw.get("runtime_check"), 300)
+                             if item["status"] == "needs_runtime" else "")
+    item["retest"] = tidy(raw.get("retest"), 300)
+    vector, score = report_standards.cvss31(raw.get("cvss"))
+    item["cvss"], item["cvss_score"] = ("", None) if verdict == "false_positive" else (vector, score)
     return item
+
+
+def _code_text(value) -> str:
+    """A model's example code, masked and kept short.  Lines, not prose."""
+    from app.core.diagram import mask
+
+    text = str(value or "").replace("\r\n", "\n").strip().strip("`").strip()
+    if not text:
+        return ""
+    lines = [mask(line)[:160] for line in text.split("\n")[:12]]
+    return "\n".join(lines)[:1400]
+
+
+def _display_code(lines: list, line_numbers: list, credential: bool = False,
+                  mule: bool = False) -> str:
+    """The masked lines shown beside an issue in the report."""
+    from app.core.diagram import mask
+
+    out, used = [], 0
+    for line_no in (line_numbers or [])[:2]:
+        lo = max(1, line_no - DISPLAY_CONTEXT)
+        hi = min(len(lines), line_no + DISPLAY_CONTEXT)
+        part = []
+        for n in range(lo, hi + 1):
+            text = lines[n - 1][:160]
+            if credential and n in line_numbers:
+                text = ("<the flagged value is withheld: Mule ciphertext>" if mule
+                        else "<the flagged value is withheld>")
+            part.append(f"{n:5}  {mask(text)}")
+        block = "\n".join(part)
+        if used + len(block) > MAX_DISPLAY_CHARS:
+            break
+        out.append(block)
+        used += len(block)
+    return "\n   ...\n".join(out)
+
+
+def _file_lines(root: Path, rel: str) -> list:
+    if root is None or not rel:
+        return []
+    path = (root / rel).resolve()
+    try:
+        path.relative_to(root.resolve())
+    except ValueError:
+        return []
+    if not path.is_file() or path.is_symlink() or path.stat().st_size > 2_000_000:
+        return []
+    try:
+        return path.read_text("utf-8", "replace").splitlines()
+    except OSError:
+        return []
 
 
 def _group_evidence(ref: str, group: dict, root, send_code: bool, context: int) -> str:
@@ -891,7 +996,9 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     notes = []
 
     _update(repository, branch, stage="Fetching the branch")
-    with recheck.branch_tip(connection, repository, branch, in_memory=True) as (root, why):
+    # The code is held in memory only, never on disk, so nothing of it is
+    # left behind on the server whatever happens to this job.
+    with recheck.branch_tip(connection, repository, branch, memory_only=True) as (root, why):
         in_memory = bool(root is not None and str(root).startswith(recheck.MEMORY_DIR))
         if root is None:
             notes.append(f"The branch could not be fetched ({why}), so the review "
@@ -916,6 +1023,21 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             notes += gather_notes
         # Everything that reads the code happens inside this block, so the
         # copy is gone before the first question about findings is asked.
+        # What the report shows beside each issue, read now while the copy
+        # is here.  Masked like everything else, and only when code may be
+        # shared at all.
+        shown = {}
+        if root is not None and send_code:
+            for g in groups:
+                if g["file"] and g["lines"]:
+                    g["display_code"] = _display_code(
+                        _file_lines(Path(root), g["file"]), g["lines"],
+                        g["kind"] == "credential", bool(g.get("mule_encrypted")))
+            # The overview may only name files it was shown, so those are the
+            # files its concerns can point into.
+            for label in re.findall(r'<evidence label="File ([^"]+)">', overview_evidence):
+                rel = html.unescape(label)
+                shown[rel] = _file_lines(Path(root), rel)
         refs = [f"G{i + 1}" for i in range(len(groups))]
         # A group already decided, by a person or by its own validation, is
         # not asked about again: the report carries that decision.
@@ -931,9 +1053,15 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     overview = {"what_it_is": "", "positives": [], "concerns": []}
     if overview_evidence:
         _update(repository, branch, stage="Reading the repository")
-        prompt = (f"Repository: {repository}\nBranch: {branch}\n"
-                  f"Visibility: {facts['visibility'] or 'unknown'}\n"
-                  + _site_lines(site) + "\n" + overview_evidence)
+        head = (f"Repository: {repository}\nBranch: {branch}\n"
+                f"Visibility: {facts['visibility'] or 'unknown'}\n"
+                + _site_lines(site) + "\n")
+        room = asker.input_room(OVERVIEW_SYSTEM) - len(head) - 200
+        if len(overview_evidence) > room:
+            cut_at = overview_evidence.rfind("</evidence>", 0, room)
+            overview_evidence = overview_evidence[:cut_at + 11] if cut_at > 0 else overview_evidence[:room]
+            notes.append("The repository read was cut to fit in one request.")
+        prompt = head + overview_evidence
         obj, problem, cut = asker.ask(OVERVIEW_SYSTEM, prompt, OVERVIEW_TOKENS)
         if obj is None and not cut and "JSON" not in problem:
             raise RuntimeError(problem)
@@ -953,9 +1081,14 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
 
     # ---- the findings, a batch at a time
     batches, current_batch, size = [], [], 0
+    # Each batch is one request, so what it carries is held under both the
+    # usual size and what one request may hold.
+    room = min(MAX_BATCH_CHARS, asker.input_room(REVIEW_SYSTEM) - 500)
     for ref, text in zip(asked, evidence):
+        if len(text) > room:
+            text = text[:room - 200] + "\n</evidence>"
         if current_batch and (len(current_batch) >= asker.batch_size
-                              or size + len(text) > MAX_BATCH_CHARS):
+                              or size + len(text) > room):
             batches.append(current_batch)
             current_batch, size = [], 0
         current_batch.append((ref, text))
@@ -1000,14 +1133,17 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                     finding_ids=group["finding_ids"], group_ids=group["all_ids"],
                     known_exploited=group["known_exploited"],
                     kev_floor=group["kev_floor"],
-                    waived=group["waived"], waiver=group["waiver"])
+                    waived=group["waived"], waiver=group["waiver"],
+                    code=group.get("display_code", ""), cwe=group["cwe"] or "")
         items.append(item)
     for concern in overview["concerns"]:
         concern.update(source="review", rule="", kind="review", count=0,
                        severity="", finding_ids=[], group_ids=[],
                        location=(f"{concern['file']}, line {concern['line']}"
                                  if concern["file"] and concern["line"]
-                                 else concern["file"]))
+                                 else concern["file"]),
+                       code=(_display_code(shown.get(concern["file"]) or [], [concern["line"]])
+                             if concern["file"] and concern["line"] else ""))
         items.append(concern)
 
     for item in items:
@@ -1528,6 +1664,23 @@ def document_context(view_: dict) -> dict:
              for r in RATINGS}
     waived = {r: sum(1 for i in items if i["rating"] == r and i.get("waived"))
               for r in RATINGS}
+    # The standards an issue falls under follow from its CWE, so a report
+    # written before they were shown gets them too.  Worked out here, never
+    # stored, so a corrected table corrects every report.
+    for item in items:
+        std = report_standards.standards_for(item.get("cwe"))
+        item.setdefault("owasp", std["owasp"])
+        item.setdefault("api", std["api"])
+        item["owasp_name"], item["api_name"] = std["owasp_name"], std["api_name"]
+        item["cwe_label"] = std["cwe"]
+        item["references"] = std["references"]
+        item.setdefault("cvss", "")
+        item.setdefault("cvss_score", None)
+        item["cvss_band"] = report_standards.cvss_band(item.get("cvss_score"))
+    retests = [i for i in items if i.get("retest") and i["rating"] != "Informational"]
     return {"r": result, "items": items, "tally": tally, "waived_tally": waived,
             "matrix": matrix(items), "impact_words": IMPACT_WORDS,
-            "likelihood_words": LIKELIHOOD_WORDS, "row": view_["row"]}
+            "likelihood_words": LIKELIHOOD_WORDS, "row": view_["row"],
+            "verdict": report_standards.verdict(items),
+            "coverage": report_standards.coverage(items),
+            "retests": retests, "standards": report_standards.STANDARDS}

@@ -61,6 +61,7 @@ jsonschema==4.26.0
 # installs.  Without them the import fails loudly at start rather than
 # producing a broken document later.
 weasyprint==70.0
+python-docx==1.2.0
 
 # Reads the SQL the Ask AI box writes, so it can be checked and rebuilt
 # before it runs.  Pure Python.

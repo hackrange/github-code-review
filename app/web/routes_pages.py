@@ -2954,6 +2954,50 @@ def finding_assessment_pdf(finding_id: int, request: Request,
                     headers={"Content-Disposition": 'attachment; filename="%s"' % name})
 
 
+@router.get("/findings/{finding_id}/assessment.docx")
+def finding_assessment_docx(finding_id: int, request: Request,
+                            user: User = Depends(current_user)):
+    """The same security report as a Word document, for the people who will
+    edit it, comment on it and pass it on.  Built on download, like the PDF,
+    from the stored report: no model is asked anything here."""
+    from app.core import assessment, settings_store
+
+    with session_scope() as db:
+        row = rbac.visible_finding(db, user, finding_id)
+        if row is None or (row.out_of_scope and not rbac.can(user, "repo.scope")):
+            raise HTTPException(status_code=404, detail="No such finding.")
+        report = assessment.view(assessment.current(
+            db, row.repository, row.branch or _default_branch(db, row.repository)))
+        if not (report and report["ready"]):
+            raise HTTPException(status_code=404, detail="No report yet.")
+        context = assessment.document_context(report)
+        context.update(
+            organization_name=settings_store.get(db, "report.organization_name", "") or "",
+            logo=(settings_store.get(db, "report.logo", "") or "").strip(),
+            footer_text=settings_store.get(db, "report.footer", "") or "",
+            issued_at=(report["row"].created_at or datetime.now(timezone.utc))
+            .strftime("%B %d, %Y").replace(" 0", " "))
+        name = "security-assessment-%s-%s-%s.docx" % (
+            row.repository.replace("/", "-"),
+            re.sub(r"[^A-Za-z0-9._-]+", "-", report["result"]["branch"] or "default"),
+            datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        repository = row.repository
+    try:
+        from app.core import assessment_docx
+    except Exception:
+        log.exception("python-docx is not available")
+        raise HTTPException(status_code=503,
+                            detail="Word reports need python-docx, which is not "
+                                   "installed on this server.")
+    data = assessment_docx.build(context)
+    log.info("security report (Word) on %s downloaded by %s", repository,
+             getattr(user, "username", "?"))
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": 'attachment; filename="%s"' % name})
+
+
 def _default_branch(db, repository: str) -> str:
     repo = db.query(Repository).filter(Repository.full_name == repository).first()
     return (repo.default_branch if repo else "") or ""
