@@ -11,7 +11,7 @@ the change, whoever made it and however it was merged.
           scan that marked it fixed.  That is the fix.
   open    the file when it was first found, against the file now.
 
-A blobless clone of the one branch, in memory where there is some, gone on
+A clone of the one branch's recent history, without file contents,, in memory where there is some, gone on
 the way out.  Commit dates are read along the branch's own line of merges,
 so a change made on a side branch weeks earlier and merged in between the
 two scans still lands in the window.
@@ -27,14 +27,18 @@ import os
 import re
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 log = logging.getLogger("gcr.ask.diff")
 
 MAX_DIFFS = 3
 MAX_LINES = 400
-GIT_TIMEOUT = 120
+GIT_TIMEOUT = 60
+# For every diff in one question together, so a large repository cannot hold
+# the request open past what the load balancer in front will wait for.
+TOTAL_SECONDS = 75
 
 _BRANCH = re.compile(r"[A-Za-z0-9._/+-]{1,255}")
 _REPO = re.compile(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+")
@@ -61,8 +65,14 @@ def _utc(value):
     return value.astimezone(timezone.utc)
 
 
-def _git(args: list, cwd: Path, cred: list, timeout: int = GIT_TIMEOUT) -> tuple:
+def _git(args: list, cwd: Path, cred: list, timeout: int = GIT_TIMEOUT,
+         deadline: float = 0) -> tuple:
     """-> (ok, stdout, short error).  Never raises, never echoes a credential."""
+    if deadline:
+        left = deadline - time.monotonic()
+        if left < 2:
+            return False, "", "out of time for this question"
+        timeout = min(timeout, left)
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="/bin/false")
     try:
         done = subprocess.run(["git", "-C", str(cwd)] + cred + args,
@@ -125,7 +135,7 @@ def load(finding_ids: list) -> list:
     return out
 
 
-def _one(item: dict, work: Path) -> None:
+def _one(item: dict, work: Path, deadline: float = 0) -> None:
     """Fill item with diff, commits and window, or an error.  In place."""
     from app.core.code_reasoning import mask
     from app.core.recheck import _credential_args
@@ -147,10 +157,27 @@ def _one(item: dict, work: Path) -> None:
     cred = _credential_args(token_file, item["provider"])
     dest = work / "repo"
     try:
+        # History back to a month before the earlier moment, without file
+        # contents.  Enough for almost every finding, and bounded however old
+        # and large the repository is.  Deepened once if it was not enough.
+        def since(days):
+            return (item["before_at"] - timedelta(days=days)).strftime("%Y-%m-%d")
+
+        url = "%s/%s.git" % (item["web"], item["repository"])
         ok, _out, why = _git(["clone", "--quiet", "--filter=blob:none", "--no-checkout",
                               "--single-branch", "--branch=" + item["branch"],
-                              "--no-tags", "--", "%s/%s.git" % (item["web"], item["repository"]),
-                              str(dest)], work, cred)
+                              "--no-tags", "--shallow-since=" + since(30), "--",
+                              url, str(dest)], work, cred, deadline=deadline)
+        quiet = False
+        if not ok:
+            # A branch with no commits in that month refuses a date limited
+            # clone.  Then it has not moved since before the finding, which
+            # one commit is enough to show.
+            ok, _out, why = _git(["clone", "--quiet", "--filter=blob:none", "--no-checkout",
+                                  "--single-branch", "--branch=" + item["branch"],
+                                  "--no-tags", "--depth=1", "--", url, str(dest)],
+                                 work, cred, deadline=deadline)
+            quiet = ok
         if not ok:
             item["error"] = why or "The branch could not be fetched."
             return
@@ -158,18 +185,27 @@ def _one(item: dict, work: Path) -> None:
         def commit_before(when):
             stamp = when.strftime("%Y-%m-%dT%H:%M:%SZ")
             ok, out, _why = _git(["rev-list", "-1", "--first-parent",
-                                  "--before=" + stamp, "HEAD"], dest, cred)
+                                  "--before=" + stamp, "HEAD"], dest, cred, deadline=deadline)
             return out.strip() if ok else ""
 
-        before = commit_before(item["before_at"])
-        after = commit_before(item["after_at"]) if item["after_at"] else ""
-        if not item["after_at"]:
-            ok, out, _why = _git(["rev-parse", "HEAD"], dest, cred)
-            after = out.strip() if ok else ""
+        if quiet:
+            before = after = commit_before(item["before_at"])
+        else:
+            before = commit_before(item["before_at"])
+            if not before:
+                _git(["fetch", "--quiet", "--filter=blob:none", "--no-tags",
+                      "--shallow-since=" + since(400), "origin"], dest, cred,
+                     deadline=deadline)
+                before = commit_before(item["before_at"])
+            if item["after_at"]:
+                after = commit_before(item["after_at"])
+            else:
+                ok, out, _why = _git(["rev-parse", "HEAD"], dest, cred, deadline=deadline)
+                after = out.strip() if ok else ""
         if not before or not after:
-            item["error"] = ("The branch has no commit from before %s, so there "
-                             "is nothing to compare against."
-                             % item["before_at"].strftime("%Y-%m-%d"))
+            item["error"] = ("The branch has no commit from before %s within the "
+                             "last year of its history, so there is nothing to "
+                             "compare against." % item["before_at"].strftime("%Y-%m-%d"))
             return
         item["before_commit"], item["after_commit"] = before[:12], after[:12]
         if before == after:
@@ -179,10 +215,10 @@ def _one(item: dict, work: Path) -> None:
 
         ok, log_out, _why = _git(["log", "--no-color", "--format=%h %ad %an: %s",
                                   "--date=short", "%s..%s" % (before, after),
-                                  "--", item["file"]], dest, cred)
+                                  "--", item["file"]], dest, cred, deadline=deadline)
         commits = [mask(line)[:200] for line in log_out.splitlines()[:20]] if ok else []
         ok, diff, why = _git(["diff", "--no-color", "--no-ext-diff", "--unified=5",
-                              before, after, "--", item["file"]], dest, cred)
+                              before, after, "--", item["file"]], dest, cred, deadline=deadline)
         if not ok:
             item["error"] = why or "The diff could not be read."
             return
@@ -216,14 +252,18 @@ def diffs(finding_ids: list) -> list:
             item.setdefault("error", "")
             item["error"] = item["error"] or "The server is busy reading code.  Ask again shortly."
         return [_public(i) for i in items]
+    deadline = time.monotonic() + TOTAL_SECONDS
     try:
         for item in items:
             if item["error"]:
                 continue
+            if time.monotonic() > deadline - 5:
+                item["error"] = "Out of time for this question.  Ask about this one on its own."
+                continue
             with tempfile.TemporaryDirectory(prefix="gcr-diff-",
                                              dir=memory_dir() or None) as tmp:
                 try:
-                    _one(item, Path(tmp))
+                    _one(item, Path(tmp), deadline)
                 except Exception:  # noqa: BLE001 - one bad repo is not the answer
                     log.exception("diff for finding %s failed", item["finding_id"])
                     item["error"] = "The diff could not be made."

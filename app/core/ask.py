@@ -841,18 +841,32 @@ def ask(cfg: dict, user, question: str, history=None, pdf_maker=None) -> dict:
             diffs = ask_diff.diffs(ids)
 
     files_note = (f"\nFiles made: {', '.join(sorted(wants))}." if wants else "")
+    # A report or a diff is worth having even when the model cannot be
+    # reached to write about it: a firewall in front of the service may refuse
+    # a body with code in it.  The numbers and the diff come from the data, so
+    # they are shown with a sentence saying why there is no write up.
     if report:
         from app.core import ask_report
 
-        answer = call(REPORT_SYSTEM,
-                      f"Conversation:\n{talk}\n\nReport data (JSON):\n"
-                      f"{json.dumps(ask_report.for_model(report), default=str)[:60_000]}",
-                      3000).strip()[:6000]
+        try:
+            answer = call(REPORT_SYSTEM,
+                          f"Conversation:\n{talk}\n\nReport data (JSON):\n"
+                          f"{json.dumps(ask_report.for_model(report), default=str)[:60_000]}",
+                          3000).strip()[:6000]
+        except AskError as exc:
+            answer = "\n".join(
+                ["Summary:", report.get("summary", ""), "", "What to do first:"]
+                + [f"- {r['priority']}: {r['title']}" for r in report.get("recommendations", [])]
+                + ["", f"(The model could not write this up: {exc}  The numbers "
+                       "above and in the PDF come straight from the data.)"])
     elif diffs:
-        answer = call(DIFF_SYSTEM,
-                      f"Conversation:\n{talk}\n\nDiffs (JSON):\n"
-                      f"{_diff_for_model(diffs, bool(cfg.get('ai.send_code', True)))}"
-                      f"{files_note}", 2000).strip()[:4000]
+        try:
+            answer = call(DIFF_SYSTEM,
+                          f"Conversation:\n{talk}\n\nDiffs (JSON):\n"
+                          f"{_diff_for_model(diffs, bool(cfg.get('ai.send_code', True)))}"
+                          f"{files_note}", 2000).strip()[:4000]
+        except AskError as exc:
+            answer = (f"The changes are below.  The model could not explain them: {exc}")
     else:
         answer = call(ANSWER_SYSTEM,
                       f"Conversation:\n{talk}\n\nQuery results (JSON):\n"
