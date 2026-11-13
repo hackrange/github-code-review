@@ -210,7 +210,7 @@ COALESCE(NULLIF(r.application_owner, ''), c.application_owner).
 - A finding that counts as open: state = 'OPEN' AND excepted = 0 AND out_of_scope = 0.
 - Effective severity: COALESCE(custom_severity, severity).  Enum values are upper case.
 - A person may be stored as "First Last", "Last, First", a login or an email.  Match \
-with LOWER(column) LIKE '%baker%' on the most distinctive part, across owners, \
+with LOWER(column) LIKE '%doe%' on the most distinctive part, across owners, \
 findings.author_name/author_email/author_login and repo_access.login.
 - What a repository uses (a framework, Power Apps, a package) is in components.name, \
 findings.file_path, repositories.application_name, repositories.note and \
