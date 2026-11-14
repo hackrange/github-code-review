@@ -134,7 +134,10 @@ def _decided_item(group: dict) -> dict:
         "verdict": "false_positive" if severity == "info" else "confirmed",
         "title": tidy(group["title"] or group["rule"] or group["package"], 120),
         "likelihood": 0, "impact": 0, "fixes": [],
-        "decided": {k: v for k, v in d.items() if k not in ("what", "why", "fix")},
+        # created_at is the raw datetime the API reads; the report keeps the
+        # printable "at" and is stored as JSON, which a datetime breaks.
+        "decided": {k: v for k, v in d.items()
+                    if k not in ("what", "why", "fix", "created_at")},
     }
     if d["by"] == "validation":
         item["what"] = tidy(d["what"] or group["description"], 600)
