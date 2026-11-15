@@ -2030,6 +2030,9 @@ class RepoAssessment(Base):
     output_tokens = Column(Integer, default=0)
     created_by = Column(String(120), default="")
     created_at = Column(DateTime(timezone=True))
+    # How far a running report has got, 0 to 100, for the progress bar on
+    # the finding page.  An estimate from the stage it is at, never a promise.
+    progress = Column(Integer, default=0)
     started_by = Column(String(120), default="")
     started_at = Column(DateTime(timezone=True))
 

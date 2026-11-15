@@ -33,8 +33,15 @@
      and their issue numbers stay large enough to read. */
   @page design { size: A4 landscape; margin: 16mm 16mm 18mm 16mm; }
   .design-page { page: design; break-before: page; break-after: page; }
-  .design-page svg { width: 100%; height: auto; max-height: 150mm; }
-  .design-key { font-size: 8pt; color: #5a5a5a; margin-top: 3mm; }
+  /* The printable area of a landscape A4 page is about 265 by 176 mm.  The
+     drawing takes the width and leaves room for the steps under it. */
+  .design-page svg { display: block; margin: 0 auto; }
+  .design-lead { font-size: 9pt; margin-bottom: 2mm; }
+  .design-foot { display: flex; gap: 6mm; align-items: flex-start; margin-top: 2mm; }
+  .design-steps { columns: 3; column-gap: 6mm; font-size: 8pt; margin: 0; padding-left: 5mm;
+                  flex: 1; line-height: 1.4; }
+  .design-steps li { break-inside: avoid; }
+  .design-key { font-size: 8pt; color: #5a5a5a; margin: 0; width: 55mm; }
   .design-key .badge { margin-right: 1.5mm; }
 
   :root { --ink: #1a1a1a; --soft: #5a5a5a; --faint: #8a8a8a; --rule: #dcdcdc;
@@ -83,6 +90,9 @@
   .r-low      { background: #70ad47; color: #fff; }
   .r-informational { background: #5b9bd5; color: #fff; }
   .r-unverified { background: #8a94a3; color: #fff; }
+  .fix-pair { break-inside: avoid; }
+  pre.code.code-before { border-left: 3px solid #c00000; }
+  pre.code.code-after { border-left: 3px solid #70ad47; }
   .scenario { background: #f4f7fb; border-left: 3px solid #1f3a5f; padding: 2mm 3mm;
               border-radius: 1mm; break-inside: avoid; }
   td.badge-cell { text-align: center; }
@@ -184,10 +194,13 @@
 {% if design_svg %}
 <div class="design-page">
 <h3 style="margin-top:0">How the Code Fits Together</h3>
-<p>{{ "A simple view of the main parts of this code and how they connect.  Each numbered pill is an open Critical, High or Medium issue found in that part, in the color of its rating, so a developer can see where the flaws sit.  Low issues are in the tables that follow.  It is a sketch to check against the code, not a full design." | sentence_spaced }}</p>
+<p class="design-lead">{{ "The main logic of this code and how a request travels through it, step by step.  Each numbered pill marks an open Critical, High or Medium issue in that part of the logic, in the color of its rating.  Low issues are in the tables that follow.  It is a sketch to check against the code, not a full design." | sentence_spaced }}</p>
 {{ design_svg | safe }}
-<p class="design-key">{% for rt in ['Critical', 'High', 'Medium'] %}<span class="badge r-{{ rt | lower }}">{{ rt }}</span>{% endfor %}
-{%- if design_loose %}  {{ ("Critical, High or Medium issues not tied to one part: " ~ design_loose[:12] | join(', ') ~ (" and others" if design_loose | length > 12 else "") ~ ".") }}{% endif %}</p>
+<div class="design-foot">
+  {% if design_steps %}<ol class="design-steps">{% for st in design_steps %}<li><strong>{{ st.from }}</strong> to <strong>{{ st.to }}</strong>{% if st.label %}: {{ st.label }}{% endif %}</li>{% endfor %}</ol>{% endif %}
+  <p class="design-key">{% for rt in ['Critical', 'High', 'Medium'] %}<span class="badge r-{{ rt | lower }}">{{ rt }}</span>{% endfor %}
+  {%- if design_loose %}<br>{{ ("Not tied to one part: " ~ design_loose[:12] | join(', ') ~ (" and others" if design_loose | length > 12 else "") ~ ".") }}{% endif %}</p>
+</div>
 </div>
 {% endif %}
 
@@ -355,7 +368,16 @@
   <p class="label" style="margin-bottom:.2rem">What to do.</p>
   <ul>{% for step in i.fixes %}<li>{{ step | sentence_spaced }}</li>{% endfor %}</ul>
   {% endif %}
-  {% if i.fix_example %}<p class="label" style="margin-bottom:.2rem">Example of the fix.</p><pre class="code">{{ i.fix_example }}</pre>{% endif %}
+  {% if i.fix_before %}
+  {# The fix tied to the numbered lines it replaces, checked against the
+     lines the review was shown. #}
+  <div class="fix-pair">
+    <p class="label" style="margin-bottom:.2rem">The code now, lines {{ i.fix_range[0] }} to {{ i.fix_range[1] }}.</p>
+    <pre class="code code-before">{{ i.fix_before }}</pre>
+    <p class="label" style="margin-bottom:.2rem">Proposed fix, replacing lines {{ i.fix_range[0] }} to {{ i.fix_range[1] }}.</p>
+    <pre class="code code-after">{{ i.fix_after }}</pre>
+  </div>
+  {% elif i.fix_example %}<p class="label" style="margin-bottom:.2rem">Example of the fix.</p><pre class="code">{{ i.fix_example }}</pre>{% endif %}
   {% if i.retest %}<p><span class="label">How to confirm the fix.</span>  {{ i.retest | sentence_spaced }}</p>{% endif %}
   {% if i.references %}<p class="faint">References: {{ i.references | join(', ') }}</p>{% endif %}
 </div>

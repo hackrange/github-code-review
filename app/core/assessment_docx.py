@@ -314,20 +314,6 @@ def _pill(para, text, rating):
     para.add_run("  ").font.size = Pt(8.5)
 
 
-def _card_borders(cell, accent: str, edge: str = "D6DCE4"):
-    """A light outline with a thick colored left edge, like the PDF's cards."""
-    pr = cell._tc.get_or_add_tcPr()
-    borders = OxmlElement("w:tcBorders")
-    for side, size, color in (("top", 4, edge), ("bottom", 4, edge), ("right", 4, edge),
-                              ("left", 36, accent)):
-        el = OxmlElement(f"w:{side}")
-        el.set(qn("w:val"), "single")
-        el.set(qn("w:sz"), str(size))
-        el.set(qn("w:color"), color)
-        borders.append(el)
-    pr.append(borders)
-
-
 def _orient(doc, landscape: bool):
     """Start a new page in landscape or back in portrait."""
     from docx.enum.section import WD_ORIENT, WD_SECTION
@@ -339,64 +325,50 @@ def _orient(doc, landscape: bool):
 
 
 def _design(D, context):
-    """The drawing of the code, as cards in a table on a landscape page.
+    """The logic diagram of the code, as a picture on a landscape page.
 
-    Word has no place for the PDF's SVG without a rasterizer, so the same
-    columns are laid out as a table: one column per tier, a card per part,
-    and each open Critical, High or Medium issue as a pill in its color.
+    The same layout the PDF draws as SVG, painted as a PNG at print
+    resolution (report_design.png), so both copies show the same drawing.
     """
-    cols = context.get("design_columns") or []
-    if not cols:
+    design = context.get("design") or {}
+    picture = report_design.png(design, context.get("design_placed") or {})
+    if not picture:
         return
     doc = D.doc
     _orient(doc, True)
     D.h("How the Code Fits Together", 2)
-    D.p("A simple view of the main parts of this code and how they connect.  Each "
-        "numbered pill is an open Critical, High or Medium issue found in that part, in "
-        "the color of its rating.  Low issues are in the tables that follow.  It is a "
-        "sketch to check against the code, not a full design.", size=9.5)
-    t = doc.add_table(rows=2, cols=len(cols))
-    t.alignment = WD_TABLE_ALIGNMENT.CENTER
-    _margins(t, 120, 140)
-    for n, (title, members) in enumerate(cols):
-        _cell(t.rows[0].cells[n], title.upper(), bold=True, size=8, color=GRAY,
-              align=WD_ALIGN_PARAGRAPH.CENTER)
-        cell = t.rows[1].cells[n]
-        cell.text = ""
-        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
-        for part in members:
-            # Each card is its own small bordered table inside the column.
-            card = cell.add_table(rows=1, cols=1)
-            _margins(card, 110, 160)
-            inner = card.rows[0].cells[0]
-            issues = part.get("issues") or []
-            _shade(inner, "FFFFFF")
-            # The worst issue's color outlines a card that holds any.
-            _card_borders(inner, report_design.ACCENT[part["kind"]].lstrip("#"),
-                          FILL[issues[0][1]] if issues else "D6DCE4")
-            _cell(inner, part["name"], bold=True, size=10, color=NAVY)
-            if issues:
-                para = inner.add_paragraph()
-                para.paragraph_format.space_before = Pt(3)
-                para.paragraph_format.space_after = Pt(0)
-                for issue_id, rating in issues[:6]:
-                    _pill(para, issue_id, rating)
-                if len(issues) > 6:
-                    more = para.add_run(f"+{len(issues) - 6} more")
-                    more.font.size = Pt(8)
-            cell.add_paragraph().paragraph_format.space_after = Pt(2)
-    _widths(t, [9.4 / len(cols)] * len(cols))
-    links = context.get("design_links") or []
-    if links:
-        D.p("How the parts connect", bold=True, color=NAVY, size=9.5, after=2)
-        D.p("   ".join(f"{line}." for line in links), size=8.5, color=GRAY)
+    D.p("The main logic of this code and how a request travels through it, step by "
+        "step.  Each numbered pill marks an open Critical, High or Medium issue in that "
+        "part of the logic, in the color of its rating.  Low issues are in the tables "
+        "that follow.  It is a sketch to check against the code, not a full design.",
+        size=9.5)
+    doc.add_picture(io.BytesIO(picture), width=Inches(9.3))
+    doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    steps = report_design.steps(design)
+    if steps:
+        t = doc.add_table(rows=(len(steps) + 1) // 2, cols=2)
+        _margins(t, 20, 60)
+        half = (len(steps) + 1) // 2
+        for n, st in enumerate(steps):
+            cell = t.rows[n % half].cells[n // half]
+            cell.text = ""
+            para = cell.paragraphs[0]
+            para.paragraph_format.space_after = Pt(0)
+            num = para.add_run(f"{st['n']}.  ")
+            num.bold = True
+            for text, bold in ((st["from"], True), (" to ", False), (st["to"], True),
+                               ((": " + st["label"]) if st["label"] else "", False)):
+                run = para.add_run(spaced(text))
+                run.bold = bold
+            for run in para.runs:
+                run.font.size = Pt(8.5)
+        _widths(t, [4.65, 4.65])
     legend = doc.add_paragraph()
     for rating in ("Critical", "High", "Medium"):
         _pill(legend, rating, rating)
     loose = context.get("design_loose") or []
     if loose:
-        run = legend.add_run("Critical, High or Medium issues not tied to one part: "
-                             + ", ".join(loose[:12]) + ".")
+        run = legend.add_run("Not tied to one part: " + ", ".join(loose[:12]) + ".")
         run.font.size = Pt(8)
         run.font.color.rgb = GRAY
     _orient(doc, False)
@@ -483,7 +455,7 @@ def build(context: dict) -> bytes:
         D.bullets([f"{a['lead']}.  {a['text']}" for a in actions], numbered=True)
 
     # ---- the drawing, on a landscape page of its own
-    if context.get("design_columns"):
+    if (context.get("design") or {}).get("components"):
         _design(D, context)
     else:
         D.page_break()
@@ -647,7 +619,12 @@ def build(context: dict) -> bytes:
         if i.get("fixes"):
             D.p("What to do.", bold=True, color=NAVY, after=2)
             D.bullets(i["fixes"])
-        D.code(i.get("fix_example"), "Example of the fix")
+        if i.get("fix_before"):
+            a, b = i["fix_range"]
+            D.code(i["fix_before"], f"The code now, lines {a} to {b}")
+            D.code(i["fix_after"], f"Proposed fix, replacing lines {a} to {b}")
+        else:
+            D.code(i.get("fix_example"), "Example of the fix")
         if i.get("retest"):
             D.labeled("How to confirm the fix.", i["retest"])
         if i.get("references"):

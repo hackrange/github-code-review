@@ -1291,3 +1291,17 @@ tr.decided-out > td.decision-cell { opacity: 1; }
 .ask-commit { margin: .25rem 0; font-size: .8rem; }
 .ask-commit summary { cursor: pointer; overflow-wrap: anywhere; }
 .ask-diff-body .file { font-weight: 600; }
+
+/* The security report's live progress bar on the finding page. */
+.report-progress { display: block; }
+.report-progress-body { width: 100%; }
+.report-progress-head { display: flex; justify-content: space-between; align-items: baseline;
+                        gap: 1rem; margin-bottom: .45rem; }
+.report-progress-pct { font-variant-numeric: tabular-nums; font-weight: 700; }
+.report-progress-track { height: 10px; border-radius: 999px; background: rgba(127, 140, 160, .22);
+                         overflow: hidden; }
+.report-progress-fill { height: 100%; width: 0; border-radius: 999px; background: var(--info);
+                        transition: width .8s ease; }
+.report-progress.done .report-progress-fill { background: var(--ok); }
+.report-progress.failed .report-progress-fill { background: var(--bad); }
+.report-progress-stage { margin-top: .4rem; opacity: .85; }

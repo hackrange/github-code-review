@@ -278,6 +278,13 @@
     {% if report and report.ready %}
       <a class="btn" href="{{ base }}/findings/{{ f.id }}/assessment.pdf">Download security report</a>
       <a class="btn" href="{{ base }}/findings/{{ f.id }}/assessment.docx">Download as Word</a>
+      {# What the last report used.  Every call is also on the AI cost page,
+         under Security reports. #}
+      {% set u = report.result.usage if report.result else none %}
+      {% if can_assess and u %}
+      <span class="faint small" title="Input {{ u.input | thousands }}, output {{ u.output | thousands }}, cache read {{ u.cache_read | thousands }}, cache write {{ u.cache_write | thousands }}">
+        {{ u.total | thousands }} tokens in {{ u.calls }} question{{ '' if u.calls == 1 else 's' }}{% if u.cost %}, about {{ u.currency }}{{ '%.2f' % (u.cost | float) }}{% endif %}</span>
+      {% endif %}
     {% endif %}
     {% if can_assess and not (report and report.running) %}
       <form method="post" action="{{ base }}/findings/{{ f.id }}/assessment"
@@ -342,10 +349,23 @@
 {% endif %}
 
 {% if report and report.running %}
-<div class="notice info" data-reload-after="15">
-  A security report on this branch is being written.
-  {% if report.row.stage %}Now: {{ report.row.stage }}.{% endif %}
-  This page refreshes itself until it is done.
+{# A live bar: app.js asks the status address every few seconds and moves
+   it, then reloads the page once the report is done.  Without script the
+   stage still shows and the page can be refreshed by hand. #}
+{% set pct = report.row.progress or 0 %}
+<div class="notice info report-progress" data-report-progress
+     data-status-url="{{ base }}/findings/{{ f.id }}/assessment/status">
+  <div class="report-progress-body">
+    <div class="report-progress-head">
+      <strong data-report-title>Writing the security report</strong>
+      <span class="report-progress-pct" data-report-pct>{{ pct }}%</span>
+    </div>
+    <div class="report-progress-track" role="progressbar" aria-label="Security report progress"
+         aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ pct }}" data-report-track>
+      <div class="report-progress-fill" data-report-fill data-pct="{{ pct }}"></div>
+    </div>
+    <div class="small report-progress-stage" data-report-stage>{{ report.row.stage or "Starting" }}</div>
+  </div>
 </div>
 {% elif report and report.failed %}
 <div class="notice warn">

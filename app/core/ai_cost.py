@@ -20,6 +20,12 @@ from decimal import Decimal, InvalidOperation
 from app.core.models import AIUsage, FindingAnalysis, RepoDiagram
 
 KINDS = ("input", "output", "cache_read", "cache_write")
+# What each purpose tag on a usage row is, in words, for the cost page.  A
+# tag not listed here is shown as it is.
+PURPOSE_NAMES = {"report": "Security reports", "validation": "Finding validation",
+                 "diagram": "Repository diagrams", "code_reasoning": "Code reasoning",
+                 "sast_rule": "Rule drafts", "dast-triage": "DAST triage",
+                 "external-risk": "External site risk", "ask": "Ask AI", "test": "Connection test"}
 FORECAST_DAYS = 30
 
 
@@ -101,7 +107,8 @@ def summary(session, cfg: dict, days: int, now: datetime | None = None) -> dict:
         return bucket
 
     daily = [{"day": day, **finish(bucket)} for day, bucket in by_day.items()]
-    purposes = sorted(({"purpose": name, **finish(bucket)}
+    purposes = sorted(({"purpose": name, "label": PURPOSE_NAMES.get(name, name),
+                        **finish(bucket)}
                        for name, bucket in by_purpose.items()),
                       key=lambda p: (-p["cost"], -p["tokens"], p["purpose"]))
     finish(total)

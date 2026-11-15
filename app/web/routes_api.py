@@ -6712,6 +6712,44 @@ async def start_assessment(finding_id: int, request: Request,
               "minutes, and this page refreshes itself until it is done.", "ok"))
 
 
+@router.get("/findings/{finding_id}/assessment/status")
+def assessment_status(finding_id: int, user: User = Depends(current_user)):
+    """How far the security report on this finding's branch has got.
+
+    Read by the progress bar on the finding page every few seconds while a
+    report is written.  Says only what the page already shows: the stage,
+    the share done and whether it finished, never the report itself.
+    """
+    from fastapi.responses import JSONResponse
+
+    from app.core import assessment
+    from app.core.models import Repository
+
+    with session_scope() as db:
+        row = rbac.visible_finding(db, user, finding_id)
+        if row is None or (row.out_of_scope and not rbac.can(user, "repo.scope")):
+            raise HTTPException(status_code=404, detail="No such finding.")
+        branch = row.branch
+        if not branch:
+            repo = (db.query(Repository)
+                    .filter(Repository.full_name == row.repository).one_or_none())
+            branch = (repo.default_branch if repo else "") or ""
+        report = assessment.current(db, row.repository, branch)
+        if report is None:
+            body = {"status": "none", "progress": 0, "stage": "", "ready": False}
+        else:
+            running = report.status == "running"
+            body = {"status": report.status,
+                    "progress": max(0, min(100, report.progress or 0)) if running else
+                    (100 if report.status == "idle" else report.progress or 0),
+                    "stage": report.stage or "" if running else "",
+                    "ready": bool(report.result),
+                    # The failure text is what the page already shows; it is
+                    # the report's own message, never an exception.
+                    "error": (report.error or "")[:300] if report.status == "failed" else ""}
+    return JSONResponse(body, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/findings/{finding_id}/false-positive/confirm")
 async def confirm_report_false_positive(finding_id: int, request: Request,
                                         user: User = Depends(current_user)):

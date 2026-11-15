@@ -68,7 +68,7 @@ MAX_GROUPS = 40
 # A planning figure for one reviewed group's answer, in tokens.  The prompt
 # holds each field to a word limit, and this is comfortably over what that
 # comes to.
-ITEM_TOKENS = 1200
+ITEM_TOKENS = 1350
 # The share of the service's answer limit an answer is planned to use.  The
 # rest is left for the model's thinking, which counts against the same limit.
 ANSWER_SHARE = 0.4
@@ -692,7 +692,10 @@ first words of an advisory",
  "impact": 1 to 5,
  "cvss": "the CVSS 3.1 base vector for this issue as it stands in this code, such as \
 AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N, or empty for a false positive",
- "what": "what is wrong and how the code gets there, at most 90 words",
+ "what": "what is wrong, specifically: name the function, handler, route or \
+setting, the input or value involved, and the check or protection that is \
+missing or wrong, and how the code reaches it; never a general statement \
+such as something is wrong or input is not validated; at most 90 words",
  "evidence": "what in the code or data shows it, naming files and lines, at most 60 words",
  "why": "what could happen to the business, at most 60 words",
  "scenario": "a short realistic story a non technical reader follows: who \
@@ -705,10 +708,16 @@ by_design or not_applicable",
  "attack": ["three to five short steps telling how an attacker would abuse it, \
 in plain words a non expert follows, each at most 30 words; empty for a false positive"],
  "fixes": ["up to four concrete steps, each at most 25 words"],
- "fix_example": "a short example of the corrected code or setting, at most 12 lines, \
-or empty when a fix is not code; never a secret value; it may only use tables, \
-columns, functions and classes the evidence shows exist, and when it needs \
-something new its first line is a comment saying pseudocode, requires new X",
+ "fix_start": the first line number, as printed in the code you were shown, \
+of the lines your fix replaces, or 0 when the fix is not a change to lines you \
+were shown,
+ "fix_end": the last line number of the lines your fix replaces, or 0,
+ "fix_example": "the corrected code: when fix_start is set, exactly what should \
+replace lines fix_start to fix_end, keeping their indentation and without line \
+numbers; otherwise a short example of the corrected code or setting; at most 20 \
+lines; empty when a fix is not code; never a secret value; it may only use \
+tables, columns, functions and classes the evidence shows exist, and when it \
+needs something new its first line is a comment saying pseudocode, requires new X",
  "waiver_check": "for a waived group only: names_control when the waiver names a \
 specific control that lowers this risk, no_control when it does not, mismatch \
 when it is about a different problem; empty otherwise",
@@ -768,12 +777,16 @@ may only use names the evidence shows exist.
 Answer with one JSON object and nothing else, no markdown fence:
 {{"what_it_is": "two to four sentences on what this repository holds and who uses it",
  "positives": ["up to six security strengths the evidence shows, each one sentence"],
- "design": {{"components": [up to eight main parts of the product, never \
-files, each {{"id": "a short id", "name": "two to four plain words", "kind": \
-"user, client, web, service, data or external", "paths": ["up to four \
-folders or files that hold this part, exactly as the file tree shows them"]}}], "links": [up to ten \
-{{"from": "id", "to": "id", "label": "one to three words, such as signs in \
-or stores files"}}]}},
+ "design": {{"components": [up to ten parts for a logic diagram: the people \
+and systems that use it, the entry points, the main logic units that do the \
+work (such as Login and sessions, Vendor risk scoring, CSV export, Nightly \
+probe job), the data stores and outside services; never single files; each \
+{{"id": "a short id", "name": "two to four plain words", "kind": "user, \
+client, web, service, data or external", "paths": ["up to four folders or \
+files that hold this part, exactly as the file tree shows them, so findings \
+can be placed on it"]}}], "links": [up to twelve, in the order a typical \
+request travels, each {{"from": "id", "to": "id", "label": "what passes, \
+two to five words, such as sends login form or writes audit row"}}]}},
  "concerns": [up to five objects, each {CONCERN_FIELDS}]}}"""
 
 # The same question asked smaller, when the full one was cut off: no
@@ -930,6 +943,8 @@ class _Asker:
         self.custom = cfg.get("ai.provider") == "custom"
         self.pacer = _Pacer(cfg.get("ai.tokens_per_minute") or 0)
         self.calls = self.input_tokens = self.output_tokens = 0
+        self.cache_read_tokens = self.cache_write_tokens = 0
+        self.cost = None
         self.provider = self.model = ""
 
     @property
@@ -962,6 +977,15 @@ class _Asker:
         self.calls += 1
         self.input_tokens += answer.get("input_tokens") or 0
         self.output_tokens += answer.get("output_tokens") or 0
+        self.cache_read_tokens += answer.get("cache_read_tokens") or 0
+        self.cache_write_tokens += answer.get("cache_write_tokens") or 0
+        # Each call is also written to the AI usage table by ai.complete,
+        # under purpose "report", which is what the AI cost page adds up.
+        # This total is the same calls, kept with the report itself.
+        from app.core import ai_cost
+        spent = ai_cost.cost_of(self.cfg, answer)
+        if spent is not None:
+            self.cost = (self.cost or 0) + spent
         self.pacer.charge((answer.get("input_tokens") or len(prompt) // 4)
                           + (answer.get("output_tokens") or 0))
         self.provider = answer.get("provider") or self.provider
@@ -1024,6 +1048,10 @@ def _clean_item(raw: dict, fallback: dict | None = None) -> dict:
     item["attack"] = ([] if closed else
                       [tidy(x, 300) for x in attack[:5] if str(x or "").strip()])
     item["fix_example"] = _code_text(raw.get("fix_example"))
+    # The lines the fix replaces, checked later against the lines the model
+    # was actually shown (_place_fix); until then only a claim.
+    item["fix_start"] = _int(raw.get("fix_start"), 0, 10_000_000, 0)
+    item["fix_end"] = _int(raw.get("fix_end"), 0, 10_000_000, 0)
     status = str(raw.get("status") or "").strip().lower()
     item["status"] = status if status in ("confirmed_in_source", "needs_runtime") else ""
     item["runtime_check"] = (tidy(raw.get("runtime_check"), 300)
@@ -1038,11 +1066,17 @@ def _code_text(value) -> str:
     """A model's example code, masked and kept short.  Lines, not prose."""
     from app.core.diagram import mask
 
-    text = str(value or "").replace("\r\n", "\n").strip().strip("`").strip()
-    if not text:
+    text = str(value or "").replace("\r\n", "\n").replace("\t", "    ")
+    lines = text.split("\n")
+    # A markdown fence, with or without a language name, is not code.
+    while lines and (not lines[0].strip() or lines[0].strip().startswith("```")):
+        lines.pop(0)
+    while lines and (not lines[-1].strip() or lines[-1].strip().startswith("```")):
+        lines.pop()
+    if not lines:
         return ""
-    lines = [mask(line)[:160] for line in text.split("\n")[:12]]
-    return "\n".join(lines)[:1400]
+    # Indentation kept: in a fix that replaces numbered lines it matters.
+    return "\n".join(mask(line.rstrip())[:160] for line in lines[:20])[:2400]
 
 
 def _display_code(lines: list, line_numbers: list, credential: bool = False,
@@ -1067,6 +1101,73 @@ def _display_code(lines: list, line_numbers: list, credential: bool = False,
         out.append(block)
         used += len(block)
     return "\n   ...\n".join(out)
+
+
+FIX_MAX_LINES = 30
+
+
+def _numbered_source(lines: list, line_numbers: list, context: int,
+                     credential: bool = False, mule: bool = False) -> dict:
+    """{line number: masked text} for the lines the model was shown.
+
+    The same windows _snippet sends, so a fix can only be placed on lines the
+    model actually saw.  Held in memory while the report is written, and
+    only the lines a fix touches end up in the report.
+    """
+    from app.core.diagram import mask
+
+    out = {}
+    for line_no in (line_numbers or [])[:MAX_SNIPPETS]:
+        for n in range(max(1, line_no - context), min(len(lines), line_no + context) + 1):
+            text = lines[n - 1][:300]
+            if credential and n in line_numbers:
+                text = ("<the flagged value is withheld: Mule ciphertext>" if mule
+                        else "<the flagged value is withheld>")
+            out[n] = mask(text)
+    return out
+
+
+def _place_fix(item: dict, source: dict) -> None:
+    """Turn a fix the model tied to line numbers into a numbered before and after.
+
+    Only when every line in the range is one the model was shown, the range
+    is short, and there is code to put there.  Otherwise the fix stays an
+    unnumbered example, which is what it was before.
+    """
+    start, end = item.pop("fix_start", 0) or 0, item.pop("fix_end", 0) or 0
+    fix = item.get("fix_example") or ""
+    if not (fix and source and start and end >= start
+            and end - start < FIX_MAX_LINES
+            and all(n in source for n in range(start, end + 1))):
+        return
+    if any("withheld" in source[n] for n in range(start, end + 1)):
+        # A credential's line is never shown, before or after.
+        return
+    # A fix replaces the lines it names, so it still looks like them.  One
+    # that shares next to nothing with them was numbered against other
+    # lines, and a wrong line number in a report is worse than none.
+    import difflib
+    before_text = "\n".join(source[n].strip() for n in range(start, end + 1))
+    after_text = "\n".join(line.strip() for line in fix.split("\n"))
+    if difflib.SequenceMatcher(None, before_text, after_text).ratio() < 0.35:
+        return
+    item["fix_range"] = [start, end]
+    item["fix_before"] = "\n".join(f"{n:5}  {source[n][:160]}" for n in range(start, end + 1))
+    new = fix.split("\n")
+    item["fix_after"] = "\n".join(f"{start + k:5}  {line}" for k, line in enumerate(new))
+
+
+def _read_part(lines: list) -> dict:
+    """{line number: masked text} for the part of a file the overview read."""
+    from app.core.diagram import MAX_FILE_CHARS, mask
+
+    out, used = {}, 0
+    for n, line in enumerate(lines, start=1):
+        used += len(line) + 1
+        if used > MAX_FILE_CHARS:
+            break
+        out[n] = mask(line[:300])
+    return out
 
 
 def _file_lines(root: Path, rel: str) -> list:
@@ -1226,6 +1327,7 @@ def start(finding_id: int, actor: str) -> tuple:
             db.add(row)
         row.status = "running"
         row.stage = "Starting"
+        row.progress = 1
         row.error = ""
         row.finding_id = finding_id
         row.started_by = (actor or "")[:120]
@@ -1301,7 +1403,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     asker = _Asker(cfg)
     notes = []
 
-    _update(repository, branch, stage="Fetching the branch")
+    _update(repository, branch, stage="Fetching the branch", progress=4)
     # The code is held in memory only, never on disk, so nothing of it is
     # left behind on the server whatever happens to this job.
     with recheck.branch_tip(connection, repository, branch, memory_only=True) as (root, why):
@@ -1340,8 +1442,12 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         if root is not None and send_code:
             for g in groups:
                 if g["file"] and g["lines"]:
+                    file_lines = _file_lines(Path(root), g["file"])
                     g["display_code"] = _display_code(
-                        _file_lines(Path(root), g["file"]), g["lines"],
+                        file_lines, g["lines"],
+                        g["kind"] == "credential", bool(g.get("mule_encrypted")))
+                    g["source"] = _numbered_source(
+                        file_lines, g["lines"], context,
                         g["kind"] == "credential", bool(g.get("mule_encrypted")))
             # The overview may only name files it was shown, so those are the
             # files its concerns can point into.
@@ -1383,7 +1489,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     # ---- one look at the whole repository
     overview = {"what_it_is": "", "positives": [], "concerns": [], "design": {}}
     if overview_evidence:
-        _update(repository, branch, stage="Reading the repository")
+        _update(repository, branch, stage="Reading the repository", progress=10)
         head = (f"Repository: {repository}\nBranch: {branch}\n"
                 f"Visibility: {facts['visibility'] or 'unknown'}\n"
                 + _site_lines(site) + "\n" + profile_head)
@@ -1448,9 +1554,13 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
 
     def progress():
         done[0] += 1
+        # The review is most of the time, so it fills most of the bar.  A
+        # batch split for size adds questions, so the bar holds below the
+        # next stage rather than run past it.
+        planned = max(1, len(batches))
         _update(repository, branch,
-                stage=f"Reviewing findings, question {done[0]} "
-                      f"(about {len(batches)} planned)")
+                stage=f"Reviewing findings, question {done[0]} of about {planned}",
+                progress=min(85, 18 + (67 * (done[0] - 1)) // planned))
 
     for batch in batches:
         reviewed.update(_review(asker, batch, progress, profile_head))
@@ -1485,6 +1595,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                     packages=group.get("packages") or [], file=group["file"] or "")
         if group["waived"]:
             item["waiver_check"] = _waiver_support(group["waiver"], item.get("waiver_check"))
+        _place_fix(item, group.get("source") or {})
         items.append(item)
     for concern in overview["concerns"]:
         concern.update(source="review", rule="", kind="review", count=0,
@@ -1494,6 +1605,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                                  else concern["file"]),
                        code=(_display_code(shown.get(concern["file"]) or [], [concern["line"]])
                              if concern["file"] and concern["line"] else ""))
+        _place_fix(concern, _read_part(shown.get(concern["file"]) or []))
         items.append(concern)
 
     for item in items:
@@ -1512,7 +1624,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         _floor(item)
 
     # ---- what the review found that no scanner did, kept as findings
-    _update(repository, branch, stage="Recording what the review found")
+    _update(repository, branch, stage="Recording what the review found", progress=86)
     items = record_concerns(items, repository, branch, actor)
 
     items.sort(key=lambda i: (RATINGS.index(i["rating"]), bool(i.get("waived")),
@@ -1531,11 +1643,11 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                        if i["rating"] != "Informational"), "")
 
     # ---- false positives, corrected in the platform where policy allows
-    _update(repository, branch, stage="Correcting false positives")
+    _update(repository, branch, stage="Correcting false positives", progress=90)
     correct(items, repository, branch, actor, asker.model or ai.describe_model(cfg))
 
     # ---- the summary, from the rated list
-    _update(repository, branch, stage="Writing the summary")
+    _update(repository, branch, stage="Writing the summary", progress=93)
     tallies = final_counts(items)
     count_lines = "\n".join(f"{k.replace('_', ' ')}: {v}" for k, v in tallies.items())
     listing = "\n".join(
@@ -1594,8 +1706,17 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                    "left_out_alerts": sum(g["count"] for g in left_out)},
         "notes": notes, "in_memory": in_memory, "code_included": send_code,
         "calls": asker.calls,
+        # What writing this report used, every token kind, and what it cost
+        # at the prices on the AI page when it was written.
+        "usage": {"calls": asker.calls, "input": asker.input_tokens,
+                  "output": asker.output_tokens, "cache_read": asker.cache_read_tokens,
+                  "cache_write": asker.cache_write_tokens,
+                  "total": (asker.input_tokens + asker.output_tokens
+                            + asker.cache_read_tokens + asker.cache_write_tokens),
+                  "cost": (f"{asker.cost:.4f}" if asker.cost is not None else ""),
+                  "currency": str(cfg.get("ai.price_currency") or "")},
     }
-    _update(repository, branch, status="idle", stage="", error="",
+    _update(repository, branch, status="idle", stage="", error="", progress=100,
             result=json.dumps(result), commit=commit, code_included=send_code,
             in_memory=in_memory, provider=asker.provider,
             model=(asker.model or ai.describe_model(cfg))[:120],
@@ -2094,6 +2215,8 @@ def document_context(view_: dict, base_url: str = "") -> dict:
             "design_columns": report_design.columns(design, placed),
             "design_loose": loose,
             "design_links": report_design.link_lines(design),
+            "design_steps": report_design.steps(design),
+            "design": design, "design_placed": placed,
             "profile": result.get("profile") or {},
             "matrix": matrix(items), "impact_words": IMPACT_WORDS,
             "likelihood_words": LIKELIHOOD_WORDS, "row": view_["row"],

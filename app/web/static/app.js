@@ -358,3 +358,60 @@
     check();
   });
 })();
+
+/* The security report's progress bar.  Asks how far the report has got every
+ * few seconds and moves the bar; when it is done it says so and reloads the
+ * page, which then offers the downloads.  The fill's width is set here, so
+ * the bar moves smoothly between answers instead of jumping on a reload. */
+(function () {
+  var box = document.querySelector("[data-report-progress]");
+  if (!box) { return; }
+  var url = box.getAttribute("data-status-url");
+  var fill = box.querySelector("[data-report-fill]");
+  var track = box.querySelector("[data-report-track]");
+  var pct = box.querySelector("[data-report-pct]");
+  var stage = box.querySelector("[data-report-stage]");
+  var title = box.querySelector("[data-report-title]");
+  var misses = 0;
+
+  function show(value, text) {
+    var v = Math.max(0, Math.min(100, parseInt(value, 10) || 0));
+    fill.style.width = v + "%";
+    track.setAttribute("aria-valuenow", String(v));
+    pct.textContent = v + "%";
+    if (text) { stage.textContent = text; }
+  }
+
+  function ask() {
+    fetch(url, { credentials: "same-origin", cache: "no-store",
+                 headers: { "Accept": "application/json" } })
+      .then(function (r) { if (!r.ok) { throw new Error(r.status); } return r.json(); })
+      .then(function (s) {
+        misses = 0;
+        if (s.status === "running") {
+          show(s.progress, s.stage || "Working");
+          window.setTimeout(ask, 3000);
+        } else if (s.status === "failed") {
+          box.classList.add("failed");
+          title.textContent = "The security report could not be written";
+          show(s.progress, s.error || "It stopped before it finished.");
+          window.setTimeout(function () { window.location.reload(); }, 4000);
+        } else {
+          box.classList.add("done");
+          title.textContent = "The security report is complete";
+          show(100, "Done.  Loading the download links.");
+          window.setTimeout(function () { window.location.reload(); }, 1500);
+        }
+      })
+      .catch(function () {
+        // A restart or a dropped connection: keep trying, more slowly, and
+        // fall back to a plain reload after a while.
+        misses += 1;
+        if (misses > 5) { window.location.reload(); return; }
+        window.setTimeout(ask, 6000);
+      });
+  }
+
+  show(fill.getAttribute("data-pct"));
+  window.setTimeout(ask, 1500);
+})();

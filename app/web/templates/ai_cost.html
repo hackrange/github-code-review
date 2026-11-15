@@ -102,7 +102,7 @@
     <tbody>
     {% for p in usage.purposes %}
     <tr>
-      <td>{{ p.purpose }}</td><td class="num">{{ p.calls | thousands }}</td>
+      <td>{{ p.label or p.purpose }}</td><td class="num">{{ p.calls | thousands }}</td>
       <td class="num">{{ p.failed | thousands }}</td><td class="num">{{ p.cut_off | thousands }}</td>
       <td class="num">{{ p.input | thousands }}</td><td class="num">{{ p.output | thousands }}</td>
       <td class="num">{{ p.cache_read | thousands }}</td><td class="num">{{ p.cache_write | thousands }}</td>
