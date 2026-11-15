@@ -4460,7 +4460,12 @@ async def describe_repository(repo_id: int, request: Request,
     back = _safe_back(back) if back else "/blast-radius"
 
     with session_scope() as db:
-        repo = (db.query(m_Repository)
+        # Through the scoped query, the same as every page that shows a
+        # repository.  Only administrators hold this permission today, and
+        # they see everything, so nothing changes for them; if it is ever
+        # given to a role that sees only some repositories, one outside that
+        # scope answers as missing rather than taking the change.
+        repo = (rbac.visible_repositories(db, user)
                 .filter(m_Repository.id == repo_id).one_or_none())
         if repo is None:
             raise HTTPException(status_code=404, detail="No such repository.")
@@ -4547,7 +4552,12 @@ async def tag_one_repository(repo_id: int, request: Request,
                        "of, so it can be found.")
         values["web_app_urls"] = ", ".join(urls)
     with session_scope() as db:
-        repo = (db.query(m_Repository)
+        # Through the scoped query, the same as every page that shows a
+        # repository.  Only administrators hold this permission today, and
+        # they see everything, so nothing changes for them; if it is ever
+        # given to a role that sees only some repositories, one outside that
+        # scope answers as missing rather than taking the change.
+        repo = (rbac.visible_repositories(db, user)
                 .filter(m_Repository.id == repo_id).one_or_none())
         if repo is None:
             raise HTTPException(status_code=404, detail="No such repository.")

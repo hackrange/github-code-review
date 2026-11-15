@@ -513,8 +513,18 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
                     "Accept": sent.get("Accept", "*/*")}
     try:
         proxy = current_proxy()
+        # With no proxy in the way, every connection is pinned to an address
+        # checked as public at the moment it is opened (_pinned_transport).
+        # Through a proxy the proxy resolves the name, so the check below is
+        # what there is.
+        env_proxy = any(os.environ.get(k) for k in
+                        ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY",
+                         "all_proxy", "ALL_PROXY"))
+        pinned = (_pinned_transport()
+                  if not allow_private and not proxy and not env_proxy else None)
         with httpx.Client(verify=False, timeout=timeout, follow_redirects=False,
-                          trust_env=not proxy, proxy=proxy or None) as client:
+                          trust_env=not proxy, proxy=proxy or None,
+                          transport=pinned) as client:
             for _hop in range(6):
                 host = urlparse(current).hostname or ""
                 if not allow_private and not _host_is_public(host):
@@ -572,6 +582,47 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
 
 
 _PUBLIC_CACHE: dict = {}
+
+
+def _pinned_transport():
+    """An httpx transport that connects only to public addresses, and only to
+    the address it checked.  -> the transport, or None when this httpx cannot
+    take one, and the caller works as before.
+
+    Checking a name and then letting the client resolve it again leaves a gap:
+    a name that answers with a public address first and an internal one
+    second passes the check and is fetched from inside.  Here the check and
+    the connection are the same step, in the socket layer, so every hop of a
+    redirect is held to it too.  The URL, the Host header, the TLS server name
+    and the cookies are all untouched, because only the address the socket
+    opens to is chosen here.
+    """
+    try:
+        import httpcore
+        import httpx
+    except ImportError:
+        return None
+
+    class _PublicOnly(httpcore.SyncBackend):
+        def connect_tcp(self, host, port, timeout=None, local_address=None,
+                        socket_options=None):
+            try:
+                ipaddress.ip_address(host)
+                ips = [host]
+            except ValueError:
+                ips = resolve(host)
+            if not ips or not all(is_public(ip) for ip in ips):
+                raise httpcore.ConnectError(f"{host} resolves to a private address")
+            return super().connect_tcp(ips[0], port, timeout=timeout,
+                                       local_address=local_address,
+                                       socket_options=socket_options)
+
+    transport = httpx.HTTPTransport(verify=False)
+    pool = getattr(transport, "_pool", None)
+    if pool is None or not hasattr(pool, "_network_backend"):
+        return None
+    pool._network_backend = _PublicOnly()
+    return transport
 
 
 def _host_is_public(host: str) -> bool:
@@ -1120,9 +1171,22 @@ def browser_dom_collect(url: str, allow_private: bool = False, timeout: int = 45
         argv.append("--allow-private")
     if current_proxy():
         argv += ["--proxy", current_proxy()]
+    # The browser's own address check runs before the browser resolves the
+    # name again, so a name that changes its answer in between could take it
+    # onto an internal address.  With no proxy of its own it goes through the
+    # same public only proxy the screenshots use, which connects to the
+    # address it checked.  Without mitmproxy it runs as before.
+    want_guard = not allow_private and not current_proxy() and not any(
+        os.environ.get(k) for k in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"))
+    guard = None
     scratch = Path(tempfile.mkdtemp(prefix="gcr-dom-"))
     try:
         with SHOT_GATE:
+            if want_guard:
+                from app.core import dast_proxy
+                guard = dast_proxy.start_public_only(scratch)
+                if guard:
+                    argv += ["--proxy", guard.url]
             try:
                 proc = subprocess.run(argv, capture_output=True, text=True,
                                       timeout=timeout + 30, cwd=scratch,
@@ -1130,6 +1194,10 @@ def browser_dom_collect(url: str, allow_private: bool = False, timeout: int = 45
             except subprocess.TimeoutExpired:
                 out["error"] = f"the browser took longer than {timeout + 30} seconds"
                 return out
+            finally:
+                if guard:
+                    guard.stop()
+                    guard = None
         try:
             got = _json.loads((proc.stdout or "").strip().splitlines()[-1])
         except (ValueError, IndexError):

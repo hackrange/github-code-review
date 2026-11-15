@@ -205,14 +205,41 @@ def create(session, password: str, actor: str = "") -> bytes:
     return out.getvalue()
 
 
+# The manifest is a few lines of JSON.  Anything near this is not ours.
+MAX_MANIFEST_BYTES = 1024 * 1024
+
+
+def _read_capped(archive, name: str, limit: int) -> bytes:
+    """One entry, refused once it unpacks past limit.
+
+    The size a zip claims for an entry is the file's own word, so it is
+    checked first and then the bytes actually read are counted too.  A small
+    file built to unpack into gigabytes stops here, before any password is
+    tried.  Our data.enc is ciphertext, which does not compress, so it is
+    never larger unpacked than the file it came in.
+    """
+    if archive.getinfo(name).file_size > limit:
+        raise ValueError("That backup holds more than one of ours can.")
+    out = bytearray()
+    with archive.open(name) as entry:
+        while True:
+            chunk = entry.read(1024 * 1024)
+            if not chunk:
+                break
+            out += chunk
+            if len(out) > limit:
+                raise ValueError("That backup holds more than one of ours can.")
+    return bytes(out)
+
+
 def read(blob: bytes, password: str) -> dict:
     """Open an archive.  Raises ValueError if the password is wrong or it was edited."""
     if len(blob) > MAX_ARCHIVE_BYTES:
         raise ValueError("That file is too large to be one of ours.")
     try:
         archive = zipfile.ZipFile(io.BytesIO(blob))
-        manifest_bytes = archive.read("manifest.json")
-        data = archive.read("data.enc")
+        manifest_bytes = _read_capped(archive, "manifest.json", MAX_MANIFEST_BYTES)
+        data = _read_capped(archive, "data.enc", MAX_ARCHIVE_BYTES)
     except (zipfile.BadZipFile, KeyError):
         raise ValueError("That is not a backup file.")
 

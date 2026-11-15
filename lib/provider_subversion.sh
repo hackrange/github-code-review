@@ -26,7 +26,7 @@ provider_subversion_api_default() { printf ''; }
 provider_subversion_web_default() { printf ''; }
 
 # No API, so no headers and no bearer anything.  The credential is a username
-# and password handed to svn on the command line.
+# and password handed to svn on standard input (see _svn_args).
 provider_subversion_auth_header_line() { printf ''; }
 provider_subversion_api_headers() { printf ''; }
 provider_subversion_git_username() { cfg '.github.username' ''; }
@@ -46,15 +46,29 @@ _svn_root() {
   printf '%s' "${web%/}"
 }
 
-# svn wants the credential as arguments.  --no-auth-cache keeps it out of the
-# home directory it would otherwise write to.
+# The password never goes on the command line, where any local user could
+# read it from the process list while svn runs.  svn reads it from standard
+# input instead (--password-from-stdin, svn 1.10 and later), and _svn_run
+# feeds it there with the shell's own printf, which is not a process either.
+# --no-auth-cache keeps it out of the home directory svn would write to.
 _svn_args() {
-  local user pass
+  local user
   user=$(cfg '.github.username' '')
-  pass="${GHSCAN_TOKEN:-}"
   printf '%s\n' --non-interactive --trust-server-cert-failures=unknown-ca --no-auth-cache
   [[ -n "$user" ]] && printf '%s\n%s\n' --username "$user"
-  [[ -n "$pass" ]] && printf '%s\n%s\n' --password "$pass"
+  [[ -n "${GHSCAN_TOKEN:-}" ]] && printf '%s\n' --password-from-stdin
+  return 0
+}
+
+# svn with the credential on standard input.  Only for commands that read
+# nothing else from standard input, which is every one this file runs.
+_svn_run() {
+  local -a args; mapfile -t args < <(_svn_args)
+  if [[ -n "${GHSCAN_TOKEN:-}" ]]; then
+    printf '%s' "$GHSCAN_TOKEN" | svn "$1" "${args[@]}" "${@:2}"
+  else
+    svn "$1" "${args[@]}" "${@:2}" </dev/null
+  fi
 }
 
 provider_subversion_git_url() {
@@ -90,9 +104,8 @@ provider_subversion_list_repos() {
 
   log_warn "subversion is scanned at its current revision only. History is not walked, so credentials that were committed and later removed are not found. See the report for what this covers."
 
-  local -a args; mapfile -t args < <(_svn_args)
   local listing
-  if ! listing=$(svn list "${args[@]}" "$root" 2>/dev/null); then
+  if ! listing=$(_svn_run list "$root" 2>/dev/null); then
     log_error "could not list $root; refusing to report an empty estate"
     echo '[]'; return 1
   fi
