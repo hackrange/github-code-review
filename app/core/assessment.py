@@ -957,7 +957,12 @@ shown: when the line that decides it (where a value is set, the check above \
 it, the column type, the config that turns a feature on) is missing, the \
 verdict is needs_review and need names what to fetch.  The code you ask for \
 is searched for and sent back, and a search that finds nothing is itself \
-evidence that the thing is absent.  Use the product profile, and run these checks:
+evidence that the thing is absent.  A protection can sit in the code that \
+calls the flagged code: a script another module starts, a function whose \
+caller checks, proxies or pins first.  Before confirming that a check is \
+missing, look at the caller; when it was not shown, use needs_review and \
+ask in need for where the flagged script or function is called, by its file \
+or function name.  Use the product profile, and run these checks:
 {REVIEW_CHECKS}
 
 {STYLE}
@@ -1547,6 +1552,53 @@ def _review(asker: _Asker, batch: list, progress, head: str = "") -> dict:
     return out
 
 
+def _merge_closed(items: list) -> list:
+    """Closed scanner issues with the same rule and the same verdict, as one.
+
+    A real issue is never merged: each one keeps its own row, rating and
+    fix.  Only what carries no risk, closed for the same reason by the same
+    rule, is folded together, with every file it was in and every finding
+    it covers, so a false positive correction still reaches all of them.
+    """
+    out, kept = [], {}
+    for item in items:
+        key = None
+        if (item.get("source") == "scanner" and item.get("verdict") in CLOSED
+                and not item.get("decided") and item.get("rule")
+                and item.get("rating") == "Informational"):
+            key = (item["rule"], item["verdict"])
+        if key is None or key not in kept:
+            if key is not None:
+                item["files_covered"] = [item["file"]] if item.get("file") else []
+                kept[key] = item
+            out.append(item)
+            continue
+        first = kept[key]
+        first["count"] = (first.get("count") or 0) + (item.get("count") or 0)
+        first["group_ids"] = (first.get("group_ids") or []) + (item.get("group_ids") or [])
+        first["finding_ids"] = ((first.get("finding_ids") or [])
+                                + (item.get("finding_ids") or []))[:12]
+        if item.get("file") and item["file"] not in first["files_covered"]:
+            first["files_covered"].append(item["file"])
+    for item in kept.values():
+        files = item.pop("files_covered")
+        if len(files) > 1:
+            shown = ", ".join(files[:6]) + (f" and {len(files) - 6} more"
+                                            if len(files) > 6 else "")
+            item["location"] = f"{len(files)} files: {shown}"
+            base = (f"{item['rule']} does not fit this code" if item.get("settled") == "check 8"
+                    else item["title"])
+            item["title"] = short_title(f"{base} ({len(files)} files)", base)
+            # The code beside one file does not stand for the rest.
+            item["code"] = ""
+            item.pop("fix_before", None)
+            item.pop("fix_after", None)
+            item["evidence"] = tidy((item.get("evidence") or "") + f"  The same rule was "
+                                    f"closed the same way in {len(files)} files, "
+                                    f"{item['count']} alerts in all.", 900)
+    return out
+
+
 def _pack(texts: list, room: int, size: int) -> list:
     """[(ref, text)] into batches, each one request: at most size groups and
     room characters, a group too big on its own cut to fit."""
@@ -1588,6 +1640,33 @@ in need.
 """
 
 
+LOOKUP_DEF_LINES = 90     # lines of a definition a hit on it brings
+_DEFINITION = re.compile(r"^(\s*)(?:async\s+def|def|class|(?:export\s+)?(?:async\s+)?function)\s+\w")
+
+
+def _block_end(lines: list, at: int) -> int:
+    """The last line of the definition that starts at line at (1 based), or 0."""
+    head = lines[at - 1] if 0 < at <= len(lines) else ""
+    m = _DEFINITION.match(head)
+    if not m:
+        return 0
+    indent, end = len(m.group(1)), at
+    braces = "{" in head and not head.rstrip().endswith(":")
+    depth = head.count("{") - head.count("}")
+    for n in range(at + 1, len(lines) + 1):
+        line = lines[n - 1]
+        if braces:
+            depth += line.count("{") - line.count("}")
+            end = n
+            if depth <= 0:
+                break
+            continue
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        end = n
+    return end
+
+
 def _grep_files(root: Path, find: str) -> list:
     """Files in the branch holding find, as plain text.  Vendored copies last."""
     try:
@@ -1624,6 +1703,11 @@ def _lookup(root: Path, need: list) -> str:
             spans = []
             for hit in hits:
                 lo, hi = max(1, hit - LOOKUP_CONTEXT), min(len(lines), hit + LOOKUP_CONTEXT)
+                # A hit on a definition brings the whole of it, up to a limit,
+                # so the check its body makes is in view.
+                end = _block_end(lines, hit)
+                if end:
+                    hi = max(hi, min(end, hit + LOOKUP_DEF_LINES))
                 if spans and lo <= spans[-1][1] + 1:
                     spans[-1][1] = max(spans[-1][1], hi)
                 else:
@@ -2155,6 +2239,10 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             item["score"] = item["likelihood"] * item["impact"]
             item["rating"] = rating_for(item["score"])
         _floor(item)
+
+    # Closed issues that are the same reason over and over (one rule that
+    # does not fit, flagged in forty templates) are one row, not forty.
+    items = _merge_closed(items)
 
     # A waiver should be challenged when the problem is real, it carries a
     # rating, and its reason names no control, states something the code

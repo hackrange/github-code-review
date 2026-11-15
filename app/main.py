@@ -147,7 +147,9 @@ def create_app() -> FastAPI:
                 if connection_store.adopt_settings(db):
                     log.info("made the first connection from the existing settings")
         except Exception as exc:
-            log.warning("could not adopt the existing credential: %s", exc)
+            # The type only.  A database error can echo the values it was
+            # given, and one of them here is the credential.
+            log.warning("could not adopt the existing credential: %s", type(exc).__name__)
 
         # Dynamic scans finished before not found answers, repeats and the
         # model's likely false positives were dealt with.  Each scan once, in

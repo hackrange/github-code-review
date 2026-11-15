@@ -403,8 +403,10 @@ def cleanup_expired(session) -> int:
 def ensure_bootstrap_admin(session) -> dict:
     """Make an admin on first boot, once.
 
-    The password is printed to the log and never stored anywhere else.  They
-    have to change it and set up TOTP before the app lets them do anything.
+    The password goes only to first-admin.txt in the data directory, mode 600,
+    which is deleted the moment the account changes it.  The log names the
+    file, never the password.  They have to change it and set up TOTP before
+    the app lets them do anything.
     """
     if not live.auth_config().local_enabled:
         return {}

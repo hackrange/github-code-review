@@ -148,6 +148,10 @@ def build(root, paths=None) -> dict:
                 for f in marks["files"])
                 or any(w in build_text for w in marks["words"])):
             frameworks.append(name)
+    # A framework the code imports is used, whether or not a build file names
+    # it, so a rule for it is never set aside on a missing requirements file.
+    seen_imports = _imported_frameworks(root, paths)
+    frameworks += [f for f in FRAMEWORKS if f in seen_imports and f not in frameworks]
 
     dockerfiles = []
     for rel in sorted(files):
@@ -232,6 +236,27 @@ def build(root, paths=None) -> dict:
             "has_github_workflows": any(p.startswith(".github/workflows/") for p in files)}
 
 
+# One source in a CSP directive: a quoted keyword ('self', 'nonce-...'), a
+# scheme (https:, data:), a host with an optional scheme, port and path, a
+# wildcard, or a template placeholder standing in for one.
+_SOURCE = re.compile(
+    r"^(?:'[^']+'|[a-z][a-z0-9+.-]*:(?://\S*)?|\*(?:\.[\w.-]+)?(?::\S+)?|"
+    r"(?:[a-z][a-z0-9+.-]*://)?[\w*-]+(?:\.[\w-]+)+(?::\d+|:\*)?(?:/\S*)?|"
+    r"[{$][^\s]*|%\S+)$", re.IGNORECASE)
+
+
+def _looks_like_sources(sources: str) -> bool:
+    """Whether a directive's text is a list of sources rather than a sentence.
+
+    A docstring that says "script-src at all.  'unsafe-inline' under style-src"
+    is about a policy, and must not be read as one.
+    """
+    words = [w.strip(",\\") for w in sources.replace("\\n", " ").split()]
+    words = [w for w in words if w and w not in ("+", ".", "\"", "'")]
+    return bool(words) and all(_SOURCE.match(w.rstrip("\"'.")) or _SOURCE.match(w)
+                               for w in words)
+
+
 def _inline_script(text: str) -> tuple:
     """Does a policy in this file let inline script run.  -> (yes, line, nonce)
 
@@ -250,6 +275,8 @@ def _inline_script(text: str) -> tuple:
             continue
         for name, sources in _DIRECTIVE.findall(line):
             name, low = name.lower(), sources.lower()
+            if not _looks_like_sources(low):
+                continue            # prose about a policy, not a policy
             if name == "default-src" and has_script_src:
                 continue
             keyed = any(k in low for k in ("'nonce-", "'sha256-", "'sha384-",
@@ -304,6 +331,54 @@ def as_text(profile: dict, fork_of: str = "", code: bool = True) -> str:
     return "\n".join(lines)
 
 
+# How code shows it uses a framework, read from the first lines of source
+# files.  Only imports: a word in a comment or a string proves nothing.
+_IMPORTS = {
+    "django": re.compile(r"^\s*(?:from|import)\s+django\b", re.M),
+    "flask": re.compile(r"^\s*(?:from|import)\s+flask\b", re.M),
+    "fastapi": re.compile(r"^\s*(?:from|import)\s+fastapi\b", re.M),
+    "rails": re.compile(r"^\s*require\s+['\"]rails", re.M),
+    "laravel": re.compile(r"^\s*use\s+Illuminate\\", re.M),
+    "symfony": re.compile(r"^\s*use\s+Symfony\\", re.M),
+    "spring": re.compile(r"^\s*import\s+org\.springframework\.", re.M),
+    "express": re.compile(r"""(?:require\(\s*|from\s+)['"]express['"]"""),
+    "react": re.compile(r"""(?:require\(\s*|from\s+)['"]react(?:-dom)?['"]"""),
+    "vue": re.compile(r"""(?:require\(\s*|from\s+)['"]vue['"]"""),
+    "angular": re.compile(r"""from\s+['"]@angular/core['"]"""),
+}
+_IMPORT_EXTS = {".py", ".rb", ".php", ".java", ".kt", ".js", ".mjs", ".cjs", ".jsx",
+                ".ts", ".tsx", ".vue"}
+MAX_IMPORT_FILES = 4000
+
+
+def _imported_frameworks(root: Path, paths: list) -> set:
+    found, read = set(), 0
+    for rel in paths:
+        if read >= MAX_IMPORT_FILES or len(found) == len(_IMPORTS):
+            break
+        if _skip(rel) or Path(rel).suffix.lower() not in _IMPORT_EXTS:
+            continue
+        # A fixture that imports a framework to test a rule against it, or a
+        # tool folder, says nothing about what the product is built on.
+        bits = rel.split("/")
+        if any(b.startswith(".") or b in ("fixtures", "testdata", "__fixtures__")
+               for b in bits[:-1]):
+            continue
+        read += 1
+        head = _read(root / rel)[:20_000]
+        for name, pattern in _IMPORTS.items():
+            if name not in found and pattern.search(head):
+                found.add(name)
+    return found
+
+
+# Rule ids written as framework-rule-name, with no pack prefix, such as
+# django-no-csrf-token.  Only framework names that are not also ordinary
+# words a rule could start with.
+_PREFIX_FRAMEWORKS = ("django", "flask", "rails", "laravel", "symfony", "spring",
+                      "angular", "express", "react", "vue")
+
+
 def rule_mismatch(rule: str, profile: dict) -> str:
     """Why a rule cannot apply to this repository, or "".
 
@@ -316,6 +391,11 @@ def rule_mismatch(rule: str, profile: dict) -> str:
         return ""
     parts = rule.lower().split(".")
     if len(parts) < 3:
+        head = re.split(r"[-_]", parts[-1], maxsplit=1)[0]
+        if (head in _PREFIX_FRAMEWORKS and head in FRAMEWORKS
+                and head not in profile.get("frameworks", [])):
+            return (f"The rule is written for the {head} framework, which this "
+                    "repository does not use.")
         return ""
     language, framework = parts[0], parts[1]
     needs = RULE_LANGUAGES.get(language)
