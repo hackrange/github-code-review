@@ -52,7 +52,7 @@ from app.core.db import session_scope
 from app.core.models import (Finding, FindingKind, FindingState, RepoAssessment,
                              Repository, utcnow)
 
-from app.core import report_standards
+from app.core import report_design, report_profile, report_standards
 
 log = logging.getLogger("gcr.assessment")
 
@@ -68,7 +68,7 @@ MAX_GROUPS = 40
 # A planning figure for one reviewed group's answer, in tokens.  The prompt
 # holds each field to a word limit, and this is comfortably over what that
 # comes to.
-ITEM_TOKENS = 900
+ITEM_TOKENS = 1200
 # The share of the service's answer limit an answer is planned to use.  The
 # rest is left for the model's thinking, which counts against the same limit.
 ANSWER_SHARE = 0.4
@@ -87,7 +87,7 @@ REQUEST_SAFETY = 2_000
 DISPLAY_CONTEXT = 4
 MAX_DISPLAY_CHARS = 1_600
 # The summary and overview answers are short, and planned as such.
-OVERVIEW_TOKENS = 6_000
+OVERVIEW_TOKENS = 7_000
 SUMMARY_TOKENS = 2_500
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4,
@@ -132,7 +132,8 @@ def _decided_item(group: dict) -> dict:
     severity = d["severity"]
     item = {
         "verdict": "false_positive" if severity == "info" else "confirmed",
-        "title": tidy(group["title"] or group["rule"] or group["package"], 120),
+        "title": short_title(group["title"] or group["rule"] or group["package"],
+                             _group_name(group)),
         "likelihood": 0, "impact": 0, "fixes": [],
         # created_at is the raw datetime the API reads; the report keeps the
         # printable "at" and is stored as JSON, which a datetime breaks.
@@ -140,12 +141,12 @@ def _decided_item(group: dict) -> dict:
                     if k not in ("what", "why", "fix", "created_at")},
     }
     if d["by"] == "validation":
-        item["what"] = tidy(d["what"] or group["description"], 600)
+        item["what"] = tidy(d["what"] or group["description"], 900)
         item["evidence"] = tidy(
             f"Validation #{d['id']} rated this {d['rating'].lower()}"
             + (f" with {d['confidence']} confidence" if d["confidence"] else "")
             + (f" on {d['at']}" if d["at"] else "") + ".", 600)
-        item["why"] = tidy(d["why"], 600)
+        item["why"] = tidy(d["why"], 900)
         if d["fix"]:
             item["fixes"] = [tidy(d["fix"], 300)]
     else:
@@ -217,9 +218,60 @@ def tidy(text, limit: int = 1200) -> str:
     text = _US_WORDS.sub(_us, text)
     text = _SENTENCE_GAP.sub(r"\1  ", text)
     if len(text) > limit:
-        cut = text[:limit].rsplit(" ", 1)[0].rstrip(",;:")
-        text = cut + "."
+        text = _shorten(text, limit)
     return text
+
+
+_SENTENCE_END = re.compile(r"[.!?][\"')\]]?(?=\s)")
+
+
+def _shorten(text: str, limit: int) -> str:
+    """Text cut to fit, ending on a whole sentence.
+
+    A paragraph cut mid sentence reads as "which is." and tells the reader
+    the tool lost its place.  Ends on the last full sentence that fits; only
+    when the first sentence alone is too long is it cut at a word, and then
+    it says so rather than pretending to be a sentence.
+    """
+    head = text[:limit + 1]
+    ends = [m.end() for m in _SENTENCE_END.finditer(head + " ")]
+    ends = [e for e in ends if e <= limit]
+    if ends:
+        return text[:ends[-1]].rstrip()
+    cut = text[:limit - 20].rsplit(" ", 1)[0].rstrip(",;: ")
+    return cut + " (shortened)."
+
+
+def short_title(text, fallback: str = "", words: int = 10) -> str:
+    """A title of a few words, never a sentence cut in half.
+
+    A scanner's title is often an advisory's first sentence, which cut to
+    fit came out as "This issue affects." or "When."  Up to the word limit
+    it is used as it is; past it the fallback, built from what the finding
+    is (a package and its advisory, a rule and its file), is used instead.
+    """
+    text = tidy(text, 400).rstrip(" .")
+    if text and len(text.split()) <= words:
+        return text
+    fallback = tidy(fallback, 200).rstrip(" .")
+    if fallback:
+        return " ".join(fallback.split()[:words + 4])
+    return " ".join(text.split()[:words]) if text else "Finding"
+
+
+def _group_name(group: dict) -> str:
+    """What a group is, in a few words, for when its title will not do."""
+    if group.get("package"):
+        packages = group.get("packages") or [group["package"]]
+        name = packages[0] + (f" and {len(packages) - 1} related packages"
+                              if len(packages) > 1 else "")
+        advisory = (group.get("advisories") or [""])[0]
+        more = len(group.get("advisories") or []) - 1
+        return (f"{name}: {advisory}" + (f" and {more} more" if more > 0 else "")
+                if advisory else f"{name} {group.get('version', '')}".strip())
+    rule = (group.get("rule") or "").rsplit(".", 1)[-1].replace("-", " ").replace("_", " ")
+    where = Path(group.get("file") or "").name
+    return f"{rule} in {where}" if rule and where else rule or where
 
 
 def _int(value, low=1, high=5, fallback=3) -> int:
@@ -410,7 +462,13 @@ def groups_for(db, repository: str, branch: str) -> tuple:
             "file": top.file_path or "",
             "lines": sorted({f.line for f in members if f.line})[:12],
             "package": top.package_name or "",
+            "packages": [top.package_name] if top.package_name else [],
             "version": top.package_version or "",
+            "ecosystem": (top.ecosystem or "").lower(),
+            # The build upgrades the base image this came from, so its version
+            # is the registry's, not what ships (report check 1).
+            "base_upgraded": all(bool(getattr(f, "base_upgraded", False))
+                                 for f in members),
             "advisories": sorted({f.vulnerability_id for f in members
                                   if f.vulnerability_id})[:10],
             "fixed_in": top.fixed_in or "",
@@ -438,6 +496,7 @@ def groups_for(db, repository: str, branch: str) -> tuple:
             # Every finding in the group, for correcting a false positive.
             "all_ids": [f.id for f in members],
         })
+    groups = _merge_copies(groups)
     groups.sort(key=lambda g: (SEVERITY_ORDER.get(g["severity"], 9), g["waived"],
                                -g["count"]))
 
@@ -460,6 +519,124 @@ def groups_for(db, repository: str, branch: str) -> tuple:
     counts["by_rule"] = [{"rule": e["rule"], "kind": e["kind"], "count": e["count"],
                           "files": len(e["files"])} for e in by_rule.values()]
     return groups[:MAX_GROUPS], counts, groups[MAX_GROUPS:]
+
+
+def _merge_copies(groups: list) -> list:
+    """Package groups that are copies of one finding, made one (check 3).
+
+    One upstream source builds many binary packages (a server, its client,
+    shared libraries, data files), and a scanner reports the advisory on each.
+    Twenty two rows that one upgrade fixes read as twenty two problems.  Two
+    package groups are one when they carry the same advisories and stand in
+    the same place: both open or both waived, and decided the same way or
+    not at all.  The packages are listed inside the one that is kept.
+    """
+    out, seen = [], {}
+    for g in groups:
+        decision = g["decision"]
+        key = None
+        if g["kind"] == "dependency" and g["advisories"]:
+            key = (tuple(g["advisories"]), g["waived"],
+                   (decision["by"], decision["severity"]) if decision else None,
+                   g["base_upgraded"])
+        if key is None or key not in seen:
+            if key is not None:
+                seen[key] = g
+            out.append(g)
+            continue
+        kept = seen[key]
+        for name in g["packages"]:
+            if name not in kept["packages"]:
+                kept["packages"].append(name)
+        kept["count"] += g["count"]
+        kept["decided_count"] += g["decided_count"]
+        kept["known_exploited"] = kept["known_exploited"] or g["known_exploited"]
+        kept["kev_floor"] = kept["kev_floor"] or g["kev_floor"]
+        kept["finding_ids"] = (kept["finding_ids"] + g["finding_ids"])[:12]
+        kept["all_ids"] = kept["all_ids"] + g["all_ids"]
+        if SEVERITY_ORDER.get(g["severity"], 9) < SEVERITY_ORDER.get(kept["severity"], 9):
+            kept["severity"] = g["severity"]
+            kept["scanner_severity"] = g["scanner_severity"]
+    return out
+
+
+DISTRO_ECOSYSTEMS = ("deb", "rpm", "apk", "debian", "ubuntu", "alpine", "redhat",
+                     "rhel", "centos", "rocky", "almalinux", "amazon", "wolfi")
+
+
+def _settled(group: dict, profile: dict) -> dict | None:
+    """The report's entry for a group the facts settle without a model.
+
+    Check 8: a rule written for a language or framework the repository does
+    not use matched nothing real.  Check 1: an operating system package read
+    from a base image the build upgrades after pulling it is the registry's
+    version, not the one that ships, so it is unverified: listed, unscored
+    and out of the overall rating until somebody reads the shipped image.
+
+    A person's grade is never second guessed here.  A known exploited
+    package keeps its floor: "probably upgraded" is not enough for those.
+    """
+    decision = group["decision"]
+    if decision and decision["by"] == "person":
+        return None
+    name = _group_name(group)
+    if group["kind"] == "code" and not decision:
+        why = report_profile.rule_mismatch(group["rule"], profile)
+        if why:
+            item = _clean_item({
+                "verdict": "false_positive", "title": "Rule does not fit this code",
+                "check": f"Check 8: {why}",
+                "what": f"{why}  What it matched cannot be the problem the rule "
+                        "looks for.",
+                "evidence": f"Product profile: languages "
+                            f"{', '.join(profile.get('languages') or []) or 'none'}; "
+                            f"frameworks {', '.join(profile.get('frameworks') or []) or 'none'}.",
+                "fixes": ["Stop running this rule pack on this repository."]},
+                {"name": name})
+            item["title"] = short_title(f"{name}: rule does not fit this code", name)
+            item["settled"] = "check 8"
+            return item
+    if (group["kind"] == "dependency" and group.get("base_upgraded")
+            and group.get("ecosystem") in DISTRO_ECOSYSTEMS
+            and not group["known_exploited"]):
+        item = _clean_item({
+            "verdict": "unverified", "title": name,
+            "check": "Check 1: the version was read from the base image, and the "
+                     "Dockerfile upgrades packages after pulling it.",
+            "what": "The scanner read this package version from the base image in "
+                    "the registry.  The build upgrades its packages after pulling "
+                    "that image, so the version that ships is most likely newer, "
+                    "and may already hold the fix.",
+            "evidence": f"Fixed in {group['fixed_in'] or 'a later version'}.  "
+                        "The Dockerfile has a package upgrade step after FROM.",
+            "fixes": ["Read the installed version inside the shipped image, for "
+                      "example with dpkg-query -W, rpm -q or apk info -v.",
+                      "Rebuild the image on a routine schedule so the upgrade stays current."]},
+            {"name": name})
+        item["title"] = short_title(name, name)
+        item["settled"] = "check 1"
+        if decision:
+            item["evidence"] = tidy(item["evidence"] + f"  An earlier validation rated it "
+                                    f"{decision['rating'].lower()} without this fact.", 900)
+        return item
+    return None
+
+
+# Waiver reasons that say a decision was made without saying what makes it
+# safe.  Only whole reasons made of these words: anything that names a
+# thing is left to the review to judge.
+_GENERIC_WAIVER = re.compile(
+    r"^(?:it\s+|this\s+)?(?:has\s+|have\s+)?(?:adequate|sufficient|appropriate|existing|"
+    r"compensating)?\s*(?:controls?|risk\s+accepted|accepted|reviewed(?:\s+by\s+security)?|"
+    r"low\s+risk|not\s+an?\s+issue|ok|approved)[\s.!]*$", re.IGNORECASE)
+
+
+def _waiver_support(waiver: dict | None, model_says: str = "") -> str:
+    """Whether a waiver names the control that lowers the risk (check 11)."""
+    reason = re.sub(r"\s+", " ", ((waiver or {}).get("reason") or "")).strip()
+    if not reason or _GENERIC_WAIVER.match(reason):
+        return "no_control"
+    return model_says or ""
 
 
 def _snippet(root: Path, group: dict, context: int) -> str:
@@ -506,8 +683,11 @@ def _snippet(root: Path, group: dict, context: int) -> str:
 
 ITEM_FIELDS = """\
 {"ref": "the group's ref, such as G3",
- "verdict": "confirmed, false_positive or needs_review",
- "title": "what is wrong, in under twelve words, plain language",
+ "verdict": "confirmed, false_positive, by_design, not_applicable or needs_review",
+ "check": "the check that decided the verdict and what it showed, such as \
+'Check 6: the value is a COUNT(*) result', at most 25 words",
+ "title": "what is wrong, in your own words, ten words or fewer; never the \
+first words of an advisory",
  "likelihood": 1 to 5,
  "impact": 1 to 5,
  "cvss": "the CVSS 3.1 base vector for this issue as it stands in this code, such as \
@@ -515,11 +695,23 @@ AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N, or empty for a false positive",
  "what": "what is wrong and how the code gets there, at most 90 words",
  "evidence": "what in the code or data shows it, naming files and lines, at most 60 words",
  "why": "what could happen to the business, at most 60 words",
+ "scenario": "a short realistic story a non technical reader follows: who \
+the person is (an outside visitor, a former employee, a staff member with a \
+normal login), what they do in this product, and what the business loses, \
+such as which records, how many customers, money or downtime, at most 80 \
+words, in plain words with no jargon; grounded in what this code actually \
+does, never a breach that did not happen; empty for a false positive, \
+by_design or not_applicable",
  "attack": ["three to five short steps telling how an attacker would abuse it, \
 in plain words a non expert follows, each at most 30 words; empty for a false positive"],
  "fixes": ["up to four concrete steps, each at most 25 words"],
  "fix_example": "a short example of the corrected code or setting, at most 12 lines, \
-or empty when a fix is not code; never a secret value",
+or empty when a fix is not code; never a secret value; it may only use tables, \
+columns, functions and classes the evidence shows exist, and when it needs \
+something new its first line is a comment saying pseudocode, requires new X",
+ "waiver_check": "for a waived group only: names_control when the waiver names a \
+specific control that lowers this risk, no_control when it does not, mismatch \
+when it is about a different problem; empty otherwise",
  "status": "confirmed_in_source when the code you were shown proves it, or \
 needs_runtime when it depends on a setting or system you were not shown",
  "runtime_check": "for needs_runtime, what to check in the running system, at most 30 words",
@@ -564,7 +756,10 @@ anonymous users, secrets or trust placed in browser code, missing \
 authentication, risky configuration.  Report only what the evidence shows.  \
 A file you were not shown is not evidence of a problem: never raise a concern \
 because a file's contents were not provided, or because something could not \
-be checked.
+be checked.  When the profile says this repository is a copy of another \
+product, files added only in this copy (its own CI workflows, deploy \
+scripts) are neither concerns about nor strengths of that product.  A fix \
+may only use names the evidence shows exist.
 
 {STYLE}
 
@@ -573,7 +768,69 @@ be checked.
 Answer with one JSON object and nothing else, no markdown fence:
 {{"what_it_is": "two to four sentences on what this repository holds and who uses it",
  "positives": ["up to six security strengths the evidence shows, each one sentence"],
+ "design": {{"components": [up to eight main parts of the product, never \
+files, each {{"id": "a short id", "name": "two to four plain words", "kind": \
+"user, client, web, service, data or external", "paths": ["up to four \
+folders or files that hold this part, exactly as the file tree shows them"]}}], "links": [up to ten \
+{{"from": "id", "to": "id", "label": "one to three words, such as signs in \
+or stores files"}}]}},
  "concerns": [up to five objects, each {CONCERN_FIELDS}]}}"""
+
+# The same question asked smaller, when the full one was cut off: no
+# drawing, and fewer concerns, so the answer fits whatever the limit is.
+OVERVIEW_SHORT = OVERVIEW_SYSTEM.replace("up to six security strengths", "up to three security strengths").replace(
+    "up to five objects", "up to three objects")
+OVERVIEW_SHORT = re.sub(r' "design": \{\{?.*?\]\}\}?,\n', "", OVERVIEW_SHORT, flags=re.S)
+
+# The checks a review runs on every group, from a vendor's rebuttal of a
+# real report that graded 40 findings and was right about 6.  Numbered, so
+# the verdict can name the one that decided it and a reader can follow.
+REVIEW_CHECKS = """\
+Check 1, shipped version: a package version read from a base image the \
+build upgrades, a build stage that does not ship, or a manifest without its \
+lockfile is not the shipped version.  Say so; do not score it as present.
+Check 2, feature on: when an advisory needs a module, option, protocol, \
+charset or cluster setup, look for it in the evidence.  Absent means \
+not_applicable for this configuration.  Never say reachability is unknown \
+when the evidence lets you check.
+Check 3, copies: the same advisory on several binary packages from one \
+source, or the same issue flagged by several rules on one line, is one \
+finding.  A data, doc or common package holds no compiled code.
+Check 4, product or copy: a file added only in this copy of another \
+product (its own CI workflows, deploy scripts) is not_applicable to that \
+product.  Say it belongs to this copy's owner.
+Check 5, ownership (IDOR, BOLA, CWE-639): first trace every role check above \
+the flagged line; if the role the attack names is stopped earlier, it is a \
+false_positive.  Then ask whether the code has an ownership model for this \
+kind of object (owner or assignee columns, an assignment table, an access \
+helper) and whether other endpoints enforce it.  No model at all is \
+by_design: role based access, informational at most.  A model enforced \
+elsewhere and missing here is real.  A single tenant product has no cross \
+tenant impact.  Endpoints of the same shape get the same verdict.
+Check 6, taint (XSS and injection): trace the printed or queried value to \
+where it is set.  A SQL aggregate, an integer key, a computed number, a loop \
+over a literal list, a column only ever written with literals, a ternary that \
+prints a literal, or a value already through the right encoder for its \
+context is not tainted: false_positive.  The wrong encoder for the context \
+is real.  If your own evidence says it looks safe, close it.  If the code is \
+not shown, say not reviewed and use needs_review.
+Check 7, bypass: a claimed filter or sanitizer bypass you cannot show \
+working from the evidence is unverified: likelihood at most 2.  Note a \
+second layer (a strict CSP without unsafe-inline, template auto escaping).
+Check 8, rule fits: a rule for a language or framework the profile does not \
+list is a false_positive.  Static demo pages from a theme are not \
+application code.
+Check 9, vector: a local or physical attack vector does not become network \
+reachable because of a proxy.  Needing high privilege held only by an admin \
+lowers likelihood.  A cluster only advisory does not apply to one node.
+Check 10, signals that it is real: a check present on a sibling handler and \
+missing here, a known gap in a standard filter, a safe helper in the code \
+that this spot does not call, a comment promising a check the code does not \
+make, redirects followed without a check on each hop, elevated container \
+settings in a file people run.
+Check 11, waivers: a waiver must name the control that lowers the risk.  \
+Generic words such as adequate controls name none.  A waiver never lowers \
+the rating."""
 
 REVIEW_SYSTEM = f"""\
 You are a senior application security assessor reviewing scanner findings \
@@ -593,6 +850,12 @@ found to be encrypted, with no key to open it in the repository, cannot be \
 used as written.  It is confirmed, with likelihood 1, and the fix is to keep \
 the key out of the repository, not to rotate the value.
 
+A finding is real only when the code or package is in what ships, can be \
+reached, and can be reached by someone who should not cause the harm.  If you \
+cannot show all three, lower the likelihood or close it.  Never keep the \
+scanner's grade by default.  Use the product profile, and run these checks:
+{REVIEW_CHECKS}
+
 {STYLE}
 
 {SCALES}
@@ -603,8 +866,10 @@ Answer with one JSON object and nothing else, no markdown fence:
 SUMMARY_SYSTEM = f"""\
 You are a senior application security assessor writing the executive summary \
 of a security assessment of one code repository branch.  You are given the \
-confirmed issues with their ratings, which are final.  Do not change them, \
-add issues or invent numbers.  An issue marked waived is still a \
+confirmed issues with their ratings, which are final, and the counts, \
+which are final too.  Do not change them, add issues or invent numbers: \
+every number you write must be one of the counts given, used for exactly \
+what it counts.  Unverified issues are neither problems nor false alarms.  An issue marked waived is still a \
 vulnerability: a person accepted the risk for now.  Name a serious waived \
 one as an accepted risk, and leave waived issues out of the roadmap.
 
@@ -642,6 +907,11 @@ class _Pacer:
     def charge(self, tokens: int) -> None:
         if self.per_minute:
             self.spent.append((time.monotonic(), max(0, int(tokens or 0))))
+
+
+_TOO_BIG = re.compile(r"\b413\b|too (?:large|long|many tokens)|context (?:length|window)"
+                      r"|max(?:imum)?[ _]?(?:context|tokens?)|token limit|exceed",
+                      re.IGNORECASE)
 
 
 class _Asker:
@@ -697,7 +967,13 @@ class _Asker:
         self.provider = answer.get("provider") or self.provider
         self.model = answer.get("model") or self.model
         if not answer.get("ok"):
-            return None, (answer.get("error") or "The model gave no answer.")[:500], False
+            error = (answer.get("error") or "The model gave no answer.")[:500]
+            # A service that refuses a request for its size is the same as an
+            # answer cut off: the caller splits or shrinks it and asks again,
+            # rather than the whole report failing on one oversized question.
+            if _TOO_BIG.search(error):
+                return None, "cut off: " + error, True
+            return None, error, False
         if answer.get("cut_off"):
             return None, "cut off", True
         raw = answer.get("text") or ""
@@ -710,23 +986,42 @@ class _Asker:
             return None, "The answer was not valid JSON.", False
 
 
+VERDICTS = ("confirmed", "false_positive", "by_design", "not_applicable",
+            "needs_review", "unverified")
+# Verdicts that close a finding: no risk score, no attack, no scenario.
+CLOSED = ("false_positive", "by_design", "not_applicable")
+VERDICT_WORDS = {"confirmed": "Confirmed", "false_positive": "False positive",
+                 "by_design": "By design", "not_applicable": "Not applicable",
+                 "needs_review": "Needs review",
+                 "unverified": "Unverified: version from a non shipped image"}
+
+
 def _clean_item(raw: dict, fallback: dict | None = None) -> dict:
     verdict = str(raw.get("verdict") or "needs_review").strip().lower()
-    if verdict not in ("confirmed", "false_positive", "needs_review"):
+    if verdict not in VERDICTS:
         verdict = "needs_review"
+    closed = verdict in CLOSED
     fixes = raw.get("fixes") if isinstance(raw.get("fixes"), list) else []
     item = {
         "verdict": verdict,
-        "title": tidy(raw.get("title") or (fallback or {}).get("title") or "Finding", 120),
+        "title": short_title(raw.get("title") or (fallback or {}).get("title") or "Finding",
+                             (fallback or {}).get("name", "")),
         "likelihood": _int(raw.get("likelihood")),
         "impact": _int(raw.get("impact")),
-        "what": tidy(raw.get("what"), 600),
-        "evidence": tidy(raw.get("evidence"), 600),
-        "why": tidy(raw.get("why"), 600),
+        "check": tidy(raw.get("check"), 300),
+        "what": tidy(raw.get("what"), 900),
+        "evidence": tidy(raw.get("evidence"), 900),
+        "why": tidy(raw.get("why"), 900),
+        # The same risk told as something that happens to the business, for
+        # the reader who does not read code.  Only for a real problem.
+        "scenario": "" if closed else tidy(raw.get("scenario"), 900),
         "fixes": [tidy(x, 300) for x in fixes[:4] if str(x or "").strip()],
     }
+    waiver_check = str(raw.get("waiver_check") or "").strip().lower()
+    item["waiver_check"] = (waiver_check if waiver_check in
+                            ("names_control", "no_control", "mismatch") else "")
     attack = raw.get("attack") if isinstance(raw.get("attack"), list) else []
-    item["attack"] = ([] if verdict == "false_positive" else
+    item["attack"] = ([] if closed else
                       [tidy(x, 300) for x in attack[:5] if str(x or "").strip()])
     item["fix_example"] = _code_text(raw.get("fix_example"))
     status = str(raw.get("status") or "").strip().lower()
@@ -735,7 +1030,7 @@ def _clean_item(raw: dict, fallback: dict | None = None) -> dict:
                              if item["status"] == "needs_runtime" else "")
     item["retest"] = tidy(raw.get("retest"), 300)
     vector, score = report_standards.cvss31(raw.get("cvss"))
-    item["cvss"], item["cvss_score"] = ("", None) if verdict == "false_positive" else (vector, score)
+    item["cvss"], item["cvss_score"] = ("", None) if closed else (vector, score)
     return item
 
 
@@ -801,6 +1096,13 @@ def _group_evidence(ref: str, group: dict, root, send_code: bool, context: int) 
             facts.append("lines: " + ", ".join(map(str, group["lines"])))
     if group["package"]:
         facts.append(f"package: {group['package']} {group['version']}".strip())
+        if len(group.get("packages") or []) > 1:
+            facts.append("same advisories also reported on: "
+                         + ", ".join(group["packages"][1:12])
+                         + " (one finding, check 3)")
+        if group.get("base_upgraded"):
+            facts.append("version source: the base image in the registry; the "
+                         "Dockerfile upgrades packages after FROM (check 1)")
     if group["advisories"]:
         facts.append("advisories: " + ", ".join(group["advisories"]))
     if group["fixed_in"]:
@@ -834,11 +1136,12 @@ def _group_evidence(ref: str, group: dict, root, send_code: bool, context: int) 
         code = _snippet(root, group, context)
         if code:
             body += "\n\ncode:\n" + code
+            group["code_sent"] = True
     from app.core.diagram import fence
     return f'<evidence label="{html.escape(ref)}">\n{fence(body)}\n</evidence>'
 
 
-def _review(asker: _Asker, batch: list, progress) -> dict:
+def _review(asker: _Asker, batch: list, progress, head: str = "") -> dict:
     """Ask about one batch.  A batch that is cut off is split and asked again.
 
     -> {ref: item}.  A group that cannot be answered even on its own comes
@@ -846,7 +1149,7 @@ def _review(asker: _Asker, batch: list, progress) -> dict:
     """
     if not batch:
         return {}
-    prompt = ("Finding groups to review, in this order: "
+    prompt = (head + "Finding groups to review, in this order: "
               + ", ".join(ref for ref, _ in batch) + "\n\n"
               + "\n\n".join(text for _, text in batch))
     progress()
@@ -856,8 +1159,8 @@ def _review(asker: _Asker, batch: list, progress) -> dict:
         half = len(batch) // 2
         log.info("review batch of %d %s, splitting", len(batch),
                  "was cut off" if cut else "did not parse")
-        out = _review(asker, batch[:half], progress)
-        out.update(_review(asker, batch[half:], progress))
+        out = _review(asker, batch[:half], progress, head)
+        out.update(_review(asker, batch[half:], progress, head))
         return out
     if obj is None:
         if not cut and "JSON" not in problem:
@@ -976,7 +1279,7 @@ def _site_lines(site: dict) -> str:
 
 
 def _write(repository: str, branch: str, connection: str, actor: str) -> None:
-    from app.core import diagram, recheck, repo_context, webapps
+    from app.core import diagram, recheck, report_profile, repo_context, webapps
     from app.core.models import Repository
 
     with session_scope() as db:
@@ -1008,6 +1311,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                          "used the scanner's records only.")
             commit, overview_evidence, file_count = "", "", 0
             lines_in = {}
+            profile = {}
         else:
             try:
                 commit = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
@@ -1018,6 +1322,9 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             file_count = sum(1 for p in Path(root).rglob("*")
                              if p.is_file() and ".git" not in p.parts)
             lines_in = _line_counts(Path(root))
+            # What the product is, worked out from the checkout, so the
+            # review is handed the facts that settle most grades (step 0).
+            profile = report_profile.build(Path(root), list(lines_in))
             overview_evidence, gather_notes = diagram.gather(
                 root, send_code, {"hosts": [], "repositories": [],
                                   "served": site.get("urls") or []},
@@ -1042,36 +1349,73 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                 rel = html.unescape(label)
                 shown[rel] = _file_lines(Path(root), rel)
         refs = [f"G{i + 1}" for i in range(len(groups))]
+        # The plainest cases are settled here, from facts, and never asked.
+        for g in groups:
+            g["pre"] = _settled(g, profile)
         # A group already decided, by a person or by its own validation, is
         # not asked about again: the report carries that decision.
         evidence = [_group_evidence(ref, g, root, send_code, context)
-                    for ref, g in zip(refs, groups) if not g["decision"]]
-        asked = [ref for ref, g in zip(refs, groups) if not g["decision"]]
+                    for ref, g in zip(refs, groups)
+                    if not g["decision"] and not g["pre"]]
+        asked = [ref for ref, g in zip(refs, groups)
+                 if not g["decision"] and not g["pre"]]
+        # The files the report actually used as evidence: those the overview
+        # read, and those whose lines were sent or shown beside a finding.
+        # Quoted code beside a note saying no file was read is the kind of
+        # mistake that makes a reader doubt every other number.
+        evidence_files = set(shown) | {g["file"] for g in groups
+                                       if g["file"] and (g.get("code_sent")
+                                                         or g.get("display_code"))}
+        notes = [n for n in notes if not n.endswith("file(s) were read for content.")]
+        if root is not None and send_code:
+            notes.append(f"{len(evidence_files)} file(s) were read as evidence: "
+                         f"{len(shown)} for the repository overview and "
+                         f"{len(evidence_files - set(shown))} more beside findings.")
 
     if not send_code:
         notes.append("Sending code is switched off, so the review saw scanner "
                      "details and file names but no code.")
 
+    profile_text = report_profile.as_text(profile, code=send_code)
+    profile_head = (f'<evidence label="Product profile">\n{diagram.fence(profile_text)}\n'
+                    "</evidence>\n\n" if profile_text else "")
+
     # ---- one look at the whole repository
-    overview = {"what_it_is": "", "positives": [], "concerns": []}
+    overview = {"what_it_is": "", "positives": [], "concerns": [], "design": {}}
     if overview_evidence:
         _update(repository, branch, stage="Reading the repository")
         head = (f"Repository: {repository}\nBranch: {branch}\n"
                 f"Visibility: {facts['visibility'] or 'unknown'}\n"
-                + _site_lines(site) + "\n")
+                + _site_lines(site) + "\n" + profile_head)
         room = asker.input_room(OVERVIEW_SYSTEM) - len(head) - 200
         if len(overview_evidence) > room:
             cut_at = overview_evidence.rfind("</evidence>", 0, room)
             overview_evidence = overview_evidence[:cut_at + 11] if cut_at > 0 else overview_evidence[:room]
             notes.append("The repository read was cut to fit in one request.")
-        prompt = head + overview_evidence
-        obj, problem, cut = asker.ask(OVERVIEW_SYSTEM, prompt, OVERVIEW_TOKENS)
+        obj, problem, cut = asker.ask(OVERVIEW_SYSTEM, head + overview_evidence,
+                                      OVERVIEW_TOKENS)
+        # Cut off or too big: ask again with half the evidence, then with
+        # half again and the short form of the question (no drawing, fewer
+        # concerns), so a large repository still gets its overview.
+        for system, share in ((OVERVIEW_SYSTEM, 2), (OVERVIEW_SHORT, 4)):
+            if obj is not None or not cut:
+                break
+            keep = len(overview_evidence) // share
+            cut_at = overview_evidence.rfind("</evidence>", 0, keep)
+            smaller = overview_evidence[:cut_at + 11] if cut_at > 0 else overview_evidence[:keep]
+            log.info("overview for %s was cut off, asking again with %d characters",
+                     repository, len(smaller))
+            obj, problem, cut = asker.ask(system, head + smaller, OVERVIEW_TOKENS // 2)
+            if obj is not None:
+                notes.append("The repository read was shortened to fit the model's limits.")
         if obj is None and not cut and "JSON" not in problem:
             raise RuntimeError(problem)
         if isinstance(obj, dict):
             overview["what_it_is"] = tidy(obj.get("what_it_is"), 900)
             overview["positives"] = [tidy(p, 300) for p in (obj.get("positives") or [])[:6]
                                      if str(p or "").strip()]
+            # A simple drawing of the product for the reader (report_design).
+            overview["design"] = report_design.clean(obj.get("design"))
             # A concern the model raised itself is a finding of the review,
             # not a scanner alert it might be doubting.
             overview["concerns"] = [{**_clean_item({"verdict": "confirmed", **c}),
@@ -1086,7 +1430,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     batches, current_batch, size = [], [], 0
     # Each batch is one request, so what it carries is held under both the
     # usual size and what one request may hold.
-    room = min(MAX_BATCH_CHARS, asker.input_room(REVIEW_SYSTEM) - 500)
+    room = min(MAX_BATCH_CHARS, asker.input_room(REVIEW_SYSTEM) - 500 - len(profile_head))
     for ref, text in zip(asked, evidence):
         if len(text) > room:
             text = text[:room - 200] + "\n</evidence>"
@@ -1109,13 +1453,13 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                       f"(about {len(batches)} planned)")
 
     for batch in batches:
-        reviewed.update(_review(asker, batch, progress))
+        reviewed.update(_review(asker, batch, progress, profile_head))
 
     # ---- one list of issues, rated here
     items = []
     for ref, group in zip(refs, groups):
-        item = (_decided_item(group) if group["decision"]
-                else reviewed.get(ref))
+        item = (group["pre"] or (_decided_item(group) if group["decision"]
+                                 else reviewed.get(ref)))
         if item is None:
             item = _clean_item({"verdict": "needs_review", "title": group["title"],
                                 "likelihood": 3, "impact": 3,
@@ -1137,7 +1481,10 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                     known_exploited=group["known_exploited"],
                     kev_floor=group["kev_floor"],
                     waived=group["waived"], waiver=group["waiver"],
-                    code=group.get("display_code", ""), cwe=group["cwe"] or "")
+                    code=group.get("display_code", ""), cwe=group["cwe"] or "",
+                    packages=group.get("packages") or [], file=group["file"] or "")
+        if group["waived"]:
+            item["waiver_check"] = _waiver_support(group["waiver"], item.get("waiver_check"))
         items.append(item)
     for concern in overview["concerns"]:
         concern.update(source="review", rule="", kind="review", count=0,
@@ -1150,10 +1497,14 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         items.append(concern)
 
     for item in items:
-        if item.get("decided"):
+        if item["verdict"] == "unverified":
+            # No score, and out of the overall rating, until the version that
+            # ships is read.  Not a false alarm either: nobody showed it fixed.
+            item["score"], item["rating"], item["unverified"] = 0, "Informational", True
+        elif item.get("decided"):
             item["score"] = 0
             item["rating"] = SEVERITY_RATING.get(item["decided"]["severity"], "Medium")
-        elif item["verdict"] == "false_positive":
+        elif item["verdict"] in CLOSED:
             item["score"], item["rating"] = 0, "Informational"
         else:
             item["score"] = item["likelihood"] * item["impact"]
@@ -1185,6 +1536,8 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
 
     # ---- the summary, from the rated list
     _update(repository, branch, stage="Writing the summary")
+    tallies = final_counts(items)
+    count_lines = "\n".join(f"{k.replace('_', ' ')}: {v}" for k, v in tallies.items())
     listing = "\n".join(
         f"{i['id']} | {i['rating']} | {i['verdict']}"
         f"{' | waived' if i.get('waived') else ''} | {i['title']} | "
@@ -1194,10 +1547,17 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
               + f"Overall rating (final): {overall}\n"
               f"Open scanner alerts: {counts['open']} in {counts['groups']} groups\n"
               f"Waived scanner alerts: {counts['waived']} in {counts['waived_groups']} groups\n"
-              f"False positives found: {sum(1 for i in items if i['rating'] == 'Informational')}\n"
+              f"Final counts of the issues listed below, the only numbers to use:\n"
+              f"{count_lines}\n"
               f"What the repository is: {overview['what_it_is'] or 'not described'}\n\n"
               f"Issues (id | rating | verdict | title | location):\n{listing}")
     obj, problem, cut = asker.ask(SUMMARY_SYSTEM, prompt, SUMMARY_TOKENS)
+    if obj is None and cut:
+        # Fewer issues listed, so the question and its answer both fit.
+        short = prompt[:prompt.find("Issues (id |")] + (
+            "Issues (id | rating | verdict | title | location), the most serious:\n"
+            + "\n".join(listing.split("\n")[:15]))
+        obj, problem, cut = asker.ask(SUMMARY_SYSTEM, short, SUMMARY_TOKENS)
     summary = {"summary": [], "actions": [], "roadmap": [], "conclusion": ""}
     if isinstance(obj, dict):
         summary["summary"] = [tidy(p, 1400) for p in (obj.get("summary") or [])[:3]
@@ -1229,6 +1589,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         "file_count": file_count, "facts": facts, "overall": overall,
         "overview": overview, "items": items, "summary": summary,
         "waived_top": waived_top, "waived_issues": len(waived_items),
+        "tallies": tallies, "profile": profile,
         "counts": {**counts, "left_out": len(left_out),
                    "left_out_alerts": sum(g["count"] for g in left_out)},
         "notes": notes, "in_memory": in_memory, "code_included": send_code,
@@ -1645,6 +2006,26 @@ def recover() -> int:
 
 # ------------------------------------------------------------------ the document
 
+def final_counts(items: list) -> dict:
+    """Every count the report prints, from the final list, worked out once.
+
+    The summary, the tables, the heat map and the conclusion all read these,
+    so a report can never say 33 in one place and 40 in another.
+    """
+    def open_(i):
+        return not i.get("waived") and not i.get("unverified")
+    out = {f"open_{r.lower()}": sum(1 for i in items if open_(i) and i["rating"] == r
+                                    and r != "Informational") for r in RATINGS[:4]}
+    out["false_positive_or_closed"] = sum(1 for i in items if open_(i)
+                                          and i["rating"] == "Informational")
+    out["unverified"] = sum(1 for i in items if i.get("unverified") and not i.get("waived"))
+    out["waived"] = sum(1 for i in items if i.get("waived"))
+    out["waived_rated_above_informational"] = sum(
+        1 for i in items if i.get("waived") and i["rating"] != "Informational")
+    out["total_listed"] = len(items)
+    return out
+
+
 def matrix(items: list) -> list:
     """5 by 5 rows, most likely first: [{likelihood, label, cells:[{ids, rating}]}]."""
     rows = []
@@ -1670,8 +2051,10 @@ def document_context(view_: dict, base_url: str = "") -> dict:
     result = view_["result"]
     items = result["items"]
     base = (base_url or "").strip().rstrip("/")
-    tally = {r: sum(1 for i in items if i["rating"] == r and not i.get("waived"))
+    tally = {r: sum(1 for i in items if i["rating"] == r and not i.get("waived")
+                    and not i.get("unverified"))
              for r in RATINGS}
+    unverified = sum(1 for i in items if i.get("unverified") and not i.get("waived"))
     waived = {r: sum(1 for i in items if i["rating"] == r and i.get("waived"))
               for r in RATINGS}
     # The standards an issue falls under follow from its CWE, so a report
@@ -1698,7 +2081,20 @@ def document_context(view_: dict, base_url: str = "") -> dict:
         item["finding_link"] = (f"{base}/findings/{primary}"
                                 if base and primary is not None else "")
     retests = [i for i in items if i.get("retest") and i["rating"] != "Informational"]
+    design = (result.get("overview") or {}).get("design") or {}
+    placed, loose = report_design.place(design, items) if design else ({}, [])
+    for item in items:
+        item["verdict_label"] = VERDICT_WORDS.get(item.get("verdict"), "")
+        item["badge"] = "Unverified" if item.get("unverified") else item["rating"]
     return {"r": result, "items": items, "tally": tally, "waived_tally": waived,
+            "unverified": unverified, "total": len(items),
+            # Drawn at render time from the stored parts, so the drawing can
+            # improve without rewriting old reports.
+            "design_svg": report_design.svg(design, placed),
+            "design_columns": report_design.columns(design, placed),
+            "design_loose": loose,
+            "design_links": report_design.link_lines(design),
+            "profile": result.get("profile") or {},
             "matrix": matrix(items), "impact_words": IMPACT_WORDS,
             "likelihood_words": LIKELIHOOD_WORDS, "row": view_["row"],
             "verdict": report_standards.verdict(items),

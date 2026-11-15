@@ -29,6 +29,13 @@
     }
   }
   @page :first { @bottom-left { content: ""; } @bottom-right { content: ""; } }
+  /* The drawing of the code has a landscape page of its own, so the cards
+     and their issue numbers stay large enough to read. */
+  @page design { size: A4 landscape; margin: 16mm 16mm 18mm 16mm; }
+  .design-page { page: design; break-before: page; break-after: page; }
+  .design-page svg { width: 100%; height: auto; max-height: 150mm; }
+  .design-key { font-size: 8pt; color: #5a5a5a; margin-top: 3mm; }
+  .design-key .badge { margin-right: 1.5mm; }
 
   :root { --ink: #1a1a1a; --soft: #5a5a5a; --faint: #8a8a8a; --rule: #dcdcdc;
           --sunk: #f4f4f4; --navy: #1f3a5f; }
@@ -75,6 +82,9 @@
   .r-medium   { background: #ffc000; color: #000; }
   .r-low      { background: #70ad47; color: #fff; }
   .r-informational { background: #5b9bd5; color: #fff; }
+  .r-unverified { background: #8a94a3; color: #fff; }
+  .scenario { background: #f4f7fb; border-left: 3px solid #1f3a5f; padding: 2mm 3mm;
+              border-radius: 1mm; break-inside: avoid; }
   td.badge-cell { text-align: center; }
   pre.code { font-family: "DejaVu Sans Mono", Consolas, monospace; font-size: 7.4pt;
     line-height: 1.25; background: #f3f5f8; border: .4pt solid #d5dbe3; padding: 2mm 3mm;
@@ -135,12 +145,14 @@
 <p>{{ ("We rate the overall risk as " ~ r.overall ~ ".  We rated "
       ~ tally['Critical'] ~ " issue" ~ ('' if tally['Critical'] == 1 else 's') ~ " Critical, "
       ~ tally['High'] ~ " High, " ~ tally['Medium'] ~ " Medium and " ~ tally['Low']
-      ~ " Low.  " ~ (tally['Informational'] ~ " scanner alert group" ~ ('' if tally['Informational'] == 1 else 's')
-      ~ " turned out to be false alarms." if tally['Informational'] else ""))
+      ~ " Low.  " ~ (tally['Informational'] ~ " issue" ~ ('' if tally['Informational'] == 1 else 's')
+      ~ " turned out to be false alarms, by design or not part of the product.  " if tally['Informational'] else "")
+      ~ (unverified ~ " package issue" ~ ('' if unverified == 1 else 's') ~ " could not be checked against the image that ships, and " ~ ('is' if unverified == 1 else 'are') ~ " listed as unverified, outside the overall rating." if unverified else ""))
      | sentence_spaced }}</p>
 <table style="margin-bottom:3mm">
-  <thead><tr>{% for rt in ['Critical', 'High', 'Medium', 'Low', 'Informational'] %}<th class="c">{{ rt }}</th>{% endfor %}<th class="c">Total</th></tr></thead>
+  <thead><tr>{% for rt in ['Critical', 'High', 'Medium', 'Low', 'Informational'] %}<th class="c">{{ rt }}</th>{% endfor %}{% if unverified %}<th class="c">Unverified</th>{% endif %}<th class="c">Total</th></tr></thead>
   <tr>{% for rt in ['Critical', 'High', 'Medium', 'Low', 'Informational'] %}<td class="c"><span class="badge r-{{ rt | lower }}">{{ tally[rt] }}</span></td>{% endfor %}
+    {% if unverified %}<td class="c"><span class="badge r-unverified">{{ unverified }}</span></td>{% endif %}
     <td class="c"><strong>{{ items | rejectattr('waived') | list | length }}</strong></td></tr>
 </table>
 {% if r.waived_issues %}
@@ -169,6 +181,16 @@
 </ol>
 {% endif %}
 
+{% if design_svg %}
+<div class="design-page">
+<h3 style="margin-top:0">How the Code Fits Together</h3>
+<p>{{ "A simple view of the main parts of this code and how they connect.  Each numbered pill is an open Critical, High or Medium issue found in that part, in the color of its rating, so a developer can see where the flaws sit.  Low issues are in the tables that follow.  It is a sketch to check against the code, not a full design." | sentence_spaced }}</p>
+{{ design_svg | safe }}
+<p class="design-key">{% for rt in ['Critical', 'High', 'Medium'] %}<span class="badge r-{{ rt | lower }}">{{ rt }}</span>{% endfor %}
+{%- if design_loose %}  {{ ("Critical, High or Medium issues not tied to one part: " ~ design_loose[:12] | join(', ') ~ (" and others" if design_loose | length > 12 else "") ~ ".") }}{% endif %}</p>
+</div>
+{% endif %}
+
 {# ------------------------------------------------------------- scope #}
 <h2>2.  Scope and Approach</h2>
 <table>
@@ -180,6 +202,17 @@
   {% if r.counts.waived %}<tr><td class="k">Waived scanner alerts</td><td>{{ r.counts.waived }}, in {{ r.counts.waived_groups }} groups, rated like the rest</td></tr>{% endif %}
   {% if r.overview.what_it_is %}<tr><td class="k">What it holds</td><td>{{ r.overview.what_it_is | sentence_spaced }}</td></tr>{% endif %}
 </table>
+{% if profile %}
+<h3>Product Profile</h3>
+<p>{{ "Worked out from the code before any alert was graded.  Every grade below is checked against it: a rule for a language the code does not use, or a package version read from an image the build upgrades, is settled here." | sentence_spaced }}</p>
+<table>
+  <tr><td class="k">Languages</td><td>{{ profile.languages | join(', ') or 'None found' }}</td></tr>
+  <tr><td class="k">Frameworks</td><td>{{ profile.frameworks | join(', ') or 'None found' }}</td></tr>
+  {% for d in profile.dockerfiles %}<tr><td class="k">Image build</td><td>{{ d.file }}: FROM {{ d.from | join(' then ') or 'none' }}{% if d.multi_stage %}; only the last stage ships{% endif %}{% if d.upgrades %}; upgrades packages after FROM{% endif %}</td></tr>{% endfor %}
+  {% if profile.elevated_containers %}<tr><td class="k">Elevated containers</td><td>{{ profile.elevated_containers | join('; ') }}</td></tr>{% endif %}
+  <tr><td class="k">Content Security Policy</td><td>{{ profile.csp }}</td></tr>
+</table>
+{% endif %}
 {# The web application this code is part of, from the repository's own page,
    as it stood when the report was written. #}
 {% set site = r.facts.web_app if r.facts else none %}
@@ -214,7 +247,8 @@
   <tr><td>10 to 16</td><td>High</td><td>{{ "Fix within days.  Real harm is likely if left alone." | sentence_spaced }}</td></tr>
   <tr><td>5 to 9</td><td>Medium</td><td>Fix within 30 days.</td></tr>
   <tr><td>1 to 4</td><td>Low</td><td>Fix as part of normal work.</td></tr>
-  <tr><td>Not scored</td><td>Informational</td><td>{{ "No risk.  Recorded for accuracy, such as a false alarm." | sentence_spaced }}</td></tr>
+  <tr><td>Not scored</td><td>Informational</td><td>{{ "No risk.  Recorded for accuracy, such as a false alarm, an issue that is by design, or a file not part of the product." | sentence_spaced }}</td></tr>
+  <tr><td>Not scored</td><td>Unverified</td><td>{{ "A package version read from a base image the build upgrades.  Not counted until someone reads the version in the image that ships." | sentence_spaced }}</td></tr>
 </table>
 <p>{{ "Some ratings were already decided before this review.  A grade a person set, or the rating from an alert's own earlier validation, is used as it is and is not scored again.  A package on the CISA known exploited list is rated at least High until a person rules on it.  A waived issue is rated the same way as any other, and the reason it was waived is shown beside its rating." | sentence_spaced }}</p>
 
@@ -230,7 +264,7 @@
     <td class="c">{{ i.impact if scored else 'N/A' }}</td>
     <td class="c">{{ i.score if scored else 'N/A' }}</td>
     <td class="c">{{ '%.1f' % i.cvss_score if i.cvss_score is not none else 'N/A' }}</td>
-    <td class="badge-cell"><span class="badge r-{{ i.rating | lower }}">{{ i.rating }}</span></td></tr>
+    <td class="badge-cell"><span class="badge r-{{ (i.badge or i.rating) | lower }}">{{ i.badge or i.rating }}</span></td></tr>
   {% endfor %}
 </table>
 
@@ -252,8 +286,9 @@
   <p class="idline">Finding {{ i.id }}{% if i.finding_id is not none %}  &middot;  ID {{ i.finding_id }}{% endif %}
     {%- if i.finding_link %}  &middot;  <a href="{{ i.finding_link }}">View this finding</a>{% endif %}</p>
   <table>
-    <tr><td class="k">Rating</td><td><span class="badge r-{{ i.rating | lower }}">{{ i.rating }}</span>
+    <tr><td class="k">Rating</td><td><span class="badge r-{{ (i.badge or i.rating) | lower }}">{{ i.badge or i.rating }}</span>
       {%- if i.waived %}  <strong>Waived</strong>{% endif %}</td></tr>
+    {% if i.verdict_label %}<tr><td class="k">Verdict</td><td>{{ i.verdict_label }}{% if i.check %}.  {{ i.check | sentence_spaced }}{% endif %}</td></tr>{% endif %}
     {% if i.waived %}
     {% set w = i.waiver or {} %}
     <tr><td class="k">Why it is waived</td><td>{{ (w.reason or "No reason was recorded.") | sentence_spaced }}
@@ -261,6 +296,9 @@
       {%- if w.by %}  {{ "Approved by " ~ w.by }}{% if w.until %}{{ ", until " ~ w.until }}{% endif %}.{% elif w.until %}  {{ "Until " ~ w.until }}.{% endif %}
       {%- if w.ticket %}  Ticket {{ w.ticket }}.{% endif %}
       {{- "  The risk is accepted, not removed." }}</td></tr>
+    {% if i.waiver_check in ('no_control', 'mismatch') %}
+    <tr><td class="k">Waiver check</td><td>{{ ("Waiver unsupported: the reason names no control that lowers this risk, so the rating stands." if i.waiver_check == 'no_control' else "The waiver reason reads as if it was written for a different problem.  Check that it is attached to the right finding.") | sentence_spaced }}</td></tr>
+    {% endif %}
     {% endif %}
     {% if i.decided %}
     <tr><td class="k">Rated by</td><td>
@@ -285,6 +323,7 @@
     {% if i.source == 'scanner' %}
     <tr><td class="k">Scanner reference</td><td>{{ i.count }} alert{{ '' if i.count == 1 else 's' }}
       {%- if i.rule %} of rule {{ i.rule }}{% endif %}, rated {{ i.severity }}
+      {%- if i.packages and i.packages | length > 1 %}; one advisory reported on {{ i.packages | length }} packages: {{ i.packages[:10] | join(', ') }}{% endif %}
       {%- if i.finding_ids %} (finding {{ i.finding_ids[:6] | join(', ') }}{% if i.finding_ids | length > 6 %} and others{% endif %}){% endif %}</td></tr>
     {% else %}
     <tr><td class="k">Source</td><td>Review of the repository</td></tr>
@@ -307,6 +346,7 @@
   {% if i.evidence %}<p><span class="label">Evidence.</span>  {{ i.evidence | sentence_spaced }}</p>{% endif %}
   {% if i.code %}<p class="label" style="margin-bottom:.2rem">The code involved.</p><pre class="code">{{ i.code }}</pre>{% endif %}
   {% if i.why %}<p><span class="label">Why it matters.</span>  {{ i.why | sentence_spaced }}</p>{% endif %}
+  {% if i.scenario %}<p class="scenario"><span class="label">A realistic example.</span>  {{ i.scenario | sentence_spaced }}</p>{% endif %}
   {% if i.attack %}
   <p class="label" style="margin-bottom:.2rem">How an attacker could abuse it.</p>
   <ol class="steps">{% for step in i.attack %}<li>{{ step | sentence_spaced }}</li>{% endfor %}</ol>

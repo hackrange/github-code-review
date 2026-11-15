@@ -22,11 +22,13 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
+from app.core import report_design
+
 NAVY = RGBColor(0x1F, 0x3A, 0x5F)
 GRAY = RGBColor(0x55, 0x5B, 0x66)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 FILL = {"Critical": "C00000", "High": "E36C0A", "Medium": "FFC000", "Low": "70AD47",
-        "Informational": "5B9BD5"}
+        "Informational": "5B9BD5", "Unverified": "8A94A3"}
 DARK_TEXT = {"Medium"}
 HEAT = {"critical": "F4B6B6", "high": "F8CBAD", "medium": "FFE699", "low": "C6E0B4"}
 VERDICT_FILL = {"stop": "C00000", "caution": "FFC000", "go": "548235"}
@@ -298,6 +300,108 @@ class _Doc:
         self.doc.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
 
 
+def _pill(para, text, rating):
+    """A finding number shaded in its rating's color, inside a paragraph."""
+    run = para.add_run(f" {text} ")
+    run.bold = True
+    run.font.size = Pt(8.5)
+    run.font.color.rgb = RGBColor(0, 0, 0) if rating in DARK_TEXT else WHITE
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), FILL.get(rating, "7F8C8D"))
+    run._r.get_or_add_rPr().append(shd)
+    para.add_run("  ").font.size = Pt(8.5)
+
+
+def _card_borders(cell, accent: str, edge: str = "D6DCE4"):
+    """A light outline with a thick colored left edge, like the PDF's cards."""
+    pr = cell._tc.get_or_add_tcPr()
+    borders = OxmlElement("w:tcBorders")
+    for side, size, color in (("top", 4, edge), ("bottom", 4, edge), ("right", 4, edge),
+                              ("left", 36, accent)):
+        el = OxmlElement(f"w:{side}")
+        el.set(qn("w:val"), "single")
+        el.set(qn("w:sz"), str(size))
+        el.set(qn("w:color"), color)
+        borders.append(el)
+    pr.append(borders)
+
+
+def _orient(doc, landscape: bool):
+    """Start a new page in landscape or back in portrait."""
+    from docx.enum.section import WD_ORIENT, WD_SECTION
+    sec = doc.add_section(WD_SECTION.NEW_PAGE)
+    sec.orientation = WD_ORIENT.LANDSCAPE if landscape else WD_ORIENT.PORTRAIT
+    sec.page_width, sec.page_height = ((Inches(11), Inches(8.5)) if landscape
+                                       else (Inches(8.5), Inches(11)))
+    sec.left_margin = sec.right_margin = Inches(0.8 if landscape else 0.9)
+
+
+def _design(D, context):
+    """The drawing of the code, as cards in a table on a landscape page.
+
+    Word has no place for the PDF's SVG without a rasterizer, so the same
+    columns are laid out as a table: one column per tier, a card per part,
+    and each open Critical, High or Medium issue as a pill in its color.
+    """
+    cols = context.get("design_columns") or []
+    if not cols:
+        return
+    doc = D.doc
+    _orient(doc, True)
+    D.h("How the Code Fits Together", 2)
+    D.p("A simple view of the main parts of this code and how they connect.  Each "
+        "numbered pill is an open Critical, High or Medium issue found in that part, in "
+        "the color of its rating.  Low issues are in the tables that follow.  It is a "
+        "sketch to check against the code, not a full design.", size=9.5)
+    t = doc.add_table(rows=2, cols=len(cols))
+    t.alignment = WD_TABLE_ALIGNMENT.CENTER
+    _margins(t, 120, 140)
+    for n, (title, members) in enumerate(cols):
+        _cell(t.rows[0].cells[n], title.upper(), bold=True, size=8, color=GRAY,
+              align=WD_ALIGN_PARAGRAPH.CENTER)
+        cell = t.rows[1].cells[n]
+        cell.text = ""
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.TOP
+        for part in members:
+            # Each card is its own small bordered table inside the column.
+            card = cell.add_table(rows=1, cols=1)
+            _margins(card, 110, 160)
+            inner = card.rows[0].cells[0]
+            issues = part.get("issues") or []
+            _shade(inner, "FFFFFF")
+            # The worst issue's color outlines a card that holds any.
+            _card_borders(inner, report_design.ACCENT[part["kind"]].lstrip("#"),
+                          FILL[issues[0][1]] if issues else "D6DCE4")
+            _cell(inner, part["name"], bold=True, size=10, color=NAVY)
+            if issues:
+                para = inner.add_paragraph()
+                para.paragraph_format.space_before = Pt(3)
+                para.paragraph_format.space_after = Pt(0)
+                for issue_id, rating in issues[:6]:
+                    _pill(para, issue_id, rating)
+                if len(issues) > 6:
+                    more = para.add_run(f"+{len(issues) - 6} more")
+                    more.font.size = Pt(8)
+            cell.add_paragraph().paragraph_format.space_after = Pt(2)
+    _widths(t, [9.4 / len(cols)] * len(cols))
+    links = context.get("design_links") or []
+    if links:
+        D.p("How the parts connect", bold=True, color=NAVY, size=9.5, after=2)
+        D.p("   ".join(f"{line}." for line in links), size=8.5, color=GRAY)
+    legend = doc.add_paragraph()
+    for rating in ("Critical", "High", "Medium"):
+        _pill(legend, rating, rating)
+    loose = context.get("design_loose") or []
+    if loose:
+        run = legend.add_run("Critical, High or Medium issues not tied to one part: "
+                             + ", ".join(loose[:12]) + ".")
+        run.font.size = Pt(8)
+        run.font.color.rgb = GRAY
+    _orient(doc, False)
+
+
 def _logo(doc, logo: str):
     m = re.match(r"data:image/(png|jpeg|jpg);base64,(.+)$", logo or "", re.S)
     if not m:
@@ -345,14 +449,21 @@ def build(context: dict) -> bytes:
         D.p(paragraph)
     D.p(f"We rate the overall risk as {r['overall']}.  We rated {tally['Critical']} "
         f"issues Critical, {tally['High']} High, {tally['Medium']} Medium and "
-        f"{tally['Low']} Low." + (f"  {tally['Informational']} scanner alert groups "
-                                   "turned out to be false alarms." if tally['Informational'] else ""))
+        f"{tally['Low']} Low." + (f"  {tally['Informational']} issues turned out to be "
+                                   "false alarms, by design or not part of the product."
+                                   if tally['Informational'] else "")
+        + (f"  {context['unverified']} package issues could not be checked against the "
+           "image that ships, and are listed as unverified, outside the overall rating."
+           if context.get("unverified") else ""))
     D.h("Findings at a glance", 2)
-    t = D.table(RATINGS + ["Total"], [[str(tally[x]) for x in RATINGS]
-                                      + [str(sum(1 for i in items if not i.get("waived")))]],
-                [1.1] * 5 + [1.2], size=11)
-    for n, rating in enumerate(RATINGS):
-        _badge(t.rows[1].cells[n], str(tally[rating]), 11)
+    shown = RATINGS + (["Unverified"] if context.get("unverified") else [])
+    counts_row = [tally[x] for x in RATINGS] + ([context["unverified"]]
+                                               if context.get("unverified") else [])
+    t = D.table(shown + ["Total"], [[str(c) for c in counts_row]
+                                    + [str(sum(1 for i in items if not i.get("waived")))]],
+                [6.7 / (len(shown) + 1)] * (len(shown) + 1), size=11)
+    for n, rating in enumerate(shown):
+        _badge(t.rows[1].cells[n], str(counts_row[n]), 11)
         _shade(t.rows[1].cells[n], FILL[rating])
     if r.get("waived_issues"):
         D.p(f"{r['waived_issues']} more issues are waived: a person accepted the risk for "
@@ -371,8 +482,13 @@ def build(context: dict) -> bytes:
         D.h("What leadership needs to do", 2)
         D.bullets([f"{a['lead']}.  {a['text']}" for a in actions], numbered=True)
 
+    # ---- the drawing, on a landscape page of its own
+    if context.get("design_columns"):
+        _design(D, context)
+    else:
+        D.page_break()
+
     # ---- 2 scope
-    D.page_break()
     D.h("2.  Scope and Approach")
     scope = [("Repository", r["repository"]), ("Branch", r.get("branch") or "default")]
     if r.get("commit"):
@@ -385,6 +501,21 @@ def build(context: dict) -> bytes:
     if (r.get("overview") or {}).get("what_it_is"):
         scope.append(("What it holds", r["overview"]["what_it_is"]))
     D.table(["Item", "Detail"], scope, [1.8, 4.9])
+    profile = context.get("profile") or {}
+    if profile:
+        D.h("Product profile", 2)
+        D.p("Worked out from the code before any alert was graded.  Every grade below is "
+            "checked against it.")
+        rows = [("Languages", ", ".join(profile.get("languages") or []) or "None found"),
+                ("Frameworks", ", ".join(profile.get("frameworks") or []) or "None found")]
+        for d in profile.get("dockerfiles") or []:
+            rows.append(("Image build", f"{d['file']}: FROM {' then '.join(d['from']) or 'none'}"
+                         + ("; only the last stage ships" if d.get("multi_stage") else "")
+                         + ("; upgrades packages after FROM" if d.get("upgrades") else "")))
+        if profile.get("elevated_containers"):
+            rows.append(("Elevated containers", "; ".join(profile["elevated_containers"])))
+        rows.append(("Content Security Policy", profile.get("csp") or ""))
+        D.table(["Item", "Detail"], rows, [1.8, 4.9])
     D.h("Method", 2)
     D.bullets([
         "Automated scanning.  Secret, code, dependency and configuration scanning of "
@@ -461,7 +592,11 @@ def build(context: dict) -> bytes:
     for i in items:
         D.h(f"{i['id']}  {i['title']}", 3)
         D.identity(i)
-        info = [("Rating", i["rating"] + ("  (waived)" if i.get("waived") else ""))]
+        badge = i.get("badge") or i["rating"]
+        info = [("Rating", badge + ("  (waived)" if i.get("waived") else ""))]
+        if i.get("verdict_label"):
+            info.append(("Verdict", i["verdict_label"]
+                         + (f".  {i['check']}" if i.get("check") else "")))
         if i.get("location"):
             info.append(("Location", i["location"]))
         if i.get("cvss"):
@@ -484,12 +619,19 @@ def build(context: dict) -> bytes:
             w = i["waiver"]
             info.append(("Why it is waived", (w.get("reason") or "No reason was recorded.")
                          + "  The risk is accepted, not removed."))
+            if i.get("waiver_check") == "no_control":
+                info.append(("Waiver check", "Waiver unsupported: the reason names no "
+                             "control that lowers this risk, so the rating stands."))
+            elif i.get("waiver_check") == "mismatch":
+                info.append(("Waiver check", "The waiver reason reads as if it was written "
+                             "for a different problem.  Check that it is attached to the "
+                             "right finding."))
         if i.get("source") == "scanner" and i.get("rule"):
             info.append(("Scanner reference", f"{i.get('count', 0)} alerts of rule {i['rule']}"))
         elif i.get("source") == "review":
             info.append(("Source", "Review of the repository"))
         t = D.table(["Attribute", "Value"], info, [1.5, 5.2])
-        _badge(t.rows[1].cells[1], i["rating"])
+        _badge(t.rows[1].cells[1], badge)
         if i.get("what"):
             D.labeled("What we found.", i["what"])
         if i.get("evidence"):
@@ -497,6 +639,8 @@ def build(context: dict) -> bytes:
         D.code(i.get("code"), "The code involved")
         if i.get("why"):
             D.labeled("Why it matters.", i["why"])
+        if i.get("scenario"):
+            D.labeled("A realistic example.", i["scenario"])
         if i.get("attack"):
             D.p("How an attacker could abuse it.", bold=True, color=NAVY, after=2)
             D.bullets(i["attack"], numbered=True)
