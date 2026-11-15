@@ -960,9 +960,11 @@ is searched for and sent back, and a search that finds nothing is itself \
 evidence that the thing is absent.  A protection can sit in the code that \
 calls the flagged code: a script another module starts, a function whose \
 caller checks, proxies or pins first.  Before confirming that a check is \
-missing, look at the caller; when it was not shown, use needs_review and \
-ask in need for where the flagged script or function is called, by its file \
-or function name.  Use the product profile, and run these checks:
+missing, look at the caller.  The evidence usually shows the callers, \
+found by search of the branch, or says the code is an entry point; judge \
+with them.  When they were not shown, use needs_review and ask in need for \
+where the flagged script or function is called, by its file or function \
+name.  Use the product profile, and run these checks:
 {REVIEW_CHECKS}
 
 {STYLE}
@@ -1508,6 +1510,11 @@ def _group_evidence(ref: str, group: dict, root, send_code: bool, context: int) 
             if granted:
                 body += ("\n\nwhere the permission this code checks is granted, "
                          "found by search of the branch (check 5):\n" + granted)
+            if needs_callers(group):
+                found = caller_lookup(root, group["file"], (group["lines"] or [1])[0])
+                group["callers"] = found["state"]
+                if found["text"]:
+                    body += "\n\n" + found["text"]
     from app.core.diagram import fence
     return f'<evidence label="{html.escape(ref)}">\n{fence(body)}\n</evidence>'
 
@@ -1553,22 +1560,33 @@ def _review(asker: _Asker, batch: list, progress, head: str = "") -> dict:
 
 
 def _merge_closed(items: list) -> list:
-    """Closed scanner issues with the same rule and the same verdict, as one.
+    """Repeats of one scanner issue, as one row.
 
-    A real issue is never merged: each one keeps its own row, rating and
-    fix.  Only what carries no risk, closed for the same reason by the same
-    rule, is folded together, with every file it was in and every finding
-    it covers, so a false positive correction still reaches all of them.
+    Closed: the same rule closed for the same reason (a rule that does not
+    fit, flagged in forty templates) is one row.  Confirmed: the same rule
+    confirmed at the same rating in several places is one problem with one
+    fix, so it is one row too, listing every place.  The same rule rated
+    differently stays apart, since the risk differs.  Every finding the
+    rows covered stays on the merged row, so a regrade still reaches all.
     """
     out, kept = [], {}
     for item in items:
         key = None
-        if (item.get("source") == "scanner" and item.get("verdict") in CLOSED
-                and not item.get("decided") and item.get("rule")
-                and item.get("rating") == "Informational"):
-            key = (item["rule"], item["verdict"])
+        plain = (item.get("source") == "scanner" and not item.get("decided")
+                 and item.get("rule") and not item.get("waived")
+                 and not item.get("unverified") and not item.get("unconfirmed")
+                 and not item.get("unreviewed"))
+        if plain and item.get("verdict") in CLOSED and item.get("rating") == "Informational":
+            key = (item["rule"], item["verdict"], "")
+        elif plain and item.get("verdict") == "confirmed" and item.get("kind") != "credential":
+            key = (item["rule"], "confirmed", item.get("rating"))
+        elif (item.get("source") == "scanner" and item.get("unconfirmed")
+              and item.get("rule") and not item.get("decided") and not item.get("waived")):
+            key = (item["rule"], "needs_review", "")
         if key is None or key not in kept:
             if key is not None:
+                item["places"] = [item.get("location") or item.get("file") or ""]
+                item["questions"] = [(item.get("file") or "", item.get("check") or "")]
                 item["files_covered"] = [item["file"]] if item.get("file") else []
                 kept[key] = item
             out.append(item)
@@ -1578,10 +1596,42 @@ def _merge_closed(items: list) -> list:
         first["group_ids"] = (first.get("group_ids") or []) + (item.get("group_ids") or [])
         first["finding_ids"] = ((first.get("finding_ids") or [])
                                 + (item.get("finding_ids") or []))[:12]
+        first["score"] = max(first.get("score") or 0, item.get("score") or 0)
+        first["places"].append(item.get("location") or item.get("file") or "")
+        first["questions"].append((item.get("file") or "", item.get("check") or ""))
         if item.get("file") and item["file"] not in first["files_covered"]:
             first["files_covered"].append(item["file"])
-    for item in kept.values():
+    for key, item in kept.items():
         files = item.pop("files_covered")
+        places = [p for p in item.pop("places") if p]
+        questions = item.pop("questions")
+        if key[1] == "needs_review":
+            if len(places) > 1:
+                shown = "; ".join(places[:6]) + (f"; and {len(places) - 6} more"
+                                                 if len(places) > 6 else "")
+                item["location"] = f"{len(places)} places: {shown}"
+                item["title"] = short_title(f"{item['title']} ({len(places)} places)",
+                                            item["title"])
+                item["code"] = ""
+                item.pop("fix_before", None)
+                item.pop("fix_after", None)
+                left = "  ".join(f"{f}: {q.rstrip('.')}." for f, q in questions[:8] if q)
+                item["evidence"] = tidy(f"The same rule left the same question open in "
+                                        f"{len(places)} places, {item['count']} alerts in "
+                                        "all.  " + left, 1200)
+            continue
+        if key[1] == "confirmed":
+            if len(places) > 1:
+                shown = "; ".join(places[:6]) + (f"; and {len(places) - 6} more"
+                                                 if len(places) > 6 else "")
+                item["location"] = f"{len(places)} places: {shown}"
+                item["title"] = short_title(f"{item['title']} ({len(places)} places)",
+                                            item["title"])
+                item["evidence"] = tidy((item.get("evidence") or "") + f"  The same "
+                                        f"problem is in {len(places)} places, "
+                                        f"{item['count']} alerts in all; the code shown "
+                                        "is the first, and the fix applies to each.", 900)
+            continue
         if len(files) > 1:
             shown = ", ".join(files[:6]) + (f" and {len(files) - 6} more"
                                             if len(files) > 6 else "")
@@ -1597,6 +1647,56 @@ def _merge_closed(items: list) -> list:
                                     f"closed the same way in {len(files)} files, "
                                     f"{item['count']} alerts in all.", 900)
     return out
+
+
+def _cwe_digits(item: dict) -> str:
+    return re.sub(r"\D", "", str(item.get("cwe") or ""))[:8]
+
+
+def _same_place(a: dict, b: dict) -> bool:
+    """Whether two issues are about the same code: one file, and the same
+    function, or a line or two apart, or the same weakness close by."""
+    if not a.get("file") or a.get("file") != b.get("file"):
+        return False
+    if a.get("function") and a.get("function") == b.get("function"):
+        return True
+    la = a.get("line") or (a.get("lines") or [0])[0]
+    lb = b.get("line") or (b.get("lines") or [0])[0]
+    if not la or not lb:
+        return False
+    gap = abs(la - lb)
+    same_cwe = bool(_cwe_digits(a)) and _cwe_digits(a) == _cwe_digits(b)
+    return gap <= NEAR_LINES or (same_cwe and gap <= SAME_CWE_LINES)
+
+
+def drop_repeat_concerns(scanner: list, concerns: list) -> list:
+    """The repository read's concerns, without those a scanner finding in
+    this report already covers, or another concern already raised.
+
+    A concern is the same as a scanner finding at the same place unless the
+    scanner one was closed: then they disagree, and the concern stays.  Of
+    two concerns at the same place with the same weakness (or no weakness
+    named), the more serious stays.
+    """
+    kept = []
+    for concern in concerns:
+        if any(_same_place(concern, g) and g.get("verdict") not in CLOSED
+               and (not _cwe_digits(concern) or not _cwe_digits(g)
+                    or _cwe_digits(concern) == _cwe_digits(g)
+                    or concern.get("function") and concern.get("function") == g.get("function"))
+               for g in scanner):
+            continue
+        twin = next((k for k in kept if _same_place(concern, k)
+                     and (_cwe_digits(concern) == _cwe_digits(k)
+                          or not _cwe_digits(concern) or not _cwe_digits(k))), None)
+        if twin is None:
+            kept.append(concern)
+            continue
+        weight = lambda c: ((c.get("verdict") == "confirmed"),
+                            (c.get("likelihood") or 0) * (c.get("impact") or 0))
+        if weight(concern) > weight(twin):
+            kept[kept.index(twin)] = concern
+    return kept
 
 
 def _pack(texts: list, room: int, size: int) -> list:
@@ -1630,9 +1730,13 @@ LOOKUP_FILES = 4         # files shown per search
 LOOKUP_CHARS = 8_000     # all the code one group gets back in one round
 
 SECOND_LOOK = """\
-Second look.  Each group below was left as needs_review on a first look.  \
-After its evidence comes the code it asked for, found by an exact text search \
-of the whole branch.  A search that found nothing means that text is nowhere \
+Second look.  Each group below was left as needs_review on a first look, or \
+was confirmed as a missing check without the code that calls it.  After its \
+evidence comes the code it asked for or the code that calls it, found by an \
+exact text search of the whole branch.  A protection in a caller (an address \
+check, a proxy that pins the address, a permission check, a path check) that \
+covers the flagged code makes it a false_positive, or lowers the likelihood \
+when it covers only some paths.  A search that found nothing means that text is nowhere \
 in the branch.  Decide each group now, from this code.  Use needs_review again \
 only when the code that decides it is still missing, and then say exactly what \
 in need.
@@ -1641,7 +1745,18 @@ in need.
 
 
 LOOKUP_DEF_LINES = 90     # lines of a definition a hit on it brings
-_DEFINITION = re.compile(r"^(\s*)(?:async\s+def|def|class|(?:export\s+)?(?:async\s+)?function)\s+\w")
+_DEFINITION = re.compile(
+    r"^(\s*)(?:"
+    r"(?:async\s+def|def|class|(?:export\s+)?(?:default\s+)?(?:async\s+)?function\*?)\s+\w"
+    # Go
+    r"|func\s+(?:\([^)]*\)\s*)?\w"
+    # const name = (...) => {, const name = async function
+    r"|(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?"
+    r"(?:function\b|\([^)]*\)\s*=>|\w+\s*=>)"
+    # Java, C#, Kotlin style methods: modifiers, a type, a name, (
+    r"|(?:(?:public|private|protected|internal|static|final|abstract|synchronized|"
+    r"override|virtual|async)\s+)+[\w<>\[\],.? ]*?\w+\s*\("
+    r")")
 
 
 def _block_end(lines: list, at: int) -> int:
@@ -1652,13 +1767,36 @@ def _block_end(lines: list, at: int) -> int:
         return 0
     indent, end = len(m.group(1)), at
     braces = "{" in head and not head.rstrip().endswith(":")
+    python = re.match(r"\s*(?:async\s+def|def|class)\s", head) is not None
+    if not braces and not python and not head.rstrip().endswith(":"):
+        # A brace on a line of its own below the head, or a head over
+        # several lines: the body is in braces all the same.
+        for n in range(at + 1, min(len(lines), at + 6) + 1):
+            if lines[n - 1].strip().endswith(":"):
+                break
+            if "{" in lines[n - 1]:
+                braces = True
+                break
     depth = head.count("{") - head.count("}")
-    for n in range(at + 1, len(lines) + 1):
+    opened = depth > 0
+    if braces and "{" in head and not opened:
+        return at               # all on one line
+    body = at + 1
+    if not braces:
+        # A signature over several lines, such as one closing with "):" at
+        # the left edge, is part of the head, not the end of the body.
+        parens, n = head.count("(") - head.count(")"), at
+        while parens > 0 and n < min(len(lines), at + 30):
+            n += 1
+            parens += lines[n - 1].count("(") - lines[n - 1].count(")")
+        body, end = n + 1, n
+    for n in range(body, len(lines) + 1):
         line = lines[n - 1]
         if braces:
             depth += line.count("{") - line.count("}")
+            opened = opened or depth > 0
             end = n
-            if depth <= 0:
+            if (opened and depth <= 0) or (not opened and n - at > 6):
                 break
             continue
         if line.strip() and len(line) - len(line.lstrip()) <= indent:
@@ -1728,6 +1866,324 @@ def _lookup(root: Path, need: list) -> str:
     return "\n\n".join(parts)
 
 
+# ---- callers.  A finding that says a protection is missing (no address
+# check before a fetch, no permission check, no path check) is only true if
+# the code that calls the flagged lines does not make that check either.  A
+# model asked to "look at the caller" may not, so the report finds the
+# callers itself, by plain text search, and puts them in the evidence.
+CALLER_CWES = AUTHZ_CWES | {
+    "918", "367", "295", "297", "22", "23", "36", "73", "78", "77", "88",
+    "89", "94", "95", "502", "601", "611", "79", "434"}
+_CALLER_RULE = re.compile(
+    r"ssrf|forgery|toctou|rebind|\btls\b|\bssl\b|certificate|verify|travers|"
+    r"inject|sqli|\bsql\b|command|\bexec|shell|deserial|pickle|redirect|xss|xxe|"
+    + _AUTHZ_RULE.pattern, re.I)
+CALLER_SITES = 3          # caller functions shown per finding
+CALLER_FUNC_LINES = 100   # lines of one caller function shown
+CALLER_CHARS = 8_000      # all the caller code one finding gets
+_SCRIPT_SUFFIXES = {".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".bash", ".rb", ".php",
+                    ".pl", ".ps1", ".go", ".java", ".cs", ".kt"}
+# Names too common to search for: every file has one.
+_GENERIC_NAMES = {"main", "run", "get", "post", "put", "delete", "patch", "handle",
+                  "handler", "index", "init", "__init__", "setup", "call", "__call__",
+                  "execute", "process", "start", "load", "save", "update", "create",
+                  "render", "apply", "build", "check", "test", "fetch", "send", "read",
+                  "write", "open", "close", "parse", "default", "constructor"}
+# A function the outside world calls: a web route, a command, a job.
+_ENTRY = re.compile(
+    r"^\s*@\s*[\w.]*?(?:route|get|post|put|patch|delete|api_route|websocket|"
+    r"RequestMapping|GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|"
+    r"HttpGet|HttpPost|HttpPut|HttpDelete|Route|command|task|shared_task|"
+    r"receiver|on_event|middleware|exception_handler)\b", re.I)
+# Files a web server runs straight from a URL: their top level is an entry.
+_PAGE_SUFFIXES = {".php", ".phtml", ".jsp", ".jspx", ".asp", ".aspx", ".ashx", ".asmx",
+                  ".cshtml", ".vbhtml", ".cfm", ".cgi"}
+# Folders whose pages are pulled in by another page, which makes the checks.
+_INCLUDE_DIRS = {"include", "includes", "inc", "lib", "libs", "partials", "partial",
+                 "fragments", "templates", "views", "modules", "sections"}
+FILE_HEAD_LINES = 30      # the top of a file that includes another, where gates sit
+# A handler handed to a router: app.get("/x", (req, res) => {, Route::post(...
+_ROUTE_CALL = re.compile(
+    r"\b(?:app|router|server|api|routes?|Route|fastify)\s*(?:\.|::)\s*"
+    r"(?:get|post|put|patch|delete|all|use|route|any|match|options|head)\s*\(", re.I)
+_ASSIGNED = re.compile(r"^\s*(?:(?:export\s+)?(?:const|let|var|final|static|private|"
+                       r"public)\s+)*([A-Za-z_][\w]*)\s*(?::[^=]{1,40})?=(?!=)")
+_COMMENT_LINE = re.compile(r"^\s*(?:#|//|\*|/\*|--|<!--)")
+_IMPORT_LINE = re.compile(r"^\s*(?:from\s+\S+\s+import\b|import\b|using\b|require\b|"
+                          r".*=\s*require\()")
+_PROSE_SUFFIXES = {".md", ".rst", ".txt", ".adoc", ".markdown", ".csv", ".log"}
+_TEST_PATH = re.compile(r"(?:^|/)(?:tests?|spec|__tests__|testdata|fixtures)/|"
+                        r"(?:^|/)test_[^/]*$|_test\.\w+$|\.(?:spec|test)\.\w+$", re.I)
+
+
+def _def_name(head: str) -> str:
+    for pattern in (r"\b(?:def|class|function\*?|const|let|var)\s+(\w+)",
+                    r"\bfunc\s+(?:\([^)]*\)\s*)?(\w+)", r"(\w+)\s*\("):
+        m = re.search(pattern, head)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def _enclosing(lines: list, at: int) -> tuple:
+    """(first line, last line, name) of the function line at sits in, or None."""
+    for k in range(min(at, len(lines)), 0, -1):
+        if _DEFINITION.match(lines[k - 1]):
+            end = _block_end(lines, k)
+            if end >= at:
+                return k, end, _def_name(lines[k - 1])
+    return None
+
+
+def _entry_point(lines: list, start: int) -> str:
+    """The decorator that makes a function an entry point, or ""."""
+    k = start - 1
+    while k >= 1 and lines[k - 1].strip().startswith("@"):
+        if _ENTRY.match(lines[k - 1]):
+            return lines[k - 1].strip()[:120]
+        k -= 1
+    return ""
+
+
+def _in_docstring(lines: list, n: int) -> bool:
+    """Whether line n (1 based) of a Python file is prose inside a triple
+    quoted string, where a name is a mention, not a call.  Counted from the
+    function the line is in, so a stray quote elsewhere cannot flip it."""
+    inside = False
+    found = _enclosing(lines, n)
+    for k in range((found[0] - 1) if found else 0, n - 1):
+        line = lines[k]
+        if (line.count('"""') + line.count("'''")) % 2:
+            inside = not inside
+    here = lines[n - 1] if 0 < n <= len(lines) else ""
+    return inside or bool(re.match(r"\s*[rubf]*(?:\"\"\"|''')", here))
+
+
+def _usable(name: str) -> bool:
+    return len(name) >= 4 and name.lower() not in _GENERIC_NAMES
+
+
+def _word_hits(root: Path, word: str) -> list:
+    """(file, line, text) for each line of the branch with word as a whole word."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(root), "grep", "-n", "-I", "-w", "-F", "--no-color",
+             "-e", word, "--", "."], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    hits = []
+    for row in (done.stdout or "").splitlines()[:400]:
+        parts = row.split(":", 2)
+        if len(parts) == 3 and parts[1].isdigit():
+            hits.append((parts[0], int(parts[1]), parts[2]))
+    return hits
+
+
+def _function_view(lines: list, at: int) -> tuple:
+    """((first, last) spans to show for the code around line at, its name).
+    The whole function it is in, with decorators, up to a limit, and the
+    line itself always."""
+    found = _enclosing(lines, at)
+    if not found:
+        lo, hi = max(1, at - LOOKUP_CONTEXT), min(len(lines), at + LOOKUP_CONTEXT)
+        return [[lo, hi]], ""
+    start, end, name = found
+    top = start
+    while top > 1 and lines[top - 2].strip().startswith("@"):
+        top -= 1
+    spans = [[top, min(end, start + CALLER_FUNC_LINES)]]
+    if at > spans[0][1]:
+        lo, hi = max(1, at - LOOKUP_CONTEXT), min(end, at + LOOKUP_CONTEXT)
+        if lo <= spans[0][1] + 1:
+            spans[0][1] = hi
+        else:
+            spans.append([lo, hi])
+    return spans, name
+
+
+def _render(lines: list, spans: list) -> str:
+    from app.core.diagram import mask
+    return "\n...\n".join(
+        "\n".join(f"{n:5}  {mask(lines[n - 1][:300])}" for n in range(lo, hi + 1))
+        for lo, hi in spans)
+
+
+def needs_callers(item: dict) -> bool:
+    """Whether a finding or concern claims a protection is missing, the kind
+    whose verdict depends on what its callers do."""
+    if item.get("kind") not in ("code", "review"):
+        return False
+    cwe = re.sub(r"\D", "", str(item.get("cwe") or ""))
+    if cwe in CALLER_CWES:
+        return True
+    words = item.get("rule") or ""
+    if item.get("kind") == "review" and not cwe:
+        words = f"{item.get('title') or ''} {item.get('check') or ''}"
+    return bool(words and _CALLER_RULE.search(words))
+
+
+def caller_lookup(root, rel: str, at: int) -> dict:
+    """The code that calls the function (or runs the script) line at of rel
+    sits in, found by search of the branch.
+
+    -> {"state", "name", "text", "function"}:
+      shown  callers were found and are in text
+      entry  the function is an entry point (a route, a command, a job)
+      none   it was searched for and nothing calls it by name
+      skip   there is no function or script name to search for
+    One hop is followed: a caller that only stores the name, such as
+    DOM_SCRIPT = HERE / "browser_dom.py", is followed to where DOM_SCRIPT is
+    used.  Test files are shown only when nothing else calls it.
+    """
+    out = {"state": "skip", "name": "", "text": "", "function": None}
+    if root is None or not rel:
+        return out
+    root = Path(root)
+    lines = _file_lines(root, rel)
+    if not lines:
+        return out
+    at = max(1, min(at or 1, len(lines)))
+    # A callback handed to a router, enclosing the line: an entry point.
+    depth = len(lines[at - 1]) - len(lines[at - 1].lstrip())
+    for k in range(at, max(0, at - 200), -1):
+        line = lines[k - 1]
+        indent = len(line) - len(line.lstrip())
+        if line.strip() and (indent < depth or k == at) and _ROUTE_CALL.search(line):
+            out.update(state="entry", text=(
+                f"callers: line {at} is in a handler given to a router at line {k}, "
+                f"reached from outside: {line.strip()[:120]}"))
+            return out
+        if line.strip() and indent < depth:
+            depth = indent
+            if indent == 0:
+                break
+    found = _enclosing(lines, at)
+    own = (rel, 0, 0)
+    if found:
+        start, end, name = found
+        out["function"] = (rel, start)
+        out["name"] = name
+        entry = _entry_point(lines, start)
+        if entry:
+            out.update(state="entry", text=(
+                f"callers: {name} (line {start}) is an entry point, reached "
+                f"from outside through {entry}"))
+            return out
+        own = (rel, start, end)
+        targets = [name] if _usable(name) else []
+        module = False
+    else:
+        path = Path(rel)
+        included = (bool(_INCLUDE_DIRS & {part.lower() for part in path.parts[:-1]})
+                    or ".inc" in path.name.lower())
+        page = path.suffix.lower() in _PAGE_SUFFIXES
+        if page and not included:
+            out.update(state="entry", name=path.name, text=(
+                f"callers: line {at} is at the top level of {path.name}, a page the "
+                "web server runs when its address is requested"))
+            return out
+        if not page and path.suffix.lower() not in _SCRIPT_SUFFIXES:
+            return out
+        out["name"] = path.name
+        # Python and JavaScript import a module by its bare name.
+        by_stem = path.suffix.lower() in {".py", ".js", ".mjs", ".cjs", ".ts"}
+        targets = [path.name] + ([path.stem] if by_stem and _usable(path.stem) else [])
+        module = True
+    if not targets:
+        return out
+
+    def keep(hit, word, allow_imports):
+        f, n, text = hit
+        if f == own[0] and (own[1] <= n <= own[2] or (module and f == rel)):
+            return False
+        if _COMMENT_LINE.match(text):
+            return False
+        if not allow_imports and _IMPORT_LINE.match(text):
+            return False
+        if Path(f).suffix.lower() in _PROSE_SUFFIXES:
+            return False
+        if f.endswith(".py") and _in_docstring(_file_lines(root, f), n):
+            return False
+        return True
+
+    sites = []          # (file, line, how it was reached)
+    for word in targets:
+        for hit in _word_hits(root, word):
+            if keep(hit, word, module):
+                sites.append((hit[0], hit[1], f"{word} is named"))
+    # One hop: a caller that stores the name itself in a variable, not the
+    # result of calling it.
+    for f, n, how in list(sites):
+        text = (_file_lines(root, f) or [""] * n)[n - 1] if n else ""
+        m = _ASSIGNED.match(text)
+        if not m or m.group(1) in targets or not _usable(m.group(1)):
+            continue
+        rhs = text[m.end():]
+        word = how.split(" ", 1)[0]
+        if not re.search(r"(?<![\w.])" + re.escape(word) + r"\b(?!\s*\()", rhs):
+            continue
+        var = m.group(1)
+        for hit in _word_hits(root, var):
+            if (hit[0], hit[1]) != (f, n) and keep(hit, var, False):
+                sites.append((hit[0], hit[1], f"{var}, which holds it, is used"))
+    if not sites and module and page:
+        # Nothing includes it, so it is a page in its own right.
+        out.update(state="entry", text=(
+            f"callers: nothing in the branch includes {out['name']}, so line {at} runs "
+            "when its own address is requested"))
+        return out
+    if not sites:
+        out["state"] = "none"
+        out["text"] = (f"callers: a search of the whole branch for {', '.join(targets)} "
+                       "found nothing that calls it, and it carries no route, command or "
+                       "job decorator.  It may be started by name at runtime, or not "
+                       "be reached at all.")
+        return out
+    # Own code first, then vendored copies, tests only when nothing else.
+    code_suffixes = _SCRIPT_SUFFIXES | _PAGE_SUFFIXES
+    ranked = sorted(dict.fromkeys(sites), key=lambda s: (
+        bool(_TEST_PATH.search(s[0])), report_profile._skip(s[0]),
+        Path(s[0]).suffix.lower() not in code_suffixes, "holds it" in s[2]))
+    if not all(_TEST_PATH.search(s[0]) for s in ranked):
+        ranked = [s for s in ranked if not _TEST_PATH.search(s[0])]
+    parts, used, seen = [], 0, set()
+    for f, n, how in ranked:
+        file_lines = _file_lines(root, f)
+        if not file_lines or n > len(file_lines):
+            continue
+        spans, caller = _function_view(file_lines, n)
+        key = (f, spans[0][0])
+        if key in seen:
+            continue
+        seen.add(key)
+        where = f"in {caller}" if caller else "at the top level of the file"
+        head = ""
+        if not caller and spans[0][0] > 1:
+            # Named at the top level of a file: the code at its top, where a
+            # page checks who is signed in, comes with it, without comments.
+            from app.core.diagram import mask
+            picked = [k for k in range(1, spans[0][0])
+                      if file_lines[k - 1].strip()
+                      and not _COMMENT_LINE.match(file_lines[k - 1])
+                      and not file_lines[k - 1].strip().startswith(("/**", "*/", '"""'))
+                      ][:FILE_HEAD_LINES]
+            if picked:
+                head = "\n".join(f"{k:5}  {mask(file_lines[k - 1][:300])}"
+                                  for k in picked) + "\n...\n"
+        block = (f"{how} in {f} line {n}, {where}:\n" + head + _render(file_lines, spans))
+        if used + len(block) > CALLER_CHARS:
+            block = block[:max(0, CALLER_CHARS - used)]
+        if block:
+            parts.append(block)
+            used += len(block)
+        if len(seen) >= CALLER_SITES + 1 or used >= CALLER_CHARS:
+            break
+    out["state"] = "shown"
+    out["text"] = (f"callers of {out['name']}, found by search of the whole branch "
+                   "(judge the finding with them):\n\n" + "\n\n".join(parts))
+    return out
+
+
 def _concern_evidence(ref: str, concern: dict, root: Path, context: int) -> str:
     """A review concern as evidence for its second look."""
     from app.core.diagram import fence
@@ -1748,49 +2204,112 @@ def _concern_evidence(ref: str, concern: dict, root: Path, context: int) -> str:
     return f'<evidence label="{html.escape(ref)}">\n{fence(body)}\n</evidence>'
 
 
+NO_CALLER = ("This was confirmed on a first look, but nothing in the branch calls "
+             "the flagged function by name, and no route, command or job decorator "
+             "was found on it.  Confirm it only if the code shown proves that outside "
+             "input reaches it, such as a route, a page, a command or a framework "
+             "hook registering it.  Otherwise use needs_review.")
+NO_CALLER_SEEN = ("This was confirmed on a first look as a missing check without the "
+                  "code that calls it.  Judge it again with that code.")
+
+
 def _second_looks(asker: "_Asker", connection: str, repository: str, branch: str,
                   reviewed: dict, evidence_by_ref: dict, concerns: list,
-                  context: int, progress, head: str) -> int:
-    """Ask again about every open question, with the code it asked for.
+                  context: int, progress, head: str,
+                  groups_by_ref: dict | None = None) -> tuple:
+    """Ask again about every open question, with the code it asked for, and
+    about every missing check confirmed without its callers in view.
 
-    reviewed and concerns are updated in place.  -> how many were decided.
+    The second kind does not wait for the model to ask: a finding that says
+    a protection is missing, confirmed while the code that calls it was not
+    shown (nothing calls it by name, or a concern the repository read raised
+    on its own), is asked about again with that code, whatever its need
+    says.  If that look cannot settle it, it is needs_review and unscored.
+
+    reviewed and concerns are updated in place.
+    -> (open questions decided, confirmed findings checked against callers).
     Credentials are never searched for: their lines are withheld on purpose.
     """
     from app.core import recheck
     from app.core.diagram import fence
 
-    pending = {}
+    groups_by_ref = groups_by_ref or {}
+    pending, forced = {}, {}
     for ref, item in reviewed.items():
-        if (item["verdict"] == "needs_review" and item.get("need")
-                and ref in evidence_by_ref):
+        if ref not in evidence_by_ref:
+            continue
+        group = groups_by_ref.get(ref) or {}
+        if item["verdict"] == "needs_review" and item.get("need"):
             pending[ref] = [evidence_by_ref[ref], item]
+        elif (item["verdict"] == "confirmed" and group.get("callers") == "none"
+              and needs_callers(group)):
+            pending[ref] = [evidence_by_ref[ref], item]
+            forced[ref] = None
     for n, concern in enumerate(concerns, start=1):
         if concern["verdict"] == "needs_review" and concern.get("need"):
             pending[f"C{n}"] = [None, concern]
+        elif (concern["verdict"] == "confirmed" and concern.get("file")
+              and needs_callers({**concern, "kind": "review"})):
+            pending[f"C{n}"] = [None, concern]
+            forced[f"C{n}"] = None
     if not pending:
-        return 0
+        return 0, 0
     asked = {ref: set() for ref in pending}
-    decided = 0
+    decided = rechecked = 0
     room = min(MAX_BATCH_CHARS, asker.input_room(REVIEW_SYSTEM) - 500
                - len(head) - len(SECOND_LOOK))
     with recheck.branch_tip(connection, repository, branch, memory_only=True) as (root, why):
         if root is None:
             log.info("second look skipped for %s: %s", repository, why)
-            return 0
+            return 0, 0
         root = Path(root)
+        # What each forced look is shown.  A concern whose callers are an
+        # entry point, or that has no function to search for, is left as
+        # the repository read judged it.
+        for ref in list(forced):
+            base, item = pending[ref]
+            if ref.startswith("C"):
+                found = caller_lookup(root, item["file"], item.get("line") or 1)
+                if found["state"] not in ("shown", "none"):
+                    forced.pop(ref)
+                    if not (item["verdict"] == "needs_review" and item.get("need")):
+                        pending.pop(ref)
+                    continue
+                note = (NO_CALLER if found["state"] == "none" else NO_CALLER_SEEN)
+                forced[ref] = note + "\n\n" + found["text"]
+            else:
+                group = groups_by_ref.get(ref) or {}
+                lines = _file_lines(root, group.get("file") or "")
+                at = (group.get("lines") or [1])[0]
+                whole = ""
+                if lines and at <= len(lines):
+                    spans, name = _function_view(lines, at)
+                    whole = (f"the whole of {name or 'the code'} in {group['file']}:\n"
+                             + _render(lines, spans))
+                forced[ref] = NO_CALLER + ("\n\n" + whole if whole else "")
+        if not pending:
+            return 0, 0
         for _ in range(FOLLOW_UP_ROUNDS):
             texts = []
             for ref, (base, item) in pending.items():
-                fresh = [a for a in item["need"] if (a["file"], a["find"]) not in asked[ref]]
-                if not fresh:
+                fresh = [a for a in (item.get("need") or [])
+                         if (a["file"], a["find"]) not in asked[ref]]
+                note = forced.get(ref) or ""
+                if ref in forced:
+                    forced[ref] = ""            # shown once
+                if not fresh and not note:
                     continue
                 asked[ref].update((a["file"], a["find"]) for a in fresh)
                 if base is None:
                     base = pending[ref][0] = _concern_evidence(ref, item, root, context)
-                more = (f"first look: {item.get('check') or 'needs review'}\n\n"
-                        + _lookup(root, fresh))
+                more = f"first look: {item.get('check') or item['verdict']}"
+                if note:
+                    more += "\n\n" + note
+                if fresh:
+                    more += "\n\n" + _lookup(root, fresh)
+                label = "code that calls it" if note and not fresh else "code it asked for"
                 texts.append((ref, base + "\n\n" + f'<evidence label="{html.escape(ref)}, '
-                              f'code it asked for">\n{fence(more)}\n</evidence>'))
+                              f'{label}">\n{fence(more)}\n</evidence>'))
             if not texts:
                 break
             answers = {}
@@ -1798,7 +2317,10 @@ def _second_looks(asker: "_Asker", connection: str, repository: str, branch: str
                 answers.update(_review(asker, batch, progress, head + SECOND_LOOK))
             for ref, new in answers.items():
                 base, item = pending[ref]
+                was_forced = ref in forced
                 new["second_look"] = True
+                if was_forced:
+                    new["callers_checked"] = True
                 if ref.startswith("C"):
                     item.update(new)            # the concern keeps its file and line
                     new = item
@@ -1808,10 +2330,14 @@ def _second_looks(asker: "_Asker", connection: str, repository: str, branch: str
                     pending[ref] = [base, new]
                 else:
                     pending.pop(ref)
-                    decided += 1
+                    if was_forced:
+                        rechecked += 1
+                    else:
+                        decided += 1
+                forced.pop(ref, None)
             if not pending:
                 break
-    return decided
+    return decided, rechecked
 
 
 # ------------------------------------------------------------------ running it
@@ -1988,6 +2514,8 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                     g["source"] = _numbered_source(
                         file_lines, g["lines"], context,
                         g["kind"] == "credential", bool(g.get("mule_encrypted")))
+                    found = _enclosing(file_lines, g["lines"][0])
+                    g["function"] = (g["file"], found[0]) if found else None
             # The overview may only name files it was shown, so those are the
             # files its concerns can point into.
             for label in re.findall(r'<evidence label="File ([^"]+)">', overview_evidence):
@@ -2113,6 +2641,12 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                                      **_place(c, lines_in)}
                                     for c in (obj.get("concerns") or [])[:5]
                                     if isinstance(c, dict)]
+            # The function each concern is in, to tell one issue said twice
+            # from two issues.
+            for c in overview["concerns"]:
+                found = (_enclosing(shown.get(c["file"]) or [], c["line"])
+                         if c["file"] and c["line"] else None)
+                c["function"] = (c["file"], found[0]) if found else None
         else:
             notes.append("The overall read of the repository did not come back in a "
                          "usable form, so only the scanner findings were reviewed.")
@@ -2163,17 +2697,28 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                 reviewed[ref]["need"] = []
         open_questions = sum(1 for item in list(reviewed.values()) + overview["concerns"]
                              if item["verdict"] == "needs_review" and item.get("need"))
+        open_questions += sum(
+            1 for ref, group in zip(refs, groups)
+            if (reviewed.get(ref) or {}).get("verdict") == "confirmed"
+            and group.get("callers") == "none" and needs_callers(group))
+        open_questions += sum(1 for c in overview["concerns"]
+                              if c["verdict"] == "confirmed" and c.get("file")
+                              and needs_callers({**c, "kind": "review"}))
         done[0] = 0
         phase.update(label="Second look at open questions", low=82, high=86,
                      planned=max(1, -(-open_questions // max(1, asker.batch_size))))
         _update(repository, branch, stage="Taking a second look at open questions",
                 progress=82)
-        settled = _second_looks(asker, connection, repository, branch, reviewed,
-                                evidence_by_ref, overview["concerns"], context,
-                                progress, profile_head)
+        settled, rechecked = _second_looks(
+            asker, connection, repository, branch, reviewed, evidence_by_ref,
+            overview["concerns"], context, progress, profile_head,
+            dict(zip(refs, groups)))
         if settled:
             notes.append(f"{settled} open question(s) were settled on a second look, "
                          "with the code they needed fetched from the branch.")
+        if rechecked:
+            notes.append(f"{rechecked} missing check(s) confirmed without the code that "
+                         "calls them were judged again with that code.")
 
     # ---- one list of issues, rated here, and apart from it the waived
     # findings, of which only those whose waiver should be challenged stay
@@ -2208,6 +2753,18 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             item["waiver_check"] = _waiver_support(group["waiver"], item.get("waiver_check"))
         _place_fix(item, group.get("source") or {})
         (challenged if group["waived"] else items).append(item)
+    # A concern the scanners already raised in this report, or one the read
+    # raised twice, is one issue, not two.
+    on_scanner = []
+    for ref, group in zip(refs, groups):
+        if group["waived"]:
+            continue
+        said = (group["pre"] or (_decided_item(group) if group["decision"]
+                                 else reviewed.get(ref)) or {})
+        on_scanner.append({"file": group["file"], "lines": group["lines"],
+                           "cwe": group["cwe"], "function": group.get("function"),
+                           "verdict": said.get("verdict")})
+    overview["concerns"] = drop_repeat_concerns(on_scanner, overview["concerns"])
     for concern in overview["concerns"]:
         concern.update(source="review", rule="", kind="review", count=0,
                        severity="", finding_ids=[], group_ids=[],
@@ -2240,8 +2797,9 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             item["rating"] = rating_for(item["score"])
         _floor(item)
 
-    # Closed issues that are the same reason over and over (one rule that
-    # does not fit, flagged in forty templates) are one row, not forty.
+    # One rule saying the same thing in many places is one row, not many:
+    # closed for the same reason, confirmed at the same rating, or left with
+    # the same question open.
     items = _merge_closed(items)
 
     # A waiver should be challenged when the problem is real, it carries a
