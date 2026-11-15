@@ -1827,16 +1827,21 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
 
     reviewed = {}
     done = [0]
+    # What the bar is counting now.  The review is most of the time, so it
+    # fills most of the bar; the second look gets a thin slice after it.  A
+    # batch split for size adds a question, so the estimate grows with the
+    # count rather than read "question 7 of about 4".
+    phase = {"label": "Reviewing findings", "planned": max(1, len(batches)),
+             "low": 18, "high": 82}
 
     def progress():
         done[0] += 1
-        # The review is most of the time, so it fills most of the bar.  A
-        # batch split for size adds questions, so the bar holds below the
-        # next stage rather than run past it.
-        planned = max(1, len(batches))
+        phase["planned"] = max(phase["planned"], done[0])
+        span = phase["high"] - phase["low"]
         _update(repository, branch,
-                stage=f"Reviewing findings, question {done[0]} of about {planned}",
-                progress=min(85, 18 + (67 * (done[0] - 1)) // planned))
+                stage=f"{phase['label']}, question {done[0]} of about {phase['planned']}",
+                progress=min(phase["high"], phase["low"]
+                             + (span * (done[0] - 1)) // phase["planned"]))
 
     for batch in batches:
         reviewed.update(_review(asker, batch, progress, profile_head))
@@ -1848,8 +1853,13 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         for ref, group in zip(refs, groups):
             if group["kind"] == "credential" and ref in reviewed:
                 reviewed[ref]["need"] = []
+        open_questions = sum(1 for item in list(reviewed.values()) + overview["concerns"]
+                             if item["verdict"] == "needs_review" and item.get("need"))
+        done[0] = 0
+        phase.update(label="Second look at open questions", low=82, high=86,
+                     planned=max(1, -(-open_questions // max(1, asker.batch_size))))
         _update(repository, branch, stage="Taking a second look at open questions",
-                progress=84)
+                progress=82)
         settled = _second_looks(asker, connection, repository, branch, reviewed,
                                 evidence_by_ref, overview["concerns"], context,
                                 progress, profile_head)
