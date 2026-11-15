@@ -1417,6 +1417,13 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                     finding.engine_severity = (finding.engine_severity
                                                or finding.severity.value)
                     finding.severity = grade.severity
+                elif (grade.source == "report"
+                      and learned.higher(finding.severity, grade.severity)):
+                    # A security report read the code and found it worse than
+                    # the engine said.  Raising is never against policy.
+                    finding.engine_severity = (finding.engine_severity
+                                               or finding.severity.value)
+                    finding.severity = grade.severity
             else:
                 taught = learned.match(learned_rules, finding)
                 if taught is not None:

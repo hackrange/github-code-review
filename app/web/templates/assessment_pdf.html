@@ -90,6 +90,7 @@
   .r-low      { background: #70ad47; color: #fff; }
   .r-informational { background: #5b9bd5; color: #fff; }
   .r-unverified { background: #8a94a3; color: #fff; }
+  .r-needs-review { background: #8a94a3; color: #fff; }
   .fix-pair { break-inside: avoid; }
   pre.code.code-before { border-left: 3px solid #c00000; }
   pre.code.code-after { border-left: 3px solid #70ad47; }
@@ -157,12 +158,14 @@
       ~ tally['High'] ~ " High, " ~ tally['Medium'] ~ " Medium and " ~ tally['Low']
       ~ " Low.  " ~ (tally['Informational'] ~ " issue" ~ ('' if tally['Informational'] == 1 else 's')
       ~ " turned out to be false alarms, by design or not part of the product.  " if tally['Informational'] else "")
-      ~ (unverified ~ " package issue" ~ ('' if unverified == 1 else 's') ~ " could not be checked against the image that ships, and " ~ ('is' if unverified == 1 else 'are') ~ " listed as unverified, outside the overall rating." if unverified else ""))
+      ~ (unverified ~ " package issue" ~ ('' if unverified == 1 else 's') ~ " could not be checked against the image that ships, and " ~ ('is' if unverified == 1 else 'are') ~ " listed as unverified, outside the overall rating.  " if unverified else "")
+      ~ (unconfirmed ~ " issue" ~ ('' if unconfirmed == 1 else 's') ~ " could not be confirmed from the code, even with a second look at the code " ~ ('it' if unconfirmed == 1 else 'they') ~ " needed, so " ~ ('it is' if unconfirmed == 1 else 'they are') ~ " listed for a person to check, unscored and outside the overall rating." if unconfirmed else ""))
      | sentence_spaced }}</p>
 <table style="margin-bottom:3mm">
-  <thead><tr>{% for rt in ['Critical', 'High', 'Medium', 'Low', 'Informational'] %}<th class="c">{{ rt }}</th>{% endfor %}{% if unverified %}<th class="c">Unverified</th>{% endif %}<th class="c">Total</th></tr></thead>
+  <thead><tr>{% for rt in ['Critical', 'High', 'Medium', 'Low', 'Informational'] %}<th class="c">{{ rt }}</th>{% endfor %}{% if unverified %}<th class="c">Unverified</th>{% endif %}{% if unconfirmed %}<th class="c">Needs review</th>{% endif %}<th class="c">Total</th></tr></thead>
   <tr>{% for rt in ['Critical', 'High', 'Medium', 'Low', 'Informational'] %}<td class="c"><span class="badge r-{{ rt | lower }}">{{ tally[rt] }}</span></td>{% endfor %}
     {% if unverified %}<td class="c"><span class="badge r-unverified">{{ unverified }}</span></td>{% endif %}
+    {% if unconfirmed %}<td class="c"><span class="badge r-needs-review">{{ unconfirmed }}</span></td>{% endif %}
     <td class="c"><strong>{{ items | rejectattr('waived') | list | length }}</strong></td></tr>
 </table>
 {% if r.waived_issues %}
@@ -212,7 +215,6 @@
   {% if r.commit %}<tr><td class="k">Commit</td><td>{{ r.commit }}</td></tr>{% endif %}
   {% if r.file_count %}<tr><td class="k">Files</td><td>{{ r.file_count }}</td></tr>{% endif %}
   <tr><td class="k">Open scanner alerts</td><td>{{ r.counts.open }}, in {{ r.counts.groups }} groups by rule and file</td></tr>
-  {% if r.counts.waived %}<tr><td class="k">Waived scanner alerts</td><td>{{ r.counts.waived }}, in {{ r.counts.waived_groups }} groups, rated like the rest</td></tr>{% endif %}
   {% if r.overview.what_it_is %}<tr><td class="k">What it holds</td><td>{{ r.overview.what_it_is | sentence_spaced }}</td></tr>{% endif %}
 </table>
 {% if profile %}
@@ -262,8 +264,9 @@
   <tr><td>1 to 4</td><td>Low</td><td>Fix as part of normal work.</td></tr>
   <tr><td>Not scored</td><td>Informational</td><td>{{ "No risk.  Recorded for accuracy, such as a false alarm, an issue that is by design, or a file not part of the product." | sentence_spaced }}</td></tr>
   <tr><td>Not scored</td><td>Unverified</td><td>{{ "A package version read from a base image the build upgrades.  Not counted until someone reads the version in the image that ships." | sentence_spaced }}</td></tr>
+  <tr><td>Not scored</td><td>Needs review</td><td>{{ "The code that would decide it could not be found, even after a second look that fetched the code it needed.  Not counted until a person checks it." | sentence_spaced }}</td></tr>
 </table>
-<p>{{ "Some ratings were already decided before this review.  A grade a person set, or the rating from an alert's own earlier validation, is used as it is and is not scored again.  A package on the CISA known exploited list is rated at least High until a person rules on it.  A waived issue is rated the same way as any other, and the reason it was waived is shown beside its rating." | sentence_spaced }}</p>
+<p>{{ "Some ratings were already decided before this review.  A grade a person set, or the rating from an alert's own earlier validation made with high confidence, is used as it is and is not scored again.  An earlier validation with less confidence is checked again against the code.  A package on the CISA known exploited list is rated at least High until a person rules on it.  Waived findings are left out of this report." | sentence_spaced }}</p>
 
 {# ---------------------------------------------------------- risk matrix #}
 <h2 class="new-page" style="margin-top:0">4.  Risk Matrix</h2>
@@ -277,7 +280,7 @@
     <td class="c">{{ i.impact if scored else 'N/A' }}</td>
     <td class="c">{{ i.score if scored else 'N/A' }}</td>
     <td class="c">{{ '%.1f' % i.cvss_score if i.cvss_score is not none else 'N/A' }}</td>
-    <td class="badge-cell"><span class="badge r-{{ (i.badge or i.rating) | lower }}">{{ i.badge or i.rating }}</span></td></tr>
+    <td class="badge-cell"><span class="badge r-{{ (i.badge or i.rating) | lower | replace(' ', '-') }}">{{ i.badge or i.rating }}</span></td></tr>
   {% endfor %}
 </table>
 
@@ -299,7 +302,7 @@
   <p class="idline">Finding {{ i.id }}{% if i.finding_id is not none %}  &middot;  ID {{ i.finding_id }}{% endif %}
     {%- if i.finding_link %}  &middot;  <a href="{{ i.finding_link }}">View this finding</a>{% endif %}</p>
   <table>
-    <tr><td class="k">Rating</td><td><span class="badge r-{{ (i.badge or i.rating) | lower }}">{{ i.badge or i.rating }}</span>
+    <tr><td class="k">Rating</td><td><span class="badge r-{{ (i.badge or i.rating) | lower | replace(' ', '-') }}">{{ i.badge or i.rating }}</span>
       {%- if i.waived %}  <strong>Waived</strong>{% endif %}</td></tr>
     {% if i.verdict_label %}<tr><td class="k">Verdict</td><td>{{ i.verdict_label }}{% if i.check %}.  {{ i.check | sentence_spaced }}{% endif %}</td></tr>{% endif %}
     {% if i.waived %}
@@ -383,13 +386,55 @@
 </div>
 {% endfor %}
 
+{% if challenged %}
+<h2 class="new-page" style="margin-top:0">6.  Waived Findings That Should Be Challenged</h2>
+<p>{{ ("These findings were waived, but the problem is real and the reason given for the waiver does not hold up against the code.  They are not counted in any rating or total in this report.  Each one shows why it was waived, in the words of the person who asked, and why that reason is not enough.  The owner of each waiver should look at it again.") | sentence_spaced }}</p>
+{% for i in challenged %}
+{% set w = i.waiver or {} %}
+<div class="finding">
+  <h3>{{ i.id }}  {{ i.title }}</h3>
+  <p class="idline">Waived finding{% if i.finding_id is not none %}  &middot;  ID {{ i.finding_id }}{% endif %}
+    {%- if i.finding_link %}  &middot;  <a href="{{ i.finding_link }}">View this finding</a>{% endif %}</p>
+  <table>
+    <tr><td class="k">Rating</td><td><span class="badge r-{{ i.rating | lower }}">{{ i.rating }}</span>  <strong>Waived</strong></td></tr>
+    {% if i.verdict_label %}<tr><td class="k">Verdict</td><td>{{ i.verdict_label }}{% if i.check %}.  {{ i.check | sentence_spaced }}{% endif %}</td></tr>{% endif %}
+    <tr><td class="k">Why it was waived</td><td>{{ (w.reason or "No reason was recorded.") | sentence_spaced }}
+      {%- if w.requested_by %}  {{ "Requested by " ~ w.requested_by }}.{% endif %}
+      {%- if w.approved_by %}  {{ "Approved by " ~ w.approved_by }}{% if w.until %}{{ ", until " ~ w.until }}{% endif %}.{% elif w.until %}  {{ "Until " ~ w.until }}.{% endif %}
+      {%- if w.ticket %}  Ticket {{ w.ticket }}.{% endif %}</td></tr>
+    <tr><td class="k">Why the reason does not hold</td><td>
+      {%- if i.waiver_check == 'incorrect' %}{{ "The reason is incorrect.  " }}
+      {%- elif i.waiver_check == 'mismatch' %}{{ "The reason is about a different problem.  " }}
+      {%- else %}{{ "The reason names no control that lowers this risk.  " }}{% endif %}
+      {{- (i.waiver_why or "") | sentence_spaced }}</td></tr>
+    {% if i.rating != 'Informational' and i.score %}<tr><td class="k">Likelihood x Impact</td><td>{{ i.likelihood }} x {{ i.impact }} = {{ i.score }}</td></tr>{% endif %}
+    {% if i.location %}<tr><td class="k">Location</td><td>{{ i.location }}</td></tr>{% endif %}
+    {% if i.cvss %}<tr><td class="k">CVSS 3.1</td><td>{{ '%.1f' % i.cvss_score }} {{ i.cvss_band }}  <span class="soft">({{ i.cvss }})</span></td></tr>{% endif %}
+    {% if i.cwe_label %}<tr><td class="k">Weakness</td><td>{{ i.cwe_label }}</td></tr>{% endif %}
+    <tr><td class="k">Scanner reference</td><td>{{ i.count }} alert{{ '' if i.count == 1 else 's' }}
+      {%- if i.rule %} of rule {{ i.rule }}{% endif %}, rated {{ i.severity }}
+      {%- if i.finding_ids %} (finding {{ i.finding_ids[:6] | join(', ') }}{% if i.finding_ids | length > 6 %} and others{% endif %}){% endif %}</td></tr>
+  </table>
+  {% if i.what %}<p><span class="label">What we found.</span>  {{ i.what | sentence_spaced }}</p>{% endif %}
+  {% if i.evidence %}<p><span class="label">Evidence.</span>  {{ i.evidence | sentence_spaced }}</p>{% endif %}
+  {% if i.code %}<p class="label" style="margin-bottom:.2rem">The code involved.</p><pre class="code">{{ i.code }}</pre>{% endif %}
+  {% if i.why %}<p><span class="label">Why it matters.</span>  {{ i.why | sentence_spaced }}</p>{% endif %}
+  {% if i.fixes %}
+  <p class="label" style="margin-bottom:.2rem">What to do.</p>
+  <ul>{% for step in i.fixes %}<li>{{ step | sentence_spaced }}</li>{% endfor %}</ul>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% set nx = 1 if challenged else 0 %}
+
 {% if r.overview.positives %}
-<h2>6.  Positive Observations</h2>
+<h2>{{ 6 + nx }}.  Positive Observations</h2>
 <ul>{% for p in r.overview.positives %}<li>{{ p | sentence_spaced }}</li>{% endfor %}</ul>
 {% endif %}
 
 {% if r.summary.roadmap %}
-<h2>7.  Remediation Roadmap</h2>
+<h2>{{ 7 + nx }}.  Remediation Roadmap</h2>
 <table>
   <thead><tr><th>Timeframe</th><th>Action</th><th>Issues</th><th>Owner</th></tr></thead>
   {% for step in r.summary.roadmap %}
@@ -400,7 +445,7 @@
 {% endif %}
 
 {% if coverage %}
-<h2 class="new-page" style="margin-top:0">8.  OWASP Coverage</h2>
+<h2 class="new-page" style="margin-top:0">{{ 8 + nx }}.  OWASP Coverage</h2>
 <p>{{ "Each issue is placed in the OWASP category its weakness (CWE) belongs to.  None found means no issue in this report falls in that category.  It is not a promise that the category was fully tested." | sentence_spaced }}</p>
 <h3>OWASP Top 10 (2021)</h3>
 <table>
@@ -415,7 +460,7 @@
 {% endif %}
 
 {% if retests %}
-<h2>9.  Retest Plan</h2>
+<h2>{{ 9 + nx }}.  Retest Plan</h2>
 <p>{{ "Run these checks after each fix, against a test copy where possible.  A fix is done when its check passes." | sentence_spaced }}</p>
 <table>
   <thead><tr><th>ID</th><th>Issue</th><th>Check</th><th class="c">Rating</th></tr></thead>
@@ -425,7 +470,7 @@
 {% endif %}
 
 {% if r.summary.conclusion %}
-<h2>10.  Conclusion</h2>
+<h2>{{ 10 + nx }}.  Conclusion</h2>
 <p>{{ r.summary.conclusion | sentence_spaced }}</p>
 {% endif %}
 
@@ -439,9 +484,7 @@
   {% endfor %}
   <tr><td><strong>Total</strong></td><td></td><td class="c"><strong>{{ r.counts.open }}</strong></td><td></td></tr>
 </table>
-{% if r.counts.waived %}
-<p class="soft">{{ (r.counts.waived ~ " waived alert" ~ (' is' if r.counts.waived == 1 else 's are') ~ " not in this table.  Each waived group is in the detailed findings with its rating and the reason it was waived.") | sentence_spaced }}</p>
-{% endif %}
+
 {% if r.counts.left_out %}
 <p class="soft">{{ (r.counts.left_out ~ " lower rated group" ~ ('' if r.counts.left_out == 1 else 's') ~ ", holding " ~ r.counts.left_out_alerts ~ " alert" ~ ('' if r.counts.left_out_alerts == 1 else 's') ~ ", were counted here but not reviewed one by one.  They are listed on the findings page.") | sentence_spaced }}</p>
 {% endif %}

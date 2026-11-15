@@ -389,36 +389,52 @@ def validations(db, findings) -> dict:
 def _decision(f, reading) -> dict | None:
     """The grade already decided for a finding, by a person or by validation.
 
-    A person's own grade always has the last word.  A validation decides
-    anything but a credential or a malicious package, which policy keeps out
-    of a model's hands; for those it is passed to the review as evidence.  A
-    known exploited package is decided by its validation and floored at High
+    A person's own grade always has the last word.  A validation decides only
+    when it was sure of itself (high confidence), and never for a credential
+    or a malicious package, which policy keeps out of a model's hands.  A
+    validation with medium or low confidence, or none recorded, is a lead and
+    not a ruling: it goes to the review as evidence and the grade is judged
+    again against the code.  A known exploited package is floored at High
     later, the same floor that validation itself works under.
     """
     if f.custom_severity is not None and (f.custom_severity_by or "").strip():
         return {"by": "person", "severity": f.custom_severity.value,
                 "who": f.custom_severity_by, "at": _when(f.custom_severity_at),
                 "reason": (f.custom_severity_reason or "")[:600]}
-    if reading and f.kind != FindingKind.CREDENTIAL and not getattr(f, "malicious", None):
+    if (reading and (reading.get("confidence") or "").strip().lower() == "high"
+            and f.kind != FindingKind.CREDENTIAL and not getattr(f, "malicious", None)):
         return {**reading, "by": "validation"}
     return None
 
 
-def _waiver(w) -> dict:
+def _waiver(w, finding=None) -> dict:
+    """Who asked for a waiver, why, and who approved it.
+
+    A finding can be waived with no waiver request behind it, as an
+    exception made in the platform, and then the exception says why.
+    """
     if w is None:
-        return {"reason": "", "by": "", "until": "", "ticket": "", "category": ""}
+        reason = (getattr(finding, "exception_reason", "") or "")[:600]
+        who = getattr(finding, "exception_by", "") or ""
+        return {"reason": reason, "by": who, "requested_by": who, "approved_by": "",
+                "until": "", "ticket": "", "category": ""}
     return {"reason": (w.reason or "")[:600], "by": w.decided_by or w.requested_by or "",
+            "requested_by": w.requested_by or "", "approved_by": w.decided_by or "",
             "until": _when(w.expires_at), "ticket": w.ticket or "",
             "category": w.category or ""}
 
 
-def groups_for(db, repository: str, branch: str) -> tuple:
+def groups_for(db, repository: str, branch: str, waived_only: bool = False) -> tuple:
     """-> (groups to review, counts of everything open, groups left out).
 
-    Waived findings are in it.  A waiver is a decision to live with a
-    problem, not a finding that the problem is gone, so a waived finding is
-    rated like any other and the report says why it was waived beside the
-    rating.
+    Only open findings are in it.  A waived finding is a decision a person
+    already made, and the report leaves it out of its issues and ratings: it
+    is counted, so the reader knows waivers exist.
+
+    waived_only gives the waived findings instead, grouped the same way, for
+    the one place a waiver is looked at: the section listing waivers that
+    should be challenged.  There a past grade is evidence, not a ruling, since
+    the question is whether the waiver's reason holds.
     """
     from app.core.models import Waiver
 
@@ -427,6 +443,8 @@ def groups_for(db, repository: str, branch: str) -> tuple:
                     Finding.state.in_([FindingState.OPEN, FindingState.WAIVED]))
             .all())
     rows = [f for f in rows if _on_branch(f, branch) and not f.out_of_scope]
+    waived_rows = [f for f in rows if f.state == FindingState.WAIVED]
+    rows = waived_rows if waived_only else [f for f in rows if f.state == FindingState.OPEN]
     readings = validations(db, rows)
     waivers = {}
     waived_ids = [f.id for f in rows if f.state == FindingState.WAIVED]
@@ -435,6 +453,14 @@ def groups_for(db, repository: str, branch: str) -> tuple:
                 Waiver.finding_id.in_(waived_ids[start:start + 500])):
             waivers[w.finding_id] = w
     decisions = {f.id: _decision(f, readings.get(f.id)) for f in rows}
+    graded_by = {}
+    if waived_only:
+        for f in rows:
+            d = decisions[f.id]
+            if d and d["by"] == "person":
+                graded_by[f.id] = (f"{d['who']} graded it {d['severity']}"
+                                   + (f": {d['reason']}" if d.get("reason") else ""))
+        decisions = {f.id: None for f in rows}
 
     grouped = OrderedDict()
     for f in rows:
@@ -465,6 +491,7 @@ def groups_for(db, repository: str, branch: str) -> tuple:
             "packages": [top.package_name] if top.package_name else [],
             "version": top.package_version or "",
             "ecosystem": (top.ecosystem or "").lower(),
+            "image_ref": (getattr(top, "image_ref", "") or "").lower(),
             # The build upgrades the base image this came from, so its version
             # is the registry's, not what ships (report check 1).
             "base_upgraded": all(bool(getattr(f, "base_upgraded", False))
@@ -491,7 +518,8 @@ def groups_for(db, repository: str, branch: str) -> tuple:
             "decided_count": sum(1 for f in members if decisions[f.id]),
             "validation": None if decision else reading,
             "waived": waived,
-            "waiver": _waiver(waivers.get(top.id)) if waived else None,
+            "waiver": _waiver(waivers.get(top.id), top) if waived else None,
+            "person_grade": graded_by.get(top.id, ""),
             "finding_ids": [f.id for f in members][:12],
             # Every finding in the group, for correcting a false positive.
             "all_ids": [f.id for f in members],
@@ -500,10 +528,11 @@ def groups_for(db, repository: str, branch: str) -> tuple:
     groups.sort(key=lambda g: (SEVERITY_ORDER.get(g["severity"], 9), g["waived"],
                                -g["count"]))
 
-    open_rows = [f for f in rows if f.state == FindingState.OPEN]
-    counts = {"open": len(open_rows), "waived": len(rows) - len(open_rows),
-              "groups": sum(1 for g in groups if not g["waived"]),
-              "waived_groups": sum(1 for g in groups if g["waived"]),
+    open_rows = rows
+    counts = {"open": len(open_rows), "waived": len(waived_rows),
+              "groups": len(groups),
+              "waived_groups": len({(f.rule or f.package_name or f.title, f.file_path or "")
+                                    for f in waived_rows}),
               "by_kind": {}, "by_rule": []}
     for f in open_rows:
         counts["by_kind"][f.kind.value] = counts["by_kind"].get(f.kind.value, 0) + 1
@@ -631,6 +660,19 @@ _GENERIC_WAIVER = re.compile(
     r"low\s+risk|not\s+an?\s+issue|ok|approved)[\s.!]*$", re.IGNORECASE)
 
 
+# A credential waiver that says the secret was rotated is trusted as it
+# stands: the report cannot see whether a developer really rotated a key,
+# and second guessing every one would make the challenge list noise.
+_ROTATED = re.compile(r"\b(?:rotat|revok|regenerat|re-?issu|replac|invalidat)\w*",
+                      re.IGNORECASE)
+
+
+def rotated_credential(group: dict) -> bool:
+    """A waived credential whose waiver says it was rotated."""
+    return (group.get("kind") == "credential"
+            and bool(_ROTATED.search((group.get("waiver") or {}).get("reason") or "")))
+
+
 def _waiver_support(waiver: dict | None, model_says: str = "") -> str:
     """Whether a waiver names the control that lowers the risk (check 11)."""
     reason = re.sub(r"\s+", " ", ((waiver or {}).get("reason") or "")).strip()
@@ -719,12 +761,20 @@ lines; empty when a fix is not code; never a secret value; it may only use \
 tables, columns, functions and classes the evidence shows exist, and when it \
 needs something new its first line is a comment saying pseudocode, requires new X",
  "waiver_check": "for a waived group only: names_control when the waiver names a \
-specific control that lowers this risk, no_control when it does not, mismatch \
-when it is about a different problem; empty otherwise",
+specific control that lowers this risk and the code bears it out, no_control \
+when it names none, incorrect when it states something the code or profile \
+shows is not true, mismatch when it is about a different problem; empty otherwise",
+ "waiver_why": "for a waived group only: what the waiver claims and what the \
+code shows, in plain words, naming files and lines, at most 60 words; empty otherwise",
  "status": "confirmed_in_source when the code you were shown proves it, or \
 needs_runtime when it depends on a setting or system you were not shown",
  "runtime_check": "for needs_runtime, what to check in the running system, at most 30 words",
- "retest": "one safe step that proves the fix worked, at most 30 words"}"""
+ "retest": "one safe step that proves the fix worked, at most 30 words",
+ "need": [up to three requests for code you were not shown that would settle \
+the verdict, each {"file": "a path you saw in the evidence, or empty to search \
+the whole branch", "find": "an exact piece of text to look for, such as \
+$selectedVersion = or CREATE TABLE `vendor_assessments` or LA-U"}; required \
+with needs_review, empty otherwise]}"""
 
 STYLE = """\
 Write for business owners who do not work in security: US English, about a \
@@ -825,8 +875,8 @@ where it is set.  A SQL aggregate, an integer key, a computed number, a loop \
 over a literal list, a column only ever written with literals, a ternary that \
 prints a literal, or a value already through the right encoder for its \
 context is not tainted: false_positive.  The wrong encoder for the context \
-is real.  If your own evidence says it looks safe, close it.  If the code is \
-not shown, say not reviewed and use needs_review.
+is real.  If your own evidence says it looks safe, close it.  If the code that \
+sets the value is not shown, use needs_review and ask for it in need.
 Check 7, bypass: a claimed filter or sanitizer bypass you cannot show \
 working from the evidence is unverified: likelihood at most 2.  Note a \
 second layer (a strict CSP without unsafe-inline, template auto escaping).
@@ -841,9 +891,12 @@ missing here, a known gap in a standard filter, a safe helper in the code \
 that this spot does not call, a comment promising a check the code does not \
 make, redirects followed without a check on each hop, elevated container \
 settings in a file people run.
-Check 11, waivers: a waiver must name the control that lowers the risk.  \
-Generic words such as adequate controls name none.  A waiver never lowers \
-the rating."""
+Check 11, waivers: a waiver must name the control that lowers the risk, and \
+the code must bear it out.  Generic words such as adequate controls or \
+reviewed by security name none.  A waiver that states a fact the code or \
+profile contradicts, such as a version, a missing feature or a check that is \
+not there, is incorrect: say which claim and what the code shows.  A waiver \
+never lowers the rating."""
 
 REVIEW_SYSTEM = f"""\
 You are a senior application security assessor reviewing scanner findings \
@@ -866,7 +919,12 @@ the key out of the repository, not to rotate the value.
 A finding is real only when the code or package is in what ships, can be \
 reached, and can be reached by someone who should not cause the harm.  If you \
 cannot show all three, lower the likelihood or close it.  Never keep the \
-scanner's grade by default.  Use the product profile, and run these checks:
+scanner's grade by default.  Never confirm a problem from a line you were not \
+shown: when the line that decides it (where a value is set, the check above \
+it, the column type, the config that turns a feature on) is missing, the \
+verdict is needs_review and need names what to fetch.  The code you ask for \
+is searched for and sent back, and a search that finds nothing is itself \
+evidence that the thing is absent.  Use the product profile, and run these checks:
 {REVIEW_CHECKS}
 
 {STYLE}
@@ -882,9 +940,12 @@ of a security assessment of one code repository branch.  You are given the \
 confirmed issues with their ratings, which are final, and the counts, \
 which are final too.  Do not change them, add issues or invent numbers: \
 every number you write must be one of the counts given, used for exactly \
-what it counts.  Unverified issues are neither problems nor false alarms.  An issue marked waived is still a \
-vulnerability: a person accepted the risk for now.  Name a serious waived \
-one as an accepted risk, and leave waived issues out of the roadmap.
+what it counts.  Unverified issues and issues still marked needs_review are \
+neither problems nor false alarms: say they wait on a person, and leave them \
+out of the roadmap.  Waived issues are not part of the issues or the counts.  \
+When the count of waived findings that should be challenged is above zero, \
+say in one sentence that that many waivers should be challenged, and add one \
+action to review them; say nothing else about waivers.
 
 {STYLE}
 
@@ -1016,7 +1077,7 @@ VERDICTS = ("confirmed", "false_positive", "by_design", "not_applicable",
 CLOSED = ("false_positive", "by_design", "not_applicable")
 VERDICT_WORDS = {"confirmed": "Confirmed", "false_positive": "False positive",
                  "by_design": "By design", "not_applicable": "Not applicable",
-                 "needs_review": "Needs review",
+                 "needs_review": "Needs review: not confirmed from the code, so not scored",
                  "unverified": "Unverified: version from a non shipped image"}
 
 
@@ -1043,7 +1104,8 @@ def _clean_item(raw: dict, fallback: dict | None = None) -> dict:
     }
     waiver_check = str(raw.get("waiver_check") or "").strip().lower()
     item["waiver_check"] = (waiver_check if waiver_check in
-                            ("names_control", "no_control", "mismatch") else "")
+                            ("names_control", "no_control", "incorrect", "mismatch") else "")
+    item["waiver_why"] = tidy(raw.get("waiver_why"), 600) if item["waiver_check"] else ""
     attack = raw.get("attack") if isinstance(raw.get("attack"), list) else []
     item["attack"] = ([] if closed else
                       [tidy(x, 300) for x in attack[:5] if str(x or "").strip()])
@@ -1059,6 +1121,17 @@ def _clean_item(raw: dict, fallback: dict | None = None) -> dict:
     item["retest"] = tidy(raw.get("retest"), 300)
     vector, score = report_standards.cvss31(raw.get("cvss"))
     item["cvss"], item["cvss_score"] = ("", None) if closed else (vector, score)
+    # Code the model asked for, fetched and sent back in a second look
+    # (_follow_up).  Only text to search for: it never names a command.
+    need = raw.get("need") if isinstance(raw.get("need"), list) else []
+    item["need"] = []
+    for ask in need[:3]:
+        if not isinstance(ask, dict):
+            continue
+        find = str(ask.get("find") or "").strip()[:200]
+        if len(find) >= 2:
+            item["need"].append({"file": str(ask.get("file") or "").strip()[:300],
+                                 "find": find})
     return item
 
 
@@ -1223,11 +1296,19 @@ def _group_evidence(ref: str, group: dict, root, send_code: bool, context: int) 
         v = group["validation"]
         facts.append(f"earlier AI validation #{v['id']}: rated {v['rating']}"
                      + (f", {v['confidence']} confidence" if v["confidence"] else "")
-                     + (f".  Its reasoning: {v['why'][:500]}" if v["why"] else ""))
+                     + (f".  Its reasoning: {v['why'][:500]}" if v["why"] else "")
+                     + "  (a lead, not proof: it may have been made on other "
+                       "facts, so check it against the code and profile here)")
     if group.get("waived"):
         w = group["waiver"] or {}
-        facts.append("waived by a person (still a vulnerability, rate it as one)"
-                     + (f": {w['reason'][:400]}" if w.get("reason") else ""))
+        facts.append("waived by a person, still to be rated as a vulnerability; "
+                     "judge whether the waiver's reason holds against the code"
+                     + (f".  Requested by {w['requested_by']}" if w.get("requested_by") else "")
+                     + (f", approved by {w['approved_by']}" if w.get("approved_by") else "")
+                     + (f".  Their reason: {w['reason'][:500]}" if w.get("reason")
+                        else ".  No reason was recorded"))
+    if group.get("person_grade"):
+        facts.append(f"a person's grade, made before: {group['person_grade'][:400]}")
     if group["cwe"]:
         facts.append(f"CWE: {group['cwe']}")
     if group["description"]:
@@ -1280,6 +1361,189 @@ def _review(asker: _Asker, batch: list, progress, head: str = "") -> dict:
         if ref in refs:
             out[ref] = _clean_item(raw)
     return out
+
+
+def _pack(texts: list, room: int, size: int) -> list:
+    """[(ref, text)] into batches, each one request: at most size groups and
+    room characters, a group too big on its own cut to fit."""
+    batches, current_batch, used = [], [], 0
+    for ref, text in texts:
+        if len(text) > room:
+            text = text[:room - 200] + "\n</evidence>"
+        if current_batch and (len(current_batch) >= size or used + len(text) > room):
+            batches.append(current_batch)
+            current_batch, used = [], 0
+        current_batch.append((ref, text))
+        used += len(text)
+    if current_batch:
+        batches.append(current_batch)
+    return batches
+
+
+# A second look at what the first look could not decide.  The model names the
+# code it was missing (where a value is set, a column type, a config line),
+# and the report finds it in the branch by plain text search, never by
+# running anything, and asks again.  Two rounds at most, so a question that
+# keeps asking for more cannot run up the bill.
+FOLLOW_UP_ROUNDS = 2
+# Waived groups read for the challenge section, most serious first.
+MAX_WAIVED_GROUPS = 20
+LOOKUP_CONTEXT = 12      # lines either side of each hit
+LOOKUP_HITS = 3          # hits shown per file
+LOOKUP_FILES = 4         # files shown per search
+LOOKUP_CHARS = 8_000     # all the code one group gets back in one round
+
+SECOND_LOOK = """\
+Second look.  Each group below was left as needs_review on a first look.  \
+After its evidence comes the code it asked for, found by an exact text search \
+of the whole branch.  A search that found nothing means that text is nowhere \
+in the branch.  Decide each group now, from this code.  Use needs_review again \
+only when the code that decides it is still missing, and then say exactly what \
+in need.
+
+"""
+
+
+def _grep_files(root: Path, find: str) -> list:
+    """Files in the branch holding find, as plain text.  Vendored copies last."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(root), "grep", "-l", "-I", "-F", "--no-color", "-e", find,
+             "--", "."], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    files = [line.strip() for line in (done.stdout or "").splitlines() if line.strip()]
+    own = [f for f in files if not report_profile._skip(f)]
+    return (own + [f for f in files if f not in own])[:LOOKUP_FILES]
+
+
+def _lookup(root: Path, need: list) -> str:
+    """The code a group asked for, masked, with line numbers."""
+    from app.core.diagram import mask
+
+    parts, used = [], 0
+    for ask in need[:3]:
+        find, rel = ask["find"], ask["file"].lstrip("/")
+        files = [rel] if rel and any(find in line for line in _file_lines(root, rel)) else []
+        if not files:
+            files = _grep_files(root, find)
+        if not files:
+            parts.append(f'search for "{find}"'
+                         + (f" in {rel} and" if rel else "")
+                         + " in the whole branch: not found anywhere")
+            continue
+        for name in files:
+            lines = _file_lines(root, name)
+            hits = [n for n, line in enumerate(lines, start=1) if find in line][:LOOKUP_HITS]
+            if not hits:
+                continue
+            spans = []
+            for hit in hits:
+                lo, hi = max(1, hit - LOOKUP_CONTEXT), min(len(lines), hit + LOOKUP_CONTEXT)
+                if spans and lo <= spans[-1][1] + 1:
+                    spans[-1][1] = max(spans[-1][1], hi)
+                else:
+                    spans.append([lo, hi])
+            block = "\n...\n".join(
+                "\n".join(f"{n:5}  {mask(lines[n - 1][:300])}" for n in range(lo, hi + 1))
+                for lo, hi in spans)
+            text = f'search for "{find}" in {name}:\n{block}'
+            if used + len(text) > LOOKUP_CHARS:
+                text = text[:max(0, LOOKUP_CHARS - used)]
+            if text:
+                parts.append(text)
+                used += len(text)
+            if used >= LOOKUP_CHARS:
+                break
+        if used >= LOOKUP_CHARS:
+            break
+    return "\n\n".join(parts)
+
+
+def _concern_evidence(ref: str, concern: dict, root: Path, context: int) -> str:
+    """A review concern as evidence for its second look."""
+    from app.core.diagram import fence
+
+    facts = [f"ref: {ref}", "kind: a concern the repository review raised itself",
+             f"title: {concern.get('title') or ''}",
+             f"what it said: {concern.get('what') or ''}",
+             f"its evidence: {concern.get('evidence') or ''}"]
+    if concern.get("file"):
+        facts.append(f"file: {concern['file']}"
+                     + (f", line {concern['line']}" if concern.get("line") else ""))
+    body = "\n".join(facts)
+    if concern.get("file"):
+        code = _snippet(root, {"file": concern["file"], "lines": [concern.get("line") or 1],
+                               "kind": "code"}, context)
+        if code:
+            body += "\n\ncode:\n" + code
+    return f'<evidence label="{html.escape(ref)}">\n{fence(body)}\n</evidence>'
+
+
+def _second_looks(asker: "_Asker", connection: str, repository: str, branch: str,
+                  reviewed: dict, evidence_by_ref: dict, concerns: list,
+                  context: int, progress, head: str) -> int:
+    """Ask again about every open question, with the code it asked for.
+
+    reviewed and concerns are updated in place.  -> how many were decided.
+    Credentials are never searched for: their lines are withheld on purpose.
+    """
+    from app.core import recheck
+    from app.core.diagram import fence
+
+    pending = {}
+    for ref, item in reviewed.items():
+        if (item["verdict"] == "needs_review" and item.get("need")
+                and ref in evidence_by_ref):
+            pending[ref] = [evidence_by_ref[ref], item]
+    for n, concern in enumerate(concerns, start=1):
+        if concern["verdict"] == "needs_review" and concern.get("need"):
+            pending[f"C{n}"] = [None, concern]
+    if not pending:
+        return 0
+    asked = {ref: set() for ref in pending}
+    decided = 0
+    room = min(MAX_BATCH_CHARS, asker.input_room(REVIEW_SYSTEM) - 500
+               - len(head) - len(SECOND_LOOK))
+    with recheck.branch_tip(connection, repository, branch, memory_only=True) as (root, why):
+        if root is None:
+            log.info("second look skipped for %s: %s", repository, why)
+            return 0
+        root = Path(root)
+        for _ in range(FOLLOW_UP_ROUNDS):
+            texts = []
+            for ref, (base, item) in pending.items():
+                fresh = [a for a in item["need"] if (a["file"], a["find"]) not in asked[ref]]
+                if not fresh:
+                    continue
+                asked[ref].update((a["file"], a["find"]) for a in fresh)
+                if base is None:
+                    base = pending[ref][0] = _concern_evidence(ref, item, root, context)
+                more = (f"first look: {item.get('check') or 'needs review'}\n\n"
+                        + _lookup(root, fresh))
+                texts.append((ref, base + "\n\n" + f'<evidence label="{html.escape(ref)}, '
+                              f'code it asked for">\n{fence(more)}\n</evidence>'))
+            if not texts:
+                break
+            answers = {}
+            for batch in _pack(texts, room, asker.batch_size):
+                answers.update(_review(asker, batch, progress, head + SECOND_LOOK))
+            for ref, new in answers.items():
+                base, item = pending[ref]
+                new["second_look"] = True
+                if ref.startswith("C"):
+                    item.update(new)            # the concern keeps its file and line
+                    new = item
+                else:
+                    reviewed[ref] = new
+                if new["verdict"] == "needs_review" and new.get("need"):
+                    pending[ref] = [base, new]
+                else:
+                    pending.pop(ref)
+                    decided += 1
+            if not pending:
+                break
+    return decided
 
 
 # ------------------------------------------------------------------ running it
@@ -1387,6 +1651,13 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     with session_scope() as db:
         cfg = ai.config(db)
         groups, counts, left_out = groups_for(db, repository, branch)
+        # Waived findings are read too, but only to find the waivers whose
+        # reason does not hold.  They never count toward a rating, and a
+        # credential waived as rotated is trusted as it stands.
+        waived_groups, _, _ = groups_for(db, repository, branch, waived_only=True)
+        waived_groups = [g for g in waived_groups
+                         if not rotated_credential(g) and g["scanner_severity"] != "info"]
+        groups = groups + waived_groups[:MAX_WAIVED_GROUPS]
         about = repo_context.for_repository(db, repository) or {}
         # The web application this code is part of, as it stood when the
         # report was written, so the PDF says the same thing next year.
@@ -1454,7 +1725,22 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             for label in re.findall(r'<evidence label="File ([^"]+)">', overview_evidence):
                 rel = html.unescape(label)
                 shown[rel] = _file_lines(Path(root), rel)
-        refs = [f"G{i + 1}" for i in range(len(groups))]
+        refs, open_n, waived_n = [], 0, 0
+        for g in groups:
+            if g["waived"]:
+                waived_n += 1
+                refs.append(f"W{waived_n}")
+            else:
+                open_n += 1
+                refs.append(f"G{open_n}")
+        # A package read from a base image this checkout's Dockerfile pulls
+        # and then upgrades is not the shipped version, whatever the scan
+        # recorded.  Worked out here from the code as it stands, so a finding
+        # an older scan flagged without that fact is still read right.
+        for g in groups:
+            if (g["kind"] == "dependency" and not g.get("base_upgraded")
+                    and report_profile.upgraded_base(profile, g.get("image_ref"))):
+                g["base_upgraded"] = True
         # The plainest cases are settled here, from facts, and never asked.
         for g in groups:
             g["pre"] = _settled(g, profile)
@@ -1533,21 +1819,11 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
                          "usable form, so only the scanner findings were reviewed.")
 
     # ---- the findings, a batch at a time
-    batches, current_batch, size = [], [], 0
     # Each batch is one request, so what it carries is held under both the
     # usual size and what one request may hold.
     room = min(MAX_BATCH_CHARS, asker.input_room(REVIEW_SYSTEM) - 500 - len(profile_head))
-    for ref, text in zip(asked, evidence):
-        if len(text) > room:
-            text = text[:room - 200] + "\n</evidence>"
-        if current_batch and (len(current_batch) >= asker.batch_size
-                              or size + len(text) > room):
-            batches.append(current_batch)
-            current_batch, size = [], 0
-        current_batch.append((ref, text))
-        size += len(text)
-    if current_batch:
-        batches.append(current_batch)
+    batches = _pack(list(zip(asked, evidence)), room, asker.batch_size)
+    evidence_by_ref = dict(zip(asked, evidence))
 
     reviewed = {}
     done = [0]
@@ -1565,8 +1841,25 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     for batch in batches:
         reviewed.update(_review(asker, batch, progress, profile_head))
 
-    # ---- one list of issues, rated here
-    items = []
+    # ---- a second look at whatever the first could not decide, with the
+    # code it asked for.  Only when code may be sent at all, and never for a
+    # credential, whose line is withheld on purpose.
+    if send_code and commit:
+        for ref, group in zip(refs, groups):
+            if group["kind"] == "credential" and ref in reviewed:
+                reviewed[ref]["need"] = []
+        _update(repository, branch, stage="Taking a second look at open questions",
+                progress=84)
+        settled = _second_looks(asker, connection, repository, branch, reviewed,
+                                evidence_by_ref, overview["concerns"], context,
+                                progress, profile_head)
+        if settled:
+            notes.append(f"{settled} open question(s) were settled on a second look, "
+                         "with the code they needed fetched from the branch.")
+
+    # ---- one list of issues, rated here, and apart from it the waived
+    # findings, of which only those whose waiver should be challenged stay
+    items, challenged = [], []
     for ref, group in zip(refs, groups):
         item = (group["pre"] or (_decided_item(group) if group["decision"]
                                  else reviewed.get(ref)))
@@ -1596,7 +1889,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         if group["waived"]:
             item["waiver_check"] = _waiver_support(group["waiver"], item.get("waiver_check"))
         _place_fix(item, group.get("source") or {})
-        items.append(item)
+        (challenged if group["waived"] else items).append(item)
     for concern in overview["concerns"]:
         concern.update(source="review", rule="", kind="review", count=0,
                        severity="", finding_ids=[], group_ids=[],
@@ -1608,11 +1901,17 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         _place_fix(concern, _read_part(shown.get(concern["file"]) or []))
         items.append(concern)
 
-    for item in items:
+    for item in items + challenged:
         if item["verdict"] == "unverified":
             # No score, and out of the overall rating, until the version that
             # ships is read.  Not a false alarm either: nobody showed it fixed.
             item["score"], item["rating"], item["unverified"] = 0, "Informational", True
+        elif item["verdict"] == "needs_review" and not item.get("decided"):
+            # Even a second look with the code it asked for could not settle
+            # it.  A guess at a rating is how false positives get into a
+            # report, so it carries none: listed for a person, unscored, and
+            # out of the overall rating.
+            item["score"], item["rating"], item["unconfirmed"] = 0, "Informational", True
         elif item.get("decided"):
             item["score"] = 0
             item["rating"] = SEVERITY_RATING.get(item["decided"]["severity"], "Medium")
@@ -1622,6 +1921,18 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             item["score"] = item["likelihood"] * item["impact"]
             item["rating"] = rating_for(item["score"])
         _floor(item)
+
+    # A waiver should be challenged when the problem is real, it carries a
+    # rating, and its reason names no control, states something the code
+    # shows is not so, or is about a different problem.
+    challenged = [i for i in challenged
+                  if i["verdict"] == "confirmed" and not i.get("unverified")
+                  and not i.get("unconfirmed") and not i.get("unreviewed")
+                  and i["rating"] != "Informational"
+                  and i.get("waiver_check") in ("no_control", "incorrect", "mismatch")]
+    challenged.sort(key=lambda i: (RATINGS.index(i["rating"]), -i["score"]))
+    for n, item in enumerate(challenged, start=1):
+        item["id"] = f"W-{n:02d}"
 
     # ---- what the review found that no scanner did, kept as findings
     _update(repository, branch, stage="Recording what the review found", progress=86)
@@ -1633,9 +1944,9 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
     for n, item in enumerate(items, start=1):
         item["id"] = f"F-{n:02d}"
 
-    # The overall rating is the risk still being carried without a decision
-    # to carry it.  Waived issues keep their own ratings and are counted
-    # beside it, so a waived Critical is never out of sight.
+    # The overall rating is the most serious issue the code shows.  Waived
+    # findings are not in the report, and an issue nobody could confirm
+    # (unverified, or still open after a second look) is not scored.
     scored = [i for i in items if i["rating"] != "Informational" and not i.get("waived")]
     overall = scored[0]["rating"] if scored else "Low"
     waived_items = [i for i in items if i.get("waived")]
@@ -1658,7 +1969,8 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
               + _site_lines(site)
               + f"Overall rating (final): {overall}\n"
               f"Open scanner alerts: {counts['open']} in {counts['groups']} groups\n"
-              f"Waived scanner alerts: {counts['waived']} in {counts['waived_groups']} groups\n"
+              f"Waived findings that should be challenged: {len(challenged)}, listed "
+              "in their own section\n"
               f"Final counts of the issues listed below, the only numbers to use:\n"
               f"{count_lines}\n"
               f"What the repository is: {overview['what_it_is'] or 'not described'}\n\n"
@@ -1702,6 +2014,9 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         "overview": overview, "items": items, "summary": summary,
         "waived_top": waived_top, "waived_issues": len(waived_items),
         "tallies": tallies, "profile": profile,
+        # Waived findings whose waiver should be looked at again.  Outside
+        # every count and rating above.
+        "waived_challenged": challenged,
         "counts": {**counts, "left_out": len(left_out),
                    "left_out_alerts": sum(g["count"] for g in left_out)},
         "notes": notes, "in_memory": in_memory, "code_included": send_code,
@@ -1830,8 +2145,8 @@ def record_concerns(items: list, repository: str, branch: str, actor: str) -> li
 
       open      already reported.  If it is in this report as a scanner item
                 the concern is dropped, as the same thing twice.
-      waived    somebody decided.  It stays in the report, marked waived with
-                their reason, and carries no risk.
+      waived    somebody decided.  It is dropped: waived findings are not
+                part of the report.
       neither   a new finding from engine security-report, at the report's
                 rating, for a person to confirm.
 
@@ -1885,12 +2200,8 @@ def record_concerns(items: list, repository: str, branch: str, actor: str) -> li
                 kept.append(item)
                 continue
             if waived:
-                f = waived[0]
-                item["recorded"] = {"state": "waived", "id": f.id,
-                                    "reason": tidy(f.exception_reason, 400)}
-                item["finding_ids"] = [f.id]
-                item["score"], item["rating"] = 0, "Informational"
-                kept.append(item)
+                # Somebody already decided about this one, and waived
+                # findings are not part of the report.
                 continue
             if ours:
                 f = ours[0]
@@ -1982,46 +2293,75 @@ def correct(items: list, repository: str, branch: str, actor: str, model: str) -
     are and listed for a person to confirm, which the finding page offers as
     one button for the whole group.
 
-    Only scanner groups, only open findings, and never higher: give() refuses
-    anything that would not move the grade down.
+    The same goes for every other grade the review settled.  When it rated a
+    confirmed issue higher or lower than its findings are recorded, each open
+    finding in the group moves to the report's rating, so the platform and
+    the report agree.  Moving up is never blocked by policy; moving down
+    keeps every guard above.  Nothing moves on a rating the report could not
+    stand behind: an unverified package, a question still open after the
+    second look, or a group it never managed to review.  Waived findings are
+    never touched, and a person's own grade still wins (give and raise_to
+    record the model's grade beside it, but leave the severity alone).
     """
     from app.core import learned, reports
     from app.core.audit import record
     from app.core.models import Severity
 
-    lowered_total = waiting_total = 0
+    lowered_total = waiting_total = raised_total = 0
     with session_scope() as db:
         for item in items:
-            item["lowered"], item["awaiting"], item["protected_why"] = 0, [], ""
-            if item.get("verdict") != "false_positive" or item.get("source") != "scanner":
+            item["lowered"], item["raised"] = 0, 0
+            item["awaiting"], item["protected_why"] = [], ""
+            if item.get("source") != "scanner" or item.get("waived"):
                 continue
             # Already decided by a person or a validation, which made its own
             # call on the grade.  The report only repeats it.
-            if item.get("decided"):
+            if (item.get("decided") or item.get("unverified") or item.get("unconfirmed")
+                    or item.get("unreviewed")):
                 continue
-            reason = tidy("Security report on %s%s: a false positive.  %s"
-                          % (repository, f" branch {branch}" if branch else "",
-                             item.get("what") or ""), 1500)
+            verdict = item.get("verdict")
+            if verdict in CLOSED:
+                target = Severity.INFO
+                label = VERDICT_WORDS.get(verdict, "a false positive").lower()
+            elif verdict == "confirmed":
+                target = learned.severity_for(item.get("rating") or "")
+                if target is None and item.get("rating") == "Informational":
+                    target = Severity.INFO
+                label = f"rated {item.get('rating', '').lower()}"
+            else:
+                continue
+            if target is None:
+                continue
+            reason = tidy("Security report on %s%s: %s.  %s"
+                          % (repository, f" branch {branch}" if branch else "", label,
+                             item.get("check") or item.get("what") or ""), 1500)
             for finding_id in item.get("group_ids") or []:
                 finding = db.get(Finding, finding_id)
                 if finding is None or finding.state != FindingState.OPEN:
                     continue
-                why = learned.protected(finding)
-                if why:
-                    item["awaiting"].append(finding.id)
-                    item["protected_why"] = item["protected_why"] or why
-                    continue
-                if learned.give(db, finding, Severity.INFO, source="report",
-                                reason=reason, by=actor or "", model=model):
-                    item["lowered"] += 1
+                if learned.lower(finding.severity, target):
+                    why = learned.protected(finding)
+                    if why:
+                        item["awaiting"].append(finding.id)
+                        item["protected_why"] = item["protected_why"] or why
+                        continue
+                    if learned.give(db, finding, target, source="report",
+                                    reason=reason, by=actor or "", model=model):
+                        item["lowered"] += 1
+                elif learned.higher(finding.severity, target):
+                    if learned.raise_to(db, finding, target, source="report",
+                                        reason=reason, by=actor or "", model=model):
+                        item["raised"] += 1
             lowered_total += item["lowered"]
+            raised_total += item["raised"]
             waiting_total += len(item["awaiting"])
-        if lowered_total or waiting_total:
-            record(db, "finding.report_false_positives", actor=actor or "",
+        if lowered_total or waiting_total or raised_total:
+            record(db, "finding.report_regraded", actor=actor or "",
                    target=repository,
-                   detail=f"branch {branch or 'default'}: {lowered_total} lowered to "
-                          f"info, {waiting_total} left for a person to confirm")
-    if lowered_total:
+                   detail=f"branch {branch or 'default'}: {lowered_total} lowered, "
+                          f"{raised_total} raised, {waiting_total} left for a person "
+                          f"to confirm")
+    if lowered_total or raised_total:
         reports.request_rewrite()
 
 
@@ -2133,16 +2473,16 @@ def final_counts(items: list) -> dict:
     The summary, the tables, the heat map and the conclusion all read these,
     so a report can never say 33 in one place and 40 in another.
     """
+    items = [i for i in items if not i.get("waived")]
+
     def open_(i):
-        return not i.get("waived") and not i.get("unverified")
+        return not i.get("unverified") and not i.get("unconfirmed")
     out = {f"open_{r.lower()}": sum(1 for i in items if open_(i) and i["rating"] == r
                                     and r != "Informational") for r in RATINGS[:4]}
     out["false_positive_or_closed"] = sum(1 for i in items if open_(i)
                                           and i["rating"] == "Informational")
-    out["unverified"] = sum(1 for i in items if i.get("unverified") and not i.get("waived"))
-    out["waived"] = sum(1 for i in items if i.get("waived"))
-    out["waived_rated_above_informational"] = sum(
-        1 for i in items if i.get("waived") and i["rating"] != "Informational")
+    out["unverified"] = sum(1 for i in items if i.get("unverified"))
+    out["needs_review_unscored"] = sum(1 for i in items if i.get("unconfirmed"))
     out["total_listed"] = len(items)
     return out
 
@@ -2169,19 +2509,24 @@ def document_context(view_: dict, base_url: str = "") -> dict:
     so a reader of the report can open the finding it is about.  Without it,
     the item still carries its platform finding id, just no link.
     """
-    result = view_["result"]
-    items = result["items"]
+    # Waived findings are not part of a report.  A report written before
+    # that rule still holds them, so they are taken out here.  The ids keep
+    # their numbers, because the stored summary and roadmap quote them.
+    result = dict(view_["result"])
+    items = [i for i in result["items"] if not i.get("waived")]
+    result["items"], result["waived_issues"], result["waived_top"] = items, 0, ""
+    challenged = list(result.get("waived_challenged") or [])
     base = (base_url or "").strip().rstrip("/")
-    tally = {r: sum(1 for i in items if i["rating"] == r and not i.get("waived")
-                    and not i.get("unverified"))
+    tally = {r: sum(1 for i in items if i["rating"] == r and not i.get("unverified")
+                    and not i.get("unconfirmed"))
              for r in RATINGS}
-    unverified = sum(1 for i in items if i.get("unverified") and not i.get("waived"))
-    waived = {r: sum(1 for i in items if i["rating"] == r and i.get("waived"))
-              for r in RATINGS}
+    unverified = sum(1 for i in items if i.get("unverified"))
+    unconfirmed = sum(1 for i in items if i.get("unconfirmed"))
+    waived = {r: 0 for r in RATINGS}
     # The standards an issue falls under follow from its CWE, so a report
     # written before they were shown gets them too.  Worked out here, never
     # stored, so a corrected table corrects every report.
-    for item in items:
+    for item in items + challenged:
         std = report_standards.standards_for(item.get("cwe"))
         item.setdefault("owasp", std["owasp"])
         item.setdefault("api", std["api"])
@@ -2204,11 +2549,13 @@ def document_context(view_: dict, base_url: str = "") -> dict:
     retests = [i for i in items if i.get("retest") and i["rating"] != "Informational"]
     design = (result.get("overview") or {}).get("design") or {}
     placed, loose = report_design.place(design, items) if design else ({}, [])
-    for item in items:
+    for item in items + challenged:
         item["verdict_label"] = VERDICT_WORDS.get(item.get("verdict"), "")
-        item["badge"] = "Unverified" if item.get("unverified") else item["rating"]
+        item["badge"] = ("Unverified" if item.get("unverified") else
+                         "Needs review" if item.get("unconfirmed") else item["rating"])
     return {"r": result, "items": items, "tally": tally, "waived_tally": waived,
-            "unverified": unverified, "total": len(items),
+            "unverified": unverified, "unconfirmed": unconfirmed, "total": len(items),
+            "challenged": challenged,
             # Drawn at render time from the stored parts, so the drawing can
             # improve without rewriting old reports.
             "design_svg": report_design.svg(design, placed),

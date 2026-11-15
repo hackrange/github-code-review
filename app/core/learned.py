@@ -74,6 +74,11 @@ def lower(current, target) -> bool:
         and RANK.get(_value(target), 0) > 0
 
 
+def higher(current, target) -> bool:
+    """Is target strictly above current."""
+    return RANK.get(_value(target), 0) > RANK.get(_value(current), 0)
+
+
 def severity_for(rating: str):
     return RATING_SEVERITY.get((rating or "").strip().upper())
 
@@ -577,6 +582,40 @@ def give(session, finding, severity, *, source: str, reason: str, by: str,
     grade.source = source
     grade.analysis_id = analysis_id
     grade.rule_id = rule_id
+    grade.model = (model or "")[:120]
+    grade.created_by = by or ""
+    grade.created_at = utcnow()
+    record_basis(session, finding, "ai")
+    if finding.custom_severity is not None:
+        return False
+    finding.engine_severity = finding.engine_severity or _value(finding.severity)
+    finding.severity = severity
+    return True
+
+
+def raise_to(session, finding, severity, *, source: str, reason: str, by: str,
+             model: str = "") -> bool:
+    """Grade a finding higher on a security report's reading.  -> True when moved.
+
+    Raising is never against policy, so nothing is protected here.  The grade
+    is kept the same way give() keeps one, against the code it was made on,
+    so a later scan holds it while that code is unchanged and drops it when
+    the code moves.  A person's own grade still has the last word.
+    """
+    if not higher(finding.severity, severity):
+        return False
+    if finding.id is None:
+        session.flush()
+    grade = session.query(AIGrade).filter(AIGrade.finding_id == finding.id).one_or_none()
+    if grade is None:
+        grade = AIGrade(finding_id=finding.id)
+        session.add(grade)
+    grade.was = grade.was or _value(finding.severity)
+    grade.severity = severity
+    grade.reason = (reason or "")[:4000]
+    grade.source = source
+    grade.analysis_id = None
+    grade.rule_id = None
     grade.model = (model or "")[:120]
     grade.created_by = by or ""
     grade.created_at = utcnow()

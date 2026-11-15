@@ -70,15 +70,18 @@ VAR = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 # apt update alone is not one of them: it refreshes the list and installs
 # nothing, and treating it as a patch would clear findings on a build that
 # never applied one.
+#
+# The words between the tool and its verb can be anything that stays inside
+# one command, such as -o Dpkg::Options::=--force-confold, so they are read
+# up to the next ; & | or line end rather than as a list of known option
+# shapes.  The verb must stand on its own: --only-upgrade foo patches one
+# package, and update-motd is a package name, so neither counts.
 UPGRADE = re.compile(
-    r"\b(?:"
-    r"apt-get\s+(?:[-\w=]+\s+)*(?:upgrade|dist-upgrade)"
-    r"|apt\s+(?:[-\w=]+\s+)*(?:upgrade|full-upgrade|dist-upgrade)"
-    r"|(?:dnf|yum|microdnf)\s+(?:[-\w=]+\s+)*(?:update|upgrade)"
-    r"|zypper\s+(?:[-\w=]+\s+)*(?:update|up|dup|dist-upgrade)"
-    r"|apk\s+(?:[-\w=]+\s+)*upgrade"
-    r"|pacman\s+[-\w]*Syu"
-    r")\b", re.I)
+    r"\b(?:apt-get|apt)\b[^;&|\n]*?\s(?:dist-|full-)?upgrade(?=[\s;&|]|$)"
+    r"|\b(?:dnf|yum|microdnf)\b[^;&|\n]*?\s(?:update|upgrade|distro-sync)(?=[\s;&|]|$)"
+    r"|\bzypper\b[^;&|\n]*?\s(?:update|up|dup|dist-upgrade)(?=[\s;&|]|$)"
+    r"|\bapk\b[^;&|\n]*?\supgrade(?=[\s;&|]|$)"
+    r"|\bpacman\s+[-\w]*Syu", re.I)
 
 
 def joined(text):

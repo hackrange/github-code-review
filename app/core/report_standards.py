@@ -157,15 +157,49 @@ def coverage(items: list) -> dict:
     return {"top10": table(OWASP_TOP10, "owasp"), "api": table(API_TOP10, "api")}
 
 
+def _breach_likely(item: dict) -> bool:
+    """A confirmed flaw that is likely, and whose harm is data exposed or
+    altered (impact 4 major or 5 severe).  A Critical decided before the
+    review (a person, or a validation that was sure) counts as one."""
+    if item.get("verdict") != "confirmed":
+        return False
+    if item.get("decided"):
+        return item.get("rating") == "Critical"
+    return (item.get("likelihood") or 0) >= 4 and (item.get("impact") or 0) >= 4
+
+
+def _exploitable_in_use(item: dict) -> bool:
+    """A package flaw the review confirmed the code really uses, rated High or
+    Critical.  A known exploited package held at High only by the floor,
+    which the review itself read as not used, is not one."""
+    return (item.get("kind") == "dependency" and item.get("verdict") == "confirmed"
+            and item.get("rating") in ("Critical", "High"))
+
+
 def verdict(items: list) -> dict:
-    """Whether the branch is fit to release, from the ratings alone."""
-    open_ = [i for i in items if i.get("rating") != "Informational" and not i.get("waived")]
+    """Whether the branch is fit to release.
+
+    Not ready only when a major flaw is likely to lead to a breach of data,
+    or the code uses a package with an exploitable flaw.  A High that is
+    neither, such as one that needs rare conditions, is fixed on a plan and
+    does not hold the release.  Waived, unverified and unconfirmed issues
+    decide nothing.
+    """
+    open_ = [i for i in items if i.get("rating") != "Informational" and not i.get("waived")
+             and not i.get("unverified") and not i.get("unconfirmed")]
     worst = {r: sum(1 for i in open_ if i.get("rating") == r)
              for r in ("Critical", "High", "Medium", "Low")}
-    if worst["Critical"] or worst["High"]:
+    if any(_breach_likely(i) or _exploitable_in_use(i) for i in open_):
         return {"level": "stop",
                 "text": "Not ready to release.  Fix the Critical and High issues first, "
                         "and confirm each fix with the retest steps in this report."}
+    if worst["Critical"] or worst["High"]:
+        return {"level": "caution",
+                "text": "Ready to release with a plan.  No open issue is likely to lead "
+                        "to a breach of data, and the code uses no package with an "
+                        "exploitable flaw.  Fix the High issues within days"
+                        + (", and the Medium issues within 30 days." if worst["Medium"]
+                           else ".")}
     if worst["Medium"]:
         return {"level": "caution",
                 "text": "Ready to release with a plan.  No Critical or High issues are "

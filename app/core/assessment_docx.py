@@ -28,7 +28,7 @@ NAVY = RGBColor(0x1F, 0x3A, 0x5F)
 GRAY = RGBColor(0x55, 0x5B, 0x66)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 FILL = {"Critical": "C00000", "High": "E36C0A", "Medium": "FFC000", "Low": "70AD47",
-        "Informational": "5B9BD5", "Unverified": "8A94A3"}
+        "Informational": "5B9BD5", "Unverified": "8A94A3", "Needs review": "8A94A3"}
 DARK_TEXT = {"Medium"}
 HEAT = {"critical": "F4B6B6", "high": "F8CBAD", "medium": "FFE699", "low": "C6E0B4"}
 VERDICT_FILL = {"stop": "C00000", "caution": "FFC000", "go": "548235"}
@@ -426,11 +426,17 @@ def build(context: dict) -> bytes:
                                    if tally['Informational'] else "")
         + (f"  {context['unverified']} package issues could not be checked against the "
            "image that ships, and are listed as unverified, outside the overall rating."
-           if context.get("unverified") else ""))
+           if context.get("unverified") else "")
+        + (f"  {context['unconfirmed']} issues could not be confirmed from the code, "
+           "even with a second look at the code they needed, so they are listed for a "
+           "person to check, unscored and outside the overall rating."
+           if context.get("unconfirmed") else ""))
     D.h("Findings at a glance", 2)
-    shown = RATINGS + (["Unverified"] if context.get("unverified") else [])
-    counts_row = [tally[x] for x in RATINGS] + ([context["unverified"]]
-                                               if context.get("unverified") else [])
+    shown = (RATINGS + (["Unverified"] if context.get("unverified") else [])
+             + (["Needs review"] if context.get("unconfirmed") else []))
+    counts_row = ([tally[x] for x in RATINGS]
+                  + ([context["unverified"]] if context.get("unverified") else [])
+                  + ([context["unconfirmed"]] if context.get("unconfirmed") else []))
     t = D.table(shown + ["Total"], [[str(c) for c in counts_row]
                                     + [str(sum(1 for i in items if not i.get("waived")))]],
                 [6.7 / (len(shown) + 1)] * (len(shown) + 1), size=11)
@@ -517,7 +523,10 @@ def build(context: dict) -> bytes:
         ["10 to 16", "High", "Fix within days.  Real harm is likely if left alone."],
         ["5 to 9", "Medium", "Fix within 30 days."],
         ["1 to 4", "Low", "Fix as part of normal work."],
-        ["Not scored", "Informational", "No risk.  Recorded for accuracy, such as a false alarm."]],
+        ["Not scored", "Informational", "No risk.  Recorded for accuracy, such as a false alarm."],
+        ["Not scored", "Needs review", "The code that would decide it could not be found, "
+                                       "even after a second look.  Not counted until a "
+                                       "person checks it."]],
         [1.1, 1.2, 4.4], badge_col=1)
 
     # ---- 4 risk matrix
@@ -630,21 +639,79 @@ def build(context: dict) -> bytes:
         if i.get("references"):
             D.p("References:  " + "   ".join(i["references"]), size=8, color=GRAY)
 
+    # ---- waived findings whose waiver should be challenged, the only
+    # waived findings a report shows
+    challenged = context.get("challenged") or []
+    nx = 1 if challenged else 0
+    if challenged:
+        D.page_break()
+        D.h("6.  Waived Findings That Should Be Challenged")
+        D.p("These findings were waived, but the problem is real and the reason given "
+            "for the waiver does not hold up against the code.  They are not counted in "
+            "any rating or total in this report.  Each one shows why it was waived, in "
+            "the words of the person who asked, and why that reason is not enough.  The "
+            "owner of each waiver should look at it again.")
+        for i in challenged:
+            w = i.get("waiver") or {}
+            D.h(f"{i['id']}  {i['title']}", 3)
+            D.identity(i)
+            waived_why = (w.get("reason") or "No reason was recorded.")
+            if w.get("requested_by"):
+                waived_why += f"  Requested by {w['requested_by']}."
+            if w.get("approved_by"):
+                waived_why += (f"  Approved by {w['approved_by']}"
+                               + (f", until {w['until']}" if w.get("until") else "") + ".")
+            if w.get("ticket"):
+                waived_why += f"  Ticket {w['ticket']}."
+            lead = {"incorrect": "The reason is incorrect.  ",
+                    "mismatch": "The reason is about a different problem.  "}.get(
+                i.get("waiver_check"), "The reason names no control that lowers this risk.  ")
+            info = [("Rating", i["rating"] + "  (waived)")]
+            if i.get("verdict_label"):
+                info.append(("Verdict", i["verdict_label"]
+                             + (f".  {i['check']}" if i.get("check") else "")))
+            info.append(("Why it was waived", waived_why))
+            info.append(("Why the reason does not hold", lead + (i.get("waiver_why") or "")))
+            if i.get("score"):
+                info.append(("Likelihood x Impact",
+                             f"{i['likelihood']} x {i['impact']} = {i['score']}"))
+            if i.get("location"):
+                info.append(("Location", i["location"]))
+            if i.get("cvss"):
+                info.append(("CVSS 3.1", f"{i['cvss_score']:.1f} {i.get('cvss_band', '')}  "
+                                         f"({i['cvss']})"))
+            if i.get("cwe_label"):
+                info.append(("Weakness", i["cwe_label"]))
+            if i.get("rule"):
+                info.append(("Scanner reference", f"{i.get('count', 0)} alerts of rule {i['rule']}"))
+            t = D.table(["Attribute", "Value"], info, [1.5, 5.2])
+            _badge(t.rows[1].cells[1], i["rating"])
+            if i.get("what"):
+                D.labeled("What we found.", i["what"])
+            if i.get("evidence"):
+                D.labeled("Evidence.", i["evidence"])
+            D.code(i.get("code"), "The code involved")
+            if i.get("why"):
+                D.labeled("Why it matters.", i["why"])
+            if i.get("fixes"):
+                D.p("What to do.", bold=True, color=NAVY, after=2)
+                D.bullets(i["fixes"])
+
     # ---- 6 to 9
     overview = r.get("overview") or {}
     if overview.get("positives"):
-        D.h("6.  Positive Observations")
+        D.h(f"{6 + nx}.  Positive Observations")
         D.bullets(overview["positives"])
     roadmap = r["summary"].get("roadmap") or []
     if roadmap:
-        D.h("7.  Remediation Roadmap")
+        D.h(f"{7 + nx}.  Remediation Roadmap")
         D.table(["Timeframe", "Action", "Issues", "Owner"],
                 [[s["timeframe"], s["action"], s["issues"], s["owner"]] for s in roadmap],
                 [1.2, 3.2, 1.1, 1.2])
     cov = context.get("coverage")
     if cov:
         D.page_break()
-        D.h("8.  OWASP Coverage")
+        D.h(f"{8 + nx}.  OWASP Coverage")
         D.p("Each issue is placed in the OWASP category its weakness (CWE) belongs to.  "
             "None found means no issue in this report falls in that category.  It is not a "
             "promise that the category was fully tested.")
@@ -658,14 +725,14 @@ def build(context: dict) -> bytes:
                                          for c in cov["api"]], [3.6, 3.1])
     retests = context.get("retests") or []
     if retests:
-        D.h("9.  Retest Plan")
+        D.h(f"{9 + nx}.  Retest Plan")
         D.p("Run these checks after each fix, against a test copy where possible.  A fix "
             "is done when its check passes.")
         D.table(["ID", "Issue", "Check", "Rating"],
                 [[i["id"], i["title"], i["retest"], i["rating"]] for i in retests],
                 [0.55, 2.0, 3.25, 0.9], badge_col=3)
     if r["summary"].get("conclusion"):
-        D.h("10.  Conclusion")
+        D.h(f"{10 + nx}.  Conclusion")
         D.p(r["summary"]["conclusion"])
 
     # ---- appendices

@@ -62,13 +62,23 @@ RULE_LANGUAGES = {
     "c": ("c", "cpp"), "cpp": ("cpp", "c"),
 }
 
+# The same words lib/images.sh looks for.  What sits between the tool and its
+# verb is read up to the end of the command, because real options such as
+# -o Dpkg::Options::=--force-confold do not fit a list of option shapes.  The
+# verb must stand alone, so --only-upgrade foo and update-motd do not count.
 _UPGRADE = re.compile(
-    r"apt-get\s+(?:[-\w=]+\s+)*(?:upgrade|dist-upgrade)"
-    r"|apt\s+(?:[-\w=]+\s+)*(?:upgrade|full-upgrade|dist-upgrade)"
-    r"|(?:dnf|yum|microdnf)\s+(?:[-\w=]+\s+)*(?:update|upgrade)"
-    r"|zypper\s+(?:[-\w=]+\s+)*(?:update|up|dup|dist-upgrade)"
-    r"|apk\s+(?:[-\w=]+\s+)*upgrade", re.IGNORECASE)
-_FROM = re.compile(r"^\s*FROM\s+(\S+)(?:\s+AS\s+(\S+))?", re.IGNORECASE)
+    r"\b(?:apt-get|apt)\b[^;&|\n]*?\s(?:dist-|full-)?upgrade(?=[\s;&|]|$)"
+    r"|\b(?:dnf|yum|microdnf)\b[^;&|\n]*?\s(?:update|upgrade|distro-sync)(?=[\s;&|]|$)"
+    r"|\bzypper\b[^;&|\n]*?\s(?:update|up|dup|dist-upgrade)(?=[\s;&|]|$)"
+    r"|\bapk\b[^;&|\n]*?\supgrade(?=[\s;&|]|$)"
+    r"|\bpacman\s+[-\w]*Syu", re.IGNORECASE)
+_FROM = re.compile(r"^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?",
+                   re.IGNORECASE)
+# One CSP directive: its name and its sources, up to the ; or the end of the
+# string or line that holds it.
+_DIRECTIVE = re.compile(r"(?<![\w-])(script-src(?:-elem)?|default-src)\b([^;\"`\n]*)",
+                        re.IGNORECASE)
+_COMMENT = re.compile(r"^\s*(?:#|//|/?\*|<!--)")
 _ELEVATED = re.compile(
     r"^\s*(privileged:\s*true|network_mode:\s*[\"']?host|cap_add:.*SYS_ADMIN"
     r"|-\s*[\"']?/var/run/docker\.sock)", re.IGNORECASE)
@@ -145,17 +155,38 @@ def build(root, paths=None) -> dict:
         if _skip(rel) or not (name == "dockerfile" or name.startswith("dockerfile.")
                               or name.endswith(".dockerfile")):
             continue
-        stages, upgraded = [], False
-        for line in _read(root / rel).splitlines():
+        # Line continuations folded first: nearly every upgrade is the second
+        # half of a chained RUN, and a line by line read misses it.
+        text = re.sub(r"\\[ \t]*\r?\n", " ", _read(root / rel))
+        stages = []
+        for line in text.splitlines():
             m = _FROM.match(line)
             if m:
-                # An image reference can carry a registry login; masked like
-                # every other line of code that leaves the checkout.
-                stages.append(mask(m.group(1))[:200])
-            elif _UPGRADE.search(line):
-                upgraded = True
-        dockerfiles.append({"file": rel, "from": stages[:6],
-                            "multi_stage": len(stages) > 1, "upgrades": upgraded})
+                stages.append({"ref": m.group(1), "alias": (m.group(2) or "").lower(),
+                               "upgrades": False})
+            elif stages and not _COMMENT.match(line) and _UPGRADE.search(line):
+                stages[-1]["upgrades"] = True
+        # What ships is the last stage.  Its base may be another stage, so
+        # the chain is followed to the image it rests on, and an upgrade
+        # anywhere along it counts, the same way lib/images.sh reads it.
+        ships, upgraded = "", False
+        if stages:
+            by_alias = {s["alias"]: i for i, s in enumerate(stages) if s["alias"]}
+            index, seen = len(stages) - 1, set()
+            while index not in seen:
+                seen.add(index)
+                upgraded = upgraded or stages[index]["upgrades"]
+                parent = by_alias.get(stages[index]["ref"].lower())
+                if parent is None or parent == index:
+                    ships = stages[index]["ref"]
+                    break
+                index = parent
+        dockerfiles.append({"file": rel,
+                            # An image reference can carry a registry login;
+                            # masked like every other line that leaves the checkout.
+                            "from": [mask(s["ref"])[:200] for s in stages[:6]],
+                            "multi_stage": len(stages) > 1, "upgrades": upgraded,
+                            "ships": ships.lower()})
         if len(dockerfiles) >= 10:
             break
 
@@ -172,22 +203,21 @@ def build(root, paths=None) -> dict:
             break
 
     # A Content-Security-Policy set anywhere in the code or server config,
-    # and whether any of them allows inline script.
-    csp, unsafe_inline = False, False
+    # and whether any of them really lets inline script run.
+    csp, unsafe_inline, where, nonce = False, False, "", False
     for rel in paths:
         if _skip(rel) or Path(rel).suffix.lower() not in (
                 ".php", ".py", ".js", ".ts", ".conf", ".java", ".rb", ".cs", ".go",
-                ".json", ".yml", ".yaml", ".xml", ".htaccess", ""):
+                ".json", ".yml", ".yaml", ".xml", ".htaccess", ".html", ".htm", ""):
             continue
         text = _read(root / rel)
-        if "content-security-policy" in text.lower():
-            csp = True
-            for line in text.splitlines():
-                low = line.lower()
-                if "unsafe-inline" in low and "script-src" in low:
-                    unsafe_inline = True
-                    break
-        if csp and unsafe_inline:
+        if "content-security-policy" not in text.lower():
+            continue
+        csp = True
+        found, at, uses_nonce = _inline_script(text)
+        nonce = nonce or uses_nonce
+        if found:
+            unsafe_inline, where = True, f"{rel}:{at}"
             break
 
     return {"languages": languages[:8], "present": sorted(present),
@@ -195,9 +225,55 @@ def build(root, paths=None) -> dict:
             "build_files": build_seen[:12], "dockerfiles": dockerfiles,
             "elevated_containers": elevated,
             "csp": ("none found" if not csp else
-                    "set, allows inline script" if unsafe_inline else
+                    f"set, allows inline script ({where})" if unsafe_inline else
+                    "set, script-src uses a nonce or hash and allows no inline "
+                    "script" if nonce else
                     "set, no 'unsafe-inline' for scripts found"),
             "has_github_workflows": any(p.startswith(".github/workflows/") for p in files)}
+
+
+def _inline_script(text: str) -> tuple:
+    """Does a policy in this file let inline script run.  -> (yes, line, nonce)
+
+    Only the script-src directive decides it, or default-src when the file
+    sets no script-src at all.  'unsafe-inline' under style-src is about
+    styles, and a browser ignores it under script-src whenever a nonce or a
+    hash is also listed there.  A policy built across several lines of code
+    is read directive by directive, so one line holding style-src
+    'unsafe-inline' and script-src 'nonce-...' is not misread as unsafe.
+    Commented out lines are not policies.
+    """
+    has_script_src = bool(re.search(r"(?<![\w-])script-src", text, re.IGNORECASE))
+    nonce = False
+    for n, line in enumerate(text.splitlines(), start=1):
+        if _COMMENT.match(line):
+            continue
+        for name, sources in _DIRECTIVE.findall(line):
+            name, low = name.lower(), sources.lower()
+            if name == "default-src" and has_script_src:
+                continue
+            keyed = any(k in low for k in ("'nonce-", "'sha256-", "'sha384-",
+                                           "'sha512-", "'strict-dynamic'"))
+            nonce = nonce or (keyed and name != "default-src")
+            if "'unsafe-inline'" in low and not keyed:
+                return True, n, nonce
+    return False, 0, nonce
+
+
+def upgraded_base(profile: dict, image_ref: str) -> str:
+    """The Dockerfile that ships image_ref as its base and upgrades it, or "".
+
+    A scanner reads package versions from the base image in the registry.
+    When the build upgrades that image after pulling it, those versions are
+    not the ones that ship (report check 1).
+    """
+    ref = (image_ref or "").strip().lower()
+    if not profile or not ref:
+        return ""
+    for d in profile.get("dockerfiles") or []:
+        if d.get("upgrades") and d.get("ships") and d["ships"] == ref:
+            return d["file"]
+    return ""
 
 
 def as_text(profile: dict, fork_of: str = "", code: bool = True) -> str:
