@@ -767,6 +767,7 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             auth_b=external_auth_mod.describe(asset, "b"),
             tls_pins=sorted(tls_trust.pins_of(asset).items()),
             adhoc=dast_adhoc_mod.describe(asset),
+            api_spec=_api_spec_described(asset.id),
             auth_kinds=external_auth_mod.FORM_KINDS,
             site_profile=external.profile_for(asset), proxy_label=external.proxy_shown(asset),
             has_shot=external.shot_path(asset.id).is_file(),
@@ -920,6 +921,29 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
                 external.set_engine_timeouts(
                     asset, {name: form.get(f"timeout_{name}")
                             for name in external.TIMEOUT_ENGINES})
+            if form.get("with_api_spec"):
+                from app.core.dast_checks import api_spec as api_spec_mod
+
+                if _checked(form, "api_spec_clear"):
+                    api_spec_mod.clear(asset.id)
+                    record(db, "external.api_spec_cleared", actor=user.username,
+                           target=asset.host, source_ip=client_ip(request))
+                else:
+                    upload = form.get("api_spec")
+                    if upload is not None and getattr(upload, "filename", ""):
+                        raw = await upload.read(api_spec_mod.MAX_BYTES + 1)
+                        if len(raw) > api_spec_mod.MAX_BYTES:
+                            raise ValueError("The API description is larger than 5 MB.")
+                        try:
+                            got = api_spec_mod.save(asset.id, raw.decode("utf-8", "replace"),
+                                                    upload.filename, user.username)
+                        except api_spec_mod.SpecError as exc:
+                            raise ValueError(f"The API description could not be read: {exc}.") \
+                                from None
+                        record(db, "external.api_spec_set", actor=user.username,
+                               target=asset.host,
+                               detail=f"{got['operations']} operations"[:200],
+                               source_ip=client_ip(request))
             if form.get("with_adhoc"):
                 from app.core import dast_adhoc
 
@@ -2895,3 +2919,13 @@ async def record_cancel(asset_id: int, rid: str, request: Request,
     except session_recorder.Busy:
         pass
     return redirect(_back(f"/external/{asset_id}", "The recording was closed.  Nothing was saved."))
+
+
+def _api_spec_described(asset_id: int):
+    """The uploaded API description's summary for the site page, or None."""
+    from app.core.dast_checks import api_spec as api_spec_mod
+
+    try:
+        return api_spec_mod.describe(asset_id)
+    except Exception:                       # noqa: BLE001 - never break the page
+        return None

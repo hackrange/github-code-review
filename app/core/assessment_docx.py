@@ -447,6 +447,14 @@ def build(context: dict) -> bytes:
         D.p(f"{r['waived_issues']} more issues are waived: a person accepted the risk for "
             "now.  A waiver does not fix anything, so each waived issue keeps its rating "
             "here, and waived issues are not counted in the overall rating.")
+    # What the application does right, ahead of the findings.
+    site_strengths = context.get("site_strengths") or []
+    well = list((r.get("overview") or {}).get("positives") or [])[:3]
+    for site in site_strengths[:1]:
+        well += [f"At {site['host']}: {p}" for p in site["items"][:2]]
+    if well:
+        D.h("What the application does well", 2)
+        D.bullets(well)
     top = [i for i in items if i["rating"] != "Informational" and not i.get("waived")][:5]
     if top:
         D.h("Key findings", 2)
@@ -628,6 +636,12 @@ def build(context: dict) -> bytes:
         if i.get("fixes"):
             D.p("What to do.", bold=True, color=NAVY, after=2)
             D.bullets(i["fixes"])
+        if i.get("compensating"):
+            D.p("Controls already in place.", bold=True, color=NAVY, after=2)
+            D.bullets(i["compensating"])
+        if i.get("interim"):
+            D.p("Interim protection while the fix is made.", bold=True, color=NAVY, after=2)
+            D.bullets(i["interim"])
         if i.get("fix_before"):
             a, b = i["fix_range"]
             D.code(i["fix_before"], f"The code now, lines {a} to {b}")
@@ -699,9 +713,14 @@ def build(context: dict) -> bytes:
 
     # ---- 6 to 9
     overview = r.get("overview") or {}
-    if overview.get("positives"):
+    if overview.get("positives") or site_strengths:
         D.h(f"{6 + nx}.  Positive Observations")
-        D.bullets(overview["positives"])
+        if overview.get("positives"):
+            D.bullets(overview["positives"])
+        for site in site_strengths:
+            D.p(f"Controls seen in front of {site['host']}, where this code runs.",
+                bold=True, color=NAVY, after=2)
+            D.bullets(site["items"])
     roadmap = r["summary"].get("roadmap") or []
     if roadmap:
         D.h(f"{7 + nx}.  Remediation Roadmap")

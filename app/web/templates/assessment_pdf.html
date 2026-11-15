@@ -176,6 +176,17 @@
      | sentence_spaced }}</p>
 {% endif %}
 
+{% if r.overview.positives or site_strengths %}
+{# What the application does right, ahead of the findings, so a reader knows
+   whether this is a well built application with gaps or not.  Only what the
+   evidence shows; the full list is in Positive Observations. #}
+<h3>What the Application Does Well</h3>
+<ul>
+  {% for p in (r.overview.positives or [])[:3] %}<li>{{ p | sentence_spaced }}</li>{% endfor %}
+  {% for site in site_strengths[:1] %}{% for p in site['items'][:2] %}<li>{{ ("At " ~ site.host ~ ": " ~ p) | sentence_spaced }}</li>{% endfor %}{% endfor %}
+</ul>
+{% endif %}
+
 {% set top = items | rejectattr('rating', 'equalto', 'Informational') | rejectattr('waived') | list %}
 {% if top %}
 <h3>Key Findings</h3>
@@ -371,6 +382,16 @@
   <p class="label" style="margin-bottom:.2rem">What to do.</p>
   <ul>{% for step in i.fixes %}<li>{{ step | sentence_spaced }}</li>{% endfor %}</ul>
   {% endif %}
+  {% if i.compensating %}
+  {# Controls already standing between this issue and an attacker.  They lower
+     how likely it is to be used; they are never a reason to leave it. #}
+  <p class="label" style="margin-bottom:.2rem">Controls already in place.</p>
+  <ul>{% for c in i.compensating %}<li>{{ c | sentence_spaced }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if i.interim %}
+  <p class="label" style="margin-bottom:.2rem">Interim protection while the fix is made.</p>
+  <ul>{% for step in i.interim %}<li>{{ step | sentence_spaced }}</li>{% endfor %}</ul>
+  {% endif %}
   {% if i.fix_before %}
   {# The fix tied to the numbered lines it replaces, checked against the
      lines the review was shown. #}
@@ -428,9 +449,15 @@
 {% endif %}
 {% set nx = 1 if challenged else 0 %}
 
-{% if r.overview.positives %}
+{% if r.overview.positives or site_strengths %}
 <h2>{{ 6 + nx }}.  Positive Observations</h2>
+{% if r.overview.positives %}
 <ul>{% for p in r.overview.positives %}<li>{{ p | sentence_spaced }}</li>{% endfor %}</ul>
+{% endif %}
+{% for site in site_strengths %}
+<p class="label" style="margin-bottom:.2rem">{{ "Controls seen in front of " ~ site.host ~ ", where this code runs." }}</p>
+<ul>{% for p in site['items'] %}<li>{{ p | sentence_spaced }}</li>{% endfor %}</ul>
+{% endfor %}
 {% endif %}
 
 {% if r.summary.roadmap %}

@@ -1,0 +1,47 @@
+{
+  "id": "misconfiguration-installer-reachable",
+  "class": "misconfiguration",
+  "safety": "read",
+  "severity_floor": "medium",
+  "anonymous": true,
+  "title": "The application's installer or setup page is still reachable",
+  "summary": "An install or setup page that offers to configure the database or create the first administrator is answering on a live site.  Whoever reaches it first can point the application at a database they control, create an administrator, or overwrite the configuration.  Automated attackers sweep for these pages on every host they find.  This check sends no session and reports only a page that really shows an installer's database or administrator form, not one that says the application is already installed.",
+  "needs": [],
+  "candidate_paths": [
+    "/install.php",
+    "/setup.php",
+    "/install/",
+    "/install/index.php",
+    "/installer/",
+    "/setup/",
+    "/setup/index.php",
+    "/installation/",
+    "/admin/install.php",
+    "/install/install.php"
+  ],
+  "probe": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "{route}"
+      }
+    }
+  ],
+  "confirm": {
+    "control": "A path that cannot exist, so the site's not found answer is known.",
+    "differential": "status == 200 and body_matches(\"(?is)<form.{0,4000}(database[ _-]?(host|name|user|server)|db[_-]?(host|name|user|pass)|admin(istrator)?[ _-]?(user|email|password|account))\") and body_matches(\"(?i)(install|setup|installation|configuration) (wizard|step|script)|welcome to .{0,40}(install|setup)|step [1-9] of\") and not body_matches(\"(?i)already (been )?installed|installation (is )?complete|remove (the )?install\") and body_differs(control)",
+    "retest": 2
+  },
+  "reproduce": "curl -s https://host/install.php (and the other candidate paths this check tried) with no session.  A page with an installer's database or administrator form is the finding.",
+  "remediate": "Delete the installer or setup files from the deployed application, or deny them in the web server's configuration, once installation is done.  Build the release so the installer is not part of it.",
+  "references": [
+    "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/"
+  ],
+  "mappings": {
+    "cwe": "CWE-1188",
+    "owasp": "A05:2021"
+  },
+  "rulesets": [
+    "exposure"
+  ]
+}

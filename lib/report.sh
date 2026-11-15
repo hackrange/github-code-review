@@ -198,6 +198,12 @@ report_build() {
           [ $repos[] | select((.codeql_unread_reason // "") != "")
             | {repository: .repository.full_name, reason: .codeql_unread_reason} ],
 
+        # Repositories whose published image could not be read whole.  Only
+        # findings that came from inside the image are held open for these.
+        image_unread_repositories:
+          [ $repos[] | select((.image_unread_reason // "") != "")
+            | {repository: .repository.full_name, reason: .image_unread_reason} ],
+
 
         misconfigurations: ( $iac | sort_by([ -( .severity | rank ), .repository, .file ]) ),
 
@@ -282,6 +288,7 @@ report_build() {
           # Why the CodeQL alerts were not read, for the same reader: it is
           # the whole reason those findings were held open rather than closed.
           codeql_unread_reason: (.codeql_unread_reason // null),
+          image_unread_reason: (.image_unread_reason // null),
           branches_scanned: .branches_scanned,
           # And every branch that is there, walked or not.  The walked list is
           # narrowed by the quiet branch filter and the per repository cap, so

@@ -260,7 +260,7 @@
       </form>
       {% endif %}
     {% endif %}
-    {% if can_scan and f.kind.value in ['credential', 'code'] and f.file_path %}
+    {% if can_scan and f.kind.value in ['credential', 'code'] and f.file_path and not f.image_ref %}
       {# Read only, and it does not take the scan lock, so it works while a
          scan is running.  It cannot change the finding: see the note it
          prints. #}
@@ -795,8 +795,18 @@
         {# Found in a layer rather than a manifest, which changes what fixing
            it means: a base image bump, not a version in a lock file. #}
         <tr><th>Image</th><td class="mono small">{{ f.image_ref }}
+          {% if f.kind.value == 'dependency' %}
           <div class="faint small">found in the base image, so the fix is a
             newer base rather than a change in this repository</div>
+          {% else %}
+          {# Read out of the image the repository publishes.  The file named
+             above is a path inside that image, not in the checkout, and
+             anyone who can pull the image can read it. #}
+          <div class="faint small">found inside the image this repository
+            publishes, at the path shown above.  Anyone who can pull the image
+            can read it, and a new build without it does not remove it from
+            images already pushed.</div>
+          {% endif %}
           {% if f.dockerfile %}
           {# Named, and linked, because every sentence on this row is about
              what that file does and the reader has to be able to check it. #}

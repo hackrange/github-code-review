@@ -290,3 +290,197 @@ images_scan() {
 
   cat "$acc"
 }
+
+# --- the image the repository publishes ------------------------------------
+#
+# Everything above reads the base image a Dockerfile starts from.  This reads
+# the image the repository itself builds and publishes, which is what a server
+# runs, and which differs from the checkout in ways reading the checkout never
+# shows: a sudoers rule a layer adds, a backup somebody left in the build
+# context, a credential written in one layer and deleted in the next, source
+# files copied in from outside the repository.
+#
+# Which images: only ones the repository names literally, as a compose service
+# that builds from it and tags an image, or a workflow step that pushes a named
+# tag.  See lib/image_check.py shipped_refs.  The pull is lib/image_fetch.py:
+# HTTPS only, public addresses only unless the settings allow private ones,
+# every connection pinned to the address that was checked, and the layers read
+# as streams into the scan root, which is memory.
+#
+# IMAGE_CONTENT_DIRS holds "ref<TAB>dir" for each image that was read whole.
+# IMAGE_UNREAD says why one was not, and the app holds that repository's image
+# findings open rather than closing them for silence.
+
+IMAGE_CONTENT_DIRS=()
+IMAGE_UNREAD=""
+
+# image_contents_prepare <clone_dir> <full_name>
+# Called in this shell, not in $( ), so the two variables survive.
+image_contents_prepare() {
+  local dir="$1" full_name="$2"
+  IMAGE_CONTENT_DIRS=(); IMAGE_UNREAD=""
+  cfg_bool '.scan.images.contents' false || return 0
+  [[ -d "$dir" ]] || return 0
+  local py; py=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
+  if [[ -z "$py" ]]; then
+    IMAGE_UNREAD="no python to read the published image"
+    return 0
+  fi
+  local cap; cap=$(cfg_num '.scan.images.contents_max_images' 3)
+  local refs
+  refs=$("$py" -I "$GHSCAN_HOME/lib/image_check.py" refs "$dir" "$cap" 2>"$GHSCAN_TMPROOT/imagerefs.log") || refs='[]'
+  [[ "$refs" == \[* ]] || refs='[]'
+  local n; n=$(printf '%s' "$refs" | jq 'length')
+  (( n > 0 )) || return 0
+
+  local max_mb; max_mb=$(cfg_num '.scan.images.contents_max_mb' 512)
+  local timeout_sec; timeout_sec=$(cfg_num '.scan.images.timeout_sec' 600)
+  local -a flags=("--max-mb=$max_mb")
+  cfg_bool '.scan.images.allow_private_registries' false && flags+=("--allow-private")
+
+  local ref source out err
+  while IFS=$'\t' read -r ref source; do
+    [[ -n "$ref" ]] || continue
+    out=$(tmp_dir image_contents)
+    err="$GHSCAN_TMPROOT/imagefetch.log"
+    log_info "[$full_name] reading the published image $ref (named in $source)"
+    if timeout "$timeout_sec" "$py" -I "$GHSCAN_HOME/lib/image_fetch.py" "$ref" "$out" \
+         "${flags[@]}" >/dev/null 2>"$err"; then
+      if jq -e '.truncated == true' "$out/meta.json" >/dev/null 2>&1; then
+        # Read, but not whole.  What was found stands; what was not is unknown.
+        IMAGE_UNREAD="the image $ref was larger than the read limit"
+        log_warn "[$full_name] $IMAGE_UNREAD, so its findings are held as they were"
+      fi
+      IMAGE_CONTENT_DIRS+=("$ref"$'\t'"$out")
+    else
+      IMAGE_UNREAD="could not read the image $ref: $(tail -1 "$err" 2>/dev/null | tr -d '\n' | cut -c1-300)"
+      log_warn "[$full_name] $IMAGE_UNREAD, so its findings are held as they were"
+      rm -rf -- "$out"
+    fi
+  done < <(printf '%s' "$refs" | jq -r '.[] | [.ref, .source] | @tsv')
+}
+
+# image_contents_findings <clone_dir> <full_name> <out file>
+# The structural rules, as misconfiguration rows.  Run before
+# image_contents_prune, which deletes the files the repository already holds,
+# the start script among them.  Called in this shell, so IMAGE_UNREAD set on a
+# failure survives; the rows go to <out file>.
+image_contents_findings() {
+  local dir="$1" full_name="$2" acc="$3"
+  echo '[]' > "$acc"
+  local py; py=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
+  [[ -n "$py" ]] || { IMAGE_UNREAD="no python to check the published image"; return 0; }
+  local entry ref out part
+  for entry in "${IMAGE_CONTENT_DIRS[@]}"; do
+    ref="${entry%%$'\t'*}"; out="${entry#*$'\t'}"
+    part=$(tmp_file image_check)
+    if "$py" -I "$GHSCAN_HOME/lib/image_check.py" image "$out" "$dir" "$full_name" "$ref" \
+         > "$part" 2>"$GHSCAN_TMPROOT/imagecheck.log" && jq -e 'type == "array"' "$part" >/dev/null 2>&1; then
+      jq -s -c 'add' "$acc" "$part" > "$acc.new" && mv "$acc.new" "$acc"
+    else
+      IMAGE_UNREAD="the image $ref could not be checked: $(tail -1 "$GHSCAN_TMPROOT/imagecheck.log" 2>/dev/null | cut -c1-300)"
+      log_warn "[$full_name] $IMAGE_UNREAD"
+    fi
+  done
+}
+
+# image_contents_secrets <full_name> <repo_json> <want_gitleaks> <want_trufflehog> <out file>
+#
+# The credential engines over what only the image has, through the same facts,
+# masking and triage as everything else, so a key in an image is held to the
+# same standard as a key in a commit and is never stored in the clear.  Writes
+# the partitioned set ({reported, filtered, suppressed}) to <out file>.
+#
+# The triage is git aware and an image is not a commit, so it is handed no
+# checkout: nothing about branches or history applies.  What it does say about
+# exposure is replaced, because a key in a published image is exposed to
+# everyone who can pull it, whatever the repository's history says.
+image_contents_secrets() {
+  local full_name="$1" repo_json="$2" want_gl="$3" want_th="$4" result="$5"
+  echo '{"reported":[],"filtered":[],"suppressed":[]}' > "$result"
+  local entry ref out raw part tri keep_low
+  keep_low=$(cfg_bool '.scan.secrets.triage.path_rule_downgrades_only' true && echo true || echo false)
+  for entry in "${IMAGE_CONTENT_DIRS[@]}"; do
+    ref="${entry%%$'\t'*}"; out="${entry#*$'\t'}"
+    raw=$(tmp_file image_raw); : > "$raw"
+    if (( want_gl )); then
+      part=$(tmp_file image_gl)
+      run_gitleaks_worktree "$out/scan" "$full_name" "$part"
+      normalize_gitleaks "$part" "$full_name" | derive_secret_facts "" \
+        | image_contents_secret_paths "$ref" >> "$raw"
+      wipe_file "$part"
+    fi
+    if (( want_th )); then
+      part=$(tmp_file image_th)
+      run_trufflehog_worktree "$out/scan" "$full_name" "$part"
+      # trufflehog names files by their full path; the rest is the same.
+      jq -c --arg root "$out/scan/" '
+        if (.SourceMetadata.Data.Filesystem.file // "") | startswith($root)
+        then .SourceMetadata.Data.Filesystem.file |= ltrimstr($root) else . end' \
+        "$part" 2>/dev/null > "$part.rel" || : > "$part.rel"
+      normalize_trufflehog "$part.rel" "$full_name" | derive_secret_facts "" \
+        | image_contents_secret_paths "$ref" >> "$raw"
+      wipe_file "$part"; wipe_file "$part.rel"
+    fi
+    if [[ -s "$raw" ]]; then
+      tri=$(tmp_file image_tri)
+      triage_findings "" "$raw" "$repo_json" > "$tri" || : > "$tri"
+      part=$(tmp_file image_part)
+      triage_partition "$tri" "$keep_low" | jq -c --arg ref "$ref" '
+        def fix: map(. + {image: $ref, exposure: "published_image", url: "",
+                          branch_urls: [], blame_url: null, file_history_url: null,
+                          commit_url: null});
+        {reported: (.reported // [] | fix), filtered: (.filtered // [] | fix),
+         suppressed: (.suppressed // [] | fix)}' > "$part" 2>/dev/null \
+        || echo '{"reported":[],"filtered":[],"suppressed":[]}' > "$part"
+      jq -s -c '{reported: (map(.reported) | add), filtered: (map(.filtered) | add),
+                 suppressed: (map(.suppressed) | add)}' "$result" "$part" > "$result.new" \
+        && mv "$result.new" "$result"
+      wipe_file "$tri"
+    fi
+    shred -u "$raw" 2>/dev/null || rm -f "$raw"
+  done
+}
+
+# image_contents_prune <clone_dir>
+# Drops every image file the repository already holds, and duplicate copies,
+# so the credential pass reads only what the image alone has.
+image_contents_prune() {
+  local dir="$1" entry out
+  local py; py=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
+  [[ -n "$py" ]] || return 0
+  for entry in "${IMAGE_CONTENT_DIRS[@]}"; do
+    out="${entry#*$'\t'}"
+    "$py" -I "$GHSCAN_HOME/lib/image_check.py" prune "$out" "$dir" >/dev/null 2>&1 || true
+  done
+}
+
+# image_contents_secret_paths <jsonl candidates> <ref> -> the same, with each
+# file named as it sits in the image, and the image recorded.
+#
+# The engines report a path inside the scan directory.  scan/fs/<p> is a file
+# the image ships; scan/deleted/<n>/<p> is one a later layer removed or
+# replaced, which is still in layer n for anyone who pulls the image; scan/env
+# is the image's configured environment.
+image_contents_secret_paths() {
+  local ref="$1"
+  jq -c --arg ref "$ref" '
+    (.file // "") as $f
+    | (if ($f | startswith("fs/")) then "/" + ($f | ltrimstr("fs/"))
+       elif ($f | test("^deleted/[0-9]+/")) then
+         ($f | capture("^deleted/(?<n>[0-9]+)/(?<p>.*)$")) as $d
+         | "/" + $d.p + " (removed by a later layer, still in layer " + $d.n + ")"
+       elif $f == "env" then "image configuration: environment"
+       else $f end) as $shown
+    | . + {file: $shown, image: $ref, url: "", commit: "", image_scan_path: $f}'
+}
+
+# image_contents_cleanup -- the copies are in memory, and contain whatever
+# credentials the image does, so they go as soon as the repository is done.
+image_contents_cleanup() {
+  local entry
+  for entry in "${IMAGE_CONTENT_DIRS[@]}"; do
+    rm -rf -- "${entry#*$'\t'}"
+  done
+  IMAGE_CONTENT_DIRS=()
+}

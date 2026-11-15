@@ -638,6 +638,9 @@ def _apply_common(finding: Finding, row: dict, seen_at) -> None:
     finding.url = row.get("url") or row.get("reference") or ""
     finding.commit_sha = row.get("commit") or ""
     finding.commit_url = row.get("commit_url") or ""
+    # The image a finding was read out of, when it came from inside one rather
+    # than from the checkout.  Package findings set it again in their own fill.
+    finding.image_ref = (row.get("image") or "")[:500]
     finding.last_found_at = seen_at
 
 
@@ -1780,6 +1783,13 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         named = row.get("repository") if isinstance(row, dict) else None
         if isinstance(named, str) and named:
             codeql_unread.add(named)
+    # Repositories whose published image could not be read whole.  A finding
+    # that came from inside the image says nothing by its absence then.
+    image_unread = set()
+    for row in (document.get("image_unread_repositories") or []):
+        named = row.get("repository") if isinstance(row, dict) else None
+        if isinstance(named, str) and named:
+            image_unread.add(named)
     # Before anything is closed, because the whole point of it is to keep a
     # value the scanner looked at out of the set that looks like it went away.
     # A security report that ran before the scanner could see something left
@@ -1977,6 +1987,14 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             if (from_codeql or legacy_codeql) and \
                     finding.repository in codeql_unread:
                 counts["held_open"] = counts.get("held_open", 0) + 1
+                continue
+            # Read out of a published image that could not be read this time.
+            # Base image packages are dependency findings and keep their own
+            # rule; this is the image the repository publishes.
+            if (finding.kind != FindingKind.DEPENDENCY and (finding.image_ref or "")
+                    and finding.repository in image_unread):
+                counts["held_open"] = counts.get("held_open", 0) + 1
+                counts["image_unread_held"] = counts.get("image_unread_held", 0) + 1
                 continue
             # The old dependency rows are retired by the code pass now, so they
             # wait for it rather than for the vulnerability pass, which no

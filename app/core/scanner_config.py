@@ -340,6 +340,9 @@ def build(session, out_dir: Path, orgs=None, repos=None, connection=None,
     sbom["license_policy"]["flagged"] = _list(session, "sbom.flagged_licenses")
 
     scan["images"]["enabled"] = bool(store.get(session, "images.enabled"))
+    scan["images"]["contents"] = bool(store.get(session, "images.contents"))
+    scan["images"]["allow_private_registries"] = bool(
+        store.get(session, "images.allow_private_registries"))
 
     # Which branches ship.  Only repositories somebody set are listed, and
     # the scanner reads a missing one as every branch, every pass.  The

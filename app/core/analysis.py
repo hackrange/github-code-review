@@ -180,7 +180,7 @@ def _finding_facts(f) -> str:
         ("Direct or transitive", f.dependency_direct),
         ("Dependency scope", f.dependency_scope),
         ("Manifest", f.manifest_path),
-        ("Base image", f.image_ref),
+        ("Base image" if f.kind == FindingKind.DEPENDENCY else "Published image", f.image_ref),
         ("Dockerfile", f.dockerfile),
         ("Fixed by the build's own upgrade", "yes" if f.base_upgraded else ""),
         ("Credential preview (masked)", f.secret_preview),
@@ -487,6 +487,9 @@ def _code(f, cfg: dict, branch: str, connection: str) -> tuple:
     if kind == FindingKind.DEPENDENCY and f["image_ref"]:
         return "", [], ["No code was sent: this package came from a base "
                         "image rather than from the repository's own code."]
+    if f["image_ref"]:
+        return "", [], ["No code was sent: this finding came from inside the "
+                        "published image, not from the repository's own code."]
     if kind != FindingKind.DEPENDENCY and not f["file_path"]:
         return "", [], ["No code was sent: this finding is not tied to a file."]
 

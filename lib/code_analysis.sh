@@ -50,7 +50,19 @@ _semgrep_html_blocks() {
   done < <(semgrep_valid_configs)
 
   local raw; raw=$(tmp_file html_semgrep)
-  ( cd "$blocks" && "$bin" "${hargs[@]}" . ) > "$raw" 2>/dev/null || true
+  ( cd "$blocks" && "$bin" "${hargs[@]}" --exclude templates . ) > "$raw" 2>/dev/null || true
+
+  # Script blocks from server templates, with this project's rules only.  See
+  # lib/html_scripts.py for why the registry packs are not run there.
+  if [[ -d "$blocks/templates" && -n "$extra" && -r "$extra" ]]; then
+    local traw; traw=$(tmp_file html_tpl_semgrep)
+    ( cd "$blocks/templates" && "$bin" scan --metrics=off --json --no-git-ignore --quiet \
+        --config "$extra" . ) > "$traw" 2>/dev/null || true
+    local tmerged; tmerged=$(tmp_file html_tpl_merged)
+    jq -s '.[0] as $a | .[1] as $b
+           | $a + {results: (($a.results // []) + ($b.results // []))}' \
+      "$raw" "$traw" > "$tmerged" 2>/dev/null && mv -f "$tmerged" "$raw"
+  fi
 
   local mapped; mapped=$(tmp_file html_mapped)
   local n; n=$("$python" "$helper" remap "$raw" "$blocks" "$mapped" 2>/dev/null || echo 0)

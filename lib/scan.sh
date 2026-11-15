@@ -153,6 +153,7 @@ scan_one_repo() {
   SBOM_JSON='null'; LICENSE_JSON='null'; POLICY_JSON='null'; VULNS_JSON='[]'
   SBOM_BY_BRANCH_JSON='[]'; ACCESS_JSON='null'
   PULLS_JSON='[]'; CLONE_TRAFFIC_JSON='null'; CODE_FINDINGS_JSON='[]'; CODEQL_UNREAD=''; CODE_RULES_LOADED_JSON='[]'
+  IMAGE_UNREAD=''; IMAGE_FINDINGS_FILE=''; IMAGE_CONTENT_DIRS=()
   CODE_BRANCHES_READ_JSON='null'; BRANCH_CODE_MANIFEST=''
   MISCONFIG_JSON='[]'; WORKFLOW_JSON='[]'
   # Whether a dynamic pass could ever run here.  null until the question is
@@ -237,6 +238,7 @@ scan_one_repo() {
       --argjson code_ok "${CODE_PASS_COMPLETE:-true}" \
       --arg code_why "${CODE_PASS_INCOMPLETE:-}" \
       --arg codeql_why "${CODEQL_UNREAD:-}" \
+      --arg image_why "${IMAGE_UNREAD:-}" \
       --arg secrets_why "${SECRETS_PASS_INCOMPLETE:-}" \
       --arg hist_mb "${HISTORY_VOLUME_MB:-}" \
       --argjson sso "${GHSCAN_SSO_TRUNCATED:-0}" \
@@ -294,6 +296,9 @@ scan_one_repo() {
         # The CodeQL alerts on GitHub could not be read.  Only those findings are
         # held open: semgrep still read the code, so its answer still stands.
         codeql_unread_reason: (if $codeql_why == "" then null else $codeql_why end),
+        # The image the repository publishes could not be read whole.  Only
+        # findings that came from inside an image are held open.
+        image_unread_reason: (if $image_why == "" then null else $image_why end),
         # Which engine died, for whoever has to work out afterwards why a
         # repository went quiet.  This file is the only record that survives
         # the run, and it is what the diagnosis was missing.
@@ -501,6 +506,21 @@ scan_one_repo() {
   local window_days=0 from_marker="" head_marker=""
   local history_done="false" since_arg="" until_arg=""
 
+  # --- the image the repository publishes -------------------------------------
+  # Read before the credential pass, which reads what only the image holds,
+  # and while the default branch is still the one checked out, because that
+  # is where the compose file and the workflows that name the image live.  The
+  # structural rules run now, on the whole image, and their rows join the
+  # misconfigurations later.  See lib/images.sh.
+  if (( need_clone )) && [[ -d "$clone_dir" ]] && cfg_bool '.scan.images.contents' false; then
+    image_contents_prepare "$clone_dir" "$full_name"
+    if (( ${#IMAGE_CONTENT_DIRS[@]} > 0 )); then
+      IMAGE_FINDINGS_FILE=$(tmp_file image_findings)
+      image_contents_findings "$clone_dir" "$full_name" "$IMAGE_FINDINGS_FILE"
+      image_contents_prune "$clone_dir"
+    fi
+  fi
+
   # --- secrets --------------------------------------------------------------
   if cfg_bool '.scan.secrets.enabled' true; then
     local raw; raw=$(tmp_file raw_findings)
@@ -707,6 +727,19 @@ scan_one_repo() {
     local keep_low; keep_low=$(cfg_bool '.scan.secrets.triage.path_rule_downgrades_only' true && echo true || echo false)
     SECRETS_JSON=$(triage_partition "$triaged" "$keep_low")
     shred -u "$raw" 2>/dev/null || rm -f "$raw"
+
+    # What only the published image holds, triaged the same way and added.
+    if (( ${#IMAGE_CONTENT_DIRS[@]} > 0 )); then
+      local img_sec; img_sec=$(tmp_file image_secrets)
+      image_contents_secrets "$full_name" "$repo_json" "$want_gl" "$want_th" "$img_sec"
+      local merged_sec
+      if merged_sec=$(printf '%s' "$SECRETS_JSON" | jq -c --slurpfile img "$img_sec" '
+            .reported += ($img[0].reported // []) | .filtered += ($img[0].filtered // [])
+            | .suppressed += ($img[0].suppressed // [])') && [[ -n "$merged_sec" ]]; then
+        SECRETS_JSON="$merged_sec"
+      fi
+      wipe_file "$img_sec"
+    fi
 
     local n_rep n_conf
     n_rep=$(printf '%s' "$SECRETS_JSON" | jq '.reported | length')
@@ -932,6 +965,20 @@ scan_one_repo() {
     local tv; tv=$(tmp_file trivy)
     run_trivy_config "$clone_dir" "$full_name" "$tv"
     MISCONFIG_JSON=$(normalize_trivy_config "$tv" "$full_name" "$default_branch" "$(cfg '.github.web_url' 'https://github.com')")
+    # Archives that carry credential files, which no engine above opens, and
+    # the published image's own findings.  See lib/image_check.py.
+    local ic_py; ic_py=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
+    if [[ -n "$ic_py" ]]; then
+      local ic_out
+      ic_out=$("$ic_py" -I "$GHSCAN_HOME/lib/image_check.py" repo "$clone_dir" "$full_name" \
+                 "$default_branch" "$(cfg '.github.web_url' 'https://github.com')" \
+                 "$(provider_link_parts)" 2>/dev/null) || ic_out='[]'
+      [[ "$ic_out" == \[* && "$ic_out" != "[]" ]] && \
+        MISCONFIG_JSON=$(jq -c -s 'add' <(printf '%s' "$MISCONFIG_JSON") <(printf '%s' "$ic_out"))
+    fi
+    if [[ -n "${IMAGE_FINDINGS_FILE:-}" && -s "$IMAGE_FINDINGS_FILE" ]]; then
+      MISCONFIG_JSON=$(jq -c -s 'add' <(printf '%s' "$MISCONFIG_JSON") "$IMAGE_FINDINGS_FILE")
+    fi
     # The container user check reads the supervisor config trivy never opens.
     # A failure here keeps the rows as trivy graded them.
     local mc_py; mc_py=$(ghscan_venv_bin python3 2>/dev/null || command -v python3 || true)
@@ -1219,6 +1266,7 @@ scan_one_repo() {
   fi
 
   cfg_bool '.clone.keep_clones' false || rm -rf -- "$clone_dir"
+  image_contents_cleanup
   if (( full_passes )) && cfg_bool '.scan.vulnerabilities.enabled' true; then
     PASSES_DONE="${PASSES_DONE:+$PASSES_DONE }vulnerabilities"
   fi

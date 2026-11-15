@@ -34,14 +34,79 @@ CLOSE = re.compile(r'</script\s*>', re.IGNORECASE)
 # the parse.
 MAX_BYTES = 2_000_000
 
+PAGES = (".html", ".htm")
+# Server templates.  Their script blocks are where most DOM cross site
+# scripting lives in a PHP, JSP, ERB or Razor application, and nothing read
+# them.  They go to their own directory, because the server tags inside them
+# have to be stood in for, and only this project's own rules are run there:
+# the broad registry packs report every innerHTML in a template, which is the
+# noise the curated rules exist to avoid.
+TEMPLATES = (".php", ".phtml", ".jsp", ".jspx", ".erb", ".cshtml", ".vbhtml",
+             ".aspx", ".ascx", ".twig", ".jinja", ".jinja2", ".j2", ".hbs",
+             ".handlebars", ".ejs", ".mustache", ".tpl", ".vm", ".ftl", ".gsp")
+SKIP_DIRS = {"node_modules", "vendor", ".git", "dist", "build", "bower_components"}
+
+# Server side tags, the ones that print a value and the ones that only steer.
+# A printed value becomes __SERVER_VALUE__: a name, so it is valid wherever a
+# value is, plain text inside a string, and a mark the rules can follow as
+# data the server printed.  A control tag becomes a comment.  Either way the
+# tag's lines are kept, so a finding's line is the line in the template.
+SERVER_TAGS = re.compile(
+    r"<\?(?:php\b|=)?.*?(?:\?>|$)|<%[=#-]?.*?%>|\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}",
+    re.DOTALL)
+PRINTS = re.compile(r"^(<\?=|<\?php\s+(echo|print)\b|<%=|\{\{)", re.IGNORECASE)
+
+
+# What a printed tag holds when it cannot be anything a user typed: a
+# translation, a number, a constant, a token the page needs.  Those become a
+# plain 0, so only printed data is followed.
+TRANSLATION = re.compile(r"(?<![\w$>])(t|__|_e|_x|_n|_|trans|trans_choice|lang|gettext|"
+                         r"ngettext|i18n|translate|Lang::get|I18n\.t)\s*\(|"
+                         r"\|\s*(trans|t|translate|i18n)\b")
+PAGE_TOKEN = re.compile(r"csrf|nonce|xsrf", re.IGNORECASE)
+NUMERIC = re.compile(r"\(int\)|\(float\)|\(bool\)|\bintval\s*\(|\bfloatval\s*\(|"
+                     r"\bcount\s*\(|\bsizeof\s*\(|\bnumber_format\s*\(|\|\s*length\b")
+KEYWORDS = {"echo", "print", "true", "false", "null", "none", "and", "or", "not", "if",
+            "else", "raw", "safe", "json", "tojson", "json_encode", "escape", "e"}
+
+
+def _printed_data(inner: str) -> bool:
+    """Whether a printed tag prints a variable rather than a fixed value."""
+    if TRANSLATION.search(inner) or PAGE_TOKEN.search(inner) or NUMERIC.search(inner):
+        return False
+    if re.search(r"[$@][A-Za-z_]", inner):              # $php, @ruby
+        return True
+    # Template engines name variables bare.  Function names, string
+    # literals and CONSTANTS are not variables.
+    bare = re.sub(r"(['\"]).*?\1", "", inner)
+    bare = re.sub(r"\b[A-Za-z_][\w.:]*\s*\(", "(", bare)
+    for word in re.findall(r"\b[a-z_][A-Za-z0-9_]*\b", bare):
+        if word not in KEYWORDS:
+            return True
+    return False
+
+
+def _stand_in(match) -> str:
+    tag = match.group(0)
+    lines = tag.count("\n")
+    if PRINTS.match(tag):
+        inner = re.sub(r"^(<\?=|<\?php|<%=|\{\{)|(\?>|%>|\}\})$", "", tag.strip())
+        inner = re.sub(r"^\s*(echo|print)\b", "", inner)
+        return ("__SERVER_VALUE__" if _printed_data(inner) else "0") + "\n" * lines
+    return "/*-*/" + "\n" * lines
+
 
 def extract(root: Path, out_dir: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest, n = {}, 0
 
     for page in root.rglob("*"):
-        if not page.is_file() or page.suffix.lower() not in (".html", ".htm"):
+        suffix = page.suffix.lower()
+        if not page.is_file() or suffix not in PAGES + TEMPLATES:
             continue
+        if any(part in SKIP_DIRS for part in page.relative_to(root).parts[:-1]):
+            continue
+        template = suffix in TEMPLATES
         try:
             if page.stat().st_size > MAX_BYTES:
                 continue
@@ -70,8 +135,14 @@ def extract(root: Path, out_dir: Path) -> dict:
             offset = text.count("\n", 0, m.end()) + 1
             n += 1
             name = f"block{n}.js"
-            (out_dir / name).write_text(body, encoding="utf-8")
-            manifest[name] = {"path": str(page.relative_to(root)), "line_offset": offset}
+            if template:
+                body = SERVER_TAGS.sub(_stand_in, body)
+                (out_dir / "templates").mkdir(exist_ok=True)
+                (out_dir / "templates" / name).write_text(body, encoding="utf-8")
+            else:
+                (out_dir / name).write_text(body, encoding="utf-8")
+            manifest[name] = {"path": str(page.relative_to(root)), "line_offset": offset,
+                              "template": template}
 
     (out_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return manifest
@@ -98,7 +169,8 @@ def remap(results_path: Path, manifest: dict, out_path: Path) -> int:
         # one in a module, and somebody reading it should not have to work that
         # out from the file extension.
         meta = r.setdefault("extra", {}).setdefault("metadata", {})
-        meta["embedded_in"] = "html script block"
+        meta["embedded_in"] = ("server template script block" if entry.get("template")
+                               else "html script block")
         kept.append(r)
     out_path.write_text(json.dumps({"results": kept}), encoding="utf-8")
     return len(kept)

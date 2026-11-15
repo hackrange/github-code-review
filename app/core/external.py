@@ -2469,7 +2469,11 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
         auth_a = (external_auth.load(asset) or None) if asset else None
         # The second account, for the compare checks.  Loaded only when at least
         # one enabled rule needs it.
-        if asset and any("two_accounts" in (s.get("needs") or []) for s in specs):
+        from app.core.dast_checks import api_spec as api_spec_mod
+
+        api_record = api_spec_mod.load(asset_id) if asset else None
+        if asset and (api_record or any("two_accounts" in (s.get("needs") or [])
+                                         for s in specs)):
             auth_b = external_auth.load_b(asset) or None
 
     # Sign in FRESH for this stage.  The curated rules run last, after the engines
@@ -2496,7 +2500,7 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
         row["status"] = "skipped"
         row["detail"] = scope.refuse_reason(host, domains)
         return [], row
-    if not specs:
+    if not specs and not api_record:
         row["status"] = "skipped"
         row["detail"] = "no curated rules are enabled"
         return [], row
@@ -2530,6 +2534,18 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
         else:
             log.info("curated rule %s: %s - %s", spec.get("id"),
                      result["status"], result.get("detail"))
+    # The uploaded API description, if there is one: every operation it lists,
+    # tested for the API weaknesses that matter most.  Reads only.
+    api_detail = ""
+    if api_record and scan_id not in _stopping:
+        _update(scan_id, step="testing the API from its description")
+        try:
+            api_found, api_detail = api_spec_mod.run(api_record["parsed"], ctx)
+            findings += api_found
+            confirmed += len(api_found)
+        except Exception as exc:            # noqa: BLE001 - never fail the scan
+            api_detail = f"the API checks stopped: {type(exc).__name__}"
+            log.warning("api spec checks failed for scan %s", scan_id, exc_info=True)
     row["seconds"] = int(time.monotonic() - started)
     # Proof pictures for the cross account findings: what the first account sees
     # at the object, and what the second does, so a person can compare them.
@@ -2552,6 +2568,8 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
         notes.append(f"{invalid} could not be read")
     if notes:
         detail += ".  " + "; ".join(notes)
+    if api_detail:
+        detail += f".  API description: {api_detail}"
     row["detail"] = detail
     return findings, row
 

@@ -71,6 +71,8 @@ CATEGORIES = {
     "trust-client": ("CWE-602", "A value only the server should decide is taken from the request"),
     "model-trust": ("CWE-1426", "A model's answer changes a record with no check and no person "
                                 "confirming it"),
+    "workflow": ("CWE-841", "A step the process requires is skipped, or a state captured earlier "
+                            "is acted on after it changed"),
 }
 SEVERITIES = {"high": Severity.HIGH, "medium": Severity.MEDIUM, "low": Severity.LOW}
 
@@ -186,6 +188,10 @@ that keeps working after its user is deactivated or loses a role; a one time \
 code or public link that still works after the record it opened is finished.
   trust-client    a value only the server should decide (a price, a score, a \
 role, a verdict) taken from the request as is.
+  workflow        a state change that skips a step the process requires (an \
+approval before publishing, a review before closing, a status the record must \
+be in), or that acts on a status or decision captured earlier instead of the \
+record's current one, so a finished record can be changed or reopened.
   model-trust     a language model's answer is used to lower, close, waive, \
 hide, approve or otherwise change a record (a finding, a severity, a \
 permission, a decision) with no deterministic check that the answer is \
@@ -1074,10 +1080,92 @@ def reason(session, cfg: dict, repository: str, root: Path, limit: int | None = 
             _remember(session, repository, unit, json.dumps(
                 [dict(item, o=item["l"] - unit.start) for item in kept]))
             found += [(unit, item) for item in kept]
+    # Guards the code applies on one path and leaves off another.  Found in
+    # code for nothing; only the gaps are asked about, each once.
+    gap_asked, gap_cached = _sibling_gaps(session, cfg, repository, root, run, found)
+    asked += gap_asked
+    cached += gap_cached
     session.flush()
     return {"units": len(units), "cached": cached, "asked": asked, "calls": run.calls,
             "tokens": run.tokens, "found": found, "stopped": run.stopped,
             "left": left, "unanswered": unanswered}
+
+
+def _sibling_gaps(session, cfg: dict, repository: str, root: Path, run, found: list) -> tuple:
+    """Ask about the gaps sibling_guards finds.  -> (asked, cached).
+
+    The same rules as the main pass: an answer is cached against a digest of
+    the handler, the guard and the siblings' lines, so unchanged code is never
+    asked again; a claim is filed only when the second look calls it real.
+    """
+    from app.core import sibling_guards as sg
+
+    if cfg.get("ai.code_reasoning_siblings") is False:
+        return 0, 0
+    try:
+        cap = int(cfg.get("ai.code_reasoning_sibling_gaps") or sg.MAX_GAPS)
+        gaps = sg.gaps(sg.pieces(root), cap)
+    except Exception:                       # noqa: BLE001 - never fail the pass
+        log.warning("could not work out sibling guards for %s", repository, exc_info=True)
+        return 0, 0
+    if not gaps:
+        return 0, 0
+    digests = {id(g): sg.digest_of(g) for g in gaps}
+    known = {}
+    # Without flushing what the main pass left pending: a flush takes the write
+    # lock, and the usage record each question writes on its own connection
+    # would wait on it and be lost.  Usage is what the monthly limit counts.
+    with session.no_autoflush:
+        rows = (session.query(CodeReasoningCache)
+                .filter(CodeReasoningCache.digest.in_(list(digests.values())))
+                .order_by(CodeReasoningCache.id).all())
+    for row in rows:
+        if row.repository == repository or row.digest not in known:
+            known[row.digest] = row
+    asked = cached = 0
+    for gap in gaps:
+        unit, digest = gap["unit"], digests[id(gap)]
+        row = known.get(digest)
+        items = sg.cached_items(row, unit)
+        if items is not None:
+            cached += 1
+            if row.repository != repository:
+                _remember_digest(session, repository, digest, sg.remember_key(gap), row.result)
+            found += [(unit, item) for item in items]
+            continue
+        if run.stopped:
+            break
+        item = sg.ask(run, gap, mask, _block, CATEGORIES, SEVERITIES)
+        if item is None:
+            # Nothing came back from the service; not the code's fault, so
+            # nothing is remembered and it is asked next time.
+            continue
+        asked += 1
+        kept = []
+        if not item.get("none") and run.confirm(unit, item, root)["v"] == "real":
+            written = None if run.stopped else run.writeup(unit, item)
+            if written:
+                item["d"] = written
+            kept = [item]
+        if run.stopped and not kept and not item.get("none"):
+            continue
+        _remember_digest(session, repository, digest, sg.remember_key(gap), json.dumps(
+            [dict(i, o=i["l"] - unit.start) for i in kept]))
+        found += [(unit, i) for i in kept]
+    return asked, cached
+
+
+def _remember_digest(session, repository: str, digest: str, label: str, result: str) -> None:
+    with session.no_autoflush:
+        row = (session.query(CodeReasoningCache)
+               .filter(CodeReasoningCache.repository == repository,
+                       CodeReasoningCache.digest == digest).one_or_none())
+    if row is None:
+        row = CodeReasoningCache(repository=repository, digest=digest)
+        session.add(row)
+    row.unit = label[:500]
+    row.result = result
+    row.at = utcnow()
 
 
 def _cached(row):

@@ -374,6 +374,15 @@ TEMPLATE = {
                 # downloads something big.
                 "enabled": False,
                 "timeout_sec": 600,
+                # Read the image the repository itself publishes: the one a
+                # compose service builds and tags, or a workflow pushes.  See
+                # lib/images.sh.  Off by default for the same reason.
+                "contents": False,
+                # A reference comes from a file in the repository, so by
+                # default only public registry addresses are reached.
+                "allow_private_registries": False,
+                "contents_max_mb": 512,
+                "contents_max_images": 3,
             },
             "vulnerabilities": {
                 # Whether the application can actually reach each vulnerable

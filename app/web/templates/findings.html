@@ -493,7 +493,7 @@
                row.  A badge on every finding is a badge on none. #}
             {% if f.malicious %}<span class="badge critical"
               title="{{ f.malicious_reason }}">malicious</span>{% endif %}
-            {% if f.image_ref %}<span class="badge" title="{{ f.image_ref }}">base image</span>{% endif %}
+            {% if f.image_ref %}<span class="badge" title="{{ f.image_ref }}">{{ 'base image' if f.kind.value == 'dependency' else 'published image' }}</span>{% endif %}
             {% if f.reachability == 'reachable' %}<span class="badge">imported</span>
             {% elif f.reachability == 'unlikely' %}<span class="badge medium"
                 title="{{ f.reachability_reason }}">not reached</span>{% endif %}

@@ -266,6 +266,18 @@ DEFAULTS = {
                                 "operating system layer carries, which is where most of a "
                                 "critical count usually lives. Pulls images from their "
                                 "registries, so it is off until you want it."),
+    "images.contents":         (False, False,
+                                "Read the image the repository publishes, as named by a compose "
+                                "service that builds it or a workflow that pushes it: sudo "
+                                "grants, root running files another account owns, credentials "
+                                "and backups in the layers, source the repository does not "
+                                "have.  Pulls the image into memory, so it is off until you "
+                                "want it."),
+    "images.allow_private_registries": (False, False,
+                                "Let the published image read reach registries at private or "
+                                "internal addresses.  Off, a reference that resolves inside the "
+                                "network is refused, because a repository decides the "
+                                "reference."),
     "vulns.enabled":           (True, False, "Match packages against vulnerability databases."),
     "vulns.min_severity":      ("all", False, "Report at or above this. all keeps everything."),
     "access.enabled":          (True, False, "Collect who can reach each repository."),

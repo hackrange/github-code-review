@@ -2084,6 +2084,8 @@ async def save_settings(request: Request, user: User = Depends(current_user)):
         put("sbom.flagged_licenses", _csv_list(text("sbom.flagged_licenses")))
         put("vulns.enabled", _checked(form, "vulns.enabled"))
         put("images.enabled", _checked(form, "images.enabled"))
+        put("images.contents", _checked(form, "images.contents"))
+        put("images.allow_private_registries", _checked(form, "images.allow_private_registries"))
         put("vulns.min_severity", severity)
         put("access.enabled", _checked(form, "access.enabled"))
         put("pulls.enabled", _checked(form, "pulls.enabled"))

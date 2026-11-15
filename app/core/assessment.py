@@ -750,6 +750,11 @@ by_design or not_applicable",
  "attack": ["three to five short steps telling how an attacker would abuse it, \
 in plain words a non expert follows, each at most 30 words; empty for a false positive"],
  "fixes": ["up to four concrete steps, each at most 25 words"],
+ "controls": ["up to two compensating controls the evidence shows already lower \
+this risk while it stands, such as a check further along the same path, a \
+framework default, or a firewall, header or rate limit set in the repository; \
+each at most 20 words, naming where it is; empty when the evidence shows none; \
+never a reason to leave the issue unfixed"],
  "fix_start": the first line number, as printed in the code you were shown, \
 of the lines your fix replaces, or 0 when the fix is not a change to lines you \
 were shown,
@@ -826,7 +831,11 @@ may only use names the evidence shows exist.
 
 Answer with one JSON object and nothing else, no markdown fence:
 {{"what_it_is": "two to four sentences on what this repository holds and who uses it",
- "positives": ["up to six security strengths the evidence shows, each one sentence"],
+ "positives": ["up to six security strengths the evidence shows, each one sentence \
+naming the control and where it is: sign in and second factor, role and owner checks, \
+request forgery protection, output escaping, parameterized queries, encrypted secrets, \
+security headers or a content security policy set by the code, audit logging, rate \
+limits; only what the evidence shows, never a guess"],
  "design": {{"components": [up to ten parts for a logic diagram: the people \
 and systems that use it, the entry points, the main logic units that do the \
 work (such as Login and sessions, Vendor risk scoring, CSV export, Nightly \
@@ -1215,6 +1224,8 @@ def _clean_item(raw: dict, fallback: dict | None = None) -> dict:
         # the reader who does not read code.  Only for a real problem.
         "scenario": "" if closed else tidy(raw.get("scenario"), 900),
         "fixes": [tidy(x, 300) for x in fixes[:4] if str(x or "").strip()],
+        "controls": [tidy(x, 240) for x in (raw.get("controls") if isinstance(
+            raw.get("controls"), list) else [])[:2] if str(x or "").strip()],
     }
     waiver_check = str(raw.get("waiver_check") or "").strip().lower()
     item["waiver_check"] = (waiver_check if waiver_check in
@@ -2890,9 +2901,24 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
             f"{len(scored)} issues are rated, and the most serious is "
             f"{scored[0]['title'] if scored else 'none'}.")]
 
+    # The controls in front of the sites this repository is pinned to, as the
+    # site checks last saw them: part of what stands between these issues and
+    # an attacker.  A snapshot, so the report says what was true when written.
+    site_controls = []
+    try:
+        from app.core import compensating
+
+        with session_scope() as sdb:
+            for site in compensating.site_controls_for_repository(sdb, repository):
+                site_controls.append({"host": site["host"], "controls": [
+                    {**c, "lowers": sorted(c["lowers"])} for c in site["controls"]]})
+    except Exception:                       # noqa: BLE001 - never fail the report
+        log.warning("could not read the site controls for %s", repository, exc_info=True)
+
     result = {
         "repository": repository, "branch": branch, "commit": commit,
         "file_count": file_count, "facts": facts, "overall": overall,
+        "site_controls": site_controls,
         "overview": overview, "items": items, "summary": summary,
         "waived_top": waived_top, "waived_issues": len(waived_items),
         "tallies": tallies, "profile": profile,
@@ -3428,6 +3454,24 @@ def document_context(view_: dict, base_url: str = "") -> dict:
         item["finding_id"] = primary
         item["finding_link"] = (f"{base}/findings/{primary}"
                                 if base and primary is not None else "")
+    # What already lowers each issue, and what can be done in days while the
+    # code fix is made.  At render time, so an older report gets them too.
+    from app.core import compensating
+
+    site_controls = [{**c, "lowers": set(c.get("lowers") or [])}
+                     for site in (result.get("site_controls") or [])
+                     for c in site.get("controls") or []]
+    for item in items:
+        if item.get("rating") == "Informational" or item.get("waived"):
+            continue
+        item["compensating"] = list(item.get("controls") or []) + [
+            c for c in compensating.controls_for(item, site_controls)
+            if c not in (item.get("controls") or [])]
+        item["interim"] = compensating.interim_for(item)
+    site_strengths = [{"host": site.get("host"), "items": compensating.strengths(
+        [{**c, "lowers": set(c.get("lowers") or [])} for c in site.get("controls") or []])}
+        for site in (result.get("site_controls") or [])]
+    site_strengths = [s for s in site_strengths if s["items"]]
     retests = [i for i in items if i.get("retest") and i["rating"] != "Informational"]
     design = (result.get("overview") or {}).get("design") or {}
     placed, loose = report_design.place(design, items) if design else ({}, [])
@@ -3451,4 +3495,5 @@ def document_context(view_: dict, base_url: str = "") -> dict:
             "likelihood_words": LIKELIHOOD_WORDS, "row": view_["row"],
             "verdict": report_standards.verdict(items),
             "coverage": report_standards.coverage(items),
-            "retests": retests, "standards": report_standards.STANDARDS}
+            "retests": retests, "standards": report_standards.STANDARDS,
+            "site_strengths": site_strengths}

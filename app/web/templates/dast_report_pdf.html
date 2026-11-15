@@ -154,12 +154,20 @@
 <p class="faint">Written from the findings in section 4.  Check it against them.</p>
 {% endif %}
 
+{% if strengths %}
+{# What the site does well, before the problems, so a reader knows whether
+   they are looking at a well defended site with a few gaps or not.  Only
+   controls the scan saw at work. #}
+<h3>2.2  What the site does well</h3>
+<ul>{% for s in strengths %}<li>{{ s | sentence_spaced }}</li>{% endfor %}</ul>
+{% endif %}
+
 {% if top %}
-<h3>2.2  Top issues</h3>
+<h3>2.3  Top issues</h3>
 <ol>{% for f in top %}<li><strong>{{ f.title }}</strong> <span class="badge r-{{ f.severity }}">{{ f.severity | upper }}</span> <span class="soft">{{ f.ref }}</span></li>{% endfor %}</ol>
 {% endif %}
 
-<h3>2.3  OWASP Top 10 grades</h3>
+<h3>2.4  OWASP Top 10 grades</h3>
 <table class="heat">
   <thead><tr><th style="text-align:left">Category</th><th class="c">Grade</th>
     {% for s in ['critical','high','medium','low','info'] %}<th class="c">{{ s | capitalize }}</th>{% endfor %}</tr></thead>
@@ -176,7 +184,7 @@
 </table>
 <p class="faint">Each category is graded on its own findings.  The overall grade caps any one category at 25 points.</p>
 
-<h3>2.4  Risk matrix</h3>
+<h3>2.5  Risk matrix</h3>
 <p class="faint">{{ "Each finding placed by how likely it is real and reachable against what a successful exploit would yield, weighted by how exposed the site is.  This is risk, not a compliance count." | sentence_spaced }}</p>
 <table class="heat">
   <thead><tr><th style="text-align:left">Impact \ Likelihood</th>
@@ -277,6 +285,15 @@
   <p class="faint">{{ f.repro.hint | sentence_spaced }}</p>
   {% endif %}
   {% if f.remediation %}<div style="margin-top:2mm"><strong>How to fix it</strong></div><p>{{ f.remediation | sentence_spaced }}</p>{% endif %}
+  {% if f.compensating %}
+  <div style="margin-top:2mm"><strong>Controls already in front of it</strong></div>
+  <ul>{% for c in f.compensating %}<li>{{ c | sentence_spaced }}</li>{% endfor %}</ul>
+  <p class="faint">{{ "These lower how likely the weakness is to be used.  They do not fix it." | sentence_spaced }}</p>
+  {% endif %}
+  {% if f.interim %}
+  <div style="margin-top:2mm"><strong>Interim protection while the fix is made</strong></div>
+  <ul>{% for step in f.interim %}<li>{{ step | sentence_spaced }}</li>{% endfor %}</ul>
+  {% endif %}
   <p class="faint">References: {{ f.owasp_url }}{% if f.cwe_url %}, {{ f.cwe_url }}{% endif %}{% if f.reference %}, {{ f.reference }}{% endif %}</p>
 </div>
 {% endfor %}

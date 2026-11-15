@@ -236,6 +236,25 @@
       nothing else here looks.  Nothing is built: the base image named in the
       Dockerfile is pulled from its registry and read, so leave this off unless
       the bandwidth and the disk are yours to spend.</span>
+    <label class="check">
+      <input type="checkbox" name="images.contents" value="1"
+             {{ 'checked' if values['images.contents'] }}> Read the image each repository publishes
+    </label>
+    <span class="faint small">The image a compose service builds and tags, or a
+      workflow pushes, is what a server runs, and it can differ from the
+      repository: a sudo rule a layer adds, root running files the web account
+      can change, a backup or a key left in the build, a credential deleted in
+      a later layer that is still in an earlier one, source copied in from
+      outside the repository.  The image is read into memory and thrown away;
+      nothing is built or run.</span>
+    <label class="check">
+      <input type="checkbox" name="images.allow_private_registries" value="1"
+             {{ 'checked' if values['images.allow_private_registries'] }}> Allow registries at private addresses
+    </label>
+    <span class="faint small">Off, a published image whose registry resolves to an
+      internal address is not read, because the reference comes from a file in
+      the repository and anyone who can push could point it anywhere.  Turn on
+      if your images live in an internal registry.</span>
     <label>Report at or above
       <select name="vulns.min_severity">
         {% for level in ['all', 'low', 'medium', 'high', 'critical'] %}

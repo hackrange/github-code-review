@@ -376,6 +376,14 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
     # The verified real world precedent for each weakness class, from the vetted
     # table, so the report shows a factual comparable case even with no AI triage.
     dast_precedent.annotate(findings)
+    # What already stands in front of each finding, and what can be added in
+    # days while the code fix is made.  From what the site shows, no AI.
+    from app.core import compensating
+
+    site_controls = compensating.site_controls(external.telemetry_of(asset),
+                                               getattr(asset, "exposure", "") or "")
+    compensating.annotate(findings, site_controls)
+    compensating.adjust_risk(findings, site_controls)
     # Code sinks from the mapped repositories, split by whether the scan reached
     # the route they sit behind.  Reachable ones are leads to prove; the rest
     # are context to review, not dynamic bugs.
@@ -490,6 +498,10 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
         "started": started, "finished": finished,
         "duration": int((finished - started).total_seconds()) if started and finished else None,
         "organization_name": organization,
+        # What the site does well, for the executive summary: controls the
+        # evidence shows, never a guess.
+        "strengths": compensating.strengths(site_controls),
+        "site_controls": site_controls,
     }
 
 

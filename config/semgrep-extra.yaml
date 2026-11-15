@@ -439,7 +439,13 @@ rules:
     confidence: MEDIUM
   pattern-either:
   - pattern: $R->isValid(null)
+  # The stored request id, or null when this browser started no sign in: the
+  # same as passing null for every response nobody asked for.
+  - pattern: '$R->isValid($ID ?: null)'
+  - pattern: $R->isValid($ID ?? null)
   - pattern: $A->processResponse(null)
+  - pattern: '$A->processResponse($ID ?: null)'
+  - pattern: $A->processResponse($ID ?? null)
   - pattern: $A->processResponse()
   - pattern: $A.process_response(request_id=None)
   - pattern: $A.process_response()
@@ -1622,3 +1628,538 @@ rules:
   - pattern-regex: \.set\(\s*["']trust proxy["']\s*,\s*true\s*\)
   - pattern-regex: (?m)^\s*set_real_ip_from\s+(0\.0\.0\.0/0|::/0)\s*;
   - pattern-regex: (?m)^\s*RemoteIP(Internal|Trusted)Proxy\s+.*\b(0\.0\.0\.0/0|::/0)\b
+
+# --- 2026-11-15: coverage for classes an outside review found and the packs
+# here did not.  Each is written for the pattern, not for the repository that
+# showed it, and was run against every other code base on this host before it
+# went in: certificate checks switched off in PHP, check then fetch with no
+# pinned address in PHP, address blocklists that compare text, secrets a
+# container start script prints, an application that runs sudo, SQL read from
+# a file and run in a request, and HTML built from object fields.
+- id: gcr-saml-response-not-bound-js
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: InResponseTo is not checked, so a SAML response is accepted without being tied to a sign in
+    this application started. A response captured once can be replayed into a new session, or posted
+    into a victim's browser to sign them in as somebody else. Leave the check on and keep the request
+    ids in a shared cache.
+  metadata:
+    cwe: 'CWE-294: Authentication Bypass by Capture-replay'
+    category: security
+    confidence: HIGH
+  pattern-either:
+  - pattern: '{..., validateInResponseTo: false, ...}'
+  - pattern: '{..., validateInResponseTo: "never", ...}'
+  - pattern: '{..., validateInResponseTo: ValidateInResponseTo.never, ...}'
+- id: gcr-tls-verify-disabled-php
+  languages:
+  - php
+  severity: WARNING
+  message: Certificate checking is turned off for this connection, so anybody on the network path can
+    pose as the server, read what is sent, and change what comes back. If one known host has a bad
+    certificate, trust that certificate alone (CURLOPT_CAINFO or a pinned public key) rather than all
+    of them.
+  metadata:
+    cwe: 'CWE-295: Improper Certificate Validation'
+    category: security
+    confidence: HIGH
+  pattern-either:
+  - pattern: 'curl_setopt($C, CURLOPT_SSL_VERIFYPEER, false)'
+  - pattern: 'curl_setopt($C, CURLOPT_SSL_VERIFYPEER, 0)'
+  - pattern: '[..., CURLOPT_SSL_VERIFYPEER => false, ...]'
+  - pattern: '[..., CURLOPT_SSL_VERIFYPEER => 0, ...]'
+  - pattern: '[..., "verify_peer" => false, ...]'
+  - pattern: '[..., "verify" => false, ...]'
+  # The host name check alone, where the certificate check was left on.  When
+  # both are off the one finding above says it.
+  - patterns:
+    - pattern-either:
+      - pattern: 'curl_setopt($C, CURLOPT_SSL_VERIFYHOST, false)'
+      - pattern: 'curl_setopt($C, CURLOPT_SSL_VERIFYHOST, 0)'
+    - pattern-not-inside: |
+        curl_setopt($C, CURLOPT_SSL_VERIFYPEER, false);
+        ...
+    - pattern-not-inside: |
+        curl_setopt($C, CURLOPT_SSL_VERIFYHOST, $H);
+        ...
+        curl_setopt($C, CURLOPT_SSL_VERIFYPEER, false);
+    - pattern-not-inside: |
+        curl_setopt($C, CURLOPT_SSL_VERIFYPEER, 0);
+        ...
+    - pattern-not-inside: |
+        curl_setopt($C, CURLOPT_SSL_VERIFYHOST, $H);
+        ...
+        curl_setopt($C, CURLOPT_SSL_VERIFYPEER, 0);
+  - patterns:
+    - pattern-either:
+      - pattern: '[..., CURLOPT_SSL_VERIFYHOST => false, ...]'
+      - pattern: '[..., CURLOPT_SSL_VERIFYHOST => 0, ...]'
+    - pattern-not: '[..., CURLOPT_SSL_VERIFYPEER => false, ...]'
+    - pattern-not: '[..., CURLOPT_SSL_VERIFYPEER => 0, ...]'
+  - patterns:
+    - pattern: '[..., "verify_peer_name" => false, ...]'
+    - pattern-not: '[..., "verify_peer" => false, ...]'
+- id: gcr-check-then-fetch-unpinned-php
+  languages:
+  - php
+  severity: WARNING
+  message: The host is checked for a private address, then fetched by name, which looks the name up
+    again. A name that answers with a public address for the check and a private one for the fetch
+    (DNS rebinding) walks straight past the check. Resolve once, check that address, and hand it to
+    curl with CURLOPT_RESOLVE so the connection goes to the address that was checked; check every
+    redirect the same way.
+  metadata:
+    cwe: 'CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-inside: |
+      function $F(...) { ... }
+  - pattern-either:
+    - pattern-inside: |
+        if (<... $CHECK(...) ...>) { ... }
+        ...
+    - pattern-inside: |
+        if (<... $O->$CHECK(...) ...>) { ... }
+        ...
+    - pattern-inside: |
+        if (<... self::$CHECK(...) ...>) { ... }
+        ...
+  - metavariable-regex:
+      metavariable: $CHECK
+      regex: (?i)^(_*(is_?safe_?(url|host|target|address)|is_?blocked_?(host|ip|address)|is_?private_?(host|ip|address)?|is_?public_?(host|ip|address)?|is_?internal_?(host|ip|address)?|is_?allowed_?(host|url)|check_?(host|url|target)|validate_?(host|url)|.*url_?host_?safe|.*host_?is_?safe))$
+  - pattern-either:
+    - pattern: curl_exec($CH)
+    - pattern: file_get_contents($U, ...)
+  - pattern-not-inside: |
+      function $F(...) {
+        ...
+        curl_setopt($C2, CURLOPT_RESOLVE, $X);
+        ...
+      }
+  - pattern-not-inside: |
+      function $F(...) {
+        ...
+        curl_setopt($C2, CURLOPT_CONNECT_TO, $X);
+        ...
+      }
+  - pattern-not-inside: |
+      function $F(...) {
+        ...
+        curl_setopt_array($C2, [..., CURLOPT_RESOLVE => $X, ...]);
+        ...
+      }
+  - pattern-not-inside: |
+      function $F(...) {
+        ...
+        curl_setopt_array($C2, [..., CURLOPT_CONNECT_TO => $X, ...]);
+        ...
+      }
+- id: gcr-ip-blocklist-by-string-prefix
+  languages:
+  - php
+  severity: WARNING
+  message: An address is judged private or internal by the text it starts with. The same address has
+    other spellings that start differently, such as ::ffff:169.254.169.254, 0:0:0:0:0:0:0:1,
+    2852039166 or 0x7f.1, and HTTP clients connect to them all. Parse the address and test it with
+    the library's own range checks, over IPv4 and IPv6 alike, and refuse anything that does not
+    parse or resolve.
+  metadata:
+    cwe: 'CWE-184: Incomplete List of Disallowed Inputs'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-inside: |
+      function $FN(...) { ... }
+  - metavariable-regex:
+      metavariable: $FN
+      regex: (?i).*(safe|unsafe|private|public|internal|external|blocked|block|allowed|allow|deny|denied|forbidden|local|loopback|reserved|ssrf|valid|trusted|metadata).*
+  - pattern-either:
+    - pattern: 'strpos($IP, "$PRE") === 0'
+    - pattern: 'strpos($IP, "$PRE") == 0'
+    - pattern: 'str_starts_with($IP, "$PRE")'
+    - pattern: 'substr($IP, 0, $N) === "$PRE"'
+    - pattern: 'substr($IP, 0, $N) == "$PRE"'
+  - metavariable-regex:
+      metavariable: $PRE
+      regex: ^(127\.|10\.|169\.254\.?|192\.168\.?|172\.(1[6-9]|2\d|3[01])\.|100\.64\.|0\.|fe80:?|fc00:?|fd00:?|::1)$
+- id: gcr-ip-blocklist-by-string-prefix-python
+  languages:
+  - python
+  severity: WARNING
+  message: An address is judged private or internal by the text it starts with. The same address has
+    other spellings that start differently, such as ::ffff:169.254.169.254, 0:0:0:0:0:0:0:1,
+    2852039166 or 0x7f.1, and HTTP clients connect to them all. Parse the address and test it with
+    the library's own range checks, over IPv4 and IPv6 alike, and refuse anything that does not
+    parse or resolve.
+  metadata:
+    cwe: 'CWE-184: Incomplete List of Disallowed Inputs'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-inside: |
+      def $FN(...):
+        ...
+  - metavariable-regex:
+      metavariable: $FN
+      regex: (?i).*(safe|unsafe|private|public|internal|external|blocked|block|allowed|allow|deny|denied|forbidden|local|loopback|reserved|ssrf|valid|trusted|metadata).*
+  - pattern-either:
+    - pattern: '$IP.startswith("$PRE")'
+  - metavariable-regex:
+      metavariable: $PRE
+      regex: ^(127\.|10\.|169\.254\.?|192\.168\.?|172\.(1[6-9]|2\d|3[01])\.|100\.64\.|0\.|fe80:?|fc00:?|fd00:?|::1)$
+- id: gcr-ip-blocklist-by-string-prefix-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: An address is judged private or internal by the text it starts with. The same address has
+    other spellings that start differently, such as ::ffff:169.254.169.254, 0:0:0:0:0:0:0:1,
+    2852039166 or 0x7f.1, and HTTP clients connect to them all. Parse the address and test it with
+    the library's own range checks, over IPv4 and IPv6 alike, and refuse anything that does not
+    parse or resolve.
+  metadata:
+    cwe: 'CWE-184: Incomplete List of Disallowed Inputs'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        function $FN(...) { ... }
+    - pattern-inside: |
+        $FN = function(...) { ... }
+    - pattern-inside: |
+        $FN = (...) => { ... }
+    - pattern-inside: |
+        $FN(...) { ... }
+  - metavariable-regex:
+      metavariable: $FN
+      regex: (?i).*(safe|unsafe|private|public|internal|external|blocked|block|allowed|allow|deny|denied|forbidden|local|loopback|reserved|ssrf|valid|trusted|metadata).*
+  - pattern-either:
+    - pattern: '$IP.startsWith("$PRE")'
+    - pattern: '$IP.indexOf("$PRE") === 0'
+    - pattern: '$IP.indexOf("$PRE") == 0'
+  - metavariable-regex:
+      metavariable: $PRE
+      regex: ^(127\.|10\.|169\.254\.?|192\.168\.?|172\.(1[6-9]|2\d|3[01])\.|100\.64\.|0\.|fe80:?|fc00:?|fd00:?|::1)$
+- id: gcr-ip-blocklist-by-string-prefix-java
+  languages:
+  - java
+  - kotlin
+  severity: WARNING
+  message: An address is judged private or internal by the text it starts with. The same address has
+    other spellings that start differently, such as ::ffff:169.254.169.254, 0:0:0:0:0:0:0:1,
+    2852039166 or 0x7f.1, and HTTP clients connect to them all. Parse the address and test it with
+    the library's own range checks, over IPv4 and IPv6 alike, and refuse anything that does not
+    parse or resolve.
+  metadata:
+    cwe: 'CWE-184: Incomplete List of Disallowed Inputs'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-inside: |
+      $T $FN(...) { ... }
+  - metavariable-regex:
+      metavariable: $FN
+      regex: (?i).*(safe|unsafe|private|public|internal|external|blocked|block|allowed|allow|deny|denied|forbidden|local|loopback|reserved|ssrf|valid|trusted|metadata).*
+  - pattern-either:
+    - pattern: '$IP.startsWith("$PRE")'
+  - metavariable-regex:
+      metavariable: $PRE
+      regex: ^(127\.|10\.|169\.254\.?|192\.168\.?|172\.(1[6-9]|2\d|3[01])\.|100\.64\.|0\.|fe80:?|fc00:?|fd00:?|::1)$
+- id: gcr-ip-blocklist-by-string-prefix-go
+  languages:
+  - go
+  severity: WARNING
+  message: An address is judged private or internal by the text it starts with. The same address has
+    other spellings that start differently, such as ::ffff:169.254.169.254, 0:0:0:0:0:0:0:1,
+    2852039166 or 0x7f.1, and HTTP clients connect to them all. Parse the address and test it with
+    the library's own range checks, over IPv4 and IPv6 alike, and refuse anything that does not
+    parse or resolve.
+  metadata:
+    cwe: 'CWE-184: Incomplete List of Disallowed Inputs'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-inside: |
+      func $FN(...) $R { ... }
+  - metavariable-regex:
+      metavariable: $FN
+      regex: (?i).*(safe|unsafe|private|public|internal|external|blocked|block|allowed|allow|deny|denied|forbidden|local|loopback|reserved|ssrf|valid|trusted|metadata).*
+  - pattern-either:
+    - pattern: 'strings.HasPrefix($IP, "$PRE")'
+  - metavariable-regex:
+      metavariable: $PRE
+      regex: ^(127\.|10\.|169\.254\.?|192\.168\.?|172\.(1[6-9]|2\d|3[01])\.|100\.64\.|0\.|fe80:?|fc00:?|fd00:?|::1)$
+- id: gcr-secret-printed-to-log-shell
+  languages:
+  - generic
+  paths:
+    include:
+    - '*entrypoint*'
+    - '*entry-point*'
+    - '*docker-entrypoint*'
+    - 'docker/*.sh'
+    - 'docker/**/*.sh'
+  severity: WARNING
+  message: A container's start script prints a password, key or token. Its output is kept by the log
+    driver, shipped to log collectors and handed out in support bundles, so the secret lives on in
+    places nobody thinks of as holding one. Write it to a file only root can read, and print where it
+    is instead.
+  metadata:
+    cwe: 'CWE-532: Insertion of Sensitive Information into Log File'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-regex: (?m)^[ \t]*(echo|printf)\b[^\n>|]*\$\{?[A-Za-z_]*(PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|PRIVATE_KEY|ENCRYPTION_KEY|ACCESS_KEY|CLIENT_SECRET)[A-Za-z_]*\}?[^\n>|]*$
+  - pattern-not-regex: (?m)^[ \t]*(echo|printf)\b[^\n]*\$\{?[A-Za-z_]*(PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|PRIVATE_KEY|ENCRYPTION_KEY|ACCESS_KEY|CLIENT_SECRET)[A-Za-z_]*_(FILE|PATH|DIR|NAME|LENGTH|LEN|URL|HOST|USER)\b
+  - pattern-not-regex: \$\{#[A-Za-z_]+\}
+  - pattern-not-inside: |
+      {
+        ...
+      } >
+  - pattern-not-inside: |
+      cat > $FILE <<$EOF
+      ...
+      $EOF
+  - pattern-not-regex: \$\{?[A-Za-z_]*(PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|PRIVATE_KEY|ENCRYPTION_KEY|ACCESS_KEY|CLIENT_SECRET)[A-Za-z_]*:[+?]
+- id: gcr-app-runs-sudo
+  languages:
+  - php
+  severity: WARNING
+  message: The application runs a command through sudo, so the account it runs as can do that as root.
+    Anything that gets code running as the application, through any bug in it, gets the same. A file
+    writer such as tee or cp hands over whatever root can write. Do the privileged part at build or
+    deploy time, or behind a narrow root service that takes no free-form input.
+  metadata:
+    cwe: 'CWE-250: Execution with Unnecessary Privileges'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - patterns:
+      - pattern-either:
+        - pattern: '$FN("$CMD", ...)'
+        - pattern: '$FN("$CMD" . $REST, ...)'
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: ^\s*sudo\s
+    - pattern: '$FN(["sudo", ...], ...)'
+  - metavariable-regex:
+      metavariable: $FN
+      regex: ^(exec|shell_exec|system|passthru|proc_open|popen|run|call|check_call|check_output|Popen|getoutput|getstatusoutput|execSync|spawn|spawnSync|execFile|execFileSync|capture2|capture3|capture2e|spawn_command)$
+  - focus-metavariable: $FN
+- id: gcr-app-runs-sudo-python
+  languages:
+  - python
+  severity: WARNING
+  message: The application runs a command through sudo, so the account it runs as can do that as root.
+    Anything that gets code running as the application, through any bug in it, gets the same. A file
+    writer such as tee or cp hands over whatever root can write. Do the privileged part at build or
+    deploy time, or behind a narrow root service that takes no free-form input.
+  metadata:
+    cwe: 'CWE-250: Execution with Unnecessary Privileges'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - patterns:
+      - pattern-either:
+        - pattern: '$FN("$CMD", ...)'
+        - pattern: '$M.$FN("$CMD", ...)'
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: ^\s*sudo\s
+    - pattern: '$FN(["sudo", ...], ...)'
+    - pattern: '$M.$FN(["sudo", ...], ...)'
+  - metavariable-regex:
+      metavariable: $FN
+      regex: ^(exec|shell_exec|system|passthru|proc_open|popen|run|call|check_call|check_output|Popen|getoutput|getstatusoutput|execSync|spawn|spawnSync|execFile|execFileSync|capture2|capture3|capture2e|spawn_command)$
+  - focus-metavariable: $FN
+- id: gcr-app-runs-sudo-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: The application runs a command through sudo, so the account it runs as can do that as root.
+    Anything that gets code running as the application, through any bug in it, gets the same. A file
+    writer such as tee or cp hands over whatever root can write. Do the privileged part at build or
+    deploy time, or behind a narrow root service that takes no free-form input.
+  metadata:
+    cwe: 'CWE-250: Execution with Unnecessary Privileges'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - patterns:
+      - pattern-either:
+        - pattern: '$FN("$CMD", ...)'
+        - pattern: '$M.$FN("$CMD", ...)'
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: ^\s*sudo\s
+    - pattern: '$FN("sudo", [...], ...)'
+    - pattern: '$M.$FN("sudo", [...], ...)'
+  - metavariable-regex:
+      metavariable: $FN
+      regex: ^(exec|shell_exec|system|passthru|proc_open|popen|run|call|check_call|check_output|Popen|getoutput|getstatusoutput|execSync|spawn|spawnSync|execFile|execFileSync|capture2|capture3|capture2e|spawn_command)$
+  - focus-metavariable: $FN
+- id: gcr-app-runs-sudo-ruby
+  languages:
+  - ruby
+  severity: WARNING
+  message: The application runs a command through sudo, so the account it runs as can do that as root.
+    Anything that gets code running as the application, through any bug in it, gets the same. A file
+    writer such as tee or cp hands over whatever root can write. Do the privileged part at build or
+    deploy time, or behind a narrow root service that takes no free-form input.
+  metadata:
+    cwe: 'CWE-250: Execution with Unnecessary Privileges'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - patterns:
+      - pattern-either:
+        - pattern: '$FN("$CMD", ...)'
+        - pattern: '$M.$FN("$CMD", ...)'
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: ^\s*sudo\s
+    - pattern: '$FN("sudo", ...)'
+    - pattern: '$M.$FN("sudo", ...)'
+  - metavariable-regex:
+      metavariable: $FN
+      regex: ^(exec|shell_exec|system|passthru|proc_open|popen|run|call|check_call|check_output|Popen|getoutput|getstatusoutput|execSync|spawn|spawnSync|execFile|execFileSync|capture2|capture3|capture2e|spawn_command)$
+  - focus-metavariable: $FN
+- id: gcr-sql-from-request-chosen-file-php
+  languages:
+  - php
+  severity: ERROR
+  message: SQL read from a file the request names or uploads is run as it stands, with the
+    application's own database account. Whoever can reach this page can run any statement, read
+    every table, and change who is allowed to do what, past every check the application makes.
+    Run migrations from the deployment, never from a web request.
+  metadata:
+    cwe: 'CWE-89: Improper Neutralization of Special Elements used in an SQL Command'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        if (<... $_POST ...>) { ... }
+    - pattern-inside: |
+        if (<... $_GET ...>) { ... }
+    - pattern-inside: |
+        if (<... $_REQUEST ...>) { ... }
+    - pattern-inside: |
+        if (<... $_FILES ...>) { ... }
+    - pattern-inside: |
+        if (<... $_SERVER['REQUEST_METHOD'] ...>) { ... }
+  # A file is read, and its statements, or the whole of it, are run as they
+  # stand.  How it is split in between does not change what it is.
+  - pattern-inside: |
+      $C = file_get_contents(...);
+      ...
+  - pattern-either:
+    - pattern: $DB->query($C, ...)
+    - pattern: $DB->exec($C)
+    - pattern: $DB->multi_query($C)
+    - pattern: mysqli_multi_query($L, $C)
+    - patterns:
+      - pattern-inside: |
+          foreach ($LIST as $S) { ... }
+      - pattern-either:
+        - pattern: $DB->query($S)
+        - pattern: $DB->exec($S)
+        - pattern: mysqli_query($L, $S)
+        - pattern: $DB->multi_query($S)
+- id: gcr-dom-html-built-from-fields
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: HTML is built by joining a field of an object straight into a string that goes into the
+    page, with nothing escaping it. Fields like these usually come from the server, and if this one
+    holds text a user typed (a name, a title, a description), that text runs as script in the browser
+    of whoever views it. Set textContent, build the elements with createElement, or escape the value
+    before it goes into the string.
+  metadata:
+    cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $E.innerHTML = $V
+    - pattern: $E.innerHTML += $V
+    - pattern: $E.outerHTML = $V
+    - pattern: $E.insertAdjacentHTML($P, $V)
+    - patterns:
+      - pattern-either:
+        - pattern-inside: |
+            function $FN(...) { ... $E.innerHTML = $H; ... }
+        - pattern-inside: |
+            function $FN(...) { ... $E.insertAdjacentHTML($P, $H); ... }
+        - pattern-inside: |
+            $FN = function(...) { ... $E.innerHTML = $H; ... }
+      - pattern: $H += $V
+  - metavariable-regex:
+      metavariable: $V
+      regex: (?s).*?['"`][^'"`]*<[a-zA-Z]
+  # An expression that escapes some of its fields was written by somebody who
+  # decided which ones are text.  What they left raw is numbers and fixed
+  # values, and reporting those is noise.
+  - metavariable-regex:
+      metavariable: $V
+      regex: (?s)^(?!.*\b(escapeHtml|escHtml|escapeHTML|htmlEscape|escape|esc|he\.encode|he\.escape|sanitize|sanitizeHtml|encodeHTML|htmlEncode|escape_html|escapeAttr|escAttr|escapeAttribute|filterXSS)\s*\().*
+  - metavariable-pattern:
+      metavariable: $V
+      patterns:
+      - pattern-either:
+        - pattern: $L + $O.$F
+        - pattern: $O.$F + $R
+        - pattern: $O.$F || $D
+        - pattern: '`...${$O.$F}...`'
+      - metavariable-regex:
+          metavariable: $F
+          regex: (?i)^(?!(length|id|ids|uuid|count|size|total|index|idx|i|n|num|number|page|pages|percent|progress|score|width|height|top|left|x|y|status_code|code|year|month|day|hours?|minutes?|seconds?|created_at|updated_at|date|time|timestamp|.*(_id|Id|_count|Count|_index|Index|_total|Total|_num|Num|_pct|Pct|_at|At|_length|Length|_size|Size|html|Html|HTML|_markup|Markup|svg|Svg|icon|Icon))$)
+      - pattern-not-inside: escapeHtml(...)
+      - pattern-not-inside: escHtml(...)
+      - pattern-not-inside: escapeHTML(...)
+      - pattern-not-inside: htmlEscape(...)
+      - pattern-not-inside: escape(...)
+      - pattern-not-inside: esc(...)
+      - pattern-not-inside: _.escape(...)
+      - pattern-not-inside: he.encode(...)
+      - pattern-not-inside: he.escape(...)
+      - pattern-not-inside: DOMPurify.sanitize(...)
+      - pattern-not-inside: sanitize(...)
+      - pattern-not-inside: sanitizeHtml(...)
+      - pattern-not-inside: encodeHTML(...)
+      - pattern-not-inside: htmlEncode(...)
+      - pattern-not-inside: encodeURIComponent(...)
+      - pattern-not-inside: encodeURI(...)
+      - pattern-not-inside: Number(...)
+      - pattern-not-inside: parseInt(...)
+      - pattern-not-inside: parseFloat(...)
+      - pattern-not-inside: String(...)
+      - pattern-not-inside: CSS.escape(...)
+      - pattern-not-inside: Handlebars.escapeExpression(...)
+      - pattern-not-inside: escape_html(...)
+      - pattern-not-inside: h(...)
+      - pattern-not-inside: e(...)
+      - pattern-not-inside: safe(...)
+      - pattern-not-inside: text(...)
+      - pattern-not-inside: escapeAttr(...)
+      - pattern-not-inside: escAttr(...)
+      - pattern-not-inside: escapeAttribute(...)
+      - pattern-not-inside: xss(...)
+      - pattern-not-inside: filterXSS(...)
+      - pattern-not-inside: purify(...)
+      - pattern-not-inside: $X.replace(...)
+      - pattern-not-inside: $X.replaceAll(...)
+      - pattern-not-inside: $X.textContent = $Y
+      - metavariable-regex:
+          metavariable: $O
+          regex: ^(?!(this|Math|window|document|JSON|Number|console|location|navigator|i18n|lang|strings|labels|messages|config|CONFIG|settings|SETTINGS|constants|CONSTANTS)$)

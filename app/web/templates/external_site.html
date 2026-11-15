@@ -566,6 +566,18 @@
           <input type="file" name="adhoc_archive" accept=".zip,.tar.gz,.tgz">
           <span class="faint small">A .zip or .tar.gz of the code, up to 200 MB.  Use this for private or internal code.  An upload replaces the git URL.</span></label>
       </details>
+      <details class="hand-fields" {{ 'open' if api_spec }}>
+        <summary><strong>API description (OpenAPI or Swagger)</strong> <span class="faint small">test every operation the API lists, not only the pages a crawler finds.  Optional.</span></summary>
+        <input type="hidden" name="with_api_spec" value="1">
+        {% if api_spec %}<div class="small" style="margin:.3rem 0">Now using: <span class="mono">{{ api_spec.name }}</span>
+          ({{ api_spec.kind }}{% if api_spec.title %}, {{ api_spec.title }}{% endif %}{% if api_spec.version %} {{ api_spec.version }}{% endif %}):
+          {{ api_spec.operations }} operations, {{ api_spec.reads }} reads, {{ api_spec.secured }} that need a sign in, {{ api_spec.admin }} administrative.
+          Uploaded by {{ api_spec.by }} on {{ api_spec.at[:10] }}.
+          <label class="check" style="display:inline-block;margin-left:.5rem"><input type="checkbox" name="api_spec_clear" value="1"> clear it</label></div>{% endif %}
+        <label>Upload the description
+          <input type="file" name="api_spec" accept=".json,.yaml,.yml">
+          <span class="faint small">A JSON or YAML OpenAPI 3 or Swagger 2 file, up to 5 MB.  The scan tests object level access across the two accounts, operations that should need a sign in, administrative operations reached by the account described as lower privilege, secrets in responses, and address parameters with the out of band callback.  Reads only: nothing is created, changed or deleted.  Requests always go to this site, never to the servers the file names.</span></label>
+      </details>
       <details class="hand-fields">
         <summary><strong>Telemetry by hand</strong> <span class="faint small">for a site the scan cannot reach, or to correct it.  A value here wins over the scan's until it is cleared.</span></summary>
         {% for group, rows in fields %}
