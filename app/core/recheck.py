@@ -33,7 +33,11 @@ log = logging.getLogger("gcr.recheck")
 # rechecks on top of that is how a machine falls over mid scan.
 _slots = threading.Semaphore(2)
 
-CLONE_TIMEOUT = 90
+# A one commit, one branch clone.  Ninety seconds was too short for a branch
+# of a hundred megabytes or more over a busy link, and the security report
+# then wrote itself from the scanner's records alone, with no code and no
+# drawing.
+CLONE_TIMEOUT = 300
 ENGINE_TIMEOUT = 120
 
 # Which username the host wants when the password is a token.  Gitea and

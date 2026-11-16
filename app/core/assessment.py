@@ -3395,15 +3395,33 @@ def final_counts(items: list) -> dict:
     return out
 
 
+# Where a finding graded before the review sits on the heat map.  Its grade
+# came from a person or a validation, not from a likelihood and an impact, so
+# it is placed in the cell that represents its rating and marked, rather than
+# left off the map as though it were not there.
+GRADE_CELL = {"Critical": (5, 4), "High": (4, 3), "Medium": (3, 2), "Low": (2, 2)}
+
+
+def _cell_of(item: dict):
+    if item.get("rating") == "Informational":
+        return None
+    if item.get("decided"):
+        return GRADE_CELL.get(item.get("rating"))
+    return (item.get("likelihood"), item.get("impact"))
+
+
 def matrix(items: list) -> list:
-    """5 by 5 rows, most likely first: [{likelihood, label, cells:[{ids, rating}]}]."""
+    """5 by 5 rows, most likely first: [{likelihood, label, cells:[{ids, rating}]}].
+
+    A finding graded before this review is placed by its grade and its id
+    carries an asterisk.
+    """
     rows = []
     for lk in range(5, 0, -1):
         cells = []
         for im in range(1, 6):
-            ids = [i["id"] for i in items if i["rating"] != "Informational"
-                   and not i.get("decided")
-                   and i["likelihood"] == lk and i["impact"] == im]
+            ids = [i["id"] + ("*" if i.get("decided") else "") for i in items
+                   if _cell_of(i) == (lk, im)]
             cells.append({"ids": ids, "rating": rating_for(lk * im).lower()})
         rows.append({"likelihood": lk, "label": LIKELIHOOD_WORDS[lk], "cells": cells})
     return rows

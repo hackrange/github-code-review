@@ -571,9 +571,10 @@ def build(context: dict) -> bytes:
               align=WD_ALIGN_PARAGRAPH.CENTER)
         _shade(last.cells[n], "D6DCE4")
     _widths(t, [1.2] + [1.1] * 5)
-    D.p("Rows are likelihood and columns are impact.  False alarms and ratings decided "
-        "before this review have no scores and are not shown.", italic=True, size=8.5,
-        color=GRAY)
+    D.p("Rows are likelihood and columns are impact.  False alarms carry no risk and are "
+        "not shown.  An id marked * was graded before this review, by a person or a "
+        "validation, and is placed in the cell for its rating rather than scored.",
+        italic=True, size=8.5, color=GRAY)
 
     # ---- 5 detailed findings
     D.page_break()

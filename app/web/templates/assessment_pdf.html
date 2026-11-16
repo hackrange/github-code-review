@@ -303,7 +303,7 @@
   {% endfor %}
   <tr><th></th>{% for n in range(1, 6) %}<th>{{ n }} {{ impact_words[n] }}</th>{% endfor %}</tr>
 </table>
-<p class="faint" style="text-align:center">{{ "Rows are likelihood and columns are impact.  False alarms carry no risk and are not shown.  Neither are ratings decided before this review, which have no scores." | sentence_spaced }}</p>
+<p class="faint" style="text-align:center">{{ "Rows are likelihood and columns are impact.  False alarms carry no risk and are not shown.  An id marked * was graded before this review, by a person or a validation, and is placed in the cell for its rating rather than scored." | sentence_spaced }}</p>
 
 {# ---------------------------------------------------- detailed findings #}
 <h2 class="new-page" style="margin-top:0">5.  Detailed Findings</h2>
