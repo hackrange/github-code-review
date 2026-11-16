@@ -492,3 +492,38 @@ def open_among_protected(records: list, declared=lambda path: True) -> list:
                         "refused_count": len(refused),
                         "open_beside": len(opened) - 1})
     return out
+
+
+# ------------------------------------------------ write routes left untested
+
+MAX_UNTESTED = 150
+
+
+def untested_writes(writes: list, records: list) -> dict:
+    """Which of the code's write routes the engines sent that method to.
+
+    This product's own checks never send a request that changes something,
+    and the engines only post the forms they find, so most routes that
+    create, change or delete are never exercised.  Saying which, by name, is
+    how a report tells its reader where a code review or a test by a person
+    has to look.  -> {"total", "tested", "untested": [{method, route,
+    repository, file, line}]}
+    """
+    seen = {}
+    for rec in records or []:
+        for method in rec.get("m") or []:
+            seen.setdefault(method.upper(), []).append(rec.get("p") or "")
+    out, tested, done = [], 0, set()
+    for w in writes or []:
+        key = (w.get("method"), (w.get("route") or "").lower())
+        if key in done:
+            continue
+        done.add(key)
+        index = Index({0: [w["route"]]}, skip_generic=False)
+        if any(index.lookup(p) for p in seen.get(w["method"], [])):
+            tested += 1
+            continue
+        if len(out) < MAX_UNTESTED:
+            out.append({k: w.get(k) for k in ("method", "route", "repository", "file", "line")})
+    return {"total": len(done), "tested": tested, "untested": out,
+            "more": max(0, len(done) - tested - len(out))}

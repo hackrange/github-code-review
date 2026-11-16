@@ -329,6 +329,23 @@
 {% endif %}
 {% endif %}
 
+{% if writes and writes.untested %}
+<h2 class="new-page">{{ '6' if (reachable_sinks or context_sinks) else '5' }}.  Routes that change data, not tested</h2>
+<p>{{ ("This scan is read only by design: its own checks never send a request that creates, changes or deletes anything, and the engines only submit the forms they find.  The code behind the site declares " ~ writes.total ~ " route" ~ ('' if writes.total == 1 else 's') ~ " that change data, and the scan sent the matching method to " ~ writes.tested ~ " of them.  The rest are below.  A clean report says nothing about them.") | sentence_spaced }}</p>
+<p>{{ "Check each one in the code, or with a person testing it: that it asks for a sign in, that it checks the caller may change that record, and that it does not trust a record number from the request." | sentence_spaced }}</p>
+<table>
+  <thead><tr><th>Method</th><th>Route</th><th>Where</th></tr></thead>
+  <tbody>
+  {% for w in writes.untested[:80] %}
+    <tr><td>{{ w.method }}</td><td class="mono">{{ w.route }}</td>
+      <td class="mono">{{ w.repository }} {{ w.file }}:{{ w.line }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% set rest = (writes.untested | length - 80 if writes.untested | length > 80 else 0) + (writes.more or 0) %}
+{% if rest %}<p class="faint">{{ rest }} more not shown.</p>{% endif %}
+{% endif %}
+
 <h2 class="new-page">Appendix A.  The scan underneath</h2>
 <table>
   <tr><td class="k">Scan number</td><td>{{ scan.id }}</td></tr>

@@ -752,6 +752,7 @@ def remember_code_lost(asset_id: int, lost) -> None:
 
 
 MAX_SAMPLE_LINKS = 5
+MAX_WHITEBOX_WRITES = 300
 
 
 def sample_links_of(asset) -> list:
@@ -2422,7 +2423,7 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
         plan = plan[:MAX_WHITEBOX_REPOS]
         adhoc = {"git": asset.adhoc_git_url or "", "archive": asset.adhoc_archive or "",
                  "asset_id": asset_id} if asset is not None else {}
-    out = {"repos": [], "routes": [], "by_repo": {}, "sinks": []}
+    out = {"repos": [], "routes": [], "by_repo": {}, "sinks": [], "writes": []}
     for repo_id, name, connection, branch in plan:
         if scan_id in _stopping:
             break
@@ -2447,6 +2448,9 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
                     for sink in got.get("sinks") or []:
                         if len(out["sinks"]) < MAX_WHITEBOX_SINKS:
                             out["sinks"].append(dict(sink, repository=name))
+                    for write in got.get("writes") or []:
+                        if len(out["writes"]) < MAX_WHITEBOX_WRITES:
+                            out["writes"].append(dict(write, repository=name))
         except Exception as exc:  # noqa: BLE001 - the scan carries on without it
             entry["error"] = f"{type(exc).__name__}: {exc}"[:200]
         out["repos"].append(entry)
@@ -2482,6 +2486,9 @@ def _whitebox(scan_id: int, asset_id: int, host: str) -> dict:
                     for sink in got.get("sinks") or []:
                         if len(out["sinks"]) < MAX_WHITEBOX_SINKS:
                             out["sinks"].append(dict(sink, repository=label))
+                    for write in got.get("writes") or []:
+                        if len(out["writes"]) < MAX_WHITEBOX_WRITES:
+                            out["writes"].append(dict(write, repository=label))
         except Exception as exc:  # noqa: BLE001 - the scan carries on without it
             entry["error"] = f"{type(exc).__name__}: {exc}"[:200]
         out["repos"].append(entry)
@@ -3498,7 +3505,8 @@ def _paths_and_code(scan_id, asset_id, url, seen, findings, wb, opts, stopped,
         first = {r["p"] for r in records if r.get("v") and index.any_match(r["p"])}
         dast_paths.verify(records, controls, fetch, first)
     paths = {"control": {p: c["status"] for p, c in controls.items()},
-             "paths": records, "counts": dast_paths.counts(records)}
+             "paths": records, "counts": dast_paths.counts(records),
+             "writes": dast_paths.untested_writes(wb.get("writes") or [], records)}
     sinks = _correlate_sinks(wb.get("sinks") or [], records)
     _update(scan_id, paths=json.dumps(paths), paths_count=paths["counts"]["answered"],
             paths_real=paths["counts"]["reachable"],

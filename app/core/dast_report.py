@@ -393,6 +393,11 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
         code_sinks = []
     reachable_sinks = [s for s in code_sinks if s.get("reachable")]
     context_sinks = [s for s in code_sinks if not s.get("reachable")]
+    # The code's write routes the scan never sent their method to.  Read
+    # only by design, so these are where a review or a person has to look.
+    from app.core import dast_paths
+
+    writes = dast_paths.load(scan.paths).get("writes") or {}
     # Real SAST findings behind this site, grouped by the weakness type they are,
     # so a corroboration can name the exact code finding (its GCR id), not just
     # say "a code sink".  That is the SAST telemetry driving a positive match.
@@ -486,6 +491,7 @@ def build(db, asset, scan, user=None, organization: str = "") -> dict:
         "overall": overall, "by_sev": by_sev, "categories": categories,
         "risk_matrix": risk_matrix, "data_profile": data_profile,
         "reachable_sinks": reachable_sinks, "context_sinks": context_sinks,
+        "writes": writes,
         "heat_max": heat_max, "triaged": triaged, "ai_summary": ai_summary,
         "narrative": narrative(asset.host, view, overall, by_sev, triaged, profile_words),
         "top": [f for f in findings if f.get("severity") in ("critical", "high")

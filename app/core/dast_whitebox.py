@@ -104,6 +104,85 @@ def _clean_route(raw: str) -> str:
     return path
 
 
+MAX_WRITES = 200
+WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
+# Routes that change something, with their method.  The method is group "m"
+# and the path group "p".  A dynamic scan of this product is read only by
+# design, so these are the routes it never tests; listing them says where a
+# code review or a test with a person has to look instead.
+WRITE_PATTERNS = [
+    # Express, Koa, Fastify, Hono: app.post('/x')
+    re.compile(r"\b(?:app|router|server|api|route[rs]?)\.(?P<m>post|put|patch|delete)\(\s*['\"`](?P<p>/[^'\"`\s]*)"),
+    # Flask, FastAPI: @router.post("/x")
+    re.compile(r"@\w+\.(?P<m>post|put|patch|delete)\(\s*['\"](?P<p>/[^'\"\s]*)"),
+    # Spring: @PostMapping("/x")
+    re.compile(r"@(?P<m>Post|Put|Patch|Delete)Mapping\(\s*(?:value\s*=\s*|path\s*=\s*)?\{?\s*['\"](?P<p>/?[^'\"\s]*)"),
+    # Go: r.POST("/x"), e.Post("/x")
+    re.compile(r"\.(?P<m>POST|PUT|PATCH|DELETE|Post|Put|Patch|Delete)\(\s*['\"`](?P<p>/[^'\"`\s]*)"),
+    # Rails routes.rb: post '/x'
+    re.compile(r"^\s*(?P<m>post|put|patch|delete)\s+['\"](?P<p>/?[^'\"\s]*)", re.M),
+    # Laravel: Route::post('/x'
+    re.compile(r"Route::(?P<m>post|put|patch|delete)\(\s*['\"](?P<p>/?[^'\"\s]*)"),
+]
+# ASP.NET: [HttpPost], [HttpPost("x")], joined with the controller's [Route].
+_CS_CLASS_ROUTE = re.compile(
+    r"\[Route\(\s*\"(?P<p>[^\"]*)\"\s*\)\][^{;]*?\bclass\s+(?P<c>\w+)", re.S)
+_CS_CLASS = re.compile(r"\bclass\s+(?P<c>\w+)")
+_CS_WRITE = re.compile(r"\[Http(?P<m>Post|Put|Patch|Delete)(?:\(\s*\"(?P<p>[^\"]*)\"[^)]*\))?\]")
+
+
+def _line_of(text: str, index: int) -> int:
+    return text.count("\n", 0, index) + 1
+
+
+def _aspnet_writes(text: str) -> list:
+    """[(method, path, line)] for ASP.NET actions that change something."""
+    if "[Http" not in text:
+        return []
+    classes = [(m.start(), m.group("c")) for m in _CS_CLASS.finditer(text)]
+    routes = {m.group("c"): m.group("p") for m in _CS_CLASS_ROUTE.finditer(text)}
+    out = []
+    for m in _CS_WRITE.finditer(text):
+        owner = ""
+        for start, name in classes:
+            if start < m.start():
+                owner = name
+        template = m.group("p")
+        if template is not None and template.startswith(("/", "~/")):
+            raw = template.lstrip("~")
+        else:
+            base = routes.get(owner, "")
+            if not base and template is None:
+                continue
+            raw = "/" + "/".join(x.strip("/") for x in (base, template or "") if x.strip("/"))
+        controller = owner[:-len("Controller")] if owner.endswith("Controller") else owner
+        raw = re.sub(r"\[controller\]", controller, raw, flags=re.I)
+        if "[action]" in raw.lower():
+            continue
+        out.append((m.group("m").upper(), raw, _line_of(text, m.start())))
+    return out
+
+
+def writes_in(text: str, rel: str) -> list:
+    """Routes in one file that change something.  -> [{method, route, file, line}]"""
+    found = []
+    if rel.endswith(".cs"):
+        found = _aspnet_writes(text)
+    else:
+        for pattern in WRITE_PATTERNS:
+            for m in pattern.finditer(text):
+                found.append((m.group("m").upper(), m.group("p"), _line_of(text, m.start())))
+    out, seen = [], set()
+    for method, raw, line in found:
+        route = _clean_route(raw)
+        if not route or route == "/" or (method, route) in seen:
+            continue
+        seen.add((method, route))
+        out.append({"method": method, "route": route, "file": rel, "line": line})
+    return out
+
+
 def _openapi_paths(text: str, name: str) -> list:
     """Paths from an OpenAPI or Swagger file, JSON or YAML."""
     out = []
@@ -145,8 +224,9 @@ def _sinks_in(text: str, rel: str, file_routes: list) -> list:
 
 
 def read(root: Path, host: str = "") -> dict:
-    """-> {routes: [path], sinks: [...], host_files: [file], files: read}"""
-    routes, sinks, host_files, read_count = [], [], [], 0
+    """-> {routes: [path], sinks: [...], host_files: [file], files: read,
+    writes: [{method, route, file, line}]}"""
+    routes, sinks, host_files, read_count, writes = [], [], [], 0, []
     host_re = re.compile(r"(?<![A-Za-z0-9.-])" + re.escape(host.lower()) + r"(?![A-Za-z0-9-])",
                          re.I) if host else None
     for dirpath, dirnames, filenames in os.walk(root):
@@ -191,7 +271,9 @@ def read(root: Path, host: str = "") -> dict:
                             routes.append(cleaned)
             if len(sinks) < MAX_SINKS:
                 sinks += _sinks_in(text, rel, file_routes)
+            if len(writes) < MAX_WRITES:
+                writes += writes_in(text, rel)
             if len(routes) >= MAX_ROUTES * 2 and len(sinks) >= MAX_SINKS:
                 break
     return {"routes": routes[:MAX_ROUTES], "sinks": sinks[:MAX_SINKS],
-            "host_files": host_files, "files": read_count}
+            "host_files": host_files, "files": read_count, "writes": writes[:MAX_WRITES]}
