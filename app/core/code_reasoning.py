@@ -73,6 +73,8 @@ CATEGORIES = {
                                 "confirming it"),
     "workflow": ("CWE-841", "A step the process requires is skipped, or a state captured earlier "
                             "is acted on after it changed"),
+    "data-exposure": ("CWE-213", "A response hands over more of a record than its caller should "
+                                 "have"),
 }
 SEVERITIES = {"high": Severity.HIGH, "medium": Severity.MEDIUM, "low": Severity.LOW}
 
@@ -1085,6 +1087,11 @@ def reason(session, cfg: dict, repository: str, root: Path, limit: int | None = 
     gap_asked, gap_cached = _sibling_gaps(session, cfg, repository, root, run, found)
     asked += gap_asked
     cached += gap_cached
+    # Handlers that look a record up from the request and return it whole.
+    # Found in code for nothing; only those are asked about, each once.
+    exp_asked, exp_cached = _record_exposure(session, cfg, repository, root, run, found)
+    asked += exp_asked
+    cached += exp_cached
     session.flush()
     return {"units": len(units), "cached": cached, "asked": asked, "calls": run.calls,
             "tokens": run.tokens, "found": found, "stopped": run.stopped,
@@ -1151,6 +1158,65 @@ def _sibling_gaps(session, cfg: dict, repository: str, root: Path, run, found: l
             continue
         _remember_digest(session, repository, digest, sg.remember_key(gap), json.dumps(
             [dict(i, o=i["l"] - unit.start) for i in kept]))
+        found += [(unit, i) for i in kept]
+    return asked, cached
+
+
+def _record_exposure(session, cfg: dict, repository: str, root: Path, run, found: list) -> tuple:
+    """Ask about handlers that return a looked up record as it is.  -> (asked, cached).
+
+    The same rules as the sibling question: cached against a digest of the
+    handler and the class it returns, filed only when the second look calls
+    it real.  C# and Java handlers are read here even though the main pass
+    does not read those languages.
+    """
+    from app.core import record_exposure as rx
+
+    if cfg.get("ai.code_reasoning_exposure") is False:
+        return 0, 0
+    try:
+        cap = int(cfg.get("ai.code_reasoning_exposure_max") or rx.MAX_CANDIDATES)
+        cands = rx.candidates(root, limit=cap)
+    except Exception:                       # noqa: BLE001 - never fail the pass
+        log.warning("could not look for returned records in %s", repository, exc_info=True)
+        return 0, 0
+    if not cands:
+        return 0, 0
+    digests = {id(c): rx.digest_of(c) for c in cands}
+    known = {}
+    with session.no_autoflush:
+        rows = (session.query(CodeReasoningCache)
+                .filter(CodeReasoningCache.digest.in_(list(digests.values())))
+                .order_by(CodeReasoningCache.id).all())
+    for row in rows:
+        if row.repository == repository or row.digest not in known:
+            known[row.digest] = row
+    asked = cached = 0
+    for cand in cands:
+        unit, digest = cand["unit"], digests[id(cand)]
+        row = known.get(digest)
+        items = rx.cached_items(row, unit)
+        if items is not None:
+            cached += 1
+            if row.repository != repository:
+                _remember_digest(session, repository, digest, rx.remember_key(cand), row.result)
+            found += [(unit, item) for item in items]
+            continue
+        if run.stopped:
+            break
+        item = rx.ask(run, cand, mask, _block, CATEGORIES, SEVERITIES)
+        if item is None:
+            continue
+        asked += 1
+        kept = []
+        if not item.get("none") and run.confirm(unit, item, root)["v"] == "real":
+            written = None if run.stopped else run.writeup(unit, item)
+            if written:
+                item["d"] = written
+            kept = [item]
+        if run.stopped and not kept and not item.get("none"):
+            continue
+        _remember_digest(session, repository, digest, rx.remember_key(cand), rx.result_of(kept, unit))
         found += [(unit, i) for i in kept]
     return asked, cached
 

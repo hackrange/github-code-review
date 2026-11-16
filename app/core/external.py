@@ -2615,7 +2615,37 @@ def _start_scan_proxy(session, host, upstream, workdir):
                             workdir=workdir, auth_hosts=[host])
 
 
-def _browser_dom(scan_id, url, opts, proxy) -> tuple:
+def _keep_client_calls(asset_id: int, url: str, collected: dict) -> None:
+    """Keep the calls this site's pages make to other sites on the list."""
+    from urllib.parse import urlsplit
+
+    from app.core import dom_scan
+
+    with session_scope() as db:
+        hosts = [h for (h,) in db.query(ExternalAsset.host).all()]
+        calls = dom_scan.api_calls(collected, urlsplit(url).hostname or "", hosts)
+        asset = db.get(ExternalAsset, asset_id)
+        if asset is not None:
+            asset.client_calls = json.dumps({"at": utcnow().isoformat(), "calls": calls}) if calls else ""
+
+
+def client_calls_for(db, host: str) -> dict:
+    """The paths other sites' pages call on this host.  -> {source host: [path]}"""
+    out = {}
+    host = (host or "").lower()
+    for src, raw in (db.query(ExternalAsset.host, ExternalAsset.client_calls)
+                     .filter(ExternalAsset.client_calls.like(f"%{host}%")).all()):
+        try:
+            calls = (json.loads(raw or "{}").get("calls") or {}).get(host) or []
+        except (ValueError, AttributeError):
+            continue
+        paths = [p for p in calls if isinstance(p, str) and p.startswith("/")]
+        if paths:
+            out[src] = paths[:120]
+    return out
+
+
+def _browser_dom(scan_id, url, opts, proxy, asset_id=None) -> tuple:
     """Load the page in a real browser, run its scripts, and read the JavaScript
     it loaded.  -> (findings, an engines summary row).  Findings are a secret
     hardcoded in client code or source exposed through a source map; both are
@@ -2629,6 +2659,11 @@ def _browser_dom(scan_id, url, opts, proxy) -> tuple:
     if not collected.get("ok"):
         return [], {"tool": "dom", "name": name, "status": "skipped", "seconds": 0,
                     "detail": collected.get("error") or "the browser gave no answer"}
+    if asset_id is not None:
+        try:
+            _keep_client_calls(asset_id, url, collected)
+        except Exception:  # noqa: BLE001 - the scan stands without it
+            log.exception("scan %s: the page's API calls were not kept", scan_id)
     try:
         findings = dom_scan.scan(collected, url)
     except Exception:  # noqa: BLE001 - the rest of the scan stands without it
@@ -2929,6 +2964,26 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                 engines[-1]["lost"] = lost["repos"]
         except Exception:  # noqa: BLE001 - the scan stands without the comparison
             log.exception("scan %s: the code reading was not compared", scan_id)
+    # The calls other sites' pages make to this one, read from their scripts
+    # by their own scans: an API behind a portal is reached through them.
+    called = []
+    if url and plan:
+        with session_scope() as db:
+            from_pages = client_calls_for(db, host)
+        if from_pages:
+            for paths in from_pages.values():
+                for p in paths:
+                    full = url.rstrip("/") + p
+                    if full not in called:
+                        called.append(full)
+                    bare = p.split("?")[0]
+                    if bare not in wb["routes"]:
+                        wb["routes"].append(bare)
+            n = len(called)
+            engines.append({"tool": "client-calls", "name": "Calls from other sites' pages",
+                            "status": "ok", "seconds": 0,
+                            "detail": f"{n} path{'s' if n != 1 else ''} this site is called on "
+                                      "by the code of " + ", ".join(sorted(from_pages))[:300]})
     # Signing in, for the engines.  Baseline and testssl stay signed out:
     # one reads the public posture, the other only talks TLS.
     session, secrets = {}, []
@@ -2967,9 +3022,11 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
             _update(scan_id, engines=json.dumps(engines))
         engine_proxy = scan_proxy.url if scan_proxy else proxy
         try:
-            # Links on the front page, then the routes from the code.
+            # Links on the front page, then the routes from the code, then
+            # what other sites' pages call here.
             extra = dast_engines.links_in(url, base["telemetry"].get("body_sample") or "")
             extra += [r for r in routes if r not in extra]
+            extra += [c for c in called if c not in extra]
             timeouts = engine_timeouts_for(asset_id)
             for tool in plan:
                 if scan_id in _stopping:
@@ -3031,7 +3088,7 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
     if url and profile in ("thorough", "premium") and external_probe.playwright_python() \
             and scan_id not in _stopping:
         _update(scan_id, step="reading the page in a browser")
-        dom_findings, dom_row = _browser_dom(scan_id, url, opts, proxy)
+        dom_findings, dom_row = _browser_dom(scan_id, url, opts, proxy, asset_id)
         findings += dom_findings
         engines.append(dom_row)
         _update(scan_id, engines=json.dumps(engines))

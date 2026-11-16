@@ -2411,6 +2411,10 @@ class ExternalAsset(Base):
     # routes from that the newest scan did not.  JSON written at the end of
     # each scan, "" when nothing was lost, NULL before it was ever worked out.
     code_lost = Column(Text)
+    # The calls this site's own pages make to other sites on the list, read
+    # from its scripts by the browser scan: {"at", "calls": {host: [path]}}.
+    # A scan of one of those sites starts from them.
+    client_calls = Column(Text, default="")
 
     # Who answers for the site, as addresses, comma separated.
     executive_owner = Column(String(500), default="")

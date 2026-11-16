@@ -306,6 +306,13 @@
         all of a repository's branches.  Ones answered before do not count and
         cost nothing.  Whatever is left is read on the next scan, so a large
         repository is covered over a few scans and nothing is read twice.</p>
+      <label class="check"><input type="checkbox" name="ai.code_reasoning_exposure" value="1"
+             {{ 'checked' if values['ai.code_reasoning_exposure'] }}>
+        <span>Ask about handlers that return a looked up record whole</span></label>
+      <p class="faint small">A handler that takes a key or record number from the request and
+        sends the stored record back as it is hands over everything in it: other people's
+        addresses and keys, staff names, IP addresses.  Those are found in the code for nothing,
+        C# and Java included, and only they are asked about: at most 15 a repository, each once.</p>
     </div>
   </div>
 

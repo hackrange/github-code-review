@@ -85,3 +85,80 @@ def scan(collected: dict, base_url: str) -> list:
                 fix="Do not deploy source maps to production, or restrict access to them.",
                 cwe="CWE-540"))
     return findings
+
+
+# ------------------------------------------- the API calls a page's code makes
+
+# A single page app keeps where its API lives in a configuration object, and
+# builds each call by adding a name to it.  Minifying renames the objects but
+# keeps the property names, so these survive a production build.
+_BASE_KEYS = r"(?:base_?url|api_?url|api_?base(?:_?url)?|api_?endpoint|api_?root|service_?url|backend_?url|api_?host)"
+_BASE_VALUE = re.compile(r"\b" + _BASE_KEYS + r"""\s*[:=]\s*["'`](https?://[^"'`\s]{4,200})["'`]""", re.I)
+_JOINED = re.compile(
+    r"\b" + _BASE_KEYS + r"""\s*\}?\s*\+\s*["'`]([^"'`\s]{2,160})["'`]|"""
+    r"\$\{[\w.$]*?" + _BASE_KEYS + r"""\}([^`$\s]{2,160})""", re.I)
+_ABSOLUTE = re.compile(r"""["'`](https?://([A-Za-z0-9.\-]+)(/[A-Za-z0-9_\-./{}%]*)?(?:\?[^"'`\s]*)?)["'`]""")
+MAX_CALLS = 120
+
+
+def _clean_call(path: str) -> str:
+    """A path to ask for: values dropped, parameter names kept with an empty value."""
+    from urllib.parse import parse_qsl, urlsplit
+
+    parts = urlsplit(path)
+    base = re.sub(r"\{[^}/]*\}|\$\{[^}]*\}", "1", parts.path or "/")
+    base = re.sub(r"/{2,}", "/", base if base.startswith("/") else "/" + base)
+    if not re.fullmatch(r"/[A-Za-z0-9._~\-/%]*", base):
+        return ""
+    names = [k for k, _v in parse_qsl(parts.query, keep_blank_values=True)
+             if re.fullmatch(r"[A-Za-z_][\w\-]{0,40}", k)]
+    query = "&".join(f"{k}=" for k in dict.fromkeys(names))
+    return base + (f"?{query}" if query else "")
+
+
+from app.core.dast_paths import STATIC  # noqa: E402 - pictures and styles are not calls
+
+
+def api_calls(collected: dict, site_host: str, hosts) -> dict:
+    """The calls the page's code makes to other sites on the list.
+
+    hosts are the host names of the sites being scanned; a call to anywhere
+    else is never kept, so this can only point a scan at a site already in
+    scope.  -> {host: [path, ...]}"""
+    from urllib.parse import urljoin, urlsplit
+
+    hosts = {h.lower() for h in hosts or ()} - {(site_host or "").lower()}
+    if not hosts:
+        return {}
+    texts = [s.get("text") or "" for s in collected.get("scripts") or []]
+    texts += [t or "" for t in collected.get("inline") or []]
+    out: dict = {}
+
+    def keep(url: str):
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if host not in hosts:
+            return
+        path = _clean_call(parts.path + (f"?{parts.query}" if parts.query else ""))
+        if path and STATIC.search(path.split("?")[0]):
+            return
+        if path and path != "/":
+            bucket = out.setdefault(host, [])
+            if path not in bucket and sum(len(v) for v in out.values()) < MAX_CALLS:
+                bucket.append(path)
+
+    for text in texts:
+        bases = [m.group(1) for m in _BASE_VALUE.finditer(text)]
+        bases = [b for b in bases if (urlsplit(b).hostname or "").lower() in hosts]
+        for m in _ABSOLUTE.finditer(text):
+            if (m.group(2) or "").lower() in hosts and m.group(3) and m.group(3) != "/":
+                keep(m.group(1))
+        if not bases:
+            continue
+        for m in _JOINED.finditer(text):
+            fragment = m.group(1) or m.group(2) or ""
+            if fragment.startswith(("http:", "https:", "//")) or not re.match(r"[A-Za-z0-9_/]", fragment):
+                continue
+            for base in bases:
+                keep(urljoin(base if base.endswith("/") else base + "/", fragment.lstrip("/")))
+    return out

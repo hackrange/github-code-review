@@ -2362,3 +2362,243 @@ rules:
   - pattern-not: |
       [Authorize(...)]
       $R $M(...) { ... }
+
+# The same forgotten guard in the frameworks the estate runs most: Express,
+# FastAPI and Flask, and Spring.  Each rule marks every route handler that
+# carries no guard semgrep can see on it; triage reads the rest of the file
+# and the project and keeps one for a person only when routes beside it are
+# guarded and it is not, with nothing covering the whole router.
+- id: gcr-express-write-route-without-auth
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: This route changes data and nothing on it asks for a sign in, while routes beside it do.
+    Add the same guard, or mark it public on purpose with a check of its own.
+  metadata:
+    cwe: 'CWE-862: Missing Authorization'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $APP.post("$P", ...)
+    - pattern: $APP.put("$P", ...)
+    - pattern: $APP.patch("$P", ...)
+    - pattern: $APP.delete("$P", ...)
+  - metavariable-regex:
+      metavariable: $APP
+      regex: '^(app|router|api|server|routes?|\w*[Rr]outer|\w*[Rr]outes|\w*[Aa]pp)$'
+  - metavariable-regex:
+      metavariable: $P
+      regex: ^/
+- id: gcr-express-read-route-without-auth
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: This route returns data and nothing on it asks for a sign in, while routes beside it do.
+    Add the same guard, or mark it public on purpose.
+  metadata:
+    cwe: 'CWE-862: Missing Authorization'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $APP.get("$P", ...)
+  - metavariable-regex:
+      metavariable: $APP
+      regex: '^(app|router|api|server|routes?|\w*[Rr]outer|\w*[Rr]outes|\w*[Aa]pp)$'
+  - metavariable-regex:
+      metavariable: $P
+      regex: ^/
+- id: gcr-python-write-route-without-auth
+  languages:
+  - python
+  severity: ERROR
+  message: This route changes data and nothing on it asks for a sign in, while routes beside it do.
+    Add the same guard, or mark it public on purpose with a check of its own.
+  metadata:
+    cwe: 'CWE-862: Missing Authorization'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - patterns:
+      - pattern-either:
+        - pattern: |
+            @$R.$M("$P", ...)
+            def $F(...): ...
+        - pattern: |
+            @$R.$M("$P", ...)
+            async def $F(...): ...
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(post|put|patch|delete)$
+    - patterns:
+      - pattern: |
+          @$R.route("$P", ..., methods=[..., "$W", ...], ...)
+          def $F(...): ...
+      - metavariable-regex:
+          metavariable: $W
+          regex: ^(?i)(POST|PUT|PATCH|DELETE)$
+  - metavariable-regex:
+      metavariable: $P
+      regex: ^/
+- id: gcr-python-read-route-without-auth
+  languages:
+  - python
+  severity: WARNING
+  message: This route returns data and nothing on it asks for a sign in, while routes beside it do.
+    Add the same guard, or mark it public on purpose.
+  metadata:
+    cwe: 'CWE-862: Missing Authorization'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - patterns:
+      - pattern-either:
+        - pattern: |
+            @$R.$M("$P", ...)
+            def $F(...): ...
+        - pattern: |
+            @$R.$M("$P", ...)
+            async def $F(...): ...
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(get)$
+    - patterns:
+      - pattern: |
+          @$R.route("$P", ...)
+          def $F(...): ...
+      - pattern-not: |
+          @$R.route("$P", ..., methods=[...], ...)
+          def $F(...): ...
+  - metavariable-regex:
+      metavariable: $P
+      regex: ^/
+- id: gcr-spring-write-handler-without-auth
+  languages:
+  - java
+  severity: ERROR
+  message: This route changes data and nothing on it asks for a sign in, while routes beside it do.
+    Add the same guard, or mark it public on purpose with a check of its own.
+  metadata:
+    cwe: 'CWE-862: Missing Authorization'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        @RestController
+        class $C { ... }
+    - pattern-inside: |
+        @Controller
+        class $C { ... }
+  - pattern-not-inside: |
+      @PreAuthorize(...)
+      class $C { ... }
+  - pattern-not-inside: |
+      @Secured(...)
+      class $C { ... }
+  - pattern-not-inside: |
+      @RolesAllowed(...)
+      class $C { ... }
+  - pattern-either:
+    - pattern: |
+        @PostMapping(...)
+        $T $M(...) { ... }
+    - pattern: |
+        @PostMapping
+        $T $M(...) { ... }
+    - pattern: |
+        @PutMapping(...)
+        $T $M(...) { ... }
+    - pattern: |
+        @PutMapping
+        $T $M(...) { ... }
+    - pattern: |
+        @PatchMapping(...)
+        $T $M(...) { ... }
+    - pattern: |
+        @PatchMapping
+        $T $M(...) { ... }
+    - pattern: |
+        @DeleteMapping(...)
+        $T $M(...) { ... }
+    - pattern: |
+        @DeleteMapping
+        $T $M(...) { ... }
+    - pattern: |
+        @RequestMapping(..., method = RequestMethod.POST, ...)
+        $T $M(...) { ... }
+    - pattern: |
+        @RequestMapping(..., method = RequestMethod.PUT, ...)
+        $T $M(...) { ... }
+    - pattern: |
+        @RequestMapping(..., method = RequestMethod.PATCH, ...)
+        $T $M(...) { ... }
+    - pattern: |
+        @RequestMapping(..., method = RequestMethod.DELETE, ...)
+        $T $M(...) { ... }
+  - pattern-not: |
+      @PreAuthorize(...)
+      $T $M(...) { ... }
+  - pattern-not: |
+      @Secured(...)
+      $T $M(...) { ... }
+  - pattern-not: |
+      @RolesAllowed(...)
+      $T $M(...) { ... }
+  - pattern-not: |
+      @PermitAll(...)
+      $T $M(...) { ... }
+- id: gcr-spring-read-handler-without-auth
+  languages:
+  - java
+  severity: WARNING
+  message: This route returns data and nothing on it asks for a sign in, while routes beside it do.
+    Add the same guard, or mark it public on purpose.
+  metadata:
+    cwe: 'CWE-862: Missing Authorization'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        @RestController
+        class $C { ... }
+    - pattern-inside: |
+        @Controller
+        class $C { ... }
+  - pattern-not-inside: |
+      @PreAuthorize(...)
+      class $C { ... }
+  - pattern-not-inside: |
+      @Secured(...)
+      class $C { ... }
+  - pattern-not-inside: |
+      @RolesAllowed(...)
+      class $C { ... }
+  - pattern-either:
+    - pattern: |
+        @GetMapping(...)
+        $T $M(...) { ... }
+    - pattern: |
+        @GetMapping
+        $T $M(...) { ... }
+    - pattern: |
+        @RequestMapping(..., method = RequestMethod.GET, ...)
+        $T $M(...) { ... }
+  - pattern-not: |
+      @PreAuthorize(...)
+      $T $M(...) { ... }
+  - pattern-not: |
+      @Secured(...)
+      $T $M(...) { ... }
+  - pattern-not: |
+      @RolesAllowed(...)
+      $T $M(...) { ... }
+  - pattern-not: |
+      @PermitAll(...)
+      $T $M(...) { ... }

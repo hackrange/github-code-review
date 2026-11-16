@@ -3517,6 +3517,258 @@ def _aspnet_judgement(facts: dict, relative: str, source: str, line: int):
             "aspnet-sibling-guarded")
 
 
+
+# --- routes with no sign in, beside routes that have one ---------------------
+#
+# Express, FastAPI and Flask, and Spring.  The rules mark every route handler
+# semgrep sees no guard on.  Whether one was forgotten is a question about its
+# neighbours: kept for a person only when another route in the same file is
+# guarded and nothing covers the whole router.  A file of routes none of which
+# ask for a sign in is public on purpose, or guarded where it is mounted, and
+# is advisory.
+
+ROUTE_GUARD_RULES = {
+    "gcr-express-write-route-without-auth": "express",
+    "gcr-express-read-route-without-auth": "express",
+    "gcr-python-write-route-without-auth": "python",
+    "gcr-python-read-route-without-auth": "python",
+    "gcr-spring-write-handler-without-auth": "spring",
+    "gcr-spring-read-handler-without-auth": "spring",
+}
+_AUTH_WORD = re.compile(
+    r"auth|jwt|token|log(?:ged)?_?in|session|protect|guard|permission|role|admin|"
+    r"current_?user|require|ensure|verif|passport|signed|secur|acl|is_?staff|caller|"
+    r"principal|identity|api_?key|credential|bearer", re.I)
+# Paths that are public by design: signing in, health, descriptions.
+_PUBLIC_ROUTE = re.compile(
+    r"(^|/)(log[\-_]?in|log[\-_]?out|sign[\-_]?(in|up|out)|register|auth|oauth2?|token|me|whoami|"
+    r"refresh|sso|saml|callback|webhooks?|health\w*|ping|status|version|metrics|"
+    r"swagger[\w\-.]*|openapi[\w\-.]*|docs|redoc|public|forgot[\w\-]*|reset[\w\-]*|"
+    r"verify[\w\-]*|confirm[\w\-]*|\.well-known|favicon\.ico|robots\.txt|"
+    r"[\w\-]+\.(?:ico|png|svg|css|js|txt|xml|webmanifest))(/|$)", re.I)
+# Middleware is named for what it does; a security headers or session
+# middleware is not a sign in check, whatever its name has in common with one.
+_AUTH_MIDDLEWARE = re.compile(r"auth|jwt|login|bearer|oidc|okta|keycloak|cognito|api_?key|"
+                              r"principal|identity|token", re.I)
+_NOT_AUTH_MIDDLEWARE = re.compile(r"header|cors|gzip|trustedhost|httpsredirect|session|proxy|"
+                                  r"ratelimit|throttl|logging|prometheus|metric|compress|csp", re.I)
+_EXPRESS_ROUTE = re.compile(r"\b([A-Za-z_$][\w$]*)\.(get|post|put|patch|delete)\(\s*(['\"`])(/[^'\"`]*)\3")
+_EXPRESS_USE = re.compile(r"\b[A-Za-z_$][\w$]*\.use\(")
+
+
+def _express_guard(args: list) -> str:
+    """The middleware between the path and the handler that looks like a guard."""
+    for arg in args[1:-1]:
+        name = re.sub(r"\(.*", "", arg, flags=re.S).strip()
+        if _AUTH_WORD.search(name):
+            return name[:60]
+        # An inline middleware that calls a guard inside, such as one that
+        # picks the permission from the path, is still a guard.
+        called = re.search(r"\b([\w.]*(?:auth|perm|login|role|jwt|guard|protect)[\w.]*)\s*\(", arg, re.I)
+        if called:
+            return called.group(1)[:60] + " (inside an inline middleware)"
+    return ""
+
+
+_JS_LINE_COMMENT = re.compile(r"(^|[ \t])//[^\n]*", re.M)
+_JS_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+
+
+def _js_without_comments(source: str) -> str:
+    """Comments blanked, line numbers kept.  An apostrophe in a comment inside a
+    handler would otherwise throw the argument reading off."""
+    source = _JS_BLOCK_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), source)
+    return _JS_LINE_COMMENT.sub(lambda m: m.group(1), source)
+
+
+def _express_routes(source: str) -> list:
+    """[(line, path, guard)] for every route registration in a file."""
+    source = _js_without_comments(source)
+    out = []
+    for m in _EXPRESS_ROUTE.finditer(source):
+        args = _js_args(source, m.end(0) - len(m.group(0)) + m.group(0).index("("))
+        out.append((source.count("\n", 0, m.start()) + 1, m.group(4), _express_guard(args)))
+    return out
+
+
+def _express_router_guard(source: str, line: int) -> str:
+    """A .use() with a guard above the line, which covers every route after it."""
+    head = "\n".join(_js_without_comments(source).splitlines()[:max(line - 1, 0)])
+    for m in _EXPRESS_USE.finditer(head):
+        args = _js_args(head, m.end() - 1)
+        for arg in args:
+            name = re.sub(r"\(.*", "", arg, flags=re.S).strip()
+            if not STRING_LITERAL.match(arg.strip()) and _AUTH_WORD.search(name):
+                return "%s at line %d" % (name[:60], head.count("\n", 0, m.start()) + 1)
+    return ""
+
+
+_PY_ROUTE = re.compile(r"^[ \t]*@[\w.]+\.(get|post|put|patch|delete|route|api_route)\(\s*['\"](/[^'\"]*)", re.M)
+_PY_GUARD = re.compile(
+    r"(?:Depends|Security)\(\s*([\w.]+)|"
+    r"^[ \t]*@[\w.]*(login_required|jwt_required|auth_required|requires_auth|token_required|"
+    r"permission_required|roles_required|roles_accepted|admin_required|fresh_jwt_required|"
+    r"authenticated|protected|require_\w+)\b|"
+    r"dependencies\s*=\s*\[[^\]]*?(?:Depends|Security)\(\s*([\w.]+)", re.M)
+
+
+def _py_block(source: str, line: int) -> str:
+    """The decorators and the signature of the handler starting at line."""
+    out = []
+    for text in source.splitlines()[max(line - 1, 0):line + 25]:
+        out.append(text)
+        if re.search(r"\bdef\s+\w+\s*\((?:[^()]|\([^()]*\))*\)\s*(->[^:]+)?:",
+                     "\n".join(out), re.S):
+            break
+    return "\n".join(out)
+
+
+def _py_guard(block: str) -> str:
+    for m in _PY_GUARD.finditer(block):
+        name = m.group(1) or m.group(3) or ""
+        if m.group(2):
+            return "@" + m.group(2)
+        if name and _AUTH_WORD.search(name):
+            return "Depends(%s)" % name
+    return ""
+
+
+def _py_routes(source: str) -> list:
+    out = []
+    for m in _PY_ROUTE.finditer(source):
+        at = source.count("\n", 0, m.start()) + 1
+        # The decorators stacked above count too: a guard may come first.
+        start = at
+        lines = source.splitlines()
+        while start > 1 and lines[start - 2].lstrip().startswith("@"):
+            start -= 1
+        out.append((at, m.group(2), _py_guard(_py_block(source, start))))
+    return out
+
+
+def _py_router_guard(repo_root: str, relative: str, source: str) -> str:
+    m = re.search(r"\b(?:APIRouter|FastAPI)\([^)]*?dependencies\s*=\s*\[[^\]]*?(?:Depends|Security)\(\s*([\w.]+)",
+                  source, re.S)
+    if m and _AUTH_WORD.search(m.group(1)):
+        return "the router's dependencies (%s)" % m.group(1)
+    m = re.search(r"@[\w.]+\.before_(?:app_)?request\s*\n\s*def\s+\w+\([^)]*\):(?P<body>(?:\n[ \t]+.*){1,25})", source)
+    if m and re.search(r"abort\(\s*40[13]|login|unauthori[sz]ed|redirect\(", m.group("body"), re.I):
+        return "a before_request check in this file"
+    stem = os.path.splitext(os.path.basename(relative))[0]
+    middleware = re.compile(
+        r"\.add_middleware\(\s*([\w.]+)|@\w+\.middleware\(\s*['\"]http['\"]\s*\)\s*\n\s*(?:async\s+)?"
+        r"def\s+\w+\([^)]*\):(?P<body>(?:\n[ \t]+.*){1,30})")
+    for root, dirs, names in os.walk(repo_root):
+        dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "venv", ".venv", "__pycache__")]
+        for name in names:
+            if not name.endswith(".py"):
+                continue
+            text = _read(os.path.join(root, name))
+            for mw in middleware.finditer(text):
+                where = os.path.relpath(os.path.join(root, name), repo_root)
+                if mw.group(1) and _AUTH_MIDDLEWARE.search(mw.group(1)) \
+                        and not _NOT_AUTH_MIDDLEWARE.search(mw.group(1)):
+                    return "%s, added to the whole app in %s" % (mw.group(1), where)
+                body = mw.group("body") or ""
+                if body and re.search(r"40[13]|unauthori[sz]ed|authorization|token|login", body, re.I):
+                    return "an http middleware in %s that refuses requests" % where
+            for inc in re.finditer(r"include_router\(\s*([\w.]+)[^)]*?dependencies\s*=\s*\[[^\]]*?"
+                                   r"(?:Depends|Security)\(\s*([\w.]+)", text, re.S):
+                target = inc.group(1).split(".")
+                if stem in target and _AUTH_WORD.search(inc.group(2)):
+                    return "include_router in %s, with %s" % (
+                        os.path.relpath(os.path.join(root, name), repo_root), inc.group(2))
+    return ""
+
+
+_SPRING_HANDLER = re.compile(r"@(Get|Post|Put|Patch|Delete|Request)Mapping\b")
+_SPRING_GUARD = re.compile(r"@(PreAuthorize|Secured|RolesAllowed)\b")
+_SPRING_DEFAULT = re.compile(r"\.any(?:Request|Exchange)\(\)\s*\.\s*(?:authenticated|hasRole|hasAnyRole|hasAuthority|hasAnyAuthority|fullyAuthenticated)\(")
+
+
+def _spring_default(repo_root: str, cache: dict) -> str:
+    if "spring" not in cache:
+        cache["spring"] = ""
+        for root, dirs, names in os.walk(repo_root):
+            dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "target", "build")]
+            for name in names:
+                if name.endswith((".java", ".kt")):
+                    full = os.path.join(root, name)
+                    if _SPRING_DEFAULT.search(_read(full)):
+                        cache["spring"] = os.path.relpath(full, repo_root)
+                        return cache["spring"]
+    return cache["spring"]
+
+
+def _spring_handlers(source: str) -> list:
+    """[(line, guard)] for each handler method in a file: its own annotations
+    stacked above it."""
+    lines = source.splitlines()
+    out = []
+    for i, text in enumerate(lines):
+        if _SPRING_HANDLER.search(text) and not re.search(r"\bclass\b", "\n".join(lines[i:i + 3])):
+            stack = [text]
+            j = i - 1
+            while j >= 0 and lines[j].strip().startswith("@"):
+                stack.append(lines[j]); j -= 1
+            k = i + 1
+            while k < len(lines) and lines[k].strip().startswith("@"):
+                stack.append(lines[k]); k += 1
+            g = _SPRING_GUARD.search("\n".join(stack))
+            out.append((i + 1, g.group(0) if g else ""))
+    return out
+
+
+def _route_guard_judgement(kind: str, repo_root: str, relative: str, source: str,
+                           line: int, cache: dict):
+    """-> (verdict, reason, decided_by) for an unguarded route handler."""
+    if kind == "express":
+        routes = _express_routes(source)
+        mine = next((r for r in routes if r[0] == line), None)
+        if mine and _PUBLIC_ROUTE.search(mine[1]):
+            return (NOT_APPLICABLE, "%s is public by design" % mine[1], "route-public-by-design")
+        if mine and mine[2]:
+            return (NOT_APPLICABLE, "the route has its own guard (%s)" % mine[2], "route-own-guard")
+        wide = _express_router_guard(source, line)
+        if wide:
+            return (NOT_APPLICABLE, "every route after %s is behind it" % wide, "router-guard")
+        guarded = [(l, g) for l, _p, g in routes if g and l != line]
+    elif kind == "python":
+        routes = _py_routes(source)
+        mine = next((r for r in routes if r[0] == line), None)
+        if mine is None:
+            mine = next((r for r in routes if r[0] >= line and r[0] - line < 8), None)
+        if mine and _PUBLIC_ROUTE.search(mine[1]):
+            return (NOT_APPLICABLE, "%s is public by design" % mine[1], "route-public-by-design")
+        if mine and mine[2]:
+            return (NOT_APPLICABLE, "the route has its own guard (%s)" % mine[2], "route-own-guard")
+        wide = _py_router_guard(repo_root, relative, source)
+        if wide:
+            return (NOT_APPLICABLE, "every route in this file is behind %s" % wide, "router-guard")
+        guarded = [(l, g) for l, _p, g in routes if g and (mine is None or l != mine[0])]
+    else:
+        default = _spring_default(repo_root, cache)
+        if default:
+            return (NOT_APPLICABLE,
+                    "%s asks every request for a sign in by default.  Worth checking that "
+                    "its permitAll list does not take this route back out" % default,
+                    "spring-default-authenticated")
+        handlers = _spring_handlers(source)
+        guarded = [(l, g) for l, g in handlers if g and abs(l - line) > 2]
+    if not guarded:
+        return (ADVISORY,
+                "no route in this file asks for a sign in, so it is public on purpose or "
+                "guarded where it is mounted.  Worth confirming which",
+                "route-file-unguarded")
+    shown = ", ".join("line %d (%s)" % (l, g) for l, g in guarded[:3])
+    if len(guarded) > 3:
+        shown += " and %d more" % (len(guarded) - 3)
+    return (REVIEW,
+            "Routes beside it in this file ask for a sign in (%s), and this one does not, "
+            "which is how a forgotten guard looks" % shown,
+            "route-sibling-guarded")
+
+
 def triage(findings: list, repo_root: str, muted=()) -> list:
     """Add a triage verdict to every finding.  Nothing is removed."""
     muted = tuple(m.strip() for m in (muted or ()) if str(m).strip())
@@ -3529,6 +3781,7 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
     sources: dict = {}
     # Worked out on the first ASP.NET finding, and only then.
     aspnet = None
+    route_cache: dict = {}
     for finding in findings:
         path = str(finding.get("path") or "")
         relative = path
@@ -3658,6 +3911,10 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
                           "longer than the cap in %s, and a polynomial regex "
                           "on a string that short finishes at once" % capped)
                 decided_by = "codeql-capped-input"
+        if verdict == REVIEW and rule in ROUTE_GUARD_RULES:
+            verdict, reason, decided_by = _route_guard_judgement(
+                ROUTE_GUARD_RULES[rule], repo_root, relative, source,
+                finding.get("start", {}).get("line", 0), route_cache)
         if verdict == REVIEW and rule in ASPNET_RULES:
             if aspnet is None:
                 aspnet = _aspnet_authorization(repo_root)
