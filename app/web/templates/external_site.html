@@ -377,6 +377,27 @@
     {% set linked = links | selectattr('linked') | list %}
     {% set code = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0} %}
     {% for l in linked %}{% for level in code %}{% set _ = code.update({level: code[level] + counts.get(l.full_name, {}).get(level, 0)}) %}{% endfor %}{% endfor %}
+    {% if code_lost %}
+    <div class="notice warn" id="code-lost"><div>
+      <strong>The code behind this site was lost.</strong>
+      Scan {{ code_lost.before_scan_id }} read {{ code_lost.before_routes }} routes from the code; the newest, scan {{ code_lost.scan_id }}, read {{ code_lost.routes }}.
+      The routes steer the curated rules and the open route check, so they had less to go on.
+      {% if code_lost.repos %}<div class="table-scroll"><table class="compact">
+        <thead><tr><th>Repository</th><th>Routes it gave</th><th>Now</th><th></th></tr></thead><tbody>
+        {% for r in code_lost.repos %}<tr>
+          <td class="small">{% if r.repository_id %}<a href="{{ base }}/repositories/{{ r.repository_id }}">{{ r.repository }}</a>{% else %}{{ r.repository }}{% endif %}</td>
+          <td class="small">{{ r.routes }} in scan {{ r.scan_id }}</td>
+          <td class="small">{{ r.detail }}{% if r.evidence %}<div class="faint">Behind the site before: {{ r.evidence }}.</div>{% endif %}</td>
+          <td class="nowrap">{% if can_manage and r.state in ('hidden', 'unlinked') %}
+            <form method="post" action="{{ base }}/external/{{ asset.id }}/repos" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="repository" value="{{ r.repository }}">
+              <button class="btn sm" name="action" value="link" type="submit">Use it again</button></form>{% endif %}</td>
+        </tr>{% endfor %}</tbody></table></div>{% endif %}
+      {% if code_lost.others %}<div class="faint small">And {{ code_lost.others }} repositor{{ 'y' if code_lost.others == 1 else 'ies' }} you cannot see.</div>{% endif %}
+      <div class="faint small">The next scan reads the code again.</div>
+    </div></div>
+    {% endif %}
     <details class="card code-behind" id="code">
       <summary class="card-head">Code behind it
         <span class="code-summary">{{ linked | length }} repositor{{ 'y' if linked | length == 1 else 'ies' }}

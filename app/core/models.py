@@ -2407,6 +2407,10 @@ class ExternalAsset(Base):
     # sign in and reads what the page hands over.  Encrypted, since each one
     # is the key to what it opens.  Empty for none.
     sample_links = Column(Text, default="")
+    # The code behind the site, lost: repositories an earlier scan read
+    # routes from that the newest scan did not.  JSON written at the end of
+    # each scan, "" when nothing was lost, NULL before it was ever worked out.
+    code_lost = Column(Text)
 
     # Who answers for the site, as addresses, comma separated.
     executive_owner = Column(String(500), default="")

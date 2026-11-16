@@ -42,6 +42,7 @@
   <a class="stat bad" href="{{ here }}?risk=high"><div class="n">{{ totals.dast_bad }}</div><div class="l">Critical or high on the last scan</div></a>
   <a class="stat" href="{{ here }}?scope=mapped"><div class="n">{{ totals.mapped }}</div><div class="l">Mapped to code</div></a>
   <a class="stat" href="{{ here }}?scope=no-scan"><div class="n">{{ totals.no_scan }}</div><div class="l">No scan</div></a>
+  {% if totals.code_lost %}<a class="stat warn" href="{{ here }}?scope=code-lost" title="An earlier scan read routes from code that the newest scan did not"><div class="n">{{ totals.code_lost }}</div><div class="l">Lost their code</div></a>{% endif %}
 </div>
 <div data-live="list-notices">
 {% if running %}<div class="notice info"><div>Reading telemetry for {{ running }} site{{ '' if running == 1 else 's' }}.  The list updates as they finish.</div></div>{% endif %}
@@ -77,7 +78,7 @@
       {% for k, l in exposures.items() %}<option value="{{ k }}" {{ 'selected' if k == exposure }}>{{ l }}</option>{% endfor %}</select></div>
   <div class="field"><label for="scope">Show</label>
     <select id="scope" name="scope"><option value="">Every site</option>
-      {% for v, l in [('mapped','Mapped to a repository'),('unmapped','Not mapped'),('no-scan','No scan')] %}<option value="{{ v }}" {{ 'selected' if v == scope }}>{{ l }}</option>{% endfor %}</select></div>
+      {% for v, l in [('mapped','Mapped to a repository'),('unmapped','Not mapped'),('no-scan','No scan'),('code-lost','Lost their code')] %}<option value="{{ v }}" {{ 'selected' if v == scope }}>{{ l }}</option>{% endfor %}</select></div>
   <button class="btn primary" type="submit">Search</button>
   <a class="btn" href="{{ here }}">Clear</a>
 </form>

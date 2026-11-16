@@ -618,6 +618,139 @@ def set_proxy(asset, value) -> None:
     asset.proxy = store._encrypt(text)
 
 
+# How far back a scan's code reading is compared, in scans.
+CODE_LOST_LOOKBACK = 12
+
+
+def _whitebox_entries(engines) -> list:
+    """The repositories one scan's code reading went through."""
+    try:
+        rows = json.loads(engines) if isinstance(engines, str) else (engines or [])
+    except ValueError:
+        return []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and row.get("tool") == "whitebox":
+            return [r for r in row.get("repos") or [] if isinstance(r, dict)]
+    return []
+
+
+def _routes_reached(raw) -> dict:
+    """{repository: how many of its routes the site answered}, from one
+    scan's code matches."""
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except ValueError:
+        return {}
+    out = {}
+    if not isinstance(value, dict):
+        return out
+    for c in value.get("candidates") or []:
+        if isinstance(c, dict) and c.get("full_name") and c.get("matched_count"):
+            out[c["full_name"]] = max(out.get(c["full_name"], 0), int(c["matched_count"]))
+    for c in value.get("linked") or []:
+        if isinstance(c, dict) and c.get("full_name") and c.get("routes_reached"):
+            out[c["full_name"]] = max(out.get(c["full_name"], 0), int(c["routes_reached"]))
+    return out
+
+
+def code_lost(db, asset_id: int, current: list = None, current_scan_id: int = None):
+    """The code behind a site that an earlier scan read and the newest did not.
+
+    current is the newest scan's code reading when the scan is still running
+    and has not saved it; otherwise the newest finished scan's is used.
+    -> None when nothing was lost, else {"scan_id", "routes", "before_scan_id",
+    "before_routes", "repos": [{"repository", "repository_id", "routes",
+    "scan_id", "state", "detail"}]}, where state is hidden, unlinked or
+    unread (still linked, but the newest scan got nothing from it).
+    """
+    rows = (db.query(ExternalDastScan.id, ExternalDastScan.engines, ExternalDastScan.code_matches)
+            .filter(ExternalDastScan.asset_id == asset_id,
+                    ExternalDastScan.status == "done",
+                    ExternalDastScan.source == "builtin")
+            .order_by(ExternalDastScan.id.desc()).limit(CODE_LOST_LOOKBACK).all())
+    readings = [(sid, _whitebox_entries(eng)) for sid, eng, _cm in rows]
+    reached = {sid: _routes_reached(cm) for sid, _eng, cm in rows}
+    if current is not None:
+        readings = [(current_scan_id, current)] + [r for r in readings if r[0] != current_scan_id]
+    if len(readings) < 2:
+        return None
+    newest_id, newest = readings[0]
+    now = {e.get("repository"): e for e in newest}
+    now_routes = sum(int(e.get("routes") or 0) for e in newest)
+    gave, before_id, before_routes, proof = {}, None, 0, {}
+    for sid, entries in readings[1:]:
+        total = sum(int(e.get("routes") or 0) for e in entries)
+        if total and before_id is None:
+            before_id, before_routes = sid, total
+        for e in entries:
+            name = e.get("repository") or ""
+            if int(e.get("routes") or 0) > 0 and name not in gave \
+                    and not name.startswith("ad-hoc:"):
+                gave[name] = (int(e["routes"]), sid)
+            # Evidence the repository really is behind the site, from any
+            # earlier scan: the host written in its code, or the site
+            # answering one of its routes.  A link made on a loose name
+            # match has neither, and losing it is the cleanup working.
+            if name not in proof:
+                if e.get("host_in_code"):
+                    proof[name] = "the site's host is written in its code"
+                elif reached.get(sid, {}).get(name):
+                    n = reached[sid][name]
+                    proof[name] = f"the site answered {n} of its routes"
+    lost = {n: v for n, v in gave.items() if int((now.get(n) or {}).get("routes") or 0) == 0}
+    if not lost or now_routes >= before_routes:
+        return None
+    ids = dict(db.query(Repository.full_name, Repository.id)
+               .filter(Repository.full_name.in_(list(lost))).all())
+    links = {r.repository_id: r for r in db.query(ExternalAssetRepo)
+             .filter(ExternalAssetRepo.asset_id == asset_id,
+                     ExternalAssetRepo.repository_id.in_(list(ids.values()) or [0])).all()}
+    out = []
+    for name, (routes, sid) in sorted(lost.items(), key=lambda kv: (-kv[1][0], kv[0])):
+        repo_id = ids.get(name)
+        link = links.get(repo_id)
+        entry = now.get(name)
+        if link is not None and link.source == "hidden":
+            when = link.added_at.strftime("%Y-%m-%d") if link.added_at else ""
+            state, detail = "hidden", (f"removed from this site by {link.added_by or 'somebody'}"
+                                       + (f" on {when}" if when else ""))
+        elif entry is None and link is not None:
+            state, detail = "relinked", "linked again; the next scan reads it"
+        elif entry is None:
+            state, detail = "unlinked", "no longer linked to this site"
+        else:
+            state = "unread"
+            detail = (f"still linked, but {entry['error']}" if entry.get("error")
+                      else "still linked, but it declared no routes this time")
+        if state != "unread" and name not in proof:
+            continue
+        out.append({"repository": name, "repository_id": repo_id, "routes": routes,
+                    "scan_id": sid, "state": state, "detail": detail[:300],
+                    "evidence": proof.get(name, "")})
+    if not out:
+        return None
+    return {"scan_id": newest_id, "routes": now_routes, "before_scan_id": before_id,
+            "before_routes": before_routes, "repos": out}
+
+
+def code_lost_text(lost: dict) -> str:
+    """One sentence for a scan's engines row."""
+    names = ", ".join(f"{r['repository']} ({r['detail']})" for r in lost["repos"][:4])
+    more = f" and {len(lost['repos']) - 4} more" if len(lost["repos"]) > 4 else ""
+    return (f"The code behind the site was lost: scan {lost['before_scan_id']} read "
+            f"{lost['before_routes']} routes, this one {lost['routes']}.  "
+            f"No longer read: {names}{more}.  Routes from the code steer the curated "
+            "rules and the open route check, so they ran with less to go on.")
+
+
+def remember_code_lost(asset_id: int, lost) -> None:
+    """Keep the answer on the site, for the list's count and filter."""
+    with session_scope() as db:
+        asset = db.get(ExternalAsset, asset_id)
+        if asset is not None:
+            asset.code_lost = json.dumps(lost) if lost else ""
+
+
 MAX_SAMPLE_LINKS = 5
 
 
@@ -2779,6 +2912,16 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                                    + ", ".join(r["repository"] for r in wb["repos"])
                                    if wb["repos"] else "no repository is mapped"),
                         "repos": wb["repos"], "seconds": 0})
+        try:
+            with session_scope() as db:
+                lost = code_lost(db, asset_id, current=wb["repos"], current_scan_id=scan_id)
+            remember_code_lost(asset_id, lost)
+            if lost:
+                engines[-1]["status"] = "warn"
+                engines[-1]["detail"] = (engines[-1]["detail"] + ".  " + code_lost_text(lost))[:1500]
+                engines[-1]["lost"] = lost["repos"]
+        except Exception:  # noqa: BLE001 - the scan stands without the comparison
+            log.exception("scan %s: the code reading was not compared", scan_id)
     # Signing in, for the engines.  Baseline and testssl stay signed out:
     # one reads the public posture, the other only talks TLS.
     session, secrets = {}, []

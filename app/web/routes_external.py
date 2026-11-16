@@ -35,7 +35,7 @@ from app.core.db import session_scope
 from app.core.models import utcnow as m_utcnow
 from app.core.models import (
     DastScanProfile, DastServer, ExternalAsset, ExternalAssetRepo,
-    ExternalAssetTag, ExternalDastScan, SiteGroup, User,
+    ExternalAssetTag, ExternalDastScan, Repository, SiteGroup, User,
 )
 from app.web.render import notice_class, page
 from app.web.security import (
@@ -173,6 +173,31 @@ def repo_recommendations(hosts: str = "", application: str = "", tags: str = "",
 PAGE_SIZES = [50, 100, 200, 500, 1000]
 
 
+def _code_lost_visible(db, user, asset_id):
+    """The site's lost code, naming only repositories this person may see."""
+    lost = external.code_lost(db, asset_id)
+    if not lost:
+        return None
+    seen = {r.full_name for r in rbac.visible_repositories(db, user).filter(
+        Repository.full_name.in_([r["repository"] for r in lost["repos"]])).all()}
+    hidden_from_me = sum(1 for r in lost["repos"] if r["repository"] not in seen)
+    lost["repos"] = [r for r in lost["repos"] if r["repository"] in seen]
+    lost["others"] = hidden_from_me
+    return lost
+
+
+def _backfill_code_lost(db, assets) -> None:
+    """Work it out once for sites scanned before it was kept."""
+    for a in assets:
+        if a.code_lost is None:
+            try:
+                lost = external.code_lost(db, a.id)
+            except Exception:  # noqa: BLE001 - the list stands without it
+                log.exception("lost code for site %s was not worked out", a.id)
+                continue
+            a.code_lost = json.dumps(lost) if lost else ""
+
+
 @router.get("/external")
 def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
               grade: str = "", dast: str = "", risk: str = "", scope: str = "",
@@ -192,6 +217,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
         assets = (rbac.visible_external_assets(db, user)
                   .order_by(ExternalAsset.host).all())
         blocked = external.blocked_hosts(db)
+        _backfill_code_lost(db, assets)
         every_link = {a.id: mapper.links(a) for a in assets}
         scanning = external.running_scans(db)
         from app.core.models import ExternalScanSchedule
@@ -247,6 +273,8 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
                 continue
             if scope == "unmapped" and linked:
                 continue
+            if scope == "code-lost" and not a.code_lost:
+                continue
             rows.append(row)
         order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4, "unknown": 5}
         rows.sort(key=lambda r: (order.get(r["risk"]["level"], 9), r["a"].host))
@@ -300,6 +328,7 @@ def list_page(request: Request, q: str = "", tag: str = "", app: str = "",
             "dast_bad": sum(1 for a in assets if a.last_dast_severity in ("critical", "high")),
             "no_scan": sum(1 for a in assets if external.is_blocked(a.host, blocked, a.no_scan)),
             "mapped": sum(1 for a in assets if any(l["linked"] for l in every_link[a.id])),
+            "code_lost": sum(1 for a in assets if a.code_lost),
         }
         servers = db.query(DastServer).order_by(DastServer.name).all() if manage else []
         # Screenshots taken before thumbnails existed, or by a server
@@ -771,6 +800,7 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             auth_kinds=external_auth_mod.FORM_KINDS,
             site_profile=external.profile_for(asset), proxy_label=external.proxy_shown(asset),
             sample_links_shown=external.sample_links_shown(asset),
+            code_lost=_code_lost_visible(db, user, asset.id),
             has_shot=external.shot_path(asset.id).is_file(),
             exposures=external.EXPOSURES,
             has_proxy_shot=external.shot_proxy_path(asset.id).is_file(),
@@ -1126,6 +1156,8 @@ async def link_repo(asset_id: int, request: Request, user: User = Depends(curren
                 row.added_by = user.username[:120]
             record(db, f"external.repo_{action}", actor=user.username,
                    target=asset.host, detail=repo.full_name, source_ip=client_ip(request))
+        # Worked out again on the list's next load.
+        asset.code_lost = None
         one = len(names) == 1
         what = names[0] if one else f"{len(names)} repositories"
         if action == "forget":
