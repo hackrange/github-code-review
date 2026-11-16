@@ -40,6 +40,18 @@ _slots = threading.Semaphore(2)
 CLONE_TIMEOUT = 300
 ENGINE_TIMEOUT = 120
 
+# A clone that stops moving.  The usual one takes seconds, but now and then
+# the connection stalls with nothing coming down it, and git will sit on it
+# until the timeout above, which is how a drawing failed after five minutes
+# of waiting on a clone that takes five seconds.  git gives up on its own
+# when under STALL_BYTES a second arrive for STALL_SECONDS, and the clone is
+# tried once more on a fresh connection.
+STALL_BYTES = 1000
+STALL_SECONDS = 30
+CLONE_TRIES = 2
+_STALL_ARGS = ["-c", "http.lowSpeedLimit=%d" % STALL_BYTES,
+               "-c", "http.lowSpeedTime=%d" % STALL_SECONDS]
+
 # Which username the host wants when the password is a token.  Gitea and
 # Forgejo read the token out of the password and pay no attention to the
 # username, so the default is as good an answer there as any.
@@ -63,20 +75,39 @@ def _credential_args(token_file: Path, provider: str) -> list:
 
 def _shallow_clone(url: str, branch: str, dest: Path, cred: list) -> tuple:
     """One branch, one commit deep.  Everything here needs the tip and no more."""
-    command = ["git"] + cred + [
+    command = ["git"] + cred + _STALL_ARGS + [
         "clone", "--quiet", "--depth", "1", "--single-branch",
         "--branch", branch, "--no-tags", url, str(dest)]
-    try:
-        done = subprocess.run(command, capture_output=True, text=True,
-                              timeout=CLONE_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return False, "the clone took too long"
-    if done.returncode != 0:
+    last = "git would not clone it"
+    for attempt in range(CLONE_TRIES):
+        # A failed try can leave a partial copy behind, and git will not
+        # clone into a directory that is not empty.
+        shutil.rmtree(dest, ignore_errors=True)
+        try:
+            done = subprocess.run(command, capture_output=True, text=True,
+                                  timeout=CLONE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            last = "the clone took too long"
+            continue
+        if done.returncode == 0:
+            return True, ""
         detail = (done.stderr or "").strip().splitlines()
         # Never echo a credential back to a page.
-        last = detail[-1] if detail else "git would not clone it"
-        return False, _explain_clone(last)[:300]
-    return True, ""
+        line = detail[-1] if detail else "git would not clone it"
+        if not _stalled(line):
+            return False, _explain_clone(line)[:300]
+        last = ("the connection to the host stopped moving, twice.  The host "
+                "or the link was busy; try again in a few minutes")
+        log.info("clone of %s stalled on try %d", url, attempt + 1)
+    return False, last
+
+
+def _stalled(line: str) -> bool:
+    """Whether git gave up because nothing was arriving, which is worth a retry."""
+    lowered = line.lower()
+    return ("too slow" in lowered or "timed out" in lowered
+            or "early eof" in lowered or "unexpected disconnect" in lowered
+            or "rpc failed" in lowered)
 
 
 def _explain_clone(line: str) -> str:
@@ -156,7 +187,7 @@ def _fetch_branch(dest: Path, url: str, branch: str, cred: list) -> bool:
     across every branch it is on would otherwise cost: one connection, one
     object store, one tip per branch.
     """
-    command = ["git", "-C", str(dest)] + cred + [
+    command = ["git", "-C", str(dest)] + cred + _STALL_ARGS + [
         "fetch", "--quiet", "--depth", "1", "--no-tags", url,
         "+refs/heads/%s:refs/remotes/recheck/%s" % (branch, branch)]
     try:
