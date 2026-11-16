@@ -1245,6 +1245,12 @@ scan_one_repo() {
     if cfg_bool '.scan.images.enabled' false; then
       f=$(tmp_file v_img); images_scan "$clone_dir" "$full_name" > "$f"; parts+=("$f")
     fi
+    # What the published image has installed, read from the copy the
+    # credential pass already pulled.  After the other parts, so a package one
+    # of them already reported stays one finding.
+    if (( ${#IMAGE_CONTENT_DIRS[@]} > 0 )); then
+      f=$(tmp_file v_pub); images_published_vulns "$full_name" "$f" "${parts[@]}"; parts+=("$f")
+    fi
     if (( ${#parts[@]} > 0 )); then
       VULNS_JSON=$(vulns_merge "${parts[@]}" | vulns_stamp "$full_name" "$default_branch")
       cfg_bool '.scan.threat_intel.enabled' true && VULNS_JSON=$(threat_intel_enrich "$VULNS_JSON")

@@ -26,6 +26,10 @@ from app.core.models import (
 
 log = logging.getLogger("gcr.ingest")
 
+# The engine name the scanner gives a package installed in a published image,
+# as against one in the base image a Dockerfile names (grype-image).
+PUBLISHED_IMAGE_ENGINE = "grype-published-image"
+
 # How many branch names to keep per repository.  A repository that has collected
 # more than this has a housekeeping problem rather than a list worth reading,
 # and the names are kept to offer a choice, not to be an inventory.
@@ -1713,6 +1717,11 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         except (TypeError, ValueError):
             finding.epss_score = None
         finding.image_ref = (row.get("image") or "")[:500]
+        # Which scanners reported it, as for code.  It is how a package
+        # installed in a published image is told from one in its base image
+        # when the image could not be read again.
+        sources = row.get("sources") or ([row["source"]] if row.get("source") else [])
+        finding.engines = ", ".join(str(name) for name in sources)[:120]
         bad = row.get("malicious") or {}
         finding.malicious = bool(bad)
         finding.malicious_signal = (bad.get("signal") or "")[:32]
@@ -1989,10 +1998,14 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                 counts["held_open"] = counts.get("held_open", 0) + 1
                 continue
             # Read out of a published image that could not be read this time.
-            # Base image packages are dependency findings and keep their own
-            # rule; this is the image the repository publishes.
-            if (finding.kind != FindingKind.DEPENDENCY and (finding.image_ref or "")
-                    and finding.repository in image_unread):
+            # Base image packages are dependency findings read by grype from
+            # the registry and keep their own rule.  Packages installed in the
+            # published image come from the same read as everything else here,
+            # so they wait for it too.
+            published_package = (finding.kind == FindingKind.DEPENDENCY
+                                  and PUBLISHED_IMAGE_ENGINE in str(finding.engines or ""))
+            if ((finding.kind != FindingKind.DEPENDENCY or published_package)
+                    and (finding.image_ref or "") and finding.repository in image_unread):
                 counts["held_open"] = counts.get("held_open", 0) + 1
                 counts["image_unread_held"] = counts.get("image_unread_held", 0) + 1
                 continue

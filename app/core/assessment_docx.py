@@ -542,7 +542,8 @@ def build(context: dict) -> bytes:
     D.h("4.  Risk Matrix")
     rows = []
     for i in items:
-        scored = i["rating"] != "Informational" and not i.get("decided")
+        scored = (i["rating"] != "Informational" and not i.get("decided")
+                  and not i.get("held_grade"))
         rows.append([i["id"], i["title"] + (" (waived)" if i.get("waived") else ""),
                      str(i["likelihood"]) if scored else "N/A",
                      str(i["impact"]) if scored else "N/A",
@@ -573,7 +574,8 @@ def build(context: dict) -> bytes:
     _widths(t, [1.2] + [1.1] * 5)
     D.p("Rows are likelihood and columns are impact.  False alarms carry no risk and are "
         "not shown.  An id marked * was graded before this review, by a person or a "
-        "validation, and is placed in the cell for its rating rather than scored.",
+        "validation, or is a credential kept at the scanner's grade, and is placed in "
+        "the cell for its rating rather than scored.",
         italic=True, size=8.5, color=GRAY)
 
     # ---- 5 detailed findings
@@ -591,7 +593,9 @@ def build(context: dict) -> bytes:
             info.append(("Location", i["location"]))
         if i.get("cvss"):
             info.append(("CVSS 3.1", f"{i['cvss_score']:.1f} {i.get('cvss_band', '')}  ({i['cvss']})"))
-        if i["rating"] != "Informational" and not i.get("decided"):
+        if i.get("held_grade"):
+            info.append(("Rated by", "The scanner's grade.  " + i["held_grade"]["why"]))
+        elif i["rating"] != "Informational" and not i.get("decided"):
             info.append(("Likelihood x Impact", f"{i['likelihood']} x {i['impact']} = {i['score']}"))
         if i.get("cwe_label"):
             info.append(("Weakness", i["cwe_label"]))

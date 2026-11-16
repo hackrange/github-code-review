@@ -212,10 +212,20 @@ images_vulns() {
   # The same shape vulns_grype produces, so everything downstream, the merge,
   # the threat intel and the report, treats these as what they are: dependency
   # findings that happen to live in a layer rather than a manifest.
-  jq -c --arg image "$ref" --arg dockerfile "$dockerfile" \
-        --argjson upgraded "${upgraded:-false}" '
+  _images_grype_rows "$out" "$ref" "$dockerfile" "${upgraded:-false}" "grype-image" \
+    "shipped in the image $ref, which the application source says nothing about"
+}
+
+# _images_grype_rows <grype json> <image> <dockerfile> <upgraded> <source> <reason>
+# grype matches in the shape vulns_grype produces, so everything downstream,
+# the merge, the threat intel and the report, treats them as dependency
+# findings that happen to live in an image rather than a manifest.
+_images_grype_rows() {
+  local out="$1" ref="$2" dockerfile="$3" upgraded="$4" source="$5" reason="$6"
+  jq -c --arg image "$ref" --arg dockerfile "$dockerfile" --arg source "$source" \
+        --arg reason "$reason" --argjson upgraded "${upgraded:-false}" '
     [ (.matches // [])[] | {
-      source: "grype-image",
+      source: $source,
       id: (.vulnerability.id // "UNKNOWN"),
       aliases: ([ (.relatedVulnerabilities // [])[].id ] | unique),
       severity: ((.vulnerability.severity // "unknown") | ascii_downcase),
@@ -260,7 +270,7 @@ images_vulns() {
       # the running container whether or not this repository imports it.
       reachability: {
         verdict: "unknown",
-        reason: ("shipped in the image " + $image + ", which the application source says nothing about"),
+        reason: $reason,
         ecosystem: ((.artifact.type // "unknown") | tostring),
         direct: "unknown",
         scope: "runtime"
@@ -473,6 +483,73 @@ image_contents_secret_paths() {
        elif $f == "env" then "image configuration: environment"
        else $f end) as $shown
     | . + {file: $shown, image: $ref, url: "", commit: "", image_scan_path: $f}'
+}
+
+# images_published_vulns <full_name> <out file> [already reported files...]
+#
+# Known vulnerabilities in what the published image has installed: the
+# distribution packages the build added and the language packages it put in
+# the image, read by grype from the package records the reader kept in pkgs/.
+# No second download: grype reads the copy the pinned, public only reader
+# already made, so a reference a repository names cannot steer it anywhere.
+#
+# Only what the repository has not already been told about: a package the
+# base image scan or the checkout's own dependency scan reported with the same
+# advisory is left to that finding, so one flaw is one finding.  Called in this
+# shell, so IMAGE_UNREAD set on a failure survives and holds the image's
+# findings open rather than closing them for silence.
+images_published_vulns() {
+  local full_name="$1" result="$2"; shift 2
+  echo '[]' > "$result"
+  (( ${#IMAGE_CONTENT_DIRS[@]} > 0 )) || return 0
+  have_cmd grype && have_cmd syft || {
+    IMAGE_UNREAD="syft and grype are needed to check the published image"; return 0; }
+  local timeout_sec; timeout_sec=$(cfg_num '.scan.images.timeout_sec' 600)
+  local seen; seen=$(tmp_file image_seen)
+  if (( $# > 0 )); then
+    jq -s -c '[ .[][] | select(type == "object")
+                | [(.id // ""), (.package.name // ""), (.package.version // "")] | join("\u0000") ]
+              | unique' "$@" > "$seen" 2>/dev/null || echo '[]' > "$seen"
+  else
+    echo '[]' > "$seen"
+  fi
+  local entry ref out raw part
+  for entry in "${IMAGE_CONTENT_DIRS[@]}"; do
+    ref="${entry%%$'\t'*}"; out="${entry#*$'\t'}"
+    [[ -d "$out/pkgs" ]] || continue
+    raw=$(tmp_file image_pub_grype)
+    local sbom; sbom=$(tmp_file image_pub_sbom)
+    # syft reads a folder with the catalogers meant for checkouts, which look
+    # at lock files and skip what is installed.  These records are an image's
+    # installed packages, so they are read with the catalogers syft uses on an
+    # image, and grype matches the result.
+    if ! { SYFT_CHECK_FOR_APP_UPDATE=false timeout "$timeout_sec" \
+             syft scan "dir:$out/pkgs" --override-default-catalogers image \
+             -o syft-json -q > "$sbom" 2>"$GHSCAN_TMPROOT/image_pub.log" &&
+           GRYPE_CHECK_FOR_APP_UPDATE=false timeout "$timeout_sec" \
+             grype "sbom:$sbom" -o json -q > "$raw" 2>>"$GHSCAN_TMPROOT/image_pub.log"; }; then
+      IMAGE_UNREAD="could not check the packages in the image $ref: $(tail -1 "$GHSCAN_TMPROOT/image_pub.log" 2>/dev/null | tr -d '\n' | cut -c1-300)"
+      log_warn "[$full_name] $IMAGE_UNREAD, so its findings are held as they were"
+      continue
+    fi
+    part=$(tmp_file image_pub_rows)
+    _images_grype_rows "$raw" "$ref" "" false "grype-published-image" \
+      "installed in the published image $ref, which is what a server runs" > "$part"
+    # Where in the image each package sits, and only what is new to this
+    # repository.
+    jq -c --slurpfile seen "$seen" --slurpfile raw "$raw" --arg image "$ref" '
+      ($seen[0] // []) as $known
+      | ([ ($raw[0].matches // [])[]
+           | ((.artifact.locations // [])[0].path // "") ]) as $paths
+      | [ to_entries[]
+          | .value + {package: (.value.package + {locations:
+              [ $image + (if ($paths[.key] // "") != "" then " " + $paths[.key] else "" end) ]})}
+          | select(([.id, (.package.name // ""), (.package.version // "")] | join("\u0000"))
+                   as $k | ($known | index($k)) == null) ]' "$part" > "$part.new" 2>/dev/null \
+      && mv "$part.new" "$part"
+    jq -s -c 'add' "$result" "$part" > "$result.new" 2>/dev/null && mv "$result.new" "$result"
+    log_info "[$full_name] $(jq 'length' "$part") package vulnerability(s) only the published image $ref has"
+  done
 }
 
 # image_contents_cleanup -- the copies are in memory, and contain whatever

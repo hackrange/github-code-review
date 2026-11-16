@@ -85,6 +85,31 @@ SKIP_DIRS = {"node_modules", "site-packages", "dist-packages", "__pycache__", "v
 SKIP_LOCAL = re.compile(r"^(usr/local/lib/(python|node|ruby|perl|php/extensions)|home/[^/]+/\.cache/)")
 ARCHIVE = re.compile(r"\.(zip|tar|tgz|tar\.gz|tar\.bz2|tar\.xz|7z|rar)$", re.I)
 
+# The records a vulnerability scanner reads to know what is installed: the
+# distribution's own package database and release file, and the metadata a
+# language's package manager leaves beside each installed package.  The checks
+# above skip all of these on purpose, so they are kept in a tree of their own,
+# pkgs/, outside scan/, where no credential engine and no structural check
+# looks.  Only the final image counts here: a record a later layer replaced or
+# deleted leaves this tree rather than being kept aside.
+PACKAGE_RECORD = re.compile(
+    r"^(?:"
+    r"etc/(?:os-release|lsb-release|alpine-release|debian_version|redhat-release|"
+    r"centos-release|system-release|rocky-release|almalinux-release)"
+    r"|usr/lib/os-release"
+    r"|var/lib/dpkg/status|var/lib/dpkg/status\.d/[^/]+"
+    r"|lib/apk/db/installed"
+    r"|(?:var/lib/rpm|usr/lib/sysimage/rpm)/(?:Packages|Packages\.db|rpmdb\.sqlite)"
+    r")$"
+    r"|(?:^|/)(?:site|dist)-packages/[^/]+\.dist-info/METADATA$"
+    r"|(?:^|/)(?:site|dist)-packages/[^/]+\.egg-info/PKG-INFO$"
+    r"|(?:^|/)node_modules/(?:@[^/]+/)?[^/]+/package\.json$"
+    r"|(?:^|/)vendor/composer/installed\.json$"
+    r"|(?:^|/)specifications/[^/]+\.gemspec$"
+    r"|\.deps\.json$"
+    r"|\.(?:jar|war|ear)$")
+MAX_PACKAGE_RECORD = 64 * 1024 * 1024   # an rpm database or a large jar
+
 
 class FetchError(Exception):
     pass
@@ -238,7 +263,12 @@ class Client:
             data = resp.read(MAX_JSON + 1)
             if len(data) > MAX_JSON:
                 raise FetchError("a manifest larger than any real one")
-            return json.loads(data), (resp.getheader("Content-Type") or "").split(";")[0].strip(), \
+            try:
+                value = json.loads(data)
+            except ValueError:
+                raise FetchError(f"{urllib.parse.urlsplit(url).hostname} did not answer "
+                                 "as an image registry") from None
+            return value, (resp.getheader("Content-Type") or "").split(";")[0].strip(), \
                 resp.getheader("Docker-Content-Digest") or ""
         finally:
             conn.close()
@@ -262,6 +292,10 @@ def parse_ref(ref: str):
         registry, path = first, rest
     else:
         registry, path = "registry-1.docker.io", ref
+    # docker.io is how people write Docker Hub, and docker itself maps it to
+    # the registry; the host of that name serves the website, not the API.
+    if registry in ("docker.io", "index.docker.io"):
+        registry = "registry-1.docker.io"
     tag = "latest"
     last = path.rsplit("/", 1)[-1]
     if ":" in last:
@@ -304,6 +338,9 @@ class Layout:
     def __init__(self, outdir: str, max_bytes: int):
         self.out = outdir
         self.fs = os.path.join(outdir, "scan", "fs")
+        self.pkgs = os.path.join(outdir, "pkgs")
+        self.pkg_saved = set()    # package records in pkgs/, final image only
+        self.pkg_kept = 0
         self.max_bytes = max_bytes
         self.kept = 0
         self.meta = {}            # path -> [uid, gid, mode, size, layer, type]
@@ -318,6 +355,14 @@ class Layout:
 
     def _retire(self, path: str, layer: int):
         """A later layer removed or replaced path: keep the old copy aside."""
+        if path in self.pkg_saved:
+            # What a vulnerability scan reads is the final image, so a removed
+            # package record goes rather than being kept.
+            try:
+                os.remove(self._target(self.pkgs, path))
+            except OSError:
+                pass
+            self.pkg_saved.discard(path)
         if path in self.saved:
             src = self._target(self.fs, path)
             dst = self._target(os.path.join(self.out, "scan", "deleted", str(self.saved[path])), path)
@@ -332,12 +377,13 @@ class Layout:
     def remove(self, path: str, layer: int):
         """A whiteout: path and everything under it are gone."""
         prefix = path + "/"
-        for p in [p for p in self.meta if p == path or p.startswith(prefix)]:
+        for p in [p for p in set(self.meta) | self.pkg_saved
+                  if p == path or p.startswith(prefix)]:
             self._retire(p, layer)
 
     def opaque(self, directory: str, layer: int):
         prefix = directory + "/" if directory else ""
-        for p in [p for p in self.meta if p.startswith(prefix)]:
+        for p in [p for p in set(self.meta) | self.pkg_saved if p.startswith(prefix)]:
             self._retire(p, layer)
 
     def add(self, member: tarfile.TarInfo, path: str, stream, layer: int):
@@ -349,17 +395,25 @@ class Layout:
             self.meta[path] = [member.uid, member.gid, member.mode, member.size, layer, kind]
         else:
             self.truncated = True
-        if kind != "f" or not wanted(path):
+        if kind != "f":
+            return
+        # A layer is a stream, so each entry can be read once: one read
+        # serves both the package record and the checks.
+        data = None
+        if PACKAGE_RECORD.search(path):
+            data = self._keep_package_record(member, path, stream)
+        if not wanted(path):
             return
         limit = MAX_ARCHIVE if ARCHIVE.search(path) else MAX_FILE
         if member.size > limit or self.kept + member.size > self.max_bytes:
             if self.kept + member.size > self.max_bytes:
                 self.truncated = True
             return
-        handle = stream.extractfile(member)
-        if handle is None:
-            return
-        data = handle.read(limit + 1)
+        if data is None:
+            handle = stream.extractfile(member)
+            if handle is None:
+                return
+            data = handle.read(limit + 1)
         if len(data) > limit:
             return
         # Binary files are not config and not source; archives are listed.
@@ -371,6 +425,30 @@ class Layout:
             out.write(data)
         self.kept += len(data)
         self.saved[path] = layer
+
+
+    def _keep_package_record(self, member, path: str, stream):
+        """A package record into pkgs/, within its own share of the budget.
+        -> the bytes read, for the checks to reuse, or None."""
+        if member.size > MAX_PACKAGE_RECORD or self.pkg_kept + member.size > self.max_bytes:
+            # A vulnerability scan of part of the installed packages would
+            # report the rest as absent, which reads as clean.
+            self.truncated = True
+            return None
+        handle = stream.extractfile(member)
+        if handle is None:
+            return None
+        data = handle.read(MAX_PACKAGE_RECORD + 1)
+        if len(data) > MAX_PACKAGE_RECORD:
+            self.truncated = True
+            return None
+        target = self._target(self.pkgs, path)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as out:
+            out.write(data)
+        self.pkg_kept += len(data)
+        self.pkg_saved.add(path)
+        return data
 
 
 def _layer_stream(resp, media_type: str):

@@ -277,7 +277,7 @@
   <tr><td>Not scored</td><td>Unverified</td><td>{{ "A package version read from a base image the build upgrades.  Not counted until someone reads the version in the image that ships." | sentence_spaced }}</td></tr>
   <tr><td>Not scored</td><td>Needs review</td><td>{{ "The code that would decide it could not be found, even after a second look that fetched the code it needed.  Not counted until a person checks it." | sentence_spaced }}</td></tr>
 </table>
-<p>{{ "Some ratings were already decided before this review.  A grade a person set, or the rating from an alert's own earlier validation made with high confidence, is used as it is and is not scored again.  An earlier validation with less confidence is checked again against the code.  A package on the CISA known exploited list is rated at least High until a person rules on it.  Waived findings are left out of this report." | sentence_spaced }}</p>
+<p>{{ "Some ratings were already decided before this review.  A grade a person set, or the rating from an alert's own earlier validation made with high confidence, is used as it is and is not scored again.  An earlier validation with less confidence is checked again against the code.  A package on the CISA known exploited list is rated at least High until a person rules on it, and a credential this review could not settle keeps the scanner's grade.  Waived findings are left out of this report." | sentence_spaced }}</p>
 
 {# ---------------------------------------------------------- risk matrix #}
 <h2 class="new-page" style="margin-top:0">4.  Risk Matrix</h2>
@@ -285,7 +285,7 @@
   <thead><tr><th>ID</th><th>Issue</th><th class="c">Likelihood</th><th class="c">Impact</th>
     <th class="c">Score</th><th class="c">CVSS</th><th class="c">Rating</th></tr></thead>
   {% for i in items %}
-  {% set scored = i.rating != 'Informational' and not i.decided %}
+  {% set scored = i.rating != 'Informational' and not i.decided and not i.held_grade %}
   <tr><td>{{ i.id }}</td><td>{{ i.title }}{% if i.waived %} <span class="soft">(waived)</span>{% endif %}</td>
     <td class="c">{{ i.likelihood if scored else 'N/A' }}</td>
     <td class="c">{{ i.impact if scored else 'N/A' }}</td>
@@ -303,7 +303,7 @@
   {% endfor %}
   <tr><th></th>{% for n in range(1, 6) %}<th>{{ n }} {{ impact_words[n] }}</th>{% endfor %}</tr>
 </table>
-<p class="faint" style="text-align:center">{{ "Rows are likelihood and columns are impact.  False alarms carry no risk and are not shown.  An id marked * was graded before this review, by a person or a validation, and is placed in the cell for its rating rather than scored." | sentence_spaced }}</p>
+<p class="faint" style="text-align:center">{{ "Rows are likelihood and columns are impact.  False alarms carry no risk and are not shown.  An id marked * was graded before this review, by a person or a validation, or is a credential kept at the scanner's grade, and is placed in the cell for its rating rather than scored." | sentence_spaced }}</p>
 
 {# ---------------------------------------------------- detailed findings #}
 <h2 class="new-page" style="margin-top:0">5.  Detailed Findings</h2>
@@ -331,6 +331,8 @@
     <tr><td class="k">Rated by</td><td>
       {%- if i.decided.by == 'validation' %}{{ ("Validation #" ~ i.decided.id ~ (" on " ~ i.decided.at if i.decided.at else "") ~ ", rated " ~ (i.decided.rating | lower) ~ (", " ~ i.decided.confidence ~ " confidence" if i.decided.confidence else "") ~ ".  Not judged again for this report.") | sentence_spaced }}
       {%- else %}{{ (i.decided.who ~ ", a person's own grade" ~ (" set on " ~ i.decided.at if i.decided.at else "") ~ ".  Not judged again for this report.") | sentence_spaced }}{% endif %}</td></tr>
+    {% elif i.held_grade %}
+    <tr><td class="k">Rated by</td><td>{{ ("The scanner's grade.  " ~ i.held_grade.why) | sentence_spaced }}</td></tr>
     {% elif i.rating != 'Informational' %}
     <tr><td class="k">Likelihood x Impact</td><td>{{ i.likelihood }} x {{ i.impact }} = {{ i.score }}</td></tr>
     {% endif %}

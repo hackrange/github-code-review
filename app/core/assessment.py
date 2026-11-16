@@ -115,6 +115,14 @@ SEVERITY_RATING = {"critical": "Critical", "high": "High", "medium": "Medium",
 KEV_FLOOR = ("it is on the CISA known exploited list, and only evidence that "
              "it does not ship lowers that")
 
+# A credential the review could not settle keeps the scanner's grade.  Policy
+# keeps a credential's grade out of a model's hands, and a model that cannot
+# see a masked key, or a file only the published image holds, is not evidence
+# that the key is harmless.
+CREDENTIAL_HELD = ("A credential keeps the scanner's grade until a person rules on it.  "
+                   "This review could not confirm or rule it out from the code, and a "
+                   "model does not lower a credential.")
+
 
 def _floor(item: dict) -> None:
     """A known exploited package is at least High until a person rules on it."""
@@ -124,6 +132,34 @@ def _floor(item: dict) -> None:
         return
     item["floor"] = {"was": item["rating"], "why": KEV_FLOOR}
     item["rating"] = "High"
+
+
+def _rate(item: dict) -> None:
+    """The rating of one item, from its verdict and its numbers, in code."""
+    if item["verdict"] == "unverified":
+        # No score, and out of the overall rating, until the version that
+        # ships is read.  Not a false alarm either: nobody showed it fixed.
+        item["score"], item["rating"], item["unverified"] = 0, "Informational", True
+    elif (item["verdict"] == "needs_review" and not item.get("decided")
+          and item.get("kind") == "credential"):
+        item["score"] = 0
+        item["rating"] = SEVERITY_RATING.get(str(item.get("severity") or "").lower(), "High")
+        item["held_grade"] = {"why": CREDENTIAL_HELD}
+    elif item["verdict"] == "needs_review" and not item.get("decided"):
+        # Even a second look with the code it asked for could not settle
+        # it.  A guess at a rating is how false positives get into a
+        # report, so it carries none: listed for a person, unscored, and
+        # out of the overall rating.
+        item["score"], item["rating"], item["unconfirmed"] = 0, "Informational", True
+    elif item.get("decided"):
+        item["score"] = 0
+        item["rating"] = SEVERITY_RATING.get(item["decided"]["severity"], "Medium")
+    elif item["verdict"] in CLOSED:
+        item["score"], item["rating"] = 0, "Informational"
+    else:
+        item["score"] = item["likelihood"] * item["impact"]
+        item["rating"] = rating_for(item["score"])
+    _floor(item)
 
 
 def _decided_item(group: dict) -> dict:
@@ -2788,25 +2824,7 @@ def _write(repository: str, branch: str, connection: str, actor: str) -> None:
         items.append(concern)
 
     for item in items + challenged:
-        if item["verdict"] == "unverified":
-            # No score, and out of the overall rating, until the version that
-            # ships is read.  Not a false alarm either: nobody showed it fixed.
-            item["score"], item["rating"], item["unverified"] = 0, "Informational", True
-        elif item["verdict"] == "needs_review" and not item.get("decided"):
-            # Even a second look with the code it asked for could not settle
-            # it.  A guess at a rating is how false positives get into a
-            # report, so it carries none: listed for a person, unscored, and
-            # out of the overall rating.
-            item["score"], item["rating"], item["unconfirmed"] = 0, "Informational", True
-        elif item.get("decided"):
-            item["score"] = 0
-            item["rating"] = SEVERITY_RATING.get(item["decided"]["severity"], "Medium")
-        elif item["verdict"] in CLOSED:
-            item["score"], item["rating"] = 0, "Informational"
-        else:
-            item["score"] = item["likelihood"] * item["impact"]
-            item["rating"] = rating_for(item["score"])
-        _floor(item)
+        _rate(item)
 
     # One rule saying the same thing in many places is one row, not many:
     # closed for the same reason, confirmed at the same rating, or left with
@@ -3405,7 +3423,7 @@ GRADE_CELL = {"Critical": (5, 4), "High": (4, 3), "Medium": (3, 2), "Low": (2, 2
 def _cell_of(item: dict):
     if item.get("rating") == "Informational":
         return None
-    if item.get("decided"):
+    if item.get("decided") or item.get("held_grade"):
         return GRADE_CELL.get(item.get("rating"))
     return (item.get("likelihood"), item.get("impact"))
 
@@ -3413,14 +3431,15 @@ def _cell_of(item: dict):
 def matrix(items: list) -> list:
     """5 by 5 rows, most likely first: [{likelihood, label, cells:[{ids, rating}]}].
 
-    A finding graded before this review is placed by its grade and its id
-    carries an asterisk.
+    A finding graded before this review, or a credential kept at the scanner's
+    grade, is placed by its grade and its id carries an asterisk.
     """
     rows = []
     for lk in range(5, 0, -1):
         cells = []
         for im in range(1, 6):
-            ids = [i["id"] + ("*" if i.get("decided") else "") for i in items
+            ids = [i["id"] + ("*" if i.get("decided") or i.get("held_grade") else "")
+                   for i in items
                    if _cell_of(i) == (lk, im)]
             cells.append({"ids": ids, "rating": rating_for(lk * im).lower()})
         rows.append({"likelihood": lk, "label": LIKELIHOOD_WORDS[lk], "cells": cells})
