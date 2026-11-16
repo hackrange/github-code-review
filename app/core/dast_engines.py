@@ -219,7 +219,7 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
                 }.get(profile, "exposure,misconfig,cve,default-login,token-spray,ssrf,tech")
         report = workdir / "nuclei.jsonl"
         targets = workdir / "nuclei-targets.txt"
-        targets.write_text("\n".join([url] + _same_site(url, paths)[:50]) + "\n")
+        targets.write_text("\n".join([url] + mount_roots(url, paths)) + "\n")
         # -o with -jsonl writes each finding to the file the moment it is found,
         # not -jsonl-export, which only writes the whole set when nuclei finishes.
         # nuclei has no run-time limit of its own, so our timeout kills it mid
@@ -309,6 +309,38 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
                  "-fs", "0", "-ac", "-t", "20", "-rate", "40", "-timeout", "10",
                  "-maxtime", "240", "-s", "-H", f"User-Agent: {_ua()}"], report)
     raise ValueError(f"unknown engine {tool}")
+
+
+MAX_MOUNT_ROOTS = 5
+# A first folder that is a page or a resource, not a place an app is installed.
+_NOT_A_MOUNT = re.compile(r"\.[A-Za-z0-9]{1,5}$|^(api|v\d+|static|assets|css|js|img|images|"
+                          r"fonts|media|cdn-cgi|_next|\.well-known)$", re.I)
+
+
+def mount_roots(url: str, paths, limit: int = MAX_MOUNT_ROOTS) -> list:
+    """The folders below the root an application may be installed in, for nuclei.
+
+    nuclei's templates build their own paths from each target, so a target
+    of /blog/ checks a WordPress installed there, and a target of
+    /api/orders/12 only asks for /api/orders/12/wp-login.php.  It used to get
+    fifty paths, which multiplied every template by fifty, and ran out of time
+    on most sites with the set half done.  A first folder counts when two or
+    more paths sit under it, or a path ends in it; injection on deep paths is
+    left to wapiti, sqlmap and dalfox, which take every path.
+    """
+    from collections import Counter
+    from urllib.parse import urlparse
+
+    base = urlparse(url)
+    root = f"{base.scheme}://{base.netloc}"
+    seen = Counter()
+    for item in _same_site(url, paths):
+        segs = [s for s in urlparse(item).path.split("/") if s]
+        if not segs or _NOT_A_MOUNT.search(segs[0]):
+            continue
+        seen[segs[0]] += 1 if len(segs) > 1 or item.endswith("/") else 0
+    picked = [name for name, n in seen.most_common() if n >= 1]
+    return [f"{root}/{name}/" for name in picked[:limit]]
 
 
 def _same_site(url: str, paths) -> list:
