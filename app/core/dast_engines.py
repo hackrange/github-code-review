@@ -208,8 +208,12 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
     exe = binary(tool)
     if tool == "testssl":
         report = workdir / "testssl.json"
+        # A handshake that never answers used to hold testssl until the 15
+        # minute limit, and no TLS result was kept at all.  Each connection
+        # now gives up on its own: 15 seconds to connect, 20 for OpenSSL.
         return ([exe, "--jsonfile", str(report), "--quiet", "--color", "0",
-                 "--warnings", "off", "--user-agent", _ua(), host], report)
+                 "--warnings", "off", "--connect-timeout", "15",
+                 "--openssl-timeout", "20", "--user-agent", _ua(), host], report)
     if tool == "nuclei":
         tags = {"quick": "exposure,misconfig,cve,default-login",
                 "thorough": "exposure,misconfig,cve,default-login,token-spray,"
