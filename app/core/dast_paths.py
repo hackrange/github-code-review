@@ -442,3 +442,53 @@ def load(raw) -> dict:
     except ValueError:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+# ------------------------------------------- open among routes that refuse
+
+# Names that are public by design.  A sign in route, a health check or an API
+# description answering anybody is how they are meant to work.
+PUBLIC_BY_DESIGN = re.compile(
+    r"(^|[/_\-.])(log[\-_]?in|log[\-_]?out|sign[\-_]?(in|up|out)|register|auth|oauth2?|"
+    r"token|refresh|sso|saml|openid|\.well-known|callback|webhook|health[\w\-]*|ping|"
+    r"status|version|info|metrics|swagger[\w\-.]*|openapi[\w\-.]*|api[\-_]?docs|docs|"
+    r"redoc|public|forgot[\w\-]*|reset[\w\-]*|verify[\w\-]*|confirm[\w\-]*|captcha|"
+    r"config|settings|culture|locali[sz]ation|i18n|favicon[\w.]*|robots\.txt)"
+    r"($|[/_\-.])", re.I)
+MIN_REFUSED = 2
+
+
+def open_among_protected(records: list, declared=lambda path: True) -> list:
+    """Routes that answer anybody where the routes beside them ask for a sign in.
+
+    Read from an anonymous scan's own answers, nothing sent for it.  A route
+    the code declares, answering a real 200 (see classify), in a folder where
+    at least two other routes answered 401 or 403 and no more answered 200
+    than refused: the one left open in a set that is guarded is how a
+    forgotten guard looks from outside.  declared(path) says whether the
+    linked code declares the path.
+    -> [{"path", "status", "refused": [{"path", "status"}], "open_beside": n}]
+    """
+    groups = {}
+    for rec in records or []:
+        path = rec.get("p") or ""
+        segs = [s for s in path.split("/") if s]
+        if len(segs) < 2 or edge_of(path) or STATIC.search(path):
+            continue
+        groups.setdefault("/" + "/".join(segs[:-1]), []).append(rec)
+    out = []
+    for folder, members in sorted(groups.items()):
+        refused = [r for r in members if r.get("s") in (401, 403)]
+        opened = [r for r in members if r.get("s") == 200 and r.get("r") is True]
+        if len(refused) < MIN_REFUSED or not opened or len(opened) > len(refused):
+            continue
+        for rec in opened:
+            name = rec["p"].rsplit("/", 1)[-1]
+            if PUBLIC_BY_DESIGN.search("/" + name) or not declared(rec["p"]):
+                continue
+            out.append({"path": rec["p"], "status": 200,
+                        "refused": [{"path": r["p"], "status": r["s"]}
+                                    for r in sorted(refused, key=lambda r: r["p"])][:6],
+                        "refused_count": len(refused),
+                        "open_beside": len(opened) - 1})
+    return out

@@ -770,6 +770,7 @@ def detail_page(asset_id: int, request: Request, scans: int = 1,
             api_spec=_api_spec_described(asset.id),
             auth_kinds=external_auth_mod.FORM_KINDS,
             site_profile=external.profile_for(asset), proxy_label=external.proxy_shown(asset),
+            sample_links_shown=external.sample_links_shown(asset),
             has_shot=external.shot_path(asset.id).is_file(),
             exposures=external.EXPOSURES,
             has_proxy_shot=external.shot_proxy_path(asset.id).is_file(),
@@ -885,6 +886,18 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
                 if external.proxy_shown(asset) != before_proxy or form.get("proxy"):
                     record(db, "external.proxy_set", actor=user.username, target=asset.host,
                            detail=(external.proxy_shown(asset) or "removed")[:200],
+                           source_ip=client_ip(request))
+            if form.get("with_samples"):
+                before_links = external.sample_links_shown(asset)
+                if _checked(form, "sample_links_clear"):
+                    external.set_sample_links(asset, "")
+                elif (form.get("sample_links") or "").strip():
+                    external.set_sample_links(asset, form.get("sample_links"))
+                after_links = external.sample_links_shown(asset)
+                if after_links != before_links:
+                    # The masked form only: the links themselves are keys.
+                    record(db, "external.sample_links_set", actor=user.username,
+                           target=asset.host, detail=f"{len(after_links)} link(s)",
                            source_ip=client_ip(request))
             if form.get("with_auth"):
                 from app.core import external_auth

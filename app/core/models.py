@@ -2402,6 +2402,11 @@ class ExternalAsset(Base):
     # through, for a site that only lets in some networks.  Encrypted, since
     # it can carry a password.  Empty for none.
     proxy = Column(Text, default="")
+    # Links that open a page with no sign in, the way a customer gets one by
+    # email (a document to sign, an invoice).  The scan loads each with no
+    # sign in and reads what the page hands over.  Encrypted, since each one
+    # is the key to what it opens.  Empty for none.
+    sample_links = Column(Text, default="")
 
     # Who answers for the site, as addresses, comma separated.
     executive_owner = Column(String(500), default="")

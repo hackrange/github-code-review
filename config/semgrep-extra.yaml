@@ -2247,3 +2247,118 @@ rules:
       - metavariable-regex:
           metavariable: $O
           regex: ^(?!(this|Math|window|document|JSON|Number|console|location|navigator|i18n|lang|strings|labels|messages|config|CONFIG|settings|SETTINGS|constants|CONSTANTS)$)
+
+# ASP.NET controllers have no sign in unless something asks for it.  A
+# controller with no [Authorize], on the class or on the action, answers
+# anybody, and a project where the other controllers carry it is a project
+# where this one was forgotten.  Found on a service where one controller of
+# seven had none, and its routes, a write among them, answered anyone.  The
+# rule reports every unguarded action; triage keeps it for a person only when
+# the same project guards its other controllers and sets no default policy.
+- id: gcr-aspnet-write-action-without-authorize
+  languages:
+  - csharp
+  severity: ERROR
+  message: This action changes data and nothing on it or its controller asks for a sign in, so anybody
+    can call it.  Add [Authorize], or [AllowAnonymous] with a check of its own if it is meant to be public.
+  metadata:
+    cwe: 'CWE-862: Missing Authorization'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        [ApiController]
+        class $C { ... }
+    - pattern-inside: |
+        class $C : Controller { ... }
+    - pattern-inside: |
+        class $C : ControllerBase { ... }
+  - pattern-not-inside: |
+      [Authorize]
+      class $C { ... }
+  - pattern-not-inside: |
+      [Authorize(...)]
+      class $C { ... }
+  - pattern-not-inside: |
+      [AllowAnonymous]
+      class $C { ... }
+  - pattern-either:
+    - pattern: |
+        [HttpPost]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpPost(...)]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpPut]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpPut(...)]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpPatch]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpPatch(...)]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpDelete]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpDelete(...)]
+        $R $M(...) { ... }
+  - pattern-not: |
+      [AllowAnonymous]
+      $R $M(...) { ... }
+  - pattern-not: |
+      [Authorize]
+      $R $M(...) { ... }
+  - pattern-not: |
+      [Authorize(...)]
+      $R $M(...) { ... }
+
+- id: gcr-aspnet-read-action-without-authorize
+  languages:
+  - csharp
+  severity: WARNING
+  message: This action returns data and nothing on it or its controller asks for a sign in, so anybody
+    can read it.  Add [Authorize], or [AllowAnonymous] if it is meant to be public.
+  metadata:
+    cwe: 'CWE-862: Missing Authorization'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        [ApiController]
+        class $C { ... }
+    - pattern-inside: |
+        class $C : Controller { ... }
+    - pattern-inside: |
+        class $C : ControllerBase { ... }
+  - pattern-not-inside: |
+      [Authorize]
+      class $C { ... }
+  - pattern-not-inside: |
+      [Authorize(...)]
+      class $C { ... }
+  - pattern-not-inside: |
+      [AllowAnonymous]
+      class $C { ... }
+  - pattern-either:
+    - pattern: |
+        [HttpGet]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpGet(...)]
+        $R $M(...) { ... }
+  - pattern-not: |
+      [AllowAnonymous]
+      $R $M(...) { ... }
+  - pattern-not: |
+      [Authorize]
+      $R $M(...) { ... }
+  - pattern-not: |
+      [Authorize(...)]
+      $R $M(...) { ... }

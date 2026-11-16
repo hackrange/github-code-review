@@ -473,6 +473,17 @@
             sign in and engines go through it; DNS, ports and TLS are read directly.</span></label>
         {% if proxy_label %}<label class="check"><input type="checkbox" name="proxy_clear" value="1"><span>Remove the proxy</span></label>{% endif %}
       </details>
+      <details class="hand-fields" {{ 'open' if sample_links_shown }}>
+        <summary><strong>Sample links</strong> <span class="faint small">pages a link alone opens, like a document emailed to a customer.  Saved encrypted.</span></summary>
+        <input type="hidden" name="with_samples" value="1">
+        <label>Links, one a line <textarea name="sample_links" rows="3" maxlength="10500" autocomplete="off" spellcheck="false"
+               placeholder="{{ 'Saved, leave empty to keep' if sample_links_shown else 'https://' ~ asset.host ~ '/customer/…' }}"></textarea>
+          <span class="faint small">Up to 5, on {{ asset.host }}.  Use a test record, not a real customer's.  A thorough or premium scan loads each
+            with no sign in and reports what the page hands over: other people's links, personal data, staff details.  Nothing is
+            submitted, signed or forwarded.</span></label>
+        {% if sample_links_shown %}<div class="small">Saved: {% for l in sample_links_shown %}<div class="mono faint">{{ l }}</div>{% endfor %}</div>
+        <label class="check"><input type="checkbox" name="sample_links_clear" value="1"><span>Remove the sample links</span></label>{% endif %}
+      </details>
       <details class="hand-fields" {{ 'open' if asset.engine_timeouts }}>
         <summary><strong>Engine time limits</strong> <span class="faint small">minutes each scan engine may run on this site.  Blank uses the default.</span></summary>
         <input type="hidden" name="with_timeouts" value="1">

@@ -14,6 +14,11 @@ Every request the page makes is checked against private addresses unless they
 are allowed, so a page cannot steer the browser into this server's network.
 
     browser_dom.py URL --user-agent UA [--timeout 45] [--allow-private]
+
+With --capture-json it also keeps the JSON answers the page's own requests
+got (fetch and XHR), for reading what a page hands to whoever loads it.  A
+URL of "-" is read from standard input, for an address that is itself a
+secret (an emailed link) and must not sit in the process list.
 """
 
 from __future__ import annotations
@@ -38,6 +43,8 @@ MAX_ONE = 512 * 1024          # one script
 MAX_TOTAL = 4 * 1024 * 1024   # all scripts
 MAX_SCRIPTS = 60
 MAX_MAPS = 12
+MAX_JSON = 20                 # JSON answers kept with --capture-json
+MAX_JSON_ONE = 256 * 1024
 _SMAP = re.compile(r"[#@]\s*sourceMappingURL=([^\s'\"]+)")
 
 _public: dict = {}
@@ -64,8 +71,12 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=45)
     ap.add_argument("--allow-private", action="store_true")
     ap.add_argument("--proxy", default="")
+    ap.add_argument("--capture-json", action="store_true")
     args = ap.parse_args()
-    out = {"ok": False, "url": args.url, "scripts": [], "inline": [], "maps": [], "error": ""}
+    if args.url == "-":
+        args.url = sys.stdin.readline().strip()
+    out = {"ok": False, "url": args.url, "scripts": [], "inline": [], "maps": [],
+           "json": [], "error": ""}
     deadline = time.monotonic() + args.timeout
     try:
         from playwright.sync_api import sync_playwright
@@ -105,10 +116,19 @@ def main() -> int:
 
             def on_response(resp):
                 try:
-                    if len(scripts) >= MAX_SCRIPTS or total[0] >= MAX_TOTAL:
-                        return
                     rtype = resp.request.resource_type
                     ctype = (resp.headers.get("content-type") or "").lower()
+                    if args.capture_json and rtype in ("fetch", "xhr") \
+                            and len(out["json"]) < MAX_JSON:
+                        body = resp.text() or ""
+                        if "json" in ctype or body.lstrip()[:1] in ("{", "["):
+                            out["json"].append({"url": resp.url, "status": resp.status,
+                                                "method": resp.request.method,
+                                                "signed": bool(resp.request.headers.get("authorization")),
+                                                "body": body[:MAX_JSON_ONE]})
+                        return
+                    if len(scripts) >= MAX_SCRIPTS or total[0] >= MAX_TOTAL:
+                        return
                     if rtype != "script" and "javascript" not in ctype:
                         return
                     body = resp.text()

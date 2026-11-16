@@ -3386,6 +3386,137 @@ def _framework_absent(check_id: str, present: set, decidable: set,
                 "it" % (framework, framework))
     return None
 
+# --- ASP.NET actions with no sign in ----------------------------------------
+#
+# The two gcr-aspnet rules report every action that nothing marks with
+# [Authorize].  Whether that is a forgotten guard or the design depends on the
+# rest of the project, which a pattern on one file cannot see: a default
+# policy covers everything, a base class can carry the attribute, and an API
+# with no [Authorize] anywhere is one whose access is decided outside the code.
+
+ASPNET_RULES = ("gcr-aspnet-write-action-without-authorize",
+                "gcr-aspnet-read-action-without-authorize")
+_CS_SKIP = re.compile(r"(^|/)(bin|obj|node_modules|packages|\.git)(/|$)")
+_CS_FALLBACK = re.compile(
+    r"FallbackPolicy\s*=|new\s+AuthorizeFilter\s*\(|"
+    r"Map(?:Controllers|ControllerRoute|DefaultControllerRoute)\s*\([^;]*?\)\s*\.\s*RequireAuthorization\s*\(",
+    re.S)
+_CS_GUARDED_CLASS = re.compile(
+    r"\[\s*Authorize\b[^\]]*\]\s*(?:\[[^\]]*\]\s*)*"
+    r"(?:public\s+|internal\s+|abstract\s+|sealed\s+|partial\s+)*class\s+(\w+)")
+_CS_CLASS = re.compile(r"\bclass\s+(\w+)\s*(?::\s*([\w.<>]+))?")
+
+
+def _aspnet_project(repo_root: str, rel: str, cache: dict) -> str:
+    """The folder of the nearest .csproj above a file, relative; "" for the root.
+
+    One repository can hold several projects, and only the controllers of the
+    same project say anything about what this one forgot.
+    """
+    folder = os.path.dirname(rel)
+    while True:
+        if folder not in cache:
+            here = os.path.join(repo_root, folder)
+            try:
+                cache[folder] = any(n.endswith(".csproj") for n in os.listdir(here))
+            except OSError:
+                cache[folder] = False
+        if cache[folder] or not folder:
+            return folder
+        folder = os.path.dirname(folder)
+
+
+def _aspnet_authorization(repo_root: str, limit: int = 6000) -> dict:
+    """What the repository's C# says about sign in, file by file.
+
+    -> {files: {rel: {project, fallback, guarded}}, guarded_classes: {name: file},
+        bases: {class: base}, csproj: {folder: bool}}
+    """
+    out = {"files": {}, "guarded_classes": {}, "bases": {}, "csproj": {}}
+    seen = 0
+    for root, dirs, names in os.walk(repo_root):
+        rel_root = os.path.relpath(root, repo_root)
+        if _CS_SKIP.search(rel_root.replace(os.sep, "/")):
+            dirs[:] = []
+            continue
+        for name in names:
+            if not name.endswith(".cs"):
+                continue
+            seen += 1
+            if seen > limit:
+                return out
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, repo_root)
+            text = _read(full)
+            guarded = _CS_GUARDED_CLASS.findall(text)
+            for cls in guarded:
+                out["guarded_classes"].setdefault(cls, rel)
+            for cls, base in _CS_CLASS.findall(text):
+                if base:
+                    out["bases"][cls] = base.split(".")[-1].split("<")[0]
+            out["files"][rel] = {
+                "project": _aspnet_project(repo_root, rel, out["csproj"]),
+                "fallback": bool(_CS_FALLBACK.search(text)),
+                "guarded": bool(guarded or re.search(r"\[\s*Authorize\b", text))}
+    return out
+
+
+def _aspnet_class_at(source: str, line: int) -> str:
+    """The class a line sits in: the last class declared above it."""
+    head = "\n".join((source or "").splitlines()[:max(line, 1)])
+    found = _CS_CLASS.findall(head)
+    return found[-1][0] if found else ""
+
+
+# The sample controller a new Web API project starts with.  It answers
+# anybody, and all it ever says is "value1" and "value2".
+_CS_SAMPLE = re.compile(r"""new\s+string\s*\[\s*\]\s*\{\s*"value1"\s*,\s*"value2"\s*\}""")
+
+
+def _aspnet_judgement(facts: dict, relative: str, source: str, line: int):
+    """-> (verdict, reason, decided_by), kept for a person or cleared."""
+    mine = facts["files"].get(relative) or {"project": "", "fallback": False, "guarded": False}
+    project = mine["project"]
+    same = [(f, v) for f, v in facts["files"].items() if v["project"] == project]
+    fallback = next((f for f, v in same if v["fallback"]), "")
+    if fallback:
+        return (NOT_APPLICABLE,
+                "%s sets a default that asks every action for a sign in, so an "
+                "action without [Authorize] is still behind one" % fallback,
+                "aspnet-default-policy")
+    cls = _aspnet_class_at(source, line)
+    base, hops = facts["bases"].get(cls, ""), 0
+    while base and hops < 6:
+        if base in facts["guarded_classes"]:
+            return (NOT_APPLICABLE,
+                    "%s inherits [Authorize] from %s in %s"
+                    % (cls or "the controller", base, facts["guarded_classes"][base]),
+                    "aspnet-inherited-authorize")
+        base, hops = facts["bases"].get(base, ""), hops + 1
+    if os.path.basename(relative) == "ValuesController.cs" and _CS_SAMPLE.search(source or ""):
+        return (NOT_APPLICABLE,
+                "the sample controller a new Web API project starts with.  It "
+                "answers anybody, but only with fixed text.  Worth deleting, "
+                "since an unused route is one more thing to guard",
+                "aspnet-template-sample")
+    others = [f for f, v in same if v["guarded"] and f != relative]
+    if not others and not re.search(r"\[\s*Authorize\b", source or ""):
+        where = ("the %s project" % project) if project else "this project"
+        return (ADVISORY,
+                "nothing in %s uses [Authorize], so who may call it is decided "
+                "outside the code, by a gateway or the network.  Worth "
+                "confirming that is so" % where,
+                "aspnet-no-authorize-anywhere")
+    shown = ", ".join(os.path.basename(f) for f in others[:4])
+    if len(others) > 4:
+        shown += " and %d more" % (len(others) - 4)
+    return (REVIEW,
+            "Other controllers in this project ask for a sign in (%s), and this "
+            "one does not, which is how a forgotten guard looks" % shown
+            if others else "this file asks for a sign in elsewhere, and not here",
+            "aspnet-sibling-guarded")
+
+
 def triage(findings: list, repo_root: str, muted=()) -> list:
     """Add a triage verdict to every finding.  Nothing is removed."""
     muted = tuple(m.strip() for m in (muted or ()) if str(m).strip())
@@ -3396,6 +3527,8 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
     present, decidable = _framework_evidence(repo_root)
     import_cache: dict = {}
     sources: dict = {}
+    # Worked out on the first ASP.NET finding, and only then.
+    aspnet = None
     for finding in findings:
         path = str(finding.get("path") or "")
         relative = path
@@ -3525,6 +3658,11 @@ def triage(findings: list, repo_root: str, muted=()) -> list:
                           "longer than the cap in %s, and a polynomial regex "
                           "on a string that short finishes at once" % capped)
                 decided_by = "codeql-capped-input"
+        if verdict == REVIEW and rule in ASPNET_RULES:
+            if aspnet is None:
+                aspnet = _aspnet_authorization(repo_root)
+            verdict, reason, decided_by = _aspnet_judgement(
+                aspnet, relative, source, finding.get("start", {}).get("line", 0))
         finding["triage"] = {"verdict": verdict, "reason": reason,
                              "rule": decided_by, "matched": matched[:200]}
         line_no = finding.get("start", {}).get("line", 0)

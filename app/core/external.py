@@ -618,6 +618,63 @@ def set_proxy(asset, value) -> None:
     asset.proxy = store._encrypt(text)
 
 
+MAX_SAMPLE_LINKS = 5
+
+
+def sample_links_of(asset) -> list:
+    """The site's sample links, decrypted.  [] when there are none or they
+    cannot be read."""
+    from app.core import settings_store as store
+
+    blob = getattr(asset, "sample_links", "") or ""
+    if not blob:
+        return []
+    try:
+        value = json.loads(store._decrypt(blob) or "[]")
+    except Exception:  # noqa: BLE001 - an unreadable value is no value
+        return []
+    return [v for v in value if isinstance(v, str)][:MAX_SAMPLE_LINKS] \
+        if isinstance(value, list) else []
+
+
+def sample_links_shown(asset) -> list:
+    """The sample links as the page may show them: the key in each replaced."""
+    from app.core import oversharing
+
+    return [oversharing.mask_link(link) for link in sample_links_of(asset)]
+
+
+def set_sample_links(asset, text) -> None:
+    """Set the links, one a line, or clear them with an empty value.
+
+    Each must be http or https and on this site's own host: the scan loads
+    them, and a link elsewhere would point it at a site nobody asked to scan.
+    Raises ValueError."""
+    from urllib.parse import urlparse
+
+    from app.core import settings_store as store
+
+    links = []
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if len(line) > 2000:
+            raise ValueError("A sample link is at most 2000 characters.")
+        parsed = urlparse(line)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError("A sample link starts with https:// (or http://).")
+        if parsed.username or parsed.password:
+            raise ValueError("A sample link cannot carry a user name or password.")
+        if parsed.hostname.lower() != (asset.host or "").lower():
+            raise ValueError(f"A sample link must be on {asset.host}, the site being scanned.")
+        if line not in links:
+            links.append(line)
+    if len(links) > MAX_SAMPLE_LINKS:
+        raise ValueError(f"At most {MAX_SAMPLE_LINKS} sample links.")
+    asset.sample_links = store._encrypt(json.dumps(links)) if links else ""
+
+
 BULK_FIELDS = ("application", "executive_owner", "technical_owner", "environment",
                "status", "external_auth_needed", "whitelist_needed",
                "change_frequency_days", "default_profile")
@@ -2445,6 +2502,69 @@ def _browser_dom(scan_id, url, opts, proxy) -> tuple:
                    f"{len(findings)} finding{'s' if len(findings) != 1 else ''}")}
 
 
+def _sample_links(scan_id, asset_id, opts, proxy) -> tuple:
+    """Load each sample link with no sign in and read what the page fetched.
+
+    -> (findings, an engines row or None when the site has no links, the
+    links and their keys, for the scan to strip from everything it keeps).
+    Nothing is sent but what the page itself asks for."""
+    from app.core import dast_engines, external_probe, oversharing
+    from app.core.diagram import org_domains
+
+    with session_scope() as db:
+        asset = db.get(ExternalAsset, asset_id)
+        links = sample_links_of(asset) if asset is not None else []
+        company = org_domains(db)
+    if not links:
+        return [], None, []
+    keys = list(links)
+    for link in links:
+        # As written in the link, since what gets stripped is matched exactly.
+        for secret in oversharing.link_secrets(link):
+            keys += [m.group(0) for m in re.finditer(re.escape(secret), link, re.I)]
+            keys.append(secret)
+    name = "Sample links"
+    out, read_ok, answers_total = [], 0, 0
+    for n, link in enumerate(links, 1):
+        if scan_id in _stopping:
+            break
+        _update(scan_id, step=f"reading sample link {n} of {len(links)}")
+        with external_probe.via_proxy(proxy or ""):
+            got = external_probe.browser_dom_collect(
+                link, allow_private=opts["allow_private"], capture_json=True, secret_url=True)
+        if not got.get("ok"):
+            continue
+        read_ok += 1
+        answers = []
+        for item in got.get("json") or []:
+            try:
+                answers.append({"url": item.get("url", ""), "signed": bool(item.get("signed")),
+                                "data": json.loads(item.get("body") or "null")})
+            except ValueError:
+                continue
+        answers_total += len(answers)
+        found = oversharing.read(answers, link, company)
+
+        def make(title, severity, evidence, fix, cwe, _link=link):
+            f = dast_engines._finding(tool="sample-link", title=title, severity=severity,
+                                      url=oversharing.mask_link(_link), evidence=evidence,
+                                      fix=fix, cwe=cwe)
+            f["sample_link"] = n
+            return f
+
+        out += oversharing.findings(found, link, make)
+    if not read_ok:
+        row = {"tool": "sample-link", "name": name, "status": "skipped", "seconds": 0,
+               "detail": "the browser could not load the sample links"}
+    else:
+        row = {"tool": "sample-link", "name": name, "status": "ok", "seconds": 0,
+               "detail": (f"loaded {read_ok} of {len(links)} link{'s' if len(links) != 1 else ''} "
+                          f"with no sign in; read {answers_total} JSON answer"
+                          f"{'s' if answers_total != 1 else ''} the pages fetched; "
+                          f"{len(out)} finding{'s' if len(out) != 1 else ''}")}
+    return out, row, keys
+
+
 def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> tuple:
     """Run the enabled curated rules in the chosen rulesets against the site.
 
@@ -2765,6 +2885,16 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
         findings += dom_findings
         engines.append(dom_row)
         _update(scan_id, engines=json.dumps(engines))
+    # Sample links: pages a link alone opens, loaded with no sign in, and
+    # what their own requests hand over read for other people's data.
+    if url and profile in ("thorough", "premium") and external_probe.playwright_python() \
+            and scan_id not in _stopping:
+        link_findings, link_row, link_keys = _sample_links(scan_id, asset_id, opts, proxy)
+        if link_row:
+            findings += link_findings
+            secrets = list(secrets) + link_keys
+            engines.append(link_row)
+            _update(scan_id, engines=json.dumps(engines))
     # The premium curated rules: the enhanced, high fidelity checks.  They run
     # last, only on premium, and only against the company's own domains.  With
     # no rules enabled (the default) this does nothing.
@@ -2815,7 +2945,15 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
     stopped = scan_id in _stopping
     if url:
         try:
-            _paths_and_code(scan_id, asset_id, url, seen, findings, wb, opts, stopped)
+            opened = _paths_and_code(scan_id, asset_id, url, seen, findings, wb, opts,
+                                     stopped, signed_in=bool(auth))
+            if opened:
+                findings = merge(findings + opened)
+                engines.append({"tool": "open-route", "name": "Open among guarded routes",
+                                "status": "ok", "seconds": 0,
+                                "detail": f"{len(opened)} route{'s' if len(opened) != 1 else ''} "
+                                          "the code declares answered without a sign in, "
+                                          "where the routes beside them refused"})
         except Exception:  # noqa: BLE001 - the findings stand without it
             log.exception("scan %s: the paths and the code behind them were not read", scan_id)
     with session_scope() as db:
@@ -3190,8 +3328,11 @@ def merge(findings: list) -> list:
     return out[:MAX_FINDINGS]
 
 
-def _paths_and_code(scan_id, asset_id, url, seen, findings, wb, opts, stopped) -> None:
-    """What the scan reached, and the repositories whose routes it answered."""
+def _paths_and_code(scan_id, asset_id, url, seen, findings, wb, opts, stopped,
+                    signed_in: bool = False) -> list:
+    """What the scan reached, and the repositories whose routes it answered.
+
+    -> findings for routes left open among guarded ones (see _open_routes)."""
     from urllib.parse import urljoin
 
     from app.core import dast_paths, external_probe
@@ -3220,6 +3361,77 @@ def _paths_and_code(scan_id, asset_id, url, seen, findings, wb, opts, stopped) -
             paths_real=paths["counts"]["reachable"],
             code_sinks=json.dumps(sinks), code_matches=json.dumps(
         _code_matches(asset_id, records, index, names)))
+    if signed_in or stopped or not controls:
+        # Signed in, a 200 is what a guarded route gives too.  The comparison
+        # only means something from outside.
+        return []
+    return _open_routes(url, records, index, names, fetch)
+
+
+MAX_OPEN_ROUTES = 5
+_MASK_EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(\.[\w\-]+)+")
+_MASK_IP = re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b")
+_MASK_NUMBER = re.compile(r"\b\d{5,}\b")
+_MASK_TOKEN = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b|"
+                         r"\b[A-Za-z0-9_\-]{24,}\b")
+
+
+def _masked_sample(body: str, limit: int = 160) -> str:
+    """The start of an answer, with anything personal or secret masked.
+
+    Kept so a reader sees the handler ran, never what it handed out."""
+    text = re.sub(r"\s+", " ", body or "").strip()[:limit * 2]
+    for rule, mark in ((_MASK_EMAIL, "[email]"), (_MASK_IP, "[ip]"),
+                       (_MASK_TOKEN, "[token]"), (_MASK_NUMBER, "[number]")):
+        text = rule.sub(mark, text)
+    return text[:limit]
+
+
+def _open_routes(url, records, index, names, fetch) -> list:
+    """A route the code declares that answers anybody, among ones that refuse.
+
+    Built from the answers the scan already has.  One more GET per route, at
+    most MAX_OPEN_ROUTES, to show the handler really ran; nothing is sent
+    that changes anything."""
+    from urllib.parse import urljoin
+
+    from app.core import dast_engines, dast_paths
+
+    def declared(path):
+        return bool(index.lookup(path)) or any(
+            r.get("c") for r in records if r.get("p") == path)
+
+    out = []
+    for hit in dast_paths.open_among_protected(records, declared)[:MAX_OPEN_ROUTES]:
+        got = fetch(hit["path"]) or {}
+        if int(got.get("status") or 0) != 200:
+            continue    # it changed its mind; only what answers now counts
+        repos = sorted({names.get(repo_id, "") for repo_id, *_ in index.lookup(hit["path"])} - {""})
+        beside = ", ".join(f"{r['path']} ({r['status']})" for r in hit["refused"][:4])
+        if hit["refused_count"] > 4:
+            beside += f" and {hit['refused_count'] - 4} more"
+        sample = _masked_sample(got.get("body") or "")
+        evidence = (f"Without a sign in, {hit['path']} answered 200"
+                    + (f" (\"{sample}\")" if sample else "")
+                    + f", while the routes beside it refused: {beside}.  "
+                    + (f"The route is declared in {', '.join(repos[:3])}.  " if repos else
+                       "The linked code declares the route.  ")
+                    + "Nothing was sent to it but a plain request.")
+        f = dast_engines._finding(
+            tool="open-route",
+            title="A route answers without a sign in where the routes beside it require one",
+            severity="medium", url=urljoin(url, hit["path"]), evidence=evidence,
+            fix=("Check whether this route is meant to be public.  If not, add the sign in "
+                 "its neighbors have (in ASP.NET, [Authorize] on the controller or action; "
+                 "better, a default policy that requires it everywhere, with "
+                 "[AllowAnonymous] only where a route is public on purpose).  If it is "
+                 "public on purpose, make sure what it returns is only what a stranger "
+                 "may see, and that it does not trust an id from the request."),
+            cwe="CWE-862")
+        f["route"] = hit["path"]
+        f["repositories"] = repos[:3]
+        out.append(f)
+    return out
 
 
 def _correlate_sinks(sinks: list, records: list) -> list:

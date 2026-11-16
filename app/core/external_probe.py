@@ -1155,18 +1155,27 @@ def playwright_shot(urls: list, out_path: Path, allow_private: bool = False,
 DOM_SCRIPT = Path(__file__).with_name("dast_checks") / "browser_dom.py"
 
 
-def browser_dom_collect(url: str, allow_private: bool = False, timeout: int = 45) -> dict:
+def browser_dom_collect(url: str, allow_private: bool = False, timeout: int = 45,
+                        capture_json: bool = False, secret_url: bool = False) -> dict:
     """Load the page in a real browser and bring back the JavaScript it ran.
-    -> {ok, url, scripts:[{url,text}], inline:[text], maps:[{url,text}], error}.
-    ok is False with a reason in error when the browser could not run."""
+    -> {ok, url, scripts:[{url,text}], inline:[text], maps:[{url,text}],
+    json:[{url,status,method,signed,body}], error}.  ok is False with a reason
+    in error when the browser could not run.
+
+    capture_json keeps the JSON the page's own requests got back.  secret_url
+    hands the address over on standard input, never on the command line,
+    for a link that is itself the key to what it opens."""
     import json as _json
 
-    out = {"ok": False, "url": url, "scripts": [], "inline": [], "maps": [],
+    out = {"ok": False, "url": url, "scripts": [], "inline": [], "maps": [], "json": [],
            "error": "Playwright is not installed"}
     py = playwright_python()
     if not py or not DOM_SCRIPT.is_file():
         return out
-    argv = [py, str(DOM_SCRIPT), url, "--user-agent", user_agent(), "--timeout", str(timeout)]
+    argv = [py, str(DOM_SCRIPT), "-" if secret_url else url,
+            "--user-agent", user_agent(), "--timeout", str(timeout)]
+    if capture_json:
+        argv.append("--capture-json")
     if allow_private:
         argv.append("--allow-private")
     if current_proxy():
@@ -1190,6 +1199,7 @@ def browser_dom_collect(url: str, allow_private: bool = False, timeout: int = 45
             try:
                 proc = subprocess.run(argv, capture_output=True, text=True,
                                       timeout=timeout + 30, cwd=scratch,
+                                      input=(url + "\n") if secret_url else None,
                                       env={**os.environ, "HOME": str(Path.home())})
             except subprocess.TimeoutExpired:
                 out["error"] = f"the browser took longer than {timeout + 30} seconds"
