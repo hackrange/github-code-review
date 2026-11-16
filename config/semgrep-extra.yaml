@@ -2057,11 +2057,95 @@ rules:
         if (<... $_FILES ...>) { ... }
     - pattern-inside: |
         if (<... $_SERVER['REQUEST_METHOD'] ...>) { ... }
-  # A file is read, and its statements, or the whole of it, are run as they
-  # stand.  How it is split in between does not change what it is.
-  - pattern-inside: |
-      $C = file_get_contents(...);
+  # A file the request names or uploads is read, and its statements, or the
+  # whole of it, are run as they stand.  How it is split in between does not
+  # change what it is.  A file the application itself chose, such as a
+  # migration in a package it downloaded and checked, is not this.
+  - pattern-either:
+    - pattern-inside: |
+        $C = file_get_contents(<... $_POST ...>);
+        ...
+    - pattern-inside: |
+        $X = <... $_POST ...>;
+        ...
+        $C = file_get_contents(<... $X ...>);
+        ...
+    - pattern-inside: |
+        $X = <... $_POST ...>;
+        ...
+        $Y = <... $X ...>;
+        ...
+        $C = file_get_contents(<... $Y ...>);
+        ...
+    - pattern-inside: |
+        $C = file_get_contents(<... $_GET ...>);
+        ...
+    - pattern-inside: |
+        $X = <... $_GET ...>;
+        ...
+        $C = file_get_contents(<... $X ...>);
+        ...
+    - pattern-inside: |
+        $X = <... $_GET ...>;
+        ...
+        $Y = <... $X ...>;
+        ...
+        $C = file_get_contents(<... $Y ...>);
+        ...
+    - pattern-inside: |
+        $C = file_get_contents(<... $_REQUEST ...>);
+        ...
+    - pattern-inside: |
+        $X = <... $_REQUEST ...>;
+        ...
+        $C = file_get_contents(<... $X ...>);
+        ...
+    - pattern-inside: |
+        $X = <... $_REQUEST ...>;
+        ...
+        $Y = <... $X ...>;
+        ...
+        $C = file_get_contents(<... $Y ...>);
+        ...
+    - pattern-inside: |
+        $C = file_get_contents(<... $_FILES ...>);
+        ...
+    - pattern-inside: |
+        $X = <... $_FILES ...>;
+        ...
+        $C = file_get_contents(<... $X ...>);
+        ...
+    - pattern-inside: |
+        $X = <... $_FILES ...>;
+        ...
+        $Y = <... $X ...>;
+        ...
+        $C = file_get_contents(<... $Y ...>);
+        ...
+  # Checked against a list of known values first, such as versions the
+  # application itself fetched and verified: the request picks one, it does
+  # not name a file.
+  - pattern-not-inside: |
+      foreach ($L as $E) { ... if ($E[$K] === $X) { ... } ... }
       ...
+  - pattern-not-inside: |
+      if ($C2) {
+        ...
+        if ($E[$K] === $X) { ... }
+        ...
+      }
+      ...
+  - pattern-not-inside: |
+      if ($C2) { ... } else {
+        ...
+        foreach ($L as $E) { ... if ($E[$K] === $X) { ... } ... }
+        ...
+      }
+      ...
+  - pattern-not-inside: |
+      if (<... in_array($X, $L, true) ...>) { ... }
+  - pattern-not-inside: |
+      if (<... array_key_exists($X, $L) ...>) { ... }
   - pattern-either:
     - pattern: $DB->query($C, ...)
     - pattern: $DB->exec($C)
@@ -2123,7 +2207,7 @@ rules:
         - pattern: '`...${$O.$F}...`'
       - metavariable-regex:
           metavariable: $F
-          regex: (?i)^(?!(length|id|ids|uuid|count|size|total|index|idx|i|n|num|number|page|pages|percent|progress|score|width|height|top|left|x|y|status_code|code|year|month|day|hours?|minutes?|seconds?|created_at|updated_at|date|time|timestamp|.*(_id|Id|_count|Count|_index|Index|_total|Total|_num|Num|_pct|Pct|_at|At|_length|Length|_size|Size|html|Html|HTML|_markup|Markup|svg|Svg|icon|Icon))$)
+          regex: (?i)^(?!(length|id|ids|uuid|count|size|total|index|idx|i|n|num|number|page|pages|percent|progress|score|width|height|top|left|x|y|status_code|code|year|month|day|hours?|minutes?|seconds?|created_at|updated_at|date|time|timestamp|.*(_id|Id|_count|Count|_index|Index|_total|Total|_num|Num|_pct|Pct|_at|At|_length|Length|_size|Size|_score|Score|_percent|Percent|_rate|Rate|html|Html|HTML|_markup|Markup|svg|Svg|icon|Icon))$)
       - pattern-not-inside: escapeHtml(...)
       - pattern-not-inside: escHtml(...)
       - pattern-not-inside: escapeHTML(...)

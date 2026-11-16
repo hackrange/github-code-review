@@ -894,7 +894,7 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
                     key: form.get(f"auth_{key}") or "" for key in (
                         "header_name", "header_value", "cookie", "login_url",
                         "username", "password", "username_field", "password_field",
-                        "intent")},
+                        "intent", "api_token", "api_token_clear")},
                     user.username, asset.parent_domain)
                 if (asset.auth_kind or "") != before_kind or any(
                         form.get(f"auth_{k}") for k in ("header_value", "cookie", "password")):
@@ -909,7 +909,7 @@ async def edit(asset_id: int, request: Request, user: User = Depends(current_use
                     key: form.get(f"auth_b_{key}") or "" for key in (
                         "header_name", "header_value", "cookie", "login_url",
                         "username", "password", "username_field", "password_field",
-                        "intent")},
+                        "intent", "api_token", "api_token_clear")},
                     user.username, asset.parent_domain, slot="b")
                 if (asset.auth_kind_b or "") != before_b or any(
                         form.get(f"auth_b_{k}") for k in ("header_value", "cookie", "password")):

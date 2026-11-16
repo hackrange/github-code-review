@@ -84,7 +84,8 @@ def describe(asset, slot: str = "a") -> dict:
     out = {"kind": data["kind"], "kind_name": KINDS.get(data["kind"], data["kind"]),
            "set_by": getattr(asset, by_attr, "") or "",
            "set_at": set_at.isoformat() if set_at else None,
-           "intent": data.get("intent", "")}
+           "intent": data.get("intent", ""),
+           "has_api_token": bool(data.get("api_token"))}
     if data["kind"] == "header":
         out["header_name"] = data.get("header_name", "")
     elif data["kind"] == "cookie":
@@ -191,6 +192,17 @@ def save(asset, kind: str, values: dict, actor: str, parent_domain: str = "",
     intent = new_intent or prior.get("intent", "")
     if intent:
         data["intent"] = intent
+    # The account's API token, for the checks that test an API from its
+    # description.  A browser sign in gets a session cookie, which an API that
+    # takes bearer tokens refuses.  A secret: left empty keeps the saved one,
+    # and clearing it is a separate tick.
+    if values.get("api_token_clear"):
+        token = ""
+    else:
+        token = _clean_line(values.get("api_token") or "", "API token", 4000) \
+            or prior.get("api_token", "")
+    if token:
+        data["api_token"] = token
     setattr(asset, kind_attr, kind)
     setattr(asset, data_attr, _encrypt(data))
     setattr(asset, by_attr, (actor or "")[:120])
@@ -271,6 +283,10 @@ def secrets_of(data: dict, session_cookie: str = "") -> list:
                     out.append(value)
     if data.get("password"):
         out.append(data["password"])
+    if data.get("api_token"):
+        out.append(data["api_token"])
+        if " " in data["api_token"]:
+            out.append(data["api_token"].split(" ", 1)[1])
     for step in data.get("steps") or []:
         if step.get("secret") and step.get("text"):
             out.append(step["text"])
@@ -585,3 +601,17 @@ def for_nextgen(data: dict) -> dict:
     raise ValueError("nextgen-dast's API takes a form login or HTTP Basic only, so a "
                      f"{KINDS.get(kind, kind).lower()} cannot be passed to it.  Run this scan on "
                      "this server, or start it without signing in.")
+
+
+def api_headers(data: dict) -> dict | None:
+    """The header the API checks send for an account, or None without a token.
+
+    A bare token is sent as a bearer token; a value that already names its
+    scheme (Bearer, Token, Basic) is sent as it is.
+    """
+    token = str((data or {}).get("api_token") or "").strip()
+    if not token:
+        return None
+    if " " not in token:
+        token = "Bearer " + token
+    return {"Authorization": token}

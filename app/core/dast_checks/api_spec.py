@@ -334,9 +334,14 @@ def run(parsed: dict, ctx: dict, budget_requests: int = 300) -> tuple:
     domains = ctx.get("domains")
     budget = Budget(budget_requests)
     allow_private = bool(ctx.get("allow_private"))
-    a = Client(base_url, domains, "read", budget, allow_private, ctx.get("headers"))
-    b = Client(base_url, domains, "read", budget, allow_private, ctx.get("second_headers")) \
-        if ctx.get("second_headers") else None
+    # An API that takes tokens gets the account's token; otherwise the browser
+    # sign in, which a session based API accepts.
+    headers_a = ctx.get("api_headers") or ctx.get("headers")
+    headers_b = ctx.get("api_second_headers") or ctx.get("second_headers")
+    ctx = dict(ctx, headers=headers_a, second_headers=headers_b)
+    a = Client(base_url, domains, "read", budget, allow_private, headers_a)
+    b = Client(base_url, domains, "read", budget, allow_private, headers_b) \
+        if headers_b else None
     anon = Client(base_url, domains, "read", budget, allow_private, None)
     ops = [o for o in parsed.get("operations") or [] if o["method"] == "GET"]
     findings, notes = [], []

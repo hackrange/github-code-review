@@ -2514,7 +2514,11 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
            # can be judged against the intended policy, not just reported.
            "intent_a": (auth_a or {}).get("intent", ""),
            "intent_b": (auth_b or {}).get("intent", ""),
-           "budget": 60, "oob": oob}
+           "budget": 60, "oob": oob,
+           # Tokens for the API checks, where an API takes them instead of the
+           # browser sign in.  Never sent by any other check.
+           "api_headers": external_auth.api_headers(auth_a or {}),
+           "api_second_headers": external_auth.api_headers(auth_b or {})}
     from collections import Counter
 
     started = time.monotonic()

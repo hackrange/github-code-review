@@ -518,6 +518,11 @@
           <textarea name="auth_intent" rows="2" maxlength="2000"
             placeholder="e.g. a standard user: should see only its own orders and profile; should not see other customers or any admin page.">{{ auth.intent if auth and auth.intent else '' }}</textarea>
           <span class="faint small">Optional.  Used by the compare checks and the AI review to tell a real access violation from expected, shared access.</span></label>
+        <label>API token for this account
+          <input type="password" name="auth_api_token" maxlength="4000" autocomplete="off"
+            placeholder="{{ 'saved, leave empty to keep it' if auth and auth.has_api_token else 'optional' }}">
+          <span class="faint small">Only for testing an API from its uploaded description, when the API takes tokens rather than this sign in.  A bare token is sent as Authorization: Bearer; include the scheme (Token, Basic) to send it as it is.  Use a read only token for this test account.</span></label>
+        {% if auth and auth.has_api_token %}<label class="check"><input type="checkbox" name="auth_api_token_clear" value="1"> clear the saved API token</label>{% endif %}
         <div class="faint small">Use a test account.  A signed in scan can change what that user can change.</div>
       </details>
       <details class="hand-fields" {{ 'open' if auth_b }}>
@@ -552,6 +557,11 @@
           <textarea name="auth_b_intent" rows="2" maxlength="2000"
             placeholder="e.g. a read-only auditor: may view all records but must not edit; or a different standard user that owns different data than the first.">{{ auth_b.intent if auth_b and auth_b.intent else '' }}</textarea>
           <span class="faint small">The compare checks and the AI review weigh a cross-account read against this, so an auditor that is meant to see everything is not reported as a bug.</span></label>
+        <label>API token for this account
+          <input type="password" name="auth_b_api_token" maxlength="4000" autocomplete="off"
+            placeholder="{{ 'saved, leave empty to keep it' if auth_b and auth_b.has_api_token else 'optional' }}">
+          <span class="faint small">Only for testing an API from its uploaded description, when the API takes tokens rather than this sign in.  A bare token is sent as Authorization: Bearer; include the scheme (Token, Basic) to send it as it is.  Use a read only token for this test account.</span></label>
+        {% if auth_b and auth_b.has_api_token %}<label class="check"><input type="checkbox" name="auth_b_api_token_clear" value="1"> clear the saved API token</label>{% endif %}
         <div class="faint small">Use a second test account that owns different data than the first.  That is what lets the compare checks prove one account can reach the other's objects.</div>
       </details>
       <details class="hand-fields" {{ 'open' if adhoc }}>
