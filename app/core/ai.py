@@ -127,6 +127,10 @@ SETTINGS = {
                                    "Most handlers not read before that are asked "
                                    "about in one repository per scan, the likeliest "
                                    "first.  The rest wait for the next scan."),
+    "ai.code_reasoning_siblings": (True, False,
+                                   "Also ask about handlers that leave off a guard the "
+                                   "handlers beside them apply.  At most 25 a repository, "
+                                   "each once."),
     "ai.code_reasoning_exposure": (True, False,
                                    "Also ask about handlers that look a record up from "
                                    "the request and return it whole, C# and Java "
@@ -222,6 +226,7 @@ def read_form(form, text, number, url, checked) -> dict:
             "Monthly token limit", 0, 2_000_000_000),
         "ai.code_reasoning_per_repo": number(form.get("ai.code_reasoning_per_repo") or 25,
                                              "Handlers per repository", 1, 500),
+        "ai.code_reasoning_siblings": checked("ai.code_reasoning_siblings"),
         "ai.code_reasoning_exposure": checked("ai.code_reasoning_exposure"),
     }
 

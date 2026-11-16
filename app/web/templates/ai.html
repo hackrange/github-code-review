@@ -306,6 +306,12 @@
         all of a repository's branches.  Ones answered before do not count and
         cost nothing.  Whatever is left is read on the next scan, so a large
         repository is covered over a few scans and nothing is read twice.</p>
+      <label class="check"><input type="checkbox" name="ai.code_reasoning_siblings" value="1"
+             {{ 'checked' if values['ai.code_reasoning_siblings'] }}>
+        <span>Ask about guards a handler leaves off that the ones beside it apply</span></label>
+      <p class="faint small">Handlers that touch the same data, or sit together, are compared in the
+        code for nothing: a check one applies and another skips is a question worth asking.  Only those
+        gaps are asked about: at most 25 a repository, each once.</p>
       <label class="check"><input type="checkbox" name="ai.code_reasoning_exposure" value="1"
              {{ 'checked' if values['ai.code_reasoning_exposure'] }}>
         <span>Ask about handlers that return a looked up record whole</span></label>
