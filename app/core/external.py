@@ -867,11 +867,19 @@ def picks_from_names(db, items) -> list:
     return out
 
 
+# git's rules for a branch name, in short: no spaces or control characters,
+# none of ~ ^ : ? * [ \, no "..", no "@{", no leading or trailing slash or
+# dot, no ".lock" at the end.
+_BRANCH_NAME = re.compile(r"(?!.*\.\.)(?!.*@\{)(?!.*//)(?![/.])[^\x00-\x20\x7f~^:?*\[\\]{1,255}"
+                          r"(?<![/.])(?<!\.lock)")
+
+
 def set_picks(db, asset: ExternalAsset, picks: list, actor: str, user=None) -> list:
     """Make the repositories and branches somebody picked the site's own links.
 
-    Picks for repositories the person cannot see, and branches the scans have
-    never seen on that repository, are refused the same way: as not there.
+    Picks for repositories the person cannot see are refused as not there, and
+    a branch name git would not accept is refused.  Any other branch is taken
+    as given, seen by a scan or not.
     Links that were picked before and are not picked now go back to being
     worked out.  Links found in the code by a scan and links hidden on
     purpose are left alone unless the repository is picked again.
@@ -885,8 +893,12 @@ def set_picks(db, asset: ExternalAsset, picks: list, actor: str, user=None) -> l
         repo = base.filter(Repository.id == repo_id).one_or_none()
         if repo is None:
             raise ValueError("One of the picked repositories is not one you can see.")
-        if branch and branch not in branches_of(repo):
-            raise ValueError(f"{repo.full_name} has no branch called {branch[:120]}.")
+        # Any branch name git would accept.  The scans may not have seen it yet
+        # (a new branch, or one past the per repository cap), and a pick of a
+        # branch that has since gone stays until somebody removes it rather
+        # than blocking every other change to the site.
+        if branch and not _BRANCH_NAME.fullmatch(branch):
+            raise ValueError(f"{branch[:120]} is not a valid branch name.")
         entry = wanted.setdefault(repo.id, {"repo": repo, "branches": []})
         if branch and branch not in entry["branches"]:
             entry["branches"].append(branch)
