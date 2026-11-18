@@ -2811,6 +2811,38 @@ class ExternalDastScan(Base):
     recorded_at = Column(DateTime(timezone=True), default=utcnow)
 
 
+class ExternalSitePath(Base):
+    """One URI path found on an external site, deduplicated across scans.
+
+    One row per (asset_id, path).  first_seen_at is set on insert and never
+    updated.  last_seen_at, status and reachable are refreshed on every scan
+    that sees the path again.  methods accumulates every HTTP method ever seen
+    (ever-seen union across scans).  Rows absent from the last N completed
+    scans are pruned after each scan.
+    """
+
+    __tablename__ = "external_site_paths"
+
+    id = Column(Integer, primary_key=True)
+    asset_id = Column(Integer, ForeignKey("external_assets.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    path = Column(String(300), nullable=False)
+    first_seen_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    last_scan_id = Column(Integer, ForeignKey("external_dast_scans.id", ondelete="SET NULL"),
+                          nullable=True)
+    status = Column(Integer)
+    reachable = Column(Boolean)
+    methods = Column(String(100), default="")
+    engines = Column(String(200), default="")
+    from_code = Column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("asset_id", "path", name="uq_site_path"),
+        Index("ix_site_path_path", "path"),
+    )
+
+
 class ExternalScanSchedule(Base):
     """A dynamic scan of one site that starts on its own.
 

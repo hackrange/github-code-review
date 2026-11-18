@@ -193,6 +193,19 @@ SCHEMA = {
         "critical": "count", "high": "count", "medium": "count", "low": "count",
         "info": "count", "profile": "", "authenticated": "boolean",
     }),
+    "external_site_paths": ("URI paths found on external sites, one row per site "
+                            "and path, deduplicated across scans.", {
+        "id": "key",
+        "asset_id": "-> external_assets.id",
+        "path": "the URI path, e.g. /api/v1/users or /app/upload.php",
+        "first_seen_at": "when first found",
+        "last_seen_at": "when most recently found by any scan",
+        "status": "last HTTP status code (200, 301, 401, 404 etc.)",
+        "reachable": "boolean; 1 means a real page confirmed by the scan",
+        "methods": "JSON list of HTTP methods ever seen, e.g. [\"GET\",\"POST\"]",
+        "engines": "JSON list of scan engines that found it last",
+        "from_code": "boolean; linked repository code also declares this route",
+    }),
     "users": ("People who can sign in to this tool.", {
         "id": "key", "username": "", "display_name": "", "email": "",
         "github_login": "", "role": "ADMIN, DEVELOPER, READER (upper case)",
@@ -215,6 +228,10 @@ findings.author_name/author_email/author_login and repo_access.login.
 - What a repository uses (a framework, Power Apps, a package) is in components.name, \
 findings.file_path, repositories.application_name, repositories.note and \
 repositories.full_name.  There is no list of languages.
+- external_site_paths.asset_id = external_assets.id.  Filter reachable = 1 \
+for confirmed real pages.  Use path LIKE '/api/%' to find API endpoints, \
+path LIKE '%.php' for PHP files, and so on.  JOIN with external_assets to \
+get the host name for each path.
 - Booleans are 0 and 1.  Dates are stored as UTC timestamps."""
 
 PLAN_SYSTEM = """You help an administrator look things up in Git Code Review, \

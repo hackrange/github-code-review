@@ -41,7 +41,8 @@ from app.config import settings as app_settings
 from app.core.db import session_scope
 from app.core.models import (
     DastServer, ExternalAsset, ExternalAssetRepo, ExternalAssetTag,
-    ExternalDastScan, Finding, FindingState, Repository, RepoDiagram, utcnow,
+    ExternalDastScan, ExternalSitePath, Finding, FindingState,
+    Repository, RepoDiagram, utcnow,
 )
 
 log = logging.getLogger("gcr.external")
@@ -3535,6 +3536,83 @@ def merge(findings: list) -> list:
     return out[:MAX_FINDINGS]
 
 
+_PRUNE_KEEP_SCANS = 3
+
+
+def _upsert_site_paths(scan_id: int, asset_id: int, records: list) -> None:
+    """Persist paths from one scan into the deduplicated per-site table."""
+    if not records:
+        return
+    now = datetime.now(timezone.utc)
+    with session_scope() as db:
+        existing = {row.path: row for row in
+                    db.query(ExternalSitePath).filter_by(asset_id=asset_id).all()}
+        for rec in records:
+            path = rec.get("p") or ""
+            if not path:
+                continue
+            reachable = rec.get("r")
+            status = rec.get("s")
+            engines_json = json.dumps(rec.get("e") or [])
+            new_methods = {m.upper() for m in (rec.get("m") or ["GET"]) if m}
+            from_code = bool(rec.get("c"))
+            if path in existing:
+                row = existing[path]
+                try:
+                    old_methods = set(json.loads(row.methods or "[]"))
+                except (ValueError, TypeError):
+                    old_methods = set()
+                row.methods = json.dumps(sorted(old_methods | new_methods))
+                row.engines = engines_json
+                row.last_seen_at = now
+                row.last_scan_id = scan_id
+                if status is not None:
+                    row.status = status
+                if reachable is not None:
+                    row.reachable = reachable
+                if from_code:
+                    row.from_code = True
+            else:
+                db.add(ExternalSitePath(
+                    asset_id=asset_id,
+                    path=path,
+                    first_seen_at=now,
+                    last_seen_at=now,
+                    last_scan_id=scan_id,
+                    status=status,
+                    reachable=reachable,
+                    methods=json.dumps(sorted(new_methods)),
+                    engines=engines_json,
+                    from_code=from_code,
+                ))
+
+
+def _prune_site_paths(asset_id: int) -> int:
+    """Delete paths absent from the most recent _PRUNE_KEEP_SCANS completed scans.
+
+    Does nothing until the site has at least that many scans with path data,
+    so a path must be genuinely missed N times in a row before it is dropped.
+    Returns the number of rows removed.
+    """
+    with session_scope() as db:
+        recent = (db.query(ExternalDastScan.id)
+                  .filter(ExternalDastScan.asset_id == asset_id,
+                          ExternalDastScan.status == "done",
+                          ExternalDastScan.paths_count.isnot(None))
+                  .order_by(ExternalDastScan.scanned_at.desc())
+                  .limit(_PRUNE_KEEP_SCANS).all())
+        if len(recent) < _PRUNE_KEEP_SCANS:
+            return 0
+        from sqlalchemy import or_
+        recent_ids = [row.id for row in recent]
+        deleted = (db.query(ExternalSitePath)
+                   .filter(ExternalSitePath.asset_id == asset_id,
+                           or_(ExternalSitePath.last_scan_id.is_(None),
+                               ExternalSitePath.last_scan_id.notin_(recent_ids)))
+                   .delete(synchronize_session=False))
+        return deleted
+
+
 def _paths_and_code(scan_id, asset_id, url, seen, findings, wb, opts, stopped,
                     signed_in: bool = False) -> list:
     """What the scan reached, and the repositories whose routes it answered.
@@ -3569,6 +3647,8 @@ def _paths_and_code(scan_id, asset_id, url, seen, findings, wb, opts, stopped,
             paths_real=paths["counts"]["reachable"],
             code_sinks=json.dumps(sinks), code_matches=json.dumps(
         _code_matches(asset_id, records, index, names)))
+    _upsert_site_paths(scan_id, asset_id, records)
+    _prune_site_paths(asset_id)
     if signed_in or stopped or not controls:
         # Signed in, a 200 is what a guarded route gives too.  The comparison
         # only means something from outside.
