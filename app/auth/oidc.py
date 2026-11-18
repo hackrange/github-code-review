@@ -151,8 +151,13 @@ async def begin_login(source_ip: str = "", browser: str = "") -> str:
 
 
 async def complete_login(code: str, state: str, source_ip: str = "",
-                         browser: str = "") -> dict:
-    """Finish the login.  Swap the code for tokens and check the id_token."""
+                         browser: "str | list[str]" = "") -> dict:
+    """Finish the login.  Swap the code for tokens and check the id_token.
+
+    browser is the nonce (or a list of recent nonces) from the browser cookie.
+    Multiple open tabs each start their own flow with their own nonce; passing
+    all of them lets any tab's callback complete regardless of order.
+    """
     pending = _pending.pop(state, None)
     if not pending:
         raise OIDCError("that sign in is not one we started, or it took too "
@@ -164,10 +169,12 @@ async def complete_login(code: str, state: str, source_ip: str = "",
     # attacker's account (login CSRF).  The browser nonce was set as a cookie at
     # the start and is not in the URL, so a callback opened in another browser,
     # even with a valid state and code, is refused.
-    if pending.get("browser") and not hmac.compare_digest(
-            str(pending.get("browser")), str(browser or "")):
-        raise OIDCError("that sign in was started in a different browser. "
-                        "Start again here.")
+    expected = pending.get("browser")
+    if expected:
+        candidates = browser if isinstance(browser, list) else [browser]
+        if not any(hmac.compare_digest(str(expected), str(c)) for c in candidates):
+            raise OIDCError("that sign in was started in a different browser. "
+                            "Start again here.")
 
     doc = await get_discovery()
 

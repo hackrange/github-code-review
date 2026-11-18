@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+from urllib.parse import quote
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
@@ -271,7 +272,9 @@ async def oidc_start(request: Request):
 
     # A nonce that stays in a cookie on this browser and never travels in the
     # URL, so the callback can tell the browser that started the flow from one
-    # a victim was handed (login CSRF).
+    # a victim was handed (login CSRF).  Multiple tabs each start their own
+    # flow, so the cookie holds a JSON list of the last few nonces rather than
+    # just one; the callback checks whether its nonce is anywhere in the list.
     browser = secrets.token_urlsafe(24)
     try:
         url = await oidc.begin_login(client_ip(request), browser)
@@ -280,9 +283,19 @@ async def oidc_start(request: Request):
         return page(request, "login.html", stage="password", auth=live.auth_config(),
                     error=str(exc))
 
+    existing = request.cookies.get(OIDC_FLOW_COOKIE, "")
+    try:
+        nonces = json.loads(existing) if existing else []
+        if not isinstance(nonces, list):
+            nonces = [nonces]
+    except (ValueError, TypeError):
+        nonces = [existing] if existing else []
+    nonces.append(browser)
+    nonces = nonces[-5:]  # keep at most five in-flight flows
+
     response = RedirectResponse(url, status_code=303)
-    response.set_cookie(OIDC_FLOW_COOKIE, browser, max_age=600, httponly=True,
-                        secure=live.force_https(), samesite="lax",
+    response.set_cookie(OIDC_FLOW_COOKIE, json.dumps(nonces), max_age=600,
+                        httponly=True, secure=live.force_https(), samesite="lax",
                         path=settings.base_path or "/")
     return response
 
@@ -309,16 +322,28 @@ async def oidc_callback(request: Request):
                     error="That callback was missing something. Try again.")
 
     ip = client_ip(request)
-    browser = request.cookies.get(OIDC_FLOW_COOKIE, "")
+    raw = request.cookies.get(OIDC_FLOW_COOKIE, "")
     try:
-        profile = await oidc.complete_login(code, state, ip, browser)
+        nonces = json.loads(raw) if raw else []
+        if not isinstance(nonces, list):
+            nonces = [nonces]
+    except (ValueError, TypeError):
+        nonces = [raw] if raw else []
+    try:
+        profile = await oidc.complete_login(code, state, ip, nonces)
     except oidc.OIDCError as exc:
         log.warning("oidc sign in failed from %s: %s", ip, exc)
         with session_scope() as db:
             record(db, "login.oidc_failed", source_ip=ip, detail=str(exc)[:200],
                    outcome="denied")
-        return page(request, "login.html", stage="password", auth=live.auth_config(),
-                    error=str(exc))
+        # Redirect to the login form rather than rendering here.  Rendering
+        # inline leaves the browser at /auth/callback?..., and when the error
+        # message says "Start again here" the link goes to /login with no
+        # ?stay= param, so OIDC-only mode auto-redirects straight back to the
+        # provider again, burning auth-path rate-limit budget on every failure.
+        return RedirectResponse(
+            f"{settings.base_path or ''}/login?stay=1&error={quote(str(exc)[:200], safe='')}",
+            status_code=303)
 
     try:
         with session_scope() as db:
