@@ -3119,6 +3119,26 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
     engines = external_auth.redact(engines, secrets)
     soft_stats = {}
     findings, dropped = drop_soft_404(findings, url, opts["allow_private"], soft_stats)
+    # The leads a safe, exact test can settle, settled here, so they do not wait
+    # on a person: Wapiti's Spring4Shell guess, and our own proxy's banner.
+    from app.core import dast_verify
+
+    verify_stats = {}
+    findings, own = dast_verify.verify(findings, url, opts["allow_private"],
+                                       stats=verify_stats)
+    if verify_stats:
+        bits = []
+        if verify_stats.get("s4s_proven"):
+            bits.append("Spring4Shell proven by a safe re-test")
+        if verify_stats.get("s4s_refuted"):
+            bits.append("Spring4Shell not reproduced by a safe re-test, lowered to info")
+        if own:
+            bits.append(f"left out {own} that saw our own scan proxy, not the site")
+        if verify_stats.get("third_party"):
+            bits.append(f"{verify_stats['third_party']} in another company's file, "
+                        "lowered to info")
+        engines.append({"tool": "verify", "name": "Re-test of engine leads", "status": "ok",
+                        "seconds": 0, "detail": "; ".join(bits)})
     challenged = soft_stats.get("challenged", 0)
     if dropped - challenged:
         n = dropped - challenged
@@ -3127,6 +3147,18 @@ def _builtin_run(scan_id, host, asset_id, profile, opts, auth, proxy) -> None:
                         "detail": f"left out {n} finding{'s' if n != 1 else ''} "
                                   "for paths that answer not found, or with the same "
                                   "page as one that cannot exist"})
+    if soft_stats.get("confirmed") or soft_stats.get("unverified") or soft_stats.get("catch_all"):
+        parts = []
+        if soft_stats.get("confirmed"):
+            parts.append(f"{soft_stats['confirmed']} proven by the file's own format")
+        if soft_stats.get("catch_all"):
+            parts.append(f"{soft_stats['catch_all']} left out as the site's page for any "
+                         "address of that shape, or not the file the name says")
+        if soft_stats.get("unverified"):
+            parts.append(f"{soft_stats['unverified']} not re-checked on a catch-all site, "
+                         "lowered to info")
+        engines.append({"tool": "verify", "name": "Catch-all check", "status": "ok",
+                        "seconds": 0, "detail": "; ".join(parts)})
     if challenged:
         engines.append({"tool": "verify", "name": "Bot check", "status": "warn",
                         "seconds": 0,
@@ -3250,14 +3282,42 @@ def drop_soft_404(findings: list, base_url: str, allow_private: bool = False,
             controls.append((norm(got["body"]), len(got["body"]),
                              len(got["body"]) >= SOFT_404_BODY))
 
-    seen, kept, dropped, checked = {}, [], 0, 0
-    for f in findings:
+    from app.core import dast_catchall
+
+    site = dast_catchall.Site(base_url, allow_private=allow_private, body_limit=SOFT_404_BODY)
+
+    def rank(f):
+        # The checks have a budget, so the findings that matter most go first: a
+        # file whose format we can prove, then by severity.  A budget spent on
+        # info level noise left the high ones unchecked before.
+        # A finding about what a page holds is never dropped by this check, only
+        # tagged for the roll up, so it waits behind the claims that a path or a
+        # bypass is there.
+        path = urlparse(f.get("url") or "").path or "/"
+        text = f"{f.get('title') or ''} {f.get('evidence') or ''}"
+        tier = (0 if dast_catchall.file_type(path) else
+                1 if _WEAK_RESTRICTION.search(text) else
+                3 if about_content(f) else 2)
+        return (tier, -RANK.get(f.get("severity"), 0))
+
+    order = sorted(range(len(findings)), key=lambda i: rank(findings[i]))
+    seen, verdicts, decided, dropped, checked = {}, {}, {}, 0, 0
+    for i in order:
+        f = findings[i]
         url = f.get("url") or ""
         path = urlparse(url).path or "/"
-        if f.get("tool") not in PATH_ENGINES or path in ("", "/") or checked >= MAX_VERIFY:
-            kept.append(f)
+        if f.get("tool") not in PATH_ENGINES:
+            continue
+        if _WEAK_RESTRICTION.search(f"{f.get('title') or ''} {f.get('evidence') or ''}"):
+            if checked < MAX_VERIFY:
+                checked += 2
+                decided[i] = _verify_method_bypass(f, site)
+            continue
+        if path in ("", "/"):
             continue
         if url not in seen:
+            if checked >= MAX_VERIFY:
+                continue
             checked += 1
             got = external_probe.fetch(url, allow_private=allow_private, follow=False,
                                        body_limit=SOFT_404_BODY)
@@ -3274,18 +3334,25 @@ def drop_soft_404(findings: list, base_url: str, allow_private: bool = False,
             # matches the control.  The path was not reached at all.
             challenge = (external_probe.bot_check(body, got["status"])
                          if got["status"] == 200 else "")
-            seen[url] = (got["status"], to_login, challenge, got["status"] == 200 and any(
+            soft = got["status"] == 200 and any(
                 same(norm(body, *echoed), cut, mark, mark_cut)
                 # Bodies cut at the limit all have its length, so only a
                 # whole page can be matched on size.
                 or html and not (cut or mark_cut) and abs(len(body) - size) < 16
-                for mark, size, mark_cut in controls))
+                for mark, size, mark_cut in controls)
+            verdict = {"result": "unknown"}
+            if got["status"] == 200 and not challenge and not soft:
+                # The same-shape control and the file's own format.
+                verdict = site.verify(url, got)
+            seen[url] = (got["status"], to_login, challenge, soft)
+            verdicts[url] = verdict
         status, to_login, challenge, soft = seen[url]
+        verdict = verdicts[url]
         if challenge:
             # Nothing the scanner said about this address is about the site:
             # not that a file is there, and not what the page holds, which is
             # the firewall's own page.
-            dropped += 1
+            decided[i] = None
             if stats is not None:
                 stats["bot_check"] = challenge
                 stats["challenged"] = stats.get("challenged", 0) + 1
@@ -3293,13 +3360,23 @@ def drop_soft_404(findings: list, base_url: str, allow_private: bool = False,
         # Nothing is there: a claim that a file or page was found is only the
         # site's not found page.  What the page itself carries stays: input
         # it echoes back, or a key in it, is on the 404 page too.
-        if soft or status in NOT_THERE:
+        if (soft or status in NOT_THERE or verdict["result"] == "absent") and status \
+                and RESPONSE_PROPERTY.search(f"{f.get('title') or ''} {f.get('cwe') or ''}"):
+            # A header, cookie or method finding is about the answer itself.
+            # A catch-all page or a 404 is still an answer the site serves,
+            # with the same cookies and headers, so it stays true.  Kept, and
+            # marked, so it is never read as a file being there.
+            decided[i] = dict(f, answer="not_found" if status in NOT_THERE else "catch_all")
+            continue
+        if soft or status in NOT_THERE or verdict["result"] == "absent":
             if not about_content(f):
-                dropped += 1
+                decided[i] = None
+                if verdict["result"] == "absent" and stats is not None:
+                    stats["catch_all"] = stats.get("catch_all", 0) + 1
                 continue
             # True, but of the page every missing address gets, so roll_up
             # can say that once instead of once per address.
-            f = dict(f, answer="not_found")
+            decided[i] = dict(f, answer="not_found")
         elif status in PROTECTED or to_login:
             # Sign in required, forbidden, or redirected to a login page: the
             # path is access controlled, so an engine calling it reachable
@@ -3307,26 +3384,113 @@ def drop_soft_404(findings: list, base_url: str, allow_private: bool = False,
             # served file.  A finding about what the page echoes or holds is
             # kept; a bare "this path is here" is dropped, the same as a not
             # found.
-            if not about_content(f):
-                dropped += 1
+            # A header, cookie or method finding is about the sign in answer
+            # itself, which is real, so it stays.
+            if not about_content(f) and not RESPONSE_PROPERTY.search(
+                    f"{f.get('title') or ''} {f.get('cwe') or ''}"):
+                decided[i] = None
                 continue
-            f = dict(f, answer="protected")
-        elif status == 200 and _WEAK_RESTRICTION.search(
-                f"{f.get('title') or ''} {f.get('evidence') or ''}"):
-            # A bypass of an access restriction, but a plain request already
-            # reads the path, so there was no restriction to get past.
-            dropped += 1
-            continue
+            decided[i] = dict(f, answer="protected")
+        elif verdict["result"] == "confirmed":
+            # Proven by the file's own format, against a same-shape control.
+            decided[i] = dict(f, answer="confirmed", verified=verdict["why"],
+                              evidence=((f.get("evidence") or "")[:500]
+                                        + f"  Re-checked: {verdict['why']}.")[:800])
+            if stats is not None:
+                stats["confirmed"] = stats.get("confirmed", 0) + 1
         elif status:
-            f = dict(f, answer="found")
+            decided[i] = dict(f, answer="found")
+    kept = []
+    for i, f in enumerate(findings):
+        if i in decided:
+            if decided[i] is None:
+                dropped += 1
+            else:
+                kept.append(decided[i])
+            continue
+        path = urlparse(f.get("url") or "").path or "/"
+        if (f.get("tool") in PATH_ENGINES and path not in ("", "/") and not about_content(f)
+                and RANK.get(f.get("severity"), 0) > RANK.get("info")
+                and (dast_catchall.file_type(path) or dast_catchall.expects_non_html(path))
+                and site.catch_all(path)):
+            # Not re-checked (the budget ran out), on a site that answers this
+            # shape of address with a page even when nothing is there.  The
+            # engine's word alone is not enough to rate it as found.
+            f = dict(f, severity="info", answer="unverified",
+                     evidence=((f.get("evidence") or "")[:500]
+                               + "  Not re-checked, and this site answers every address "
+                                 "of this shape with a page, so the engine's hit alone "
+                                 "does not show the file is there.")[:800])
+            if stats is not None:
+                stats["unverified"] = stats.get("unverified", 0) + 1
         kept.append(f)
     return kept, dropped
+
+
+# The methods the bypass re-test may send: Wapiti's own made up verb, which
+# a server can only refuse or treat as a read, and the read methods.
+_SAFE_RETEST_METHODS = {"ABC", "GET", "HEAD", "OPTIONS"}
+_METHOD_IN_EVIDENCE = re.compile(r"^\s*([A-Z]{3,10})\s+/")
+
+
+def _verify_method_bypass(f: dict, site) -> dict:
+    """An engine says an odd HTTP method gets past a 401/403.  It only does when
+    that method's answer is a 2xx with content, unlike the refusal.  A 405, a
+    501 (method not implemented) or an empty answer is the server refusing the
+    method, not a way around the restriction.  -> the finding, or None to
+    leave it out."""
+    url = f.get("url") or ""
+    m = _METHOD_IN_EVIDENCE.search(f.get("evidence") or "")
+    method = m.group(1) if m else "ABC"
+    if method not in _SAFE_RETEST_METHODS:
+        return f  # never re-sent: POST, PUT and the WebDAV verbs can change data
+    from urllib.parse import urlparse
+
+    from app.core import dast_catchall, external_probe
+
+    if (urlparse(url).hostname or "").lower() != (urlparse(site.base_url).hostname or "").lower():
+        return f  # only the scanned host is ever asked
+
+    plain = site.get(url)
+    odd = external_probe.fetch(url, method=method, allow_private=site.allow_private,
+                               follow=False, body_limit=site.body_limit)
+    if plain.get("status") == 200:
+        return None  # a plain request already reads it: nothing was bypassed
+    if not (200 <= (odd.get("status") or 0) < 300) or not (odd.get("body") or "").strip() \
+            or dast_catchall.same_page(odd, dict(plain, status=odd.get("status"))):
+        return None
+    return dict(f, answer="confirmed",
+                verified=f"{method} answered {odd['status']} with content where GET "
+                         f"answered {plain.get('status')}",
+                evidence=((f.get("evidence") or "")[:500]
+                          + f"  Re-checked: {method} answered {odd['status']} with "
+                            f"{len(odd.get('body') or '')} bytes of content where a plain "
+                            f"GET answered {plain.get('status')}.")[:800])
+
+
+# Findings about the response itself (its headers, cookies, allowed methods),
+# which are as true of a catch-all page as of any other answer.
+RESPONSE_PROPERTY = re.compile(
+    r"header|cookie|httponly|samesite|secure flag|content.security.policy|\bcsp\b|"
+    r"strict.transport|\bhsts\b|x-frame|clickjack|mime type|x-content-type|"
+    r"http methods|allowed (http )?methods|\bcors\b|access-control|referrer.policy|"
+    r"permissions.policy|cache-control|CWE-(?:16|693|1021|614|1004|1275|942)\b", re.I)
 
 
 def about_content(f: dict) -> bool:
     """A finding about what a page holds or echoes, not about a path being
     there.  Such a finding is as true on a not found page as anywhere."""
-    text = f"{f.get('title') or ''} {f.get('cwe') or ''} {f.get('evidence') or ''}"
+    from urllib.parse import urlparse
+
+    evidence = f.get("evidence") or ""
+    # The evidence of a path finding is often just "GET /.htpasswd".  The name
+    # of the address asked for says nothing about what the answer held, so it
+    # is taken out first; otherwise every reported .htpasswd counted as a
+    # secret on the page and was kept on a site that has no such file.
+    path = urlparse(f.get("url") or "").path or ""
+    if len(path) > 1:
+        evidence = evidence.replace(path, " ")
+    text = f"{f.get('title') or ''} {f.get('cwe') or ''} {evidence}"
     return bool(REFLECTED.search(text) or SECRET_WORDS.search(text))
 
 

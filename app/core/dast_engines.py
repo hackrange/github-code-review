@@ -189,6 +189,9 @@ def _run(cmd: list, timeout: int, workdir: Path, scan_id: int, env=None) -> tupl
     return code, " | ".join(t.strip() for t in tail)[-300:]
 
 
+NUCLEI_EXCLUDED_TAGS = "dos,intrusive,bruteforce,fuzz,local"
+
+
 def _nuclei_templates(workdir: Path, scan_id: int) -> str:
     """The template folder, fetched once into the cache volume."""
     if TEMPLATES.is_dir() and any(TEMPLATES.iterdir()):
@@ -239,6 +242,13 @@ def command(tool: str, url: str, host: str, profile: str, workdir: Path,
         argv = [exe, "-list", str(targets), "-o", str(report), "-jsonl",
                 "-disable-update-check", "-no-color", "-silent",
                 "-severity", "info,low,medium,high,critical", "-tags", tags,
+                # Never a template that knocks a service over (dos), changes
+                # state on the target (intrusive), or guesses passwords
+                # (bruteforce).  nuclei's own ignore file is not read for a
+                # template folder given with -t, so it has to be said here: a
+                # heap overflow DoS (CVE-2019-5544) ran against web hosts until
+                # this, and reported "vulnerable" when port 427 was closed.
+                "-etags", NUCLEI_EXCLUDED_TAGS,
                 "-rl", "150", "-c", "50", "-timeout", "10", "-retries", "1",
                 "-H", f"User-Agent: {_ua()}"]
         templates = _nuclei_templates(workdir, -1)
@@ -538,10 +548,27 @@ def parse_testssl(report: Path, url: str):
     if data is None:
         return None
     rows = data if isinstance(data, list) else data.get("scanResult") or []
-    out = []
+    out, ciphers = [], []
     for row in rows:
         sev = str(row.get("severity") or "").upper()
         if sev not in ("LOW", "MEDIUM", "HIGH", "CRITICAL"):
+            continue
+        rid = str(row.get("id") or "")
+        if rid.startswith("cipher-") or rid.startswith("cipher_x"):
+            # One row per cipher suite the server accepted.  Said once, with
+            # the list: each is a handshake testssl made, so it is a fact.
+            ciphers.append((sev, " ".join(str(row.get("finding") or "").split())[:120]))
+            continue
+        if rid == "security_headers":
+            # testssl's "--": its one request to / carried none of the security
+            # headers it looks for.  The baseline check reports each header on
+            # its own, so this is a summary line, not a medium of its own.
+            out.append(_finding(
+                "testssl", "TLS scan: the front page sends none of the common security "
+                "headers", "low", url, "testssl.sh asked for / and the answer carried no "
+                "Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options, "
+                "Content-Security-Policy or similar header.",
+                "Send the security headers the baseline findings list.", "CWE-693", ""))
             continue
         out.append(_finding(
             "testssl", f"TLS: {row.get('id')} {str(row.get('finding') or '')[:160]}",
@@ -549,6 +576,19 @@ def parse_testssl(report: Path, url: str):
             if not url.startswith("https") else url,
             row.get("finding"), "Fix the TLS configuration.",
             row.get("cwe") or "CWE-326", row.get("cve") or ""))
+    if ciphers:
+        rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+        worst = max(ciphers, key=lambda c: rank.get(c[0], 0))[0].lower()
+        f = _finding(
+            "testssl", f"TLS: the server accepts {len(ciphers)} weak or obsolete cipher "
+            f"suite{'s' if len(ciphers) != 1 else ''}", worst, url,
+            "testssl.sh completed a handshake with each of these: "
+            + "; ".join(c[1] for c in ciphers[:30]),
+            "Offer only TLS 1.2 AEAD suites (AES-GCM, ChaCha20) with forward secrecy, "
+            "and TLS 1.3.", "CWE-327", "")
+        f["answer"] = "confirmed"
+        f["verified"] = "testssl.sh completed a handshake with each suite"
+        out.append(f)
     return out
 
 

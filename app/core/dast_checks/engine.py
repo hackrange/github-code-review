@@ -423,11 +423,17 @@ def run_rule(spec: dict, ctx: dict) -> dict:
                 control = (_control_response(client)
                            if spec["safety"] != "oob" else {})
                 oob_hit = bool(oob and token and oob.hit(token))
-                env = _env_for(last, control, oob_hit)
-                if evaluate(differential, env):
-                    confirmations += 1
-                else:
+                saved = {k: v for k, v in (last.get("_saved") or {}).items()
+                         if k not in _RESERVED_NAMES}
+                env = _env_for(last, control, oob_hit, saved)
+                if not evaluate(differential, env):
                     break
+                if spec["safety"] != "oob" and not spec.get("catch_all_ok"):
+                    why = _catch_all_guard(client, last)
+                    if why:
+                        out["detail"] = why
+                        break
+                confirmations += 1
             if confirmations == retest and confirmations > 0:
                 out["findings"].append(_finding(spec, client, last, route, control))
                 break   # one solid finding per rule; the rest is noise
@@ -968,6 +974,7 @@ def _run_probe(spec: dict, client: Client, route: str, oob_value: str) -> dict:
     oob_value is the callback URL that {oob} becomes, empty for a non oob rule.
     """
     last = {}
+    saved = {}
     for step in spec.get("probe") or []:
         req = step.get("request") if isinstance(step, dict) else None
         if not isinstance(req, dict):
@@ -978,7 +985,47 @@ def _run_probe(spec: dict, client: Client, route: str, oob_value: str) -> dict:
         last = client.request(req.get("method") or "GET", path, query=query,
                               headers=req.get("headers") or {},
                               follow=bool(req.get("follow", True)))
+        last["_path"] = path
+        last["_query"] = bool(query) or "?" in path
+        name = step.get("save")
+        if isinstance(name, str) and _SAVE_NAME.match(name):
+            # A named answer the differential can read, for a check that
+            # compares a baseline, a look alike and the probe itself.
+            saved[name] = last
+    last["_saved"] = saved
     return last
+
+
+_SAVE_NAME = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
+_RESERVED_NAMES = {"status", "response", "control", "oob_hit", "_funcs"}
+
+
+def _catch_all_guard(client: Client, last: dict) -> str:
+    """Why a response that passed the differential is still not a finding, or ''.
+
+    The rule's control is one fixed address.  A site that answers by shape (its
+    home page for "/.anything", its app shell for any path) gets past that.
+    Here the answer is held to an address of the same shape that cannot exist,
+    and, for a file whose format is known, to that format.  A rule aimed at a
+    query string or a header is about what the page does with it, so only a
+    plain path is held to this.
+    """
+    from app.core import dast_catchall
+
+    path = last.get("_path") or ""
+    if not path or path == "/" or last.get("_query") or last.get("status") != 200:
+        return ""
+    name = path.rstrip("/").rsplit("/", 1)[-1]
+    ctl = client.request("GET", dast_catchall.control_path(path), follow=False)
+    if dast_catchall.same_page(last, ctl, (name.lstrip("."),)):
+        return "the site gives the same page for an address of the same shape that cannot exist"
+    known = dast_catchall.file_type(path)
+    if known and not known[1](last):
+        return f"the answer is not a {known[0]}"
+    if not known and dast_catchall.expects_non_html(path) and dast_catchall.looks_html(last) \
+            and dast_catchall.looks_html(ctl) and ctl.get("status") == 200:
+        return "an HTML page was served where a file was named, as it is for any address"
+    return ""
 
 
 def _bot_checked(resp) -> str:

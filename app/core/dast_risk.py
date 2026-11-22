@@ -51,7 +51,15 @@ def likelihood(f: dict) -> tuple:
     answer = f.get("answer")
     if answer == "not_found":
         return 1, "the address answers not found"
-    if tools.startswith("rule:") or "rule:" in tools:
+    if answer == "not_reproduced":
+        return 1, "a safe re-test did not reproduce it"
+    if answer == "third_party":
+        return 1, "in another company's file, not this site's"
+    if answer == "unverified":
+        return 2, "not re-checked, on a site that answers any address with a page"
+    if answer == "confirmed":
+        base, why = 5, "re-proven by the scan: " + str(f.get("verified") or "content check")[:160]
+    elif tools.startswith("rule:") or "rule:" in tools:
         base, why = 5, "confirmed by a curated rule against a control"
     elif "baseline" in tools:
         base, why = 4, "the baseline check matched real content"

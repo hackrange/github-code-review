@@ -549,6 +549,10 @@ def fetch(url: str, method: str = "GET", headers: dict = None,
                             out["set_cookies"].append(ck)
                     out["body"] = body[:body_limit].decode(resp.encoding or "utf-8",
                                                            "replace")
+                    # The first bytes as they came, so a file's magic number
+                    # (zip, gzip, SQLite) can be read after the text decode
+                    # above has replaced the bytes it could not decode.
+                    out["head_hex"] = body[:512].hex()
                     out["final_url"] = current
                     location = resp.headers.get("location")
                     if follow and location and 300 <= resp.status_code < 400:
@@ -684,7 +688,10 @@ def detect_waf_block(body: str, status: int = 0) -> bool:
 # scanning engine sees only the check unless the scanner is let through.
 BOT_CHECKS = [
     ("Imperva", re.compile(r"_Incapsula_Resource|Incapsula incident ID", re.I)),
-    ("Cloudflare", re.compile(r"/cdn-cgi/challenge-platform|<title>Just a moment\.\.\.</title>|cf-chl-", re.I)),
+    # Cloudflare adds /cdn-cgi/challenge-platform/scripts/jsd/main.js to real
+    # pages as a passive bot script; only its other paths are the challenge.
+    ("Cloudflare", re.compile(r"/cdn-cgi/challenge-platform/(?!scripts/jsd/)|"
+                              r"<title>Just a moment\.\.\.</title>|cf-chl-", re.I)),
     ("Akamai", re.compile(r"_abck|bm-verify|akamai-bot", re.I)),
     ("PerimeterX", re.compile(r"px-captcha|_pxAppId|perimeterx", re.I)),
     ("DataDome", re.compile(r"captcha-delivery\.com|datadome", re.I)),

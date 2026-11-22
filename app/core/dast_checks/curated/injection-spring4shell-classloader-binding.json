@@ -1,0 +1,42 @@
+{
+  "id": "injection-spring4shell-classloader-binding",
+  "class": "injection",
+  "safety": "read",
+  "severity_floor": "critical",
+  "title": "Spring4Shell: request parameters reach the class loader (CVE-2022-22965)",
+  "summary": "Spring's data binder lets a request parameter walk class.module.classLoader on this endpoint.  That walk is how the published exploit rewrites Tomcat's logging to write a JSP web shell and run commands on the server.  This check proves the binder reaches the class loader without changing anything: it asks it to set a value that cannot be converted, so the setter never runs.",
+  "needs": ["code_routes"],
+  "probe": [
+    {
+      "save": "base",
+      "request": {"method": "GET", "path": "{route}", "follow": false}
+    },
+    {
+      "save": "name_like",
+      "request": {"method": "GET", "path": "{route}", "follow": false,
+                  "query": {"class.module.classLoaderGcr.DefaultAssertionStatus": "nonsense"}}
+    },
+    {
+      "save": "text_like",
+      "request": {"method": "GET", "path": "{route}", "follow": false,
+                  "query": {"gcrx.class.module.classLoader.DefaultAssertionStatus": "nonsense"}}
+    },
+    {
+      "request": {"method": "GET", "path": "{route}", "follow": false,
+                  "query": {"class.module.classLoader.DefaultAssertionStatus": "nonsense"}}
+    }
+  ],
+  "confirm": {
+    "control": "The same address three ways: plain, with a parameter that differs only in the property name (a vulnerable binder ignores it), and with the class loader text behind a prefix the binder cannot follow (a firewall that blocks on the text blocks it too).",
+    "differential": "status == 400 and status_of(base) != 400 and status_of(base) != 0 and status_of(name_like) == status_of(base) and status_of(text_like) == status_of(base)",
+    "retest": 2
+  },
+  "reproduce": "Pick the endpoint in the finding.  curl -sk -o /dev/null -w '%{http_code}\\n' 'https://host/path' gives the normal status.  curl -sk -o /dev/null -w '%{http_code}\\n' 'https://host/path?class.module.classLoaderGcr.DefaultAssertionStatus=nonsense' gives the same.  curl -sk -o /dev/null -w '%{http_code}\\n' 'https://host/path?class.module.classLoader.DefaultAssertionStatus=nonsense' gives 400 on a vulnerable Spring and the normal status on a patched one.  Never run the public exploit scripts: they change Tomcat's logging and write a web shell.",
+  "remediate": "Upgrade Spring Framework to 5.3.18 or 5.2.20 or later (Spring Boot 2.6.6 or 2.5.12 or later).  Until then, upgrade Tomcat to 10.0.20, 9.0.62 or 8.5.78, or set WebDataBinder disallowed fields to class.*, Class.*, *.class.* and *.Class.* in a @ControllerAdvice.",
+  "references": ["https://spring.io/security/cve-2022-22965"],
+  "mappings": {
+    "cwe": "CWE-94",
+    "owasp": "A06:2021"
+  },
+  "rulesets": ["java", "spring"]
+}
