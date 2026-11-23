@@ -556,6 +556,14 @@ def adopt_code_rows(session, finding, marker: str, row: dict, counts: dict):
     return finding
 
 
+def _kev_date(value) -> str:
+    """A KEV date as CISA writes it, YYYY-MM-DD, or blank for anything else."""
+    import re
+
+    text = str(value or "").strip()[:10]
+    return text if re.match(r"^\d{4}-\d{2}-\d{2}$", text) else ""
+
+
 def waived_now(session, finding) -> bool:
     """Does an approved waiver that has not expired cover this finding."""
     from app.core.models import Waiver, WaiverStatus
@@ -1231,6 +1239,16 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             # The engine's grade is kept beside it rather than overwritten, so
             # this reads as a decision somebody can disagree with.  A rule an
             # admin wrote still wins, because it is applied after.
+            # What set the grade that stands, for the API to report.  Each step
+            # below that moves the grade names itself; the last one to move it wins.
+            grade_src = ["engine", None]
+            before = finding.severity
+
+            def moved(name, rule_id=None):
+                if finding.severity != before:
+                    grade_src[0], grade_src[1] = name, rule_id
+                return finding.severity
+
             # A token that says it has expired.  Every correct validator rejects
             # it, so it cannot be used to get in, and an expired credential is
             # not a vulnerability.  Info rather than gone: the value is still
@@ -1257,6 +1275,8 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                 if not (finding.triage_reason or "").startswith("The token expired"):
                     finding.triage_reason = note
 
+            before = moved("expired_secret")
+
             # A Power Platform file link that has run out.  Power Apps writes a
             # short lived, read only SAS for each image into an exported canvas
             # app, and the export keeps the copy long after the day it worked.
@@ -1281,6 +1301,8 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                     "This is a read only link to one file in Power Platform"):
                 # No longer true of this finding, so the note goes with it.
                 finding.triage_reason = ""
+
+            before = moved("expired_secret")
 
             # A Mule secure properties value, ![...], is ciphertext.  It opens
             # nothing without the key the app is started with, so when the
@@ -1315,6 +1337,8 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                             "This value is encrypted with Mule"):
                         finding.triage_reason = ""
 
+            before = moved("encrypted_secret")
+
             # Somebody is exploiting this in the wild, and nothing here says
             # the code does not ship.  The advisory's own grade is a judgement
             # about the flaw in the abstract; CISA listing it is an
@@ -1333,6 +1357,8 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                 finding.engine_severity = (finding.engine_severity
                                            or finding.severity.value)
                 finding.severity = Severity.HIGH
+
+            before = moved("kev_raise")
 
             # The tree says it does not ship.  Since 461e180 reachability only
             # says unlikely on evidence: the lockfile marks it development
@@ -1355,6 +1381,8 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                                            or finding.severity.value)
                 finding.severity = Severity.LOW
 
+            before = moved("reach_unlikely")
+
             # A distribution package in a base image the build upgrades after
             # pulling it.  The image in the registry carries the old version
             # and the image that ships most likely does not, so these go to
@@ -1375,24 +1403,30 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                                            or finding.severity.value)
                 finding.severity = Severity.LOW
 
+            before = moved("base_image")
+
             if (finding.triage == "not_applicable"
                     and finding.severity != Severity.INFO):
                 finding.engine_severity = (finding.engine_severity
                                            or finding.severity.value)
                 finding.severity = Severity.INFO
 
+            before = moved("not_applicable")
+
             # The whole finding, not just its rule name.  An override can ask
             # about the kind, the state, the leaked value, the exposure or who
             # committed the line, and about several of those at once, so it
             # has to be able to read them.
-            override = severity_rules.apply(
-                overrides, finding.rule, finding.cwe,
+            override, override_id, shipped = severity_rules.apply_with_rule(
+                overrides,
                 getattr(connection, "sensitivity", "") if connection is not None else "",
-                finding=finding)
+                finding)
             if override is not None and override != finding.severity:
                 finding.engine_severity = (finding.engine_severity
                                            or finding.severity.value)
                 finding.severity = override
+            before = moved("built_in_rule" if shipped else "org_rule",
+                           None if shipped else override_id)
 
             # What a model said, or a rule learned from what a model said.
             # Lower only, never a credential or a known exploited package, and
@@ -1431,6 +1465,7 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                     finding.engine_severity = (finding.engine_severity
                                                or finding.severity.value)
                     finding.severity = grade.severity
+                before = moved("learned_rule" if grade.rule_id else "ai_validation")
             else:
                 taught = learned.match(learned_rules, finding)
                 if taught is not None:
@@ -1440,6 +1475,7 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                     learned.give(session, finding, taught.severity, source="rule",
                                  reason="learned rule #%d: %s" % (taught.id, taught.reason),
                                  by="scan", rule_id=taught.id, model=taught.model)
+                    before = moved("learned_rule")
 
             # A person's regrade stands for as long as the code it was about
             # does.  Rewritten flagged lines are a different question, and an
@@ -1467,6 +1503,11 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                 finding.engine_severity = (finding.engine_severity
                                            or finding.severity.value)
                 finding.severity = finding.custom_severity
+                # Named even when it matches what stood, since the person's
+                # grade is the one holding it there.
+                grade_src[0], grade_src[1] = "custom", None
+            finding.severity_source = grade_src[0]
+            finding.severity_rule_id = grade_src[1]
 
             # The two halves of the grade, worked out last because impact
             # depends on what the repository holds and that is only known here.
@@ -1693,6 +1734,12 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
         finding.vulnerability_id = row.get("id") or ""
         finding.fixed_in = row.get("fixed_in") or ""
         finding.known_exploited = bool(row.get("known_exploited"))
+        # The rest of what the scanner says about the advisory, which the
+        # report files always carried and this used to drop.
+        finding.cvss_vector = str(row.get("cvss_vector") or "")[:LONG_TEXT]
+        finding.kev_added = _kev_date(row.get("kev_added"))
+        finding.kev_due_date = _kev_date(row.get("kev_due_date"))
+        finding.kev_ransomware = row.get("kev_ransomware") is True
         finding.base_upgraded = bool(row.get("base_upgraded"))
         finding.dockerfile = (row.get("dockerfile") or "")[:320]
         # The weakness class, which the code path has always kept and this one

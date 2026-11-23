@@ -121,6 +121,10 @@ class WaiverStatus(str, enum.Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     REVOKED = "revoked"
+    # Approved, and the date ran out.  Set by app.core.waiver_expiry, which
+    # also puts the finding back on the list.  Kept apart from revoked so a
+    # report can tell "somebody took it back" from "nobody renewed it".
+    EXPIRED = "expired"
 
 
 class User(Base):
@@ -864,6 +868,29 @@ class Finding(Base):
     first_found_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     last_found_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     resolved_at = Column(DateTime(timezone=True))
+    # When the state, grade, exception or triage last changed.  Set by the
+    # before_flush hook at the bottom of this file, so nothing has to remember
+    # to.  A system that mirrors findings asks for what changed since its last
+    # read instead of reading everything again.  Blank on rows nothing has
+    # touched since the column arrived; those read as first_found_at.
+    updated_at = Column(DateTime(timezone=True), index=True)
+
+    # What set the grade that stands, written by ingest: engine, org_rule,
+    # built_in_rule, kev_raise, reach_unlikely, base_image, not_applicable,
+    # expired_secret, encrypted_secret, ai_validation, learned_rule or custom.
+    # The API checks it against the live person and AI grades before saying
+    # it, since those can change between scans.
+    severity_source = Column(String(16), default="")
+    # The SeverityRule behind an org_rule grade.
+    severity_rule_id = Column(Integer)
+
+    # Advisory details the scanner already sends.  Dependencies only.  Text
+    # for the vector because nothing filters on it and this table is near
+    # the row size ceiling.  The KEV dates are as CISA writes them.
+    cvss_vector = Column(Text, default="")
+    kev_added = Column(String(10), default="")
+    kev_due_date = Column(String(10), default="")
+    kev_ransomware = Column(Boolean, default=False, nullable=False)
 
     repo = relationship("Repository", back_populates="findings")
     waiver = relationship("Waiver", back_populates="finding", uselist=False,
@@ -1020,6 +1047,10 @@ class Waiver(Base):
     decided_by = Column(String(120), default="")
     decided_at = Column(DateTime(timezone=True))
     decision_note = Column(Text, default="")
+    # The id another system keeps this under, like ctem:<uuid>.  Set through
+    # the API so that system can find, revoke or renew its own exceptions.
+    # Not unique: one decision over there can cover many findings here.
+    external_ref = Column(String(64), default="", index=True)
 
     finding = relationship("Finding", back_populates="waiver")
 
@@ -2915,3 +2946,45 @@ class ExternalFindingDecision(Base):
     # A scan's id for one that applies to that scan only, which wins over the
     # site's decision on that scan.
     only_scan_id = Column(Integer, default=0, nullable=False)
+
+
+# --- Finding.updated_at ------------------------------------------------------
+#
+# Set on any flush that changes one of these, or the waiver on a finding.
+# A hook rather than a line at every write, because there are dozens of those
+# and the one somebody adds next year will not know about this column.
+
+_TRACKED = ("state", "severity", "excepted", "triage", "custom_severity",
+            "out_of_scope", "resolved_at", "exception_expires_at")
+
+
+def _touch_findings(session, _context, _instances) -> None:
+    from sqlalchemy import inspect as sa_inspect
+
+    now = utcnow()
+    for obj in list(session.new) + list(session.dirty):
+        if isinstance(obj, Finding):
+            if obj in session.new:
+                obj.updated_at = obj.updated_at or now
+                continue
+            state = sa_inspect(obj)
+            if any(state.attrs[name].history.has_changes() for name in _TRACKED):
+                obj.updated_at = now
+        elif isinstance(obj, Waiver):
+            finding = obj.finding
+            if finding is None and obj.finding_id:
+                finding = session.get(Finding, obj.finding_id)
+            if finding is not None and (obj in session.new
+                                        or session.is_modified(obj)):
+                finding.updated_at = now
+
+
+def _install_touch_hook() -> None:
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session as OrmSession
+
+    if not event.contains(OrmSession, "before_flush", _touch_findings):
+        event.listen(OrmSession, "before_flush", _touch_findings)
+
+
+_install_touch_hook()

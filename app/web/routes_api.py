@@ -752,7 +752,8 @@ async def edit_own_waiver(waiver_id: int, request: Request,
     with session_scope() as db:
         waiver, finding = _own_unapproved_waiver(
             db, user, waiver_id,
-            {WaiverStatus.REQUESTED, WaiverStatus.REJECTED, WaiverStatus.REVOKED})
+            {WaiverStatus.REQUESTED, WaiverStatus.REJECTED, WaiverStatus.REVOKED,
+             WaiverStatus.EXPIRED})
         reopened = waiver.status != WaiverStatus.REQUESTED
         if category_value == "not_deployed" and finding.kind == FindingKind.CREDENTIAL:
             raise HTTPException(status_code=400, detail=(
@@ -4174,6 +4175,37 @@ async def regrade_many(request: Request, user: User = Depends(current_user)):
     return redirect(_back_with(_findings_back(form), '. '.join(parts) + '.'))
 
 
+def clear_custom_grade(db, finding):
+    """Take a person's grade off one finding.  -> the grade it had.
+
+    Back to the engine's grade.  The next scan reapplies whatever rule level
+    override there is, which is the right answer and not this function's job
+    to guess at.
+    """
+    was = finding.custom_severity
+    if finding.engine_severity:
+        try:
+            finding.severity = Severity(finding.engine_severity)
+        except ValueError:
+            pass
+    finding.custom_severity = None
+    finding.custom_severity_reason = ""
+    finding.custom_severity_by = ""
+    finding.custom_severity_at = None
+    # An AI grade under the regrade stands again now that nobody is
+    # speaking over it, the same as the next scan would decide.
+    from app.core import learned
+    from app.core.models import AIGrade, GradeBasis
+    grade = db.query(AIGrade).filter(AIGrade.finding_id == finding.id).one_or_none()
+    if (grade is not None and not learned.protected(finding)
+            and learned.lower(finding.severity, grade.severity)):
+        finding.severity = grade.severity
+    db.query(GradeBasis).filter(GradeBasis.finding_id == finding.id,
+                                GradeBasis.source == "person").delete()
+    db.flush()
+    return was
+
+
 @router.post("/findings/{finding_id}/regrade/clear")
 async def clear_regrade(finding_id: int, request: Request,
                         user: User = Depends(current_user)):
@@ -4192,30 +4224,7 @@ async def clear_regrade(finding_id: int, request: Request,
             raise HTTPException(status_code=400,
                                 detail="That finding has no override on it.")
 
-        was = finding.custom_severity
-        # Back to the engine's grade.  The next scan reapplies whatever rule
-        # level override there is, which is the right answer and not this
-        # endpoint's job to guess at.
-        if finding.engine_severity:
-            try:
-                finding.severity = Severity(finding.engine_severity)
-            except ValueError:
-                pass
-        finding.custom_severity = None
-        finding.custom_severity_reason = ""
-        finding.custom_severity_by = ""
-        finding.custom_severity_at = None
-        # An AI grade under the regrade stands again now that nobody is
-        # speaking over it, the same as the next scan would decide.
-        from app.core import learned
-        from app.core.models import AIGrade, GradeBasis
-        grade = db.query(AIGrade).filter(AIGrade.finding_id == finding.id).one_or_none()
-        if (grade is not None and not learned.protected(finding)
-                and learned.lower(finding.severity, grade.severity)):
-            finding.severity = grade.severity
-        db.query(GradeBasis).filter(GradeBasis.finding_id == finding.id,
-                                    GradeBasis.source == "person").delete()
-        db.flush()
+        was = clear_custom_grade(db, finding)
 
         request_rewrite()
         record(db, "finding.regrade_cleared", actor=user.username,

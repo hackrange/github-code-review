@@ -41,8 +41,10 @@ def _finding_filters():
         _p("branch", "Only this branch."),
         _p("connection", "Only findings from this connection."),
         _p("q", "Search the id, path, rule, package, CVE and author."),
-        _p("exception", "Whether to include findings that have an approved exception.",
-           choices=["without", "with", "any"], default="without"),
+        _p("exception", "Whether to include findings that have an approved "
+                        "exception or exclusion.  requested is findings with a "
+                        "request waiting on a decision.",
+           choices=["without", "with", "any", "requested"], default="without"),
         _p("triage", "The work list, or what has been set aside.",
            choices=["work", "any", "third_party", "advisory", "not_applicable"],
            default="work"),
@@ -65,6 +67,13 @@ def _finding_filters():
            choices=["reviewed", "unreviewed"]),
         _p("archived", "1 for archived repositories only, 0 to leave them out.",
            choices=["0", "1"]),
+        _p("updated_since", "Only findings whose state, grade, exception, triage "
+                            "or scope changed at or after this ISO 8601 time.  "
+                            "For keeping a copy in step without reading "
+                            "everything again.", example="2026-11-23T08:00:00Z"),
+        _p("resolved_since", "Only findings marked fixed at or after this ISO "
+                             "8601 time.  Use with state=fixed.",
+           example="2026-11-23T08:00:00Z"),
     ] + PAGING
 
 
@@ -75,9 +84,12 @@ GROUPS = [
     ("Findings", "Your vulnerabilities, credentials and code findings.  "
                  "Only repositories your account can open are included."),
     ("Exceptions", "Ask for an exception, follow it, change it or withdraw it.  "
-                   "A request made with a token always waits for an "
-                   "administrator to approve it.  You can only read, change or "
-                   "withdraw your own, and an id that is not yours answers 404."),
+                   "A request made with a token waits for an administrator, "
+                   "unless the token also carries the approve scope and asks "
+                   "to approve it in the same call.  You can only read, change "
+                   "or withdraw your own, and an id that is not yours answers "
+                   "404.  An approved exception past its date becomes expired "
+                   "and its finding comes back."),
     ("Exclusions", "The rules that keep findings out of the report files, and "
                    "taking one back.  Administrators only.  A token can revoke "
                    "an exclusion but never add one."),
@@ -182,7 +194,17 @@ def endpoints() -> list:
                            "only when an AI review still holds for the code as it "
                            "is: its rating, a summary, the fix, what to check and "
                            "what to do in the meantime.  A learned rule gives a "
-                           "rating and a reason but no fix.",
+                           "rating and a reason but no fix.  grade says what "
+                           "set the severity that stands (source is engine, "
+                           "custom, org_rule, built_in_rule, kev_raise, "
+                           "reach_unlikely, base_image, not_applicable, "
+                           "expired_secret, encrypted_secret, ai_validation, "
+                           "learned_rule, or unknown for a grade set before "
+                           "this was recorded), and why.  exception_source says "
+                           "whether a waiver or an exclusion made excepted "
+                           "true.  exception is your own, or for somebody "
+                           "else's just its status.  updated_at is the last "
+                           "change to state, grade, exception, triage or scope.",
             "params": _finding_filters(),
             "example": {"total": 1, "limit": 100, "offset": 0, "count": 1, "findings": [{
                 "id": 4182, "vuln_id": "GCR-7Q2K9", "kind": "dependency",
@@ -194,8 +216,25 @@ def endpoints() -> list:
                 "package": {"name": "lodash", "version": "4.17.20",
                             "ecosystem": "npm", "fixed_in": "4.17.21"},
                 "vulnerability": {"id": "CVE-2021-23337", "cvss_score": 7.2,
-                                  "known_exploited": False, "epss_score": 0.01},
+                                  "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:H/UI:N/S:U/C:H/I:H/A:H",
+                                  "attack_vector": "network",
+                                  "known_exploited": False, "kev_added": None,
+                                  "kev_due_date": None, "kev_ransomware": False,
+                                  "epss_score": 0.01},
                 "excepted": False, "exception": None,
+                "exception_source": None, "exception_reason": None,
+                "exception_by": None, "exception_at": None,
+                "exception_expires_at": None,
+                "grade": {"severity": "high", "engine_severity": "critical",
+                          "source": "org_rule", "rule_id": 12, "by": "admin",
+                          "at": "2026-10-01T09:00:00Z",
+                          "reason": "Prototype pollution in build tooling is high here.",
+                          "custom": None, "ai": None, "validation": None},
+                "triage": {"state": "", "reason": ""}, "confidence": "high",
+                "engines": ["grype", "osv-scanner"], "corroborated": True,
+                "engine_impact": "", "engine_likelihood": "",
+                "resolved_at": None, "out_of_scope": False,
+                "updated_at": "2026-11-01T04:10:00Z",
                 "ai_reviewed": False, "ai_review": None}]},
         },
         {
@@ -238,7 +277,13 @@ def endpoints() -> list:
                        _p("id", "Only these exception numbers.  One, or up to 500 "
                                 "separated by commas, like 77,81."),
                        _p("vuln_id", "Only exceptions on the finding with this GCR "
-                                     "id, like GCR-1A2B3C4D5E6F.")] + PAGING,
+                                     "id, like GCR-1A2B3C4D5E6F."),
+                       _p("external_ref", "Only exceptions made with this "
+                                          "external_ref.", example="ctem:9f1c2d"),
+                       _p("requested_since", "Only ones asked for at or after this "
+                                             "ISO 8601 time."),
+                       _p("decided_since", "Only ones decided at or after this "
+                                           "ISO 8601 time.")] + PAGING,
             "example": {"total": 1, "limit": 100, "offset": 0, "count": 1, "exceptions": [{
                 "id": 77, "finding": 4182, "status": "requested", "category": "",
                 "reason": "Only reachable from the admin network, fix planned in Q1.",
@@ -254,9 +299,13 @@ def endpoints() -> list:
             "scope": "reports", "permission": "waiver.request",
             "summary": "Ask for an exception",
             "description": "Nothing leaves the report files until an administrator "
-                           "approves it in the web app.  This is true on an "
-                           "administrator's token as well.  Answers 409 if the "
-                           "finding already has a pending or approved exception.",
+                           "approves it.  A token that also carries the approve "
+                           "scope, owned by somebody allowed to approve, can send "
+                           "approve: true to do both at once.  Answers 409 if "
+                           "the finding already has a pending or approved "
+                           "exception, with that exception in the body when it "
+                           "is one you could read: {\"error\": \"exists\", "
+                           "\"exception\": {...}}.",
             "params": [_p("finding_id", "The finding number.", where="path",
                           kind="integer", example=1)],
             "body": [
@@ -270,11 +319,18 @@ def endpoints() -> list:
                  "enum": ["", "not_deployed"],
                  "description": "Empty for an accepted risk, or not_deployed for "
                                 "code that never ships.  Not allowed on a credential."},
+                {"name": "external_ref", "type": "string", "required": False,
+                 "description": "Your own id for it, up to 64 letters, digits, "
+                                "colons, underscores or dashes.  Returned with "
+                                "the exception and filterable."},
+                {"name": "approve", "type": "boolean", "required": False,
+                 "description": "Approve it in the same call.  Needs the approve "
+                                "scope as well."},
             ],
             "body_example": {"reason": "Only reachable from the admin network, "
                                        "fix planned in Q1.",
                              "expires": "2027-01-31", "ticket": "SEC-1203",
-                             "category": ""},
+                             "category": "", "external_ref": "ctem:9f1c2d"},
             "status": 201,
             "example": {"id": 77, "finding": 4182, "status": "requested",
                         "expires_at": "2027-01-31T00:00:00Z"},
@@ -344,12 +400,15 @@ def endpoints() -> list:
         {
             "id": "revoke_exception", "group": "Exceptions", "method": "POST",
             "path": "/exceptions/{exception_id}/revoke",
-            "scope": "reports", "permission": "waiver.revoke",
+            "scope": "reports or approve", "permission": "waiver.revoke",
             "summary": "Revoke an approved exception",
             "description": "Administrators only, and only on findings they can "
-                           "see.  The finding comes straight back into both "
-                           "report files, and the exclusion the approval made "
-                           "is switched off.",
+                           "see.  A token with the reports or the approve "
+                           "scope will do.  The finding comes straight back "
+                           "into both report files, and the exclusion the "
+                           "approval made is switched off.  To revoke one you "
+                           "made with an external_ref, look it up with "
+                           "GET /exceptions?external_ref=... first.",
             "params": [_p("exception_id", "The exception number.", where="path",
                           kind="integer", example=77)],
             "example": {"id": 77, "finding": 4182, "status": "revoked",
@@ -388,6 +447,69 @@ def endpoints() -> list:
             "body_example": {"note": "Upgrade instead, the fix is a patch release."},
             "example": {"id": 77, "finding": 4182, "status": "rejected",
                         "decided_by": "admin"},
+        },
+        {
+            "id": "bulk_exceptions", "group": "Exceptions", "method": "POST",
+            "path": "/exceptions/bulk",
+            "scope": "reports", "permission": "waiver.request",
+            "summary": "Ask for, or approve, many exceptions at once",
+            "description": "Up to 500 items, each checked exactly as a single "
+                           "request would be and answered on its own, so one "
+                           "bad item does not fail the rest.  Items with "
+                           "approve: true need the approve scope as well.  "
+                           "Limited to 20 calls a minute per token.",
+            "params": [],
+            "body": [{"name": "items", "type": "array", "required": True,
+                      "description": "Objects with finding (a number), reason, "
+                                     "expires, and optionally ticket, category, "
+                                     "external_ref and approve."}],
+            "body_example": {"items": [
+                {"finding": 4182, "reason": "Only reachable from the admin "
+                                            "network, fix planned in Q1.",
+                 "expires": "2027-01-31", "external_ref": "ctem:9f1c2d",
+                 "approve": True}]},
+            "example": {"count": 2, "created": 0, "approved": 1, "exists": 1,
+                        "failed": 0, "results": [
+                            {"index": 0, "finding": 4182, "status": 201,
+                             "result": "created",
+                             "exception": {"id": 78, "status": "approved"}},
+                            {"index": 1, "finding": 4190, "status": 409,
+                             "result": "exists",
+                             "error": "There is already an exception on this one.",
+                             "exception": {"id": 77, "status": "requested"}}]},
+        },
+        {
+            "id": "false_positive", "group": "Findings", "method": "POST",
+            "path": "/findings/{finding_id}/false-positive",
+            "scope": "approve", "permission": "finding.regrade",
+            "summary": "Mark a finding a false positive",
+            "description": "Grades the finding info with your reason, the same "
+                           "as a person's regrade on the finding page.  It "
+                           "holds through later scans while the flagged code "
+                           "is unchanged.  It does not hide the finding; ask "
+                           "for an exception for that.",
+            "params": [_p("finding_id", "The finding number.", where="path",
+                          kind="integer", example=1)],
+            "body": [{"name": "reason", "type": "string", "required": True,
+                      "description": "Why it is a false positive.  At least 20 "
+                                     "characters."}],
+            "body_example": {"reason": "The value is a test fixture, never a "
+                                       "real key."},
+            "example": {"id": 5120, "severity": "info",
+                        "grade": {"severity": "info", "engine_severity": "high",
+                                  "source": "custom"}},
+        },
+        {
+            "id": "clear_false_positive", "group": "Findings", "method": "DELETE",
+            "path": "/findings/{finding_id}/false-positive",
+            "scope": "approve", "permission": "finding.regrade",
+            "summary": "Take back a false positive",
+            "description": "Only a finding marked a false positive.  It goes back "
+                           "to the grade the engine and the rules give it.",
+            "params": [_p("finding_id", "The finding number.", where="path",
+                          kind="integer", example=1)],
+            "example": {"id": 5120, "severity": "high",
+                        "grade": {"severity": "high", "source": "engine"}},
         },
         {
             "id": "add_exclusion", "group": "Exclusions", "method": "POST",
@@ -518,6 +640,28 @@ def endpoints() -> list:
             "example": {"count": 1, "sboms": [{
                 "repository": "acme/payments", "format": "cdx", "bytes": 48211,
                 "written_at": "2026-11-01T04:10:00Z"}]},
+        },
+        {
+            "id": "certifications", "group": "SBOMs", "method": "GET",
+            "path": "/repositories/{repository}/certifications",
+            "scope": "reports", "permission": "repo.read",
+            "summary": "Branch sign offs on one repository",
+            "description": "Every certification on a repository you can see, "
+                           "and what each says today: active, stale, "
+                           "rescanning, lapsed, revoked or unknown, with why.",
+            "params": [_p("repository", "The repository's full name.",
+                          where="path", example="acme/payments")],
+            "example": {"repository": "acme/payments", "count": 1,
+                        "certifications": [{
+                            "branch": "main", "status": "active",
+                            "why": "reviewed and nothing has changed since",
+                            "reviewed_by": "jsmith",
+                            "reviewed_at": "2026-10-01T09:00:00Z",
+                            "expires_at": "2027-04-01T00:00:00Z",
+                            "commit": "3f1a9c2", "automatic": False,
+                            "note": "Read the payment routes.",
+                            "withdrawn": False, "withdrawn_by": "",
+                            "withdrawn_at": None, "reason": ""}]},
         },
         {
             "id": "sbom", "group": "SBOMs", "method": "GET",

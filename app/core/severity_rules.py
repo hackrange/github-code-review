@@ -313,7 +313,7 @@ def as_map(session) -> dict:
                             "combine": (row.combine or "all"),
                             "severity": row.severity,
                             "unless": _tags(row.unless_sensitivity),
-                            "shipped": False})
+                            "shipped": False, "id": row.id})
     return out
 
 
@@ -628,6 +628,36 @@ def counts_for(session, rows, base=None) -> dict:
     return {row.id: matching_count(session, row, base=base) for row in rows}
 
 
+def _winner(overrides: dict, carried: set, finding):
+    """The compiled override that decides this finding, or None."""
+    best = None
+    for compiled in overrides.get("rows") or []:
+        if not matches(compiled, finding):
+            continue
+        if compiled["unless"] and (carried & compiled["unless"]):
+            # Not this system.  Nothing less specific gets to stand in for
+            # it either: the exception was taken away here, and falling
+            # through to a broader rule would put it back by another name.
+            continue
+        rank = _specificity(compiled)
+        if best is None or rank > best[0]:
+            best = (rank, compiled)
+    return best[1] if best is not None else None
+
+
+def apply_with_rule(overrides: dict, sensitivity: str, finding) -> tuple:
+    """-> (severity or None, rule id or None, shipped).  apply() plus who said it.
+
+    The id is the SeverityRule row; a shipped default has none.
+    """
+    if not overrides:
+        return None, None, False
+    won = _winner(overrides, _tags(sensitivity), finding)
+    if won is None:
+        return None, None, False
+    return won["severity"], won.get("id"), bool(won.get("shipped"))
+
+
 def apply(overrides: dict, rule: str, cwe: str, sensitivity: str = "",
           finding=None):
     """The severity this organization gives it, or None to leave it alone.
@@ -651,19 +681,8 @@ def apply(overrides: dict, rule: str, cwe: str, sensitivity: str = "",
     carried = _tags(sensitivity)
 
     if finding is not None:
-        best = None
-        for compiled in overrides.get("rows") or []:
-            if not matches(compiled, finding):
-                continue
-            if compiled["unless"] and (carried & compiled["unless"]):
-                # Not this system.  Nothing less specific gets to stand in for
-                # it either: the exception was taken away here, and falling
-                # through to a broader rule would put it back by another name.
-                continue
-            rank = _specificity(compiled)
-            if best is None or rank > best[0]:
-                best = (rank, compiled["severity"])
-        return best[1] if best is not None else None
+        won = _winner(overrides, carried, finding)
+        return won["severity"] if won is not None else None
 
     def usable(entry):
         severity, unless = entry

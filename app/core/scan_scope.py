@@ -204,7 +204,7 @@ def refresh(session, repositories=None) -> int:
         for start in range(0, len(ids), 500):
             chunk = ids[start:start + 500]
             (session.query(Finding).filter(Finding.id.in_(chunk))
-             .update({Finding.out_of_scope: value},
+             .update({Finding.out_of_scope: value, Finding.updated_at: utcnow()},
                      synchronize_session="evaluate"))
     if flip_on or flip_off:
         log.info("scan scope: %d finding(s) now not deployed, %d back in scope",

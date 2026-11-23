@@ -252,6 +252,16 @@ def start() -> None:
                        replace_existing=True, misfire_grace_time=120,
                        coalesce=True, max_instances=1)
 
+    # Approved exceptions past their date.  Closed and their findings put
+    # back on the list.  The API also sweeps before it answers, so this is
+    # the floor for an install nobody is reading.
+    from app.core import waiver_expiry
+
+    _scheduler.add_job(waiver_expiry.run, IntervalTrigger(minutes=15),
+                       id="waiver-expiry", replace_existing=True,
+                       next_run_time=_dt.now(_UTC) + _td(minutes=1),
+                       misfire_grace_time=600, coalesce=True, max_instances=1)
+
     # The nightly backup.  Early morning, after the evening sweep and the
     # overnight bulk window have usually finished, though it only reads and is
     # safe beside a scan.  Without a backup password it logs why and skips.

@@ -10,10 +10,13 @@ A token is a person.  Every request resolves to the account that made the
 token, and the same scope rules apply, so a developer's plugin sees the
 repositories that developer was given and nothing else.
 
-Almost nothing here changes anything.  A review is worked out and thrown
-away; it is never written to the database, never becomes a finding somebody
-has to waive, and never touches a scan.  The one write is a request for an
-exception, and it stays a request until somebody approves it in a browser.
+Little here changes anything.  A review is worked out and thrown away; it
+is never written to the database, never becomes a finding somebody has to
+waive, and never touches a scan.  The writes are about exceptions.  A token
+with the reports scope can ask for one, change or withdraw its own, and an
+administrator's can revoke one.  Approving, rejecting, excluding and marking
+a false positive need the approve scope, which only an administrator's token
+can carry, and the role behind it is checked again on every call.
 
 Code arrives in the request and leaves in the response.  It is written to a
 temporary directory, looked at, and deleted.  Nothing is kept.
@@ -26,9 +29,11 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -90,6 +95,21 @@ def caller_for(scope: str):
             db.expunge(token)
             db.expunge(user)
         return Caller(token, user)
+
+    return resolve
+
+
+def caller_for_any(*scopes: str):
+    """caller_for, satisfied by any one of these scopes."""
+    checks = [caller_for(scope) for scope in scopes]
+
+    def resolve(request: Request, presented: str = Depends(_bearer)) -> Caller:
+        for check in checks[:-1]:
+            try:
+                return check(request, presented)
+            except HTTPException:
+                continue
+        return checks[-1](request, presented)
 
     return resolve
 
@@ -390,10 +410,9 @@ async def review(request: Request,
 # starts from the rbac query the matching page starts from, so a token can
 # never reach a repository its owner could not click on.
 #
-# One thing a token may write: a request for an exception.  It is only ever a
-# request, even on an administrator's token.  A token that leaks should not be
-# able to take findings out of the report files, so the approval still has to
-# happen in a browser, with a second factor behind it.
+# What a reports token may write is a request for an exception.  Anything
+# that takes a finding out of the report files, approving included, needs the
+# approve scope as well, so a pipeline token that leaks cannot hide anything.
 
 MAX_PAGE = 1000
 DEFAULT_PAGE = 100
@@ -463,12 +482,49 @@ def _exception_dict(waiver, finding=None) -> dict:
         "decided_by": waiver.decided_by or "",
         "decided_at": _stamp(waiver.decided_at),
         "decision_note": waiver.decision_note or "",
+        "external_ref": waiver.external_ref or "",
     }
     if finding is not None:
         out["vuln_id"] = finding.vuln_id or ""
         out["repository"] = finding.repository or ""
         out["title"] = finding.title or ""
     return out
+
+
+# What another system may call an exception it keeps a copy of.
+_EXTERNAL_REF = re.compile(r"^[A-Za-z0-9:_-]{1,64}$")
+
+
+def _external_ref(raw) -> str:
+    """A caller's own id for an exception, checked, or blank."""
+    if raw is None or raw == "":
+        return ""
+    if not isinstance(raw, str) or not _EXTERNAL_REF.match(raw):
+        raise HTTPException(
+            status_code=400,
+            detail="external_ref is up to 64 letters, digits, colons, "
+                   "underscores or dashes.")
+    return raw
+
+
+def _since(params, name: str):
+    """An ISO 8601 time from the query string, as naive UTC, or None."""
+    from datetime import datetime, timezone
+
+    raw = (params.get(name, "") or "").strip()
+    if not raw:
+        return None
+    if len(raw) > 40:
+        raise HTTPException(status_code=400, detail=f"{name} is an ISO 8601 time.")
+    try:
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=400,
+                            detail=f"{name} is an ISO 8601 time, like "
+                                   "2026-11-23T08:00:00Z.")
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _own_waiver(user, waiver):
@@ -535,30 +591,172 @@ def _ai_reviews(db, rows) -> dict:
     return out
 
 
+# Why a grade stands, for the grades nobody wrote a sentence for.
+_BUILT_IN_REASONS = {
+    "kev_raise": ("Listed in CISA's Known Exploited Vulnerabilities catalog, "
+                  "so it is graded at least high."),
+    "base_image": ("A distribution package in a base image the build "
+                   "upgrades after pulling it, so it is graded low."),
+    "built_in_rule": "A default severity rule that ships with this product.",
+}
+
+# Where these come from: the grades set by a person or a model can change
+# between scans, so the live record is checked before what ingest wrote.
+_LIVE_SOURCES = {"custom", "ai_validation", "learned_rule"}
+
+
+def _grade_source(finding, ai_grade) -> str:
+    severity = _value(finding.severity)
+    if (finding.custom_severity is not None
+            and _value(finding.custom_severity) == severity):
+        return "custom"
+    if ai_grade is not None and _value(ai_grade.severity) == severity:
+        return "learned_rule" if ai_grade.rule_id else "ai_validation"
+    engine = (finding.engine_severity or "").lower()
+    if not engine or engine == severity:
+        return "engine"
+    stored = finding.severity_source or ""
+    if stored and stored not in _LIVE_SOURCES and stored != "engine":
+        return stored
+    # Graded away from the engine before this was recorded.  The next scan
+    # writes it down.
+    return "unknown"
+
+
+def _value(enum_or_text) -> str:
+    return getattr(enum_or_text, "value", str(enum_or_text or "")).lower()
+
+
+def _grade(finding, ai_grade, rules, review) -> dict:
+    """The grade that stands, what set it, and the record behind it."""
+    source = _grade_source(finding, ai_grade)
+    out = {
+        "severity": _value(finding.severity),
+        "engine_severity": (finding.engine_severity or "").lower()
+                           or _value(finding.severity),
+        "source": source,
+        "rule_id": None,
+        "by": None, "at": None, "reason": None,
+        "custom": None, "ai": None, "validation": None,
+    }
+    if finding.custom_severity is not None:
+        out["custom"] = {
+            "severity": _value(finding.custom_severity),
+            "reason": finding.custom_severity_reason or "",
+            "by": finding.custom_severity_by or "",
+            "at": _stamp(finding.custom_severity_at),
+        }
+    if ai_grade is not None:
+        out["ai"] = {
+            "severity": _value(ai_grade.severity),
+            "was": ai_grade.was or "",
+            "reason": ai_grade.reason or "",
+            "source": ai_grade.source or "",
+            "rule_id": ai_grade.rule_id,
+            "model": ai_grade.model or "",
+            "by": ai_grade.created_by or "",
+            "at": _stamp(ai_grade.created_at),
+        }
+    if review and review.get("source") == "analysis":
+        out["validation"] = {"rating": (review.get("rating") or "").lower(),
+                             "confidence": (review.get("confidence") or "").lower(),
+                             "model": review.get("model") or ""}
+
+    if source == "custom":
+        out.update(by=out["custom"]["by"], at=out["custom"]["at"],
+                   reason=out["custom"]["reason"])
+    elif source in ("ai_validation", "learned_rule"):
+        out.update(by=out["ai"]["by"], at=out["ai"]["at"],
+                   reason=out["ai"]["reason"], rule_id=ai_grade.rule_id)
+    elif source == "org_rule":
+        rule = rules.get(finding.severity_rule_id)
+        out["rule_id"] = finding.severity_rule_id
+        if rule is not None:
+            out.update(by=rule.created_by or "", at=_stamp(rule.created_at),
+                       reason=rule.reason or "")
+    elif source in ("expired_secret", "encrypted_secret", "not_applicable"):
+        out["reason"] = finding.triage_reason or ""
+    elif source == "reach_unlikely":
+        out["reason"] = finding.reachability_reason or ""
+    elif source in _BUILT_IN_REASONS:
+        out["reason"] = _BUILT_IN_REASONS[source]
+    return out
+
+
+def _exception_source(finding, waiver) -> str:
+    if not finding.excepted:
+        return None
+    if waiver is not None and waiver.active():
+        return "waiver"
+    return "exclusion"
+
+
 def _finding_dicts(db, user, rows) -> list:
     """The API's view of a page of findings.  Lookups are made once per page."""
-    from app.core.models import Waiver
+    from app.core import rbac
+    from app.core.models import AIGrade, SeverityRule, Waiver
     from app.core.reports import as_dict, repo_facts
 
     if not rows:
         return []
     facts = repo_facts(db, rows)
     ids = [r.id for r in rows]
-    waivers = {}
+    waivers, ai_grades = {}, {}
     for start in range(0, len(ids), 500):
-        for w in db.query(Waiver).filter(Waiver.finding_id.in_(ids[start:start + 500])):
+        chunk = ids[start:start + 500]
+        for w in db.query(Waiver).filter(Waiver.finding_id.in_(chunk)):
             waivers[w.finding_id] = w
+        for g in db.query(AIGrade).filter(AIGrade.finding_id.in_(chunk)):
+            ai_grades[g.finding_id] = g
+    rule_ids = {r.severity_rule_id for r in rows if r.severity_rule_id}
+    rules = ({r.id: r for r in db.query(SeverityRule)
+              .filter(SeverityRule.id.in_(rule_ids))} if rule_ids else {})
     reviews = _ai_reviews(db, rows)
+    reads_exclusions = rbac.can(user, "exclusion.read")
 
     out = []
     for finding in rows:
         body = {"id": finding.id}
         body.update(as_dict(finding, facts))
         body["excepted"] = bool(finding.excepted)
-        waiver = _own_waiver(user, waivers.get(finding.id))
-        body["exception"] = _exception_dict(waiver) if waiver else None
+        stored = waivers.get(finding.id)
+        waiver = _own_waiver(user, stored)
+        if waiver is not None:
+            body["exception"] = _exception_dict(waiver)
+        elif stored is not None:
+            # Somebody else's argument stays theirs, but whether one is
+            # waiting or approved is what a mirror needs to show.
+            body["exception"] = {"status": _value(stored.status), "restricted": True}
+        else:
+            body["exception"] = None
+
+        # What made "excepted" true.  The reason and who decided are left out
+        # where this person could not read the decision itself.
+        source = _exception_source(finding, stored)
+        readable = ((source == "waiver" and waiver is not None)
+                    or (source == "exclusion" and reads_exclusions))
+        body["exception_source"] = source
+        body["exception_reason"] = (finding.exception_reason or "") if readable else None
+        body["exception_by"] = (finding.exception_by or "") if readable else None
+        body["exception_at"] = _stamp(finding.exception_at) if source else None
+        body["exception_expires_at"] = (_stamp(finding.exception_expires_at)
+                                        if source else None)
+
         body["ai_reviewed"] = finding.id in reviews
         body["ai_review"] = reviews.get(finding.id)
+        body["grade"] = _grade(finding, ai_grades.get(finding.id), rules,
+                               reviews.get(finding.id))
+        body["triage"] = {"state": finding.triage or "",
+                          "reason": finding.triage_reason or ""}
+        body["confidence"] = finding.confidence or ""
+        body["engines"] = [e.strip() for e in (finding.engines or "").split(",")
+                           if e.strip()]
+        body["corroborated"] = bool(finding.corroborated)
+        body["engine_impact"] = finding.engine_impact or ""
+        body["engine_likelihood"] = finding.engine_likelihood or ""
+        body["resolved_at"] = _stamp(finding.resolved_at)
+        body["out_of_scope"] = bool(finding.out_of_scope)
+        body["updated_at"] = _stamp(finding.updated_at or finding.first_found_at)
         out.append(body)
     return out
 
@@ -566,17 +764,47 @@ def _finding_dicts(db, user, rows) -> list:
 @router.get("/findings")
 def list_findings(request: Request,
                   caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
-    """Findings, filtered the way the Findings page filters them."""
-    from app.core.models import Finding
+    """Findings, filtered the way the Findings page filters them.
+
+    Three more filters than the page, for a system keeping a copy:
+    exception=requested (a request waiting on a decision), updated_since and
+    resolved_since, both ISO 8601.
+    """
+    from app.core import waiver_expiry
+    from app.core.models import Finding, Waiver, WaiverStatus
     from app.web.routes_pages import _filtered_findings, _priority_order
 
     _require(caller.user, "findings.read")
     params = request.query_params
     limit, offset = _paging(params)
+    updated_since = _since(params, "updated_since")
+    resolved_since = _since(params, "resolved_since")
+    waiting = (params.get("exception", "") or "").strip().lower() == "requested"
+    if waiting:
+        # The page's filter does not know this value, so it is handed "any"
+        # and the waiting requests are picked out here.
+        params = dict(params)
+        params["exception"] = "any"
 
+    waiver_expiry.on_read()
     with session_scope() as db:
         me = _me(db, caller)
         query = _filtered_findings(db, me, params)
+        if waiting:
+            query = query.filter(Finding.id.in_(
+                db.query(Waiver.finding_id)
+                .filter(Waiver.status == WaiverStatus.REQUESTED)
+                .scalar_subquery()))
+        if updated_since is not None:
+            # A row nothing has touched since updated_at arrived reads as
+            # its first sighting, the same as the response says.
+            from sqlalchemy import and_, or_
+            query = query.filter(or_(
+                Finding.updated_at >= updated_since,
+                and_(Finding.updated_at.is_(None),
+                     Finding.first_found_at >= updated_since)))
+        if resolved_since is not None:
+            query = query.filter(Finding.resolved_at >= resolved_since)
         total = query.order_by(None).count()
         rows = (query.order_by(_priority_order(), Finding.last_found_at.desc(),
                                Finding.id.asc())
@@ -591,9 +819,10 @@ def list_findings(request: Request,
 def one_finding(finding_id: int,
                 caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
     """One finding, if it is yours to see.  Otherwise it does not exist."""
-    from app.core import rbac
+    from app.core import rbac, waiver_expiry
 
     _require(caller.user, "findings.read")
+    waiver_expiry.on_read()
     with session_scope() as db:
         me = _me(db, caller)
         row = rbac.visible_finding(db, me, finding_id)
@@ -605,11 +834,17 @@ def one_finding(finding_id: int,
 @router.get("/exceptions")
 def list_exceptions(request: Request,
                     caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
-    """Exceptions on findings you can see.  Only your own, unless you approve them."""
+    """Exceptions on findings you can see.  Only your own, unless you approve them.
+
+    Filters: status, finding, id, vuln_id, external_ref, and requested_since
+    or decided_since as ISO 8601 times.
+    """
     from datetime import datetime, timezone
 
-    from app.core import rbac
-    from app.core.models import Finding, Waiver
+    from sqlalchemy import or_
+
+    from app.core import rbac, waiver_expiry
+    from app.core.models import Finding, Waiver, WaiverStatus
 
     _require(caller.user, "findings.read")
     params = request.query_params
@@ -619,7 +854,11 @@ def list_exceptions(request: Request,
         raise HTTPException(
             status_code=400,
             detail="status is requested, approved, rejected, revoked or expired.")
+    external_ref = _external_ref((params.get("external_ref", "") or "").strip())
+    requested_since = _since(params, "requested_since")
+    decided_since = _since(params, "decided_since")
 
+    waiver_expiry.on_read()
     with session_scope() as db:
         me = _me(db, caller)
         shown = rbac.visible_findings(db, me)
@@ -631,10 +870,17 @@ def list_exceptions(request: Request,
             base = base.filter(Waiver.requested_by == me.username)
         if wanted == "expired":
             now = datetime.now(timezone.utc).replace(tzinfo=None)
-            base = base.filter(Waiver.expires_at.isnot(None),
-                               Waiver.expires_at < now)
+            base = base.filter(or_(Waiver.status == WaiverStatus.EXPIRED,
+                                   (Waiver.expires_at.isnot(None))
+                                   & (Waiver.expires_at < now)))
         elif wanted:
             base = base.filter(Waiver.status == wanted)
+        if external_ref:
+            base = base.filter(Waiver.external_ref == external_ref)
+        if requested_since is not None:
+            base = base.filter(Waiver.requested_at >= requested_since)
+        if decided_since is not None:
+            base = base.filter(Waiver.decided_at >= decided_since)
         finding_raw = (params.get("finding", "") or "").strip()
         if finding_raw:
             if not finding_raw.isdigit():
@@ -670,78 +916,253 @@ def list_exceptions(request: Request,
                          "count": len(out), "exceptions": out})
 
 
-@router.post("/findings/{finding_id}/exceptions")
-async def ask_for_exception(finding_id: int, request: Request,
-                            caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
-    """Ask for an exception on one finding.  It waits for an administrator."""
-    from app.core import rbac
-    from app.core.audit import record
-    from app.core.models import (FindingKind, Waiver, WaiverStatus, utcnow)
-    from app.web.routes_api import _parse_expiry, _waiver_category
-    from app.web.security import clean_text, client_ip
+class _Exists(Exception):
+    """The finding already has a live exception.  Carries what to answer."""
 
-    _require(caller.user, "waiver.request")
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Send JSON.")
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="Send an object.")
-    for field in ("reason", "expires", "ticket", "category"):
+    def __init__(self, body: dict):
+        super().__init__("exists")
+        self.body = body
+
+
+_ITEM_FIELDS = ("reason", "expires", "ticket", "category", "external_ref")
+
+
+def _check_item(body: dict) -> dict:
+    """One exception's fields, checked before anything is looked up."""
+    from app.web.routes_api import _parse_expiry, _waiver_category
+    from app.web.security import clean_text
+
+    for field in _ITEM_FIELDS:
         if body.get(field) is not None and not isinstance(body.get(field), str):
             raise HTTPException(status_code=400,
                                 detail=f"{field} has to be a string.")
-
+    approve = body.get("approve", False)
+    if not isinstance(approve, bool):
+        raise HTTPException(status_code=400, detail="approve is true or false.")
     reason = clean_text(body.get("reason", ""), "Reason", limit=2000)
     if len(reason) < 20:
         raise HTTPException(
             status_code=400,
             detail="Say a bit more about why this is acceptable, at least 20 characters.")
-    ticket = clean_text(body.get("ticket", ""), "Ticket", limit=120, required=False)
-    expires_at = _parse_expiry(body.get("expires", ""))
-    category = _waiver_category(body.get("category", ""))
+    return {
+        "reason": reason,
+        "ticket": clean_text(body.get("ticket", ""), "Ticket", limit=120,
+                             required=False),
+        "expires_at": _parse_expiry(body.get("expires", "")),
+        "category": _waiver_category(body.get("category", "")),
+        "external_ref": _external_ref(body.get("external_ref")),
+        "approve": approve,
+    }
+
+
+def _may_approve(caller, me) -> bool:
+    """The token carries the approve scope and its owner may approve."""
+    from app.core import rbac
+
+    return caller.token.may("approve") and rbac.can(me, "waiver.approve")
+
+
+def _create_exception(db, me, caller, finding_id, item: dict, source_ip: str):
+    """Ask for, or ask for and approve, an exception on one finding.
+
+    -> (waiver dict, approved).  Raises HTTPException for anything wrong
+    with this one, or _Exists when it already has one.
+    """
+    from app.core import rbac
+    from app.core.audit import record
+    from app.core.models import (FindingKind, FindingState, Waiver,
+                                 WaiverStatus, utcnow)
+    from app.web.routes_api import _mirror_waiver, _set_exception
+
+    if item["approve"] and not _may_approve(caller, me):
+        raise HTTPException(
+            status_code=403,
+            detail="Approving needs a token with the approve scope, owned by "
+                   "somebody allowed to approve exceptions.")
+    finding = rbac.visible_finding(db, me, finding_id)
+    if finding is None:
+        raise HTTPException(status_code=404, detail="No such finding.")
+    if item["category"] == "not_deployed" and finding.kind == FindingKind.CREDENTIAL:
+        raise HTTPException(status_code=400, detail=(
+            "A credential works wherever it was pushed, deployed or not.  "
+            "Rotate it, or ask for an accepted risk exception instead."))
+
+    existing = db.query(Waiver).filter(
+        Waiver.finding_id == finding.id).one_or_none()
+    if existing is not None and existing.status in {
+            WaiverStatus.REQUESTED, WaiverStatus.APPROVED}:
+        body = {"detail": "There is already an exception on this one.",
+                "error": "exists"}
+        # Its id only when this person could read it anyway, so this does
+        # not become a way to look up other people's requests.
+        if _own_waiver(me, existing) is not None:
+            body["exception"] = _exception_dict(existing, finding)
+        raise _Exists(body)
+
+    approve = item["approve"]
+    waiver = existing or Waiver(finding_id=finding.id)
+    waiver.reason = item["reason"]
+    waiver.ticket = item["ticket"]
+    waiver.category = item["category"]
+    waiver.external_ref = item["external_ref"]
+    waiver.requested_by = me.username
+    waiver.requested_at = utcnow()
+    waiver.expires_at = item["expires_at"]
+    waiver.status = WaiverStatus.APPROVED if approve else WaiverStatus.REQUESTED
+    waiver.decided_by = me.username if approve else ""
+    waiver.decided_at = utcnow() if approve else None
+    waiver.decision_note = ("approved when it was made, by api token"
+                            if approve else "")
+    if existing is None:
+        db.add(waiver)
+    db.flush()
+
+    if approve:
+        # The same as the web form does for an administrator.
+        finding.state = FindingState.WAIVED
+        _set_exception(finding, waiver, me.username)
+        _mirror_waiver(db, finding, waiver, me.username)
+        db.flush()
+
+    record(db, "waiver.approved" if approve else "waiver.requested",
+           actor=me.username, target=finding.fingerprint,
+           detail=(f"{finding.repository} {finding.file_path} until "
+                   f"{item['expires_at']:%Y-%m-%d} (api token {caller.token.prefix})"
+                   + (" (not deployed)" if item["category"] else "")
+                   + (f" ref {item['external_ref']}" if item["external_ref"] else "")),
+           source_ip=source_ip)
+    return _exception_dict(waiver, finding), approve
+
+
+@router.post("/findings/{finding_id}/exceptions")
+async def ask_for_exception(finding_id: int, request: Request,
+                            caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
+    """Ask for an exception on one finding.  It waits for an administrator.
+
+    Send "approve": true on a token that also has the approve scope, owned
+    by somebody who may approve, to approve it in the same call.  A finding
+    that already has one answers 409 with that exception, when it is one you
+    could read.
+    """
+    from app.core.reports import request_rewrite
+    from app.web.security import client_ip
+
+    _require(caller.user, "waiver.request")
+    item = _check_item(await _json_object(request))
 
     with session_scope() as db:
         me = _me(db, caller)
-        finding = rbac.visible_finding(db, me, finding_id)
-        if finding is None:
-            raise HTTPException(status_code=404, detail="No such finding.")
-        if category == "not_deployed" and finding.kind == FindingKind.CREDENTIAL:
-            raise HTTPException(status_code=400, detail=(
-                "A credential works wherever it was pushed, deployed or not.  "
-                "Rotate it, or ask for an accepted risk exception instead."))
-
-        existing = db.query(Waiver).filter(
-            Waiver.finding_id == finding.id).one_or_none()
-        if existing is not None and existing.status in {
-                WaiverStatus.REQUESTED, WaiverStatus.APPROVED}:
-            raise HTTPException(status_code=409,
-                                detail="There is already an exception on this one.")
-
-        waiver = existing or Waiver(finding_id=finding.id)
-        waiver.reason = reason
-        waiver.ticket = ticket
-        waiver.category = category
-        waiver.requested_by = caller.user.username
-        waiver.requested_at = utcnow()
-        waiver.expires_at = expires_at
-        waiver.status = WaiverStatus.REQUESTED
-        waiver.decided_by = ""
-        waiver.decided_at = None
-        waiver.decision_note = ""
-        if existing is None:
-            db.add(waiver)
-        db.flush()
-
-        record(db, "waiver.requested", actor=caller.user.username,
-               target=finding.fingerprint,
-               detail=(f"{finding.repository} {finding.file_path} until "
-                       f"{expires_at:%Y-%m-%d} (api token {caller.token.prefix})"
-                       + (" (not deployed)" if category else "")),
-               source_ip=client_ip(request))
-        out = _exception_dict(waiver, finding)
-
+        try:
+            out, approved = _create_exception(db, me, caller, finding_id, item,
+                                              client_ip(request))
+        except _Exists as exists:
+            return JSONResponse(status_code=409, content=exists.body)
+    if approved:
+        request_rewrite()
     return JSONResponse(status_code=201, content=out)
+
+
+# --- many at once ----------------------------------------------------------
+#
+# One decision elsewhere can cover hundreds of findings here.  One call each
+# is slow and runs into the rate limit, so this takes up to 500.  Every item
+# goes through exactly the checks the single call makes, and each one gets
+# its own answer: one bad item does not fail the rest.
+
+MAX_BULK_EXCEPTIONS = 500
+# Bulk calls per token per minute, on top of the general API limit.
+BULK_PER_MINUTE = 20
+_bulk_calls = {}
+_bulk_lock = threading.Lock()
+
+
+def _bulk_allowed(token_id: int) -> bool:
+    import time
+
+    now = time.monotonic()
+    with _bulk_lock:
+        recent = [t for t in _bulk_calls.get(token_id, []) if now - t < 60]
+        if len(recent) >= BULK_PER_MINUTE:
+            _bulk_calls[token_id] = recent
+            return False
+        recent.append(now)
+        _bulk_calls[token_id] = recent
+        return True
+
+
+def _bulk_exceptions(caller, items, source_ip: str) -> dict:
+    """The work behind POST /exceptions/bulk, off the event loop."""
+    from app.core.audit import record
+    from app.core.reports import request_rewrite
+
+    results = []
+    counts = {"created": 0, "approved": 0, "exists": 0, "failed": 0}
+    with session_scope() as db:
+        me = _me(db, caller)
+        for index, raw in enumerate(items):
+            entry = {"index": index, "finding": None}
+            try:
+                if not isinstance(raw, dict):
+                    raise HTTPException(status_code=400, detail="Each item is an object.")
+                finding_id = raw.get("finding")
+                if isinstance(finding_id, bool) or not isinstance(finding_id, int):
+                    raise HTTPException(status_code=400,
+                                        detail="finding is a finding number.")
+                entry["finding"] = finding_id
+                item = _check_item(raw)
+                out, approved = _create_exception(db, me, caller, finding_id,
+                                                  item, source_ip)
+                entry.update(status=201, result="created", exception=out)
+                counts["approved" if approved else "created"] += 1
+            except _Exists as exists:
+                entry.update(status=409, result="exists",
+                             error=exists.body["detail"],
+                             exception=exists.body.get("exception"))
+                counts["exists"] += 1
+            except HTTPException as refused:
+                entry.update(status=refused.status_code, result="failed",
+                             error=str(refused.detail))
+                counts["failed"] += 1
+            results.append(entry)
+        record(db, "waiver.bulk", actor=me.username,
+               target=f"{len(items)} items",
+               detail=(f"{counts['created']} requested, {counts['approved']} "
+                       f"approved, {counts['exists']} already had one, "
+                       f"{counts['failed']} failed (api token {caller.token.prefix})"),
+               source_ip=source_ip)
+    if counts["approved"]:
+        request_rewrite()
+    return {"count": len(results), **counts, "results": results}
+
+
+@router.post("/exceptions/bulk")
+async def bulk_exceptions(request: Request,
+                          caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
+    """Up to 500 exceptions in one call, each answered on its own.
+
+    Send {"items": [{finding, reason, expires, category, ticket,
+    external_ref, approve}, ...]}.  The answer lists every item with the
+    status it would have had as a single call.
+    """
+    from app.web.security import client_ip
+
+    _require(caller.user, "waiver.request")
+    if not _bulk_allowed(caller.token.id):
+        return JSONResponse(status_code=429,
+                            content={"detail": "Too many bulk calls.  Wait a minute."},
+                            headers={"Retry-After": "60"})
+    body = await _json_object(request)
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400,
+                            detail='Send {"items": [{"finding": 1, "reason": "...", '
+                                   '"expires": "2027-01-31"}]}')
+    if len(items) > MAX_BULK_EXCEPTIONS:
+        raise HTTPException(status_code=413,
+                            detail=f"That is more than {MAX_BULK_EXCEPTIONS} items.")
+    out = await run_in_threadpool(_bulk_exceptions, caller, items,
+                                  client_ip(request))
+    return JSONResponse(out)
 
 
 # --- one exception: read, change, withdraw, revoke -------------------------
@@ -919,11 +1340,13 @@ def withdraw_exception(exception_id: int, request: Request,
 
 @router.post("/exceptions/{exception_id}/revoke")
 def revoke_exception(exception_id: int, request: Request,
-                     caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
+                     caller: Caller = Depends(caller_for_any("reports", "approve"))) -> JSONResponse:
     """Take back an approved exception, as an administrator.
 
     The safe direction for a token to have: the finding comes back into the
-    report files, it never leaves them.
+    report files, it never leaves them.  So a token with either the reports
+    or the approve scope may do it, as long as its owner may revoke.  Find
+    the id by the reference you gave it: GET /exceptions?external_ref=...
     """
     from app.core.audit import record
     from app.core.models import WaiverStatus
@@ -968,7 +1391,12 @@ async def _note(request) -> str:
 @router.post("/exceptions/{exception_id}/approve")
 async def approve_exception(exception_id: int, request: Request,
                             caller: Caller = Depends(caller_for("approve"))) -> JSONResponse:
-    """Approve a waiting exception.  Its finding leaves both report files."""
+    """Approve a waiting exception.  Its finding leaves both report files.
+
+    Approving a request the same person made is allowed.  It is what the web
+    form does when an administrator asks for one, and a token can only carry
+    this scope when its owner is allowed to approve.
+    """
     from app.core.audit import record
     from app.core.models import FindingState, WaiverStatus, utcnow
     from app.core.reports import request_rewrite
@@ -1024,6 +1452,92 @@ async def reject_exception(exception_id: int, request: Request,
                detail=f"{note} (api token {caller.token.prefix})".strip(),
                source_ip=client_ip(request))
         return JSONResponse(_exception_dict(waiver, finding))
+
+
+# --- false positives ---------------------------------------------------------
+#
+# What the product calls a false positive on a finding: a person's grade of
+# info, with the reason, the same as "Confirmed as a false positive" from a
+# security report.  It survives the next scan while the flagged code is the
+# same, and is lifted when that code changes.  It does not hide the finding;
+# an exception or an exclusion does that.
+
+FALSE_POSITIVE_PREFIX = "False positive: "
+
+
+@router.post("/findings/{finding_id}/false-positive")
+async def mark_false_positive(finding_id: int, request: Request,
+                              caller: Caller = Depends(caller_for("approve"))) -> JSONResponse:
+    """Grade one finding info as a false positive, with the reason."""
+    from app.core import learned, rbac
+    from app.core.audit import record
+    from app.core.models import Severity, utcnow
+    from app.core.reports import request_rewrite
+    from app.web.security import clean_text, client_ip
+
+    _require(caller.user, "finding.regrade")
+    body = await _json_object(request)
+    if body.get("reason") is not None and not isinstance(body.get("reason"), str):
+        raise HTTPException(status_code=400, detail="reason has to be a string.")
+    reason = clean_text(body.get("reason") or "", "Reason", limit=1900)
+    if len(reason) < 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Say why it is a false positive, at least 20 characters.")
+
+    with session_scope() as db:
+        me = _me(db, caller)
+        finding = rbac.visible_finding(db, me, finding_id)
+        if finding is None:
+            raise HTTPException(status_code=404, detail="No such finding.")
+        was = finding.severity
+        finding.engine_severity = finding.engine_severity or was.value
+        finding.custom_severity = Severity.INFO
+        finding.custom_severity_reason = FALSE_POSITIVE_PREFIX + reason
+        finding.custom_severity_by = me.username
+        finding.custom_severity_at = utcnow()
+        finding.severity = Severity.INFO
+        db.flush()
+        learned.record_basis(db, finding, "person")
+        record(db, "finding.false_positive", actor=me.username,
+               target=finding.vuln_id or str(finding.id),
+               detail=(f"{was.value} to info: {reason[:200]} "
+                       f"(api token {caller.token.prefix})"),
+               source_ip=client_ip(request))
+        out = _finding_dicts(db, me, [finding])[0]
+    request_rewrite()
+    return JSONResponse(out)
+
+
+@router.delete("/findings/{finding_id}/false-positive")
+def clear_false_positive(finding_id: int, request: Request,
+                         caller: Caller = Depends(caller_for("approve"))) -> JSONResponse:
+    """Take a false positive back.  Only one this API, or a person, marked as one."""
+    from app.core import rbac
+    from app.core.audit import record
+    from app.core.reports import request_rewrite
+    from app.web.routes_api import clear_custom_grade
+    from app.web.security import client_ip
+
+    _require(caller.user, "finding.regrade")
+    with session_scope() as db:
+        me = _me(db, caller)
+        finding = rbac.visible_finding(db, me, finding_id)
+        if finding is None:
+            raise HTTPException(status_code=404, detail="No such finding.")
+        if (finding.custom_severity is None
+                or not (finding.custom_severity_reason or "").startswith(
+                    FALSE_POSITIVE_PREFIX)):
+            raise HTTPException(status_code=409,
+                                detail="That finding is not marked a false positive.")
+        clear_custom_grade(db, finding)
+        record(db, "finding.false_positive_cleared", actor=me.username,
+               target=finding.vuln_id or str(finding.id),
+               detail=f"api token {caller.token.prefix}",
+               source_ip=client_ip(request))
+        out = _finding_dicts(db, me, [finding])[0]
+    request_rewrite()
+    return JSONResponse(out)
 
 
 @router.post("/exclusions")
@@ -1295,6 +1809,46 @@ def list_repositories(request: Request,
 
     return JSONResponse({"total": total, "limit": limit, "offset": offset,
                          "count": len(out), "repositories": out})
+
+
+@router.get("/repositories/{repository:path}/certifications")
+def repository_certifications(repository: str,
+                              caller: Caller = Depends(caller_for("reports"))) -> JSONResponse:
+    """The branch sign offs on one repository, and what each says today."""
+    from app.core import certification, rbac
+    from app.core.models import Certification, Repository
+
+    _require(caller.user, "repo.read")
+    wanted = (repository or "").strip()[:320]
+    with session_scope() as db:
+        me = _me(db, caller)
+        seen = (rbac.visible_repositories(db, me)
+                .filter(Repository.full_name == wanted)
+                .with_entities(Repository.full_name).first())
+        if seen is None:
+            raise HTTPException(status_code=404, detail="No such repository.")
+        rows = (rbac.visible_certifications(db, me)
+                .filter(Certification.repository == seen[0])
+                .order_by(Certification.branch.asc()).all())
+        out = []
+        for row, said in zip(rows, certification.statuses(db, rows)):
+            out.append({
+                "branch": row.branch or "",
+                "status": said.get("state") or "",
+                "why": said.get("why") or "",
+                "reviewed_by": row.certified_by or "",
+                "reviewed_at": _stamp(row.certified_at),
+                "expires_at": _stamp(row.expires_at),
+                "commit": row.commit_sha or "",
+                "automatic": bool(row.automatic),
+                "note": row.note or "",
+                "withdrawn": row.revoked_at is not None,
+                "withdrawn_by": row.revoked_by or "",
+                "withdrawn_at": _stamp(row.revoked_at),
+                "reason": row.revoked_reason or "",
+            })
+    return JSONResponse({"repository": seen[0], "count": len(out),
+                         "certifications": out})
 
 
 SBOM_FORMATS = {"cdx": "CycloneDX", "spdx": "SPDX"}

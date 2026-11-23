@@ -240,6 +240,9 @@ def init_db() -> None:
         extended = _extend_enums()
         if extended:
             log.info("taught %d column(s) a new value", extended)
+        indexed = _add_missing_indexes()
+        if indexed:
+            log.info("added %d index(es) to the existing database", indexed)
         # Nothing credits a history walk on the reader's side any more.
         #
         # There was a backfill here that set the "walked to its first commit"
@@ -432,6 +435,44 @@ def _capacity(spec: str) -> int:
         if spec.startswith(name):
             return size
     return 0
+
+
+# Indexes a column added after a table was made should still get.  Named
+# one at a time rather than every index the models declare: an install that
+# is missing an older one has lived without it, and building several on a
+# big table at boot holds the port closed while it runs.
+_LATE_INDEXES = (("findings", "updated_at"), ("waivers", "external_ref"))
+
+
+def _add_missing_indexes() -> int:
+    from sqlalchemy import inspect
+
+    added = 0
+    engine_ = engine()
+    with engine_.begin() as conn:
+        inspector = inspect(conn)
+        for table_name, column_name in _LATE_INDEXES:
+            table = Base.metadata.tables.get(table_name)
+            if table is None or not inspector.has_table(table_name):
+                continue
+            have = {c["name"] for c in inspector.get_columns(table_name)}
+            if column_name not in have:
+                continue
+            indexed = {tuple(i.get("column_names") or ())
+                       for i in inspector.get_indexes(table_name)}
+            if (column_name,) in indexed:
+                continue
+            for index in table.indexes:
+                if [c.name for c in index.columns] == [column_name]:
+                    try:
+                        index.create(conn)
+                        log.info("added index %s", index.name)
+                        added += 1
+                    except Exception as exc:
+                        log.error("could not index %s.%s: %s", table_name,
+                                  column_name, exc)
+                    break
+    return added
 
 
 def _extend_enums() -> int:

@@ -205,6 +205,19 @@ def repo_facts(session, findings) -> dict:
     return out
 
 
+# The AV: metric of a CVSS v2, v3 or v4 vector, spelled out.
+_ATTACK_VECTORS = {"N": "network", "A": "adjacent", "L": "local", "P": "physical"}
+
+
+def attack_vector(vector) -> str:
+    """network, adjacent, local or physical, from a CVSS vector.  Blank if none."""
+    for part in str(vector or "").split("/"):
+        name, _, value = part.partition(":")
+        if name.strip().upper() == "AV":
+            return _ATTACK_VECTORS.get(value.strip().upper()[:1], "")
+    return ""
+
+
 def as_dict(finding: Finding, facts: dict = None) -> dict:
     """One finding, the way it goes into the JSON.
 
@@ -299,7 +312,12 @@ def as_dict(finding: Finding, facts: dict = None) -> dict:
         record["vulnerability"] = {
             "id": finding.vulnerability_id or "",
             "cvss_score": finding.cvss_score,
+            "cvss_vector": finding.cvss_vector or "",
+            "attack_vector": attack_vector(finding.cvss_vector),
             "known_exploited": bool(finding.known_exploited),
+            "kev_added": finding.kev_added or None,
+            "kev_due_date": finding.kev_due_date or None,
+            "kev_ransomware": bool(finding.kev_ransomware),
             "epss_score": finding.epss_score,
         }
         if finding.reachability:
