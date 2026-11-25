@@ -18,6 +18,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from sqlalchemy import or_
 
 from app.core.models import (
     CredentialVerification, Finding, FindingKind, FindingState, Repository,
@@ -482,6 +483,77 @@ def adopt_renamed(session, rows) -> dict:
 _RANK = {"unknown": 0, "info": 1, "low": 2, "medium": 3, "high": 4, "critical": 5}
 
 
+# What a person decided about a credential, which belongs to the value and so
+# carries to every repository the same value turns up in.
+_CREDENTIAL_DECISIONS = ("excepted", "exception_reason", "exception_by", "exception_at",
+                         "exception_expires_at", "custom_severity", "custom_severity_reason",
+                         "custom_severity_by", "custom_severity_at", "verified",
+                         "verification_status", "verification_error")
+
+
+def credential_value(fingerprint: str) -> str:
+    """cred:<value> from a stored credential fingerprint, with any repository
+    part taken off.  Anything else comes back unchanged."""
+    text = fingerprint or ""
+    return text.split("/", 1)[0] if text.startswith("cred:") else text
+
+
+def credential_candidates(marker: str, full_name: str) -> list:
+    """The fingerprints this repository's row for a value can be stored under.
+
+    The first repository to hold a value keeps the plain cred:<value>, which is
+    what every row had before, so nothing already referenced by it changes.
+    Another repository holding the same value stores cred:<value>/<repo>.
+    """
+    tag = hashlib.sha256((full_name or "").lower().encode()).hexdigest()[:12]
+    return [marker, f"{marker}/{tag}"]
+
+
+def credential_for(session, marker: str, repo, full_name: str, counts: dict):
+    """This repository's own finding for a credential value.  -> (finding, carried_from)
+
+    A credential is identified by its value, and the same key is often in
+    several repositories: one service's settings copied into the next.  These
+    used to share one row, owned by whichever repository was read first, so
+    every other repository holding the key showed nothing, and when the first
+    one removed its copy the shared row closed as fixed with the key still
+    live elsewhere.  Each repository now has its own row for the value.
+
+    The first time a repository meets a value that already has a row elsewhere,
+    its new row starts from that row's decisions (an exception, a grade, a
+    live check), since those were made about the value.  carried_from is that
+    row, so the caller can count it; the new row is not created here.
+    """
+    candidates = credential_candidates(marker, full_name)
+    mine = (session.query(Finding)
+            .filter(Finding.fingerprint.in_(candidates),
+                    Finding.kind == FindingKind.CREDENTIAL,
+                    or_(Finding.repo_id == repo.id, Finding.repository == full_name))
+            .order_by(Finding.id).first())
+    if mine is not None:
+        return mine, None
+    other = (session.query(Finding)
+             .filter(or_(Finding.fingerprint == marker,
+                         Finding.fingerprint.like(marker + "/%")),
+                     Finding.kind == FindingKind.CREDENTIAL)
+             .order_by(Finding.id).first())
+    return None, other
+
+
+def credential_fingerprint_for_new(session, marker: str, full_name: str) -> str:
+    """Where a repository's first row for a value is stored."""
+    plain, own = credential_candidates(marker, full_name)
+    taken = session.query(Finding.id).filter(Finding.fingerprint == plain).first()
+    return own if taken is not None else plain
+
+
+def _carry_credential(finding, other) -> None:
+    for name in _CREDENTIAL_DECISIONS:
+        setattr(finding, name, getattr(other, name))
+    if other.state == FindingState.WAIVED:
+        finding.state = FindingState.WAIVED
+
+
 def adopt_code_rows(session, finding, marker: str, row: dict, counts: dict):
     """A credential semgrep used to file as code takes those rows over.
 
@@ -818,13 +890,17 @@ def _set_aside_placeholders(session, document, seen_at, seen_fingerprints) -> in
         if not digest:
             continue
         marker = "cred:" + digest
+        where = str(row.get("repository") or document.get("repository") or "")
         # Read and ruled out is not missing.  Recorded before anything else
         # below, so the resolve loop leaves this one alone whatever happens.
-        seen_fingerprints.add(marker)
+        seen_fingerprints.add((marker, where))
 
         finding = (session.query(Finding)
-                   .filter(Finding.fingerprint == marker).one_or_none())
-        if finding is None or finding.kind != FindingKind.CREDENTIAL:
+                   .filter(Finding.fingerprint.in_(credential_candidates(marker, where)),
+                           Finding.kind == FindingKind.CREDENTIAL,
+                           Finding.repository == where)
+                   .order_by(Finding.id).first())
+        if finding is None:
             continue
 
         triage = row.get("triage")
@@ -1153,11 +1229,17 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             # Before the fingerprint, which some kinds build from a path.
             _strip_clone_paths(row)
             marker = fingerprint_for(kind_name, row)
-            seen_fingerprints.add(marker)
-
-            finding = (session.query(Finding)
-                       .filter(Finding.fingerprint == marker)
-                       .one_or_none())
+            carried_from = None
+            if kind_name == "credential":
+                # Seen here, not anywhere: a key still in this repository
+                # keeps this repository's row open, and only that one.
+                seen_fingerprints.add((marker, full_name))
+                finding, carried_from = credential_for(session, marker, repo, full_name, counts)
+            else:
+                seen_fingerprints.add(marker)
+                finding = (session.query(Finding)
+                           .filter(Finding.fingerprint == marker)
+                           .one_or_none())
 
             # Nothing under the new name.  It may be a finding this release
             # renamed rather than a new one: see adopt_renamed above.
@@ -1195,10 +1277,15 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                 finding = adopt_code_rows(session, finding, marker, row, counts)
 
             if finding is None:
-                finding = Finding(fingerprint=marker,
-                                  vuln_id=vuln_id_for(marker),
+                stored = (credential_fingerprint_for_new(session, marker, full_name)
+                          if kind_name == "credential" else marker)
+                finding = Finding(fingerprint=stored,
+                                  vuln_id=vuln_id_for(stored),
                                   kind=kind_enum, repo_id=repo.id,
                                   first_found_at=seen_at)
+                if carried_from is not None:
+                    _carry_credential(finding, carried_from)
+                    counts["credential_split"] = counts.get("credential_split", 0) + 1
                 session.add(finding)
                 counts["new"] += 1
                 # Kept so the notifier can say what arrived rather than what
@@ -1218,7 +1305,7 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
             # Older rows predate the readable id.  Fill it in as they come
             # back round rather than making a migration out of it.
             if not finding.vuln_id:
-                finding.vuln_id = vuln_id_for(marker)
+                finding.vuln_id = vuln_id_for(finding.fingerprint or marker)
 
             finding.repo_id = repo.id
             if connection is not None:
@@ -1876,7 +1963,10 @@ def ingest_report(session, report_path: Path, scanned_repos: set = None,
                       scan_scope.rules(session, list(in_scope)).items()
                       if rule.skipped_branches()}
         for finding in stale:
-            if finding.fingerprint in seen_fingerprints:
+            if finding.kind == FindingKind.CREDENTIAL:
+                if (credential_value(finding.fingerprint), finding.repository) in seen_fingerprints:
+                    continue
+            elif finding.fingerprint in seen_fingerprints:
                 continue
             if scan_scope.held_by_skip(skip_rules.get(finding.repository),
                                        finding.kind, finding.branch,

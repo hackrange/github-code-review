@@ -369,9 +369,13 @@ def exception_lookup(session, repo_id: int, repository: str, doc: dict):
         if row is None or kind is None:
             return None
         fingerprint = fingerprint_for(kind, row)
+        wanted = [fingerprint]
+        if fingerprint.startswith("cred:"):
+            from app.core.ingest import credential_candidates
+            wanted = credential_candidates(fingerprint, repository or "")
         hit = (session.query(Finding)
-               .filter(Finding.fingerprint == fingerprint,
-                       Finding.repo_id == repo_id).one_or_none())
+               .filter(Finding.fingerprint.in_(wanted),
+                       Finding.repo_id == repo_id).order_by(Finding.id).first())
         if hit is None or not hit.excepted:
             return None
         expires = hit.exception_expires_at

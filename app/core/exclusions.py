@@ -54,6 +54,12 @@ def normalize_fingerprint(value: str, kind: str = "secret") -> str:
     return text
 
 
+def _value_of(fingerprint: str) -> str:
+    """cred:<hash> with any per repository part taken off."""
+    text = fingerprint or ""
+    return text.split("/", 1)[0] if text.startswith("cred:") else text
+
+
 def scanner_fingerprint(value: str) -> str:
     """What the scanner compares against.
 
@@ -64,7 +70,9 @@ def scanner_fingerprint(value: str) -> str:
     findings landed and got flagged after the fact.
     """
     text = (value or "").strip()
-    return text.split(":", 1)[1] if text.startswith("cred:") else text
+    # A credential held in more than one repository is stored per repository
+    # as cred:<hash>/<repo>; the scanner only knows the hash.
+    return text.split(":", 1)[1].split("/", 1)[0] if text.startswith("cred:") else text
 
 
 def _date(value) -> str:
@@ -122,7 +130,8 @@ def matches(rule, finding) -> bool:
         if not fnmatch.fnmatch(value.lower(), pattern.lower()):
             return False
     if rule.fingerprint:
-        return rule.fingerprint == finding.fingerprint
+        # A rule about a credential is about its value, wherever it is kept.
+        return _value_of(rule.fingerprint) == _value_of(finding.fingerprint)
     return True
 
 
@@ -372,7 +381,7 @@ def import_rows(session, text: str, actor: str, reason: str, ticket: str = "",
             repository = finding.repository or "*"
             path = finding.file_path or "*"
             rule = finding.rule or "*"
-            fingerprint = finding.fingerprint if kind == "secret" else ""
+            fingerprint = _value_of(finding.fingerprint) if kind == "secret" else ""
         else:
             # No id on the row, so fall back to what the report does carry.
             organization = row.get("organization") or "*"
