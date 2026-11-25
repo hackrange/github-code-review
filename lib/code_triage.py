@@ -3368,6 +3368,26 @@ def _framework_in_source(repo_root: str, framework: str, limit: int = 3000) -> b
     return False
 
 
+_PYTHON_FRAMEWORKS = {"django", "flask", "fastapi", "sqlalchemy"}
+
+
+def _has_python(repo_root: str, cache: dict, limit: int = 20000) -> bool:
+    """Any .py file in the tree.  Cached per repository."""
+    if "_has_python" not in cache:
+        found, seen = False, 0
+        for base, dirs, files in os.walk(repo_root or "."):
+            dirs[:] = [d for d in dirs if d not in SKIP_FRAMEWORK_DIRS and not d.startswith(".")]
+            seen += len(files)
+            if any(f.endswith(".py") for f in files):
+                found = True
+                break
+            if seen > limit:
+                found = True          # too big to be sure: assume it may
+                break
+        cache["_has_python"] = found
+    return cache["_has_python"]
+
+
 def _framework_absent(check_id: str, present: set, decidable: set,
                       repo_root: str, cache: dict):
     """-> a reason this rule does not apply here, or None.
@@ -3382,6 +3402,12 @@ def _framework_absent(check_id: str, present: set, decidable: set,
         if framework in present:
             return None
         if framework not in decidable:
+            # No manifest to read.  A Python framework still cannot be in
+            # a repository with no Python in it at all: a Django template rule
+            # firing on a Java application's static HTML is that case.
+            if framework in _PYTHON_FRAMEWORKS and not _has_python(repo_root, cache):
+                return ("a %s rule, and this repository has no Python in it"
+                        % framework)
             return None               # no manifest was readable: no opinion
         if framework not in cache:
             cache[framework] = _framework_in_source(repo_root, framework)

@@ -3871,6 +3871,929 @@ rules:
         if (`"'`.includes($CH)) { ... }
     - pattern: |
         if ("\"'".includes($CH)) { ... }
+# --- 2026-11-25, second pass: classes found by reading 80 estate repositories
+# and missed, each written for the class and checked across languages.
+- id: gcr-permission-always-true
+  languages:
+  - csharp
+  severity: WARNING
+  message: >-
+    A permission check answers yes for everyone.  Every caller passes it, so whatever it gates (a
+    manager action, an admin screen, an approval) is open to any signed in user.  Work it out from
+    the caller's role or group claims.
+  metadata:
+    cwe: 'CWE-863: Incorrect Authorization'
+    category: security
+    confidence: HIGH
+  pattern-regex: \bbool\s+(Is|Can|Has)(Admin|Administrator|Manager|Owner|Allowed|Authori[sz]ed|SuperUser|Superuser|Staff|Approve|Approver|Supervisor|Privileged)\w*\s*(=>\s*true\s*;|\{\s*get\s*(\{\s*return\s+true\s*;\s*\}|=>\s*true\s*;)\s*\}|\(\s*\)\s*(=>\s*true\s*;|\{\s*return\s+true\s*;\s*\}))
+- id: gcr-permission-always-true-java
+  languages:
+  - java
+  severity: WARNING
+  message: >-
+    A permission check answers yes for everyone.  Every caller passes it, so whatever it gates is
+    open to any signed in user.  Work it out from the caller's roles.
+  metadata:
+    cwe: 'CWE-863: Incorrect Authorization'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern: |
+      boolean $P(...) { return true; }
+  - metavariable-regex:
+      metavariable: $P
+      regex: ^(is|can|has)(Admin|Administrator|Manager|Owner|Allowed|Authori[sz]ed|SuperUser|Superuser|Staff|Approve|Approver|Supervisor|Privileged)\w*$
+- id: gcr-permission-always-true-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    A permission check answers yes for everyone.  Every caller passes it, so whatever it gates is
+    open to any signed in user.  Work it out from the caller's roles.
+  metadata:
+    cwe: 'CWE-863: Incorrect Authorization'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - pattern: |
+        function $P(...) { return true; }
+    - pattern: |
+        const $P = (...) => true;
+  - metavariable-regex:
+      metavariable: $P
+      regex: ^(is|can|has)(Admin|Administrator|Manager|Owner|Allowed|Authori[sz]ed|SuperUser|Superuser|Staff|Approve|Approver|Supervisor|Privileged)\w*$
+- id: gcr-permission-always-true-python
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    A permission check answers yes for everyone.  Every caller passes it, so whatever it gates is
+    open to any signed in user.  Work it out from the caller's roles.
+  metadata:
+    cwe: 'CWE-863: Incorrect Authorization'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern: |
+      def $P(...):
+        return True
+  - metavariable-regex:
+      metavariable: $P
+      regex: ^_*(is|can|has)_(admin|administrator|manager|owner|superuser|staff|approver|supervisor|privileged)\w*$
+- id: gcr-aspnet-anonymous-class-with-writes
+  languages:
+  - csharp
+  severity: WARNING
+  message: >-
+    The whole controller is marked AllowAnonymous and it has actions that change things.  The class
+    attribute overrides any global sign in requirement, so every write action here is open to
+    anyone who can reach the service, including the ones added to it later.  Put AllowAnonymous on
+    the one action that must be public, or remove the controller from builds that ship.
+  metadata:
+    cwe: 'CWE-306: Missing Authentication for Critical Function'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-inside: |
+      [AllowAnonymous]
+      class $C { ... }
+  - pattern-either:
+    - pattern: |
+        [HttpPost(...)]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpPost]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpPut(...)]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpPut]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpDelete(...)]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpDelete]
+        $R $M(...) { ... }
+    - pattern: |
+        [HttpPatch(...)]
+        $R $M(...) { ... }
+  - metavariable-regex:
+      metavariable: $C
+      regex: (?i)^(?!.*(login|logon|signin|auth|account|token|oauth|callback|webhook|health|ping|register|signup|password)).*$
+- id: gcr-cert-validation-always-true-csharp
+  languages:
+  - csharp
+  severity: WARNING
+  message: >-
+    The certificate callback accepts every certificate, so anybody on the network path can pose as
+    the server and read what is sent, passwords included.  Validate the chain, or pin the expected
+    certificate or CA.
+  metadata:
+    cwe: 'CWE-295: Improper Certificate Validation'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - pattern: $X.$CB = ($A, $B, $C, $D) => true;
+    - pattern: $X.$CB += ($A, $B, $C, $D) => true;
+    - pattern: $X.$CB = ($A, $B) => true;
+    - pattern: $X.$CB += ($A, $B) => true;
+    - pattern: $X.$CB = $T.DangerousAcceptAnyServerCertificateValidator;
+  - metavariable-regex:
+      metavariable: $CB
+      regex: ^(ServerCertificateValidationCallback|ServerCertificateCustomValidationCallback|UserDefinedServerCertValidationDelegate|RemoteCertificateValidationCallback|ServerCertificateValidation)$
+- id: gcr-ldap-filter-from-input
+  languages:
+  - csharp
+  severity: WARNING
+  message: >-
+    An LDAP search filter is built by putting a value straight into the text.  A user name with
+    *, ( or ) in it changes the filter, which can match other accounts or every account.  Escape the
+    value (RFC 4515) before it goes into the filter.
+  metadata:
+    cwe: 'CWE-90: Improper Neutralization of Special Elements used in an LDAP Query'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - patterns:
+    - pattern: $S.Filter = $"...";
+    - pattern-regex: '\{[A-Za-z_]\w*\}'
+  - patterns:
+    - pattern: $S.Filter = "..." + $X + "...";
+  - patterns:
+    - pattern: $C.Search($B, $SCOPE, $"...", ...)
+    - pattern-regex: (?i)\w+=\{[A-Za-z_]\w*\}
+- id: gcr-ldap-filter-from-input-python
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    An LDAP search filter is built by putting a value straight into the text.  A user name with
+    *, ( or ) in it changes the filter.  Escape it with ldap3.utils.conv.escape_filter_chars (or
+    ldap.filter.escape_filter_chars) first.
+  metadata:
+    cwe: 'CWE-90: Improper Neutralization of Special Elements used in an LDAP Query'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $C.search($B, $F, ...)
+    - pattern: $C.search_s($B, $SC, $F, ...)
+    - pattern: $C.search(search_base=$B, search_filter=$F, ...)
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?is)^(f["'].*\((sAMAccountName|uid|cn|mail|userPrincipalName|member)=\{(?!\s*escape)|["'].*\((sAMAccountName|uid|cn|mail|userPrincipalName|member)=(%s|["']\s*\+))
+- id: gcr-cors-any-origin-with-credentials-csharp
+  languages:
+  - csharp
+  severity: WARNING
+  message: >-
+    The CORS policy accepts any origin and allows credentials.  Any site a signed in user visits can
+    call this API with the user's cookies and read the answers.  List the origins that may call it.
+  metadata:
+    cwe: 'CWE-942: Permissive Cross-domain Policy with Untrusted Domains'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: $B.SetIsOriginAllowed($X => true). ... .AllowCredentials()
+  - pattern: $B.SetIsOriginAllowed(($X) => true). ... .AllowCredentials()
+  - pattern: $B.AllowCredentials(). ... .SetIsOriginAllowed($X => true)
+- id: gcr-cors-any-origin-with-credentials-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    The CORS setup reflects any origin and allows credentials.  Any site a signed in user visits can
+    call this API with the user's cookies and read the answers.  List the origins that may call it.
+  metadata:
+    cwe: 'CWE-942: Permissive Cross-domain Policy with Untrusted Domains'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: 'cors({..., origin: true, ..., credentials: true, ...})'
+  - pattern: 'cors({..., credentials: true, ..., origin: true, ...})'
+  - pattern: 'cors({..., origin: ($O, $CB) => $CB(null, true), ..., credentials: true, ...})'
+- id: gcr-jwt-claims-read-without-verify-java
+  languages:
+  - java
+  severity: WARNING
+  message: >-
+    A token is parsed and its claims read without its signature being checked.  Anyone can write a
+    token with any claims; if one of them decides who the caller is or what they may see, the check
+    is gone.  Verify the signature (JWSVerifier, or jjwt parseClaimsJws / parseSignedClaims) before
+    reading claims.
+  metadata:
+    cwe: 'CWE-347: Improper Verification of Cryptographic Signature'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - patterns:
+    - pattern: SignedJWT.parse($T).getJWTClaimsSet()
+    - pattern-not-inside: |
+        $RET $M(...) { ... $J.verify(...); ... }
+    - pattern-not-inside: |
+        $RET $M(...) { ... if (<... $J.verify(...) ...>) { ... } ... }
+  - patterns:
+    - pattern: |
+        $J = SignedJWT.parse($T);
+        ...
+        $J.getJWTClaimsSet();
+    - pattern-not: |
+        $J = SignedJWT.parse($T);
+        ...
+        $J.verify(...);
+        ...
+    - pattern-not: |
+        $J = SignedJWT.parse($T);
+        ...
+        if (<... $J.verify(...) ...>) { ... }
+        ...
+  - pattern: Jwts.parser(). ... .parse($T)
+- id: gcr-credential-in-log-java
+  languages:
+  - java
+  severity: WARNING
+  message: >-
+    A credential is written to the log.  Everyone who can read the logs (and every system they are
+    shipped to) can replay it until it expires.  Log that a header was present, or its last four
+    characters, never the value.
+  metadata:
+    cwe: 'CWE-532: Insertion of Sensitive Information into Log File'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $LOG.$M(..., $V, ...)
+    - pattern: $LOG.$M(... + $V + ..., ...)
+    - pattern: $LOG.$M(... + $V, ...)
+  - metavariable-regex:
+      metavariable: $LOG
+      regex: (?i)^(log|logger|LOG|LOGGER|_log|_logger)$
+  - metavariable-regex:
+      metavariable: $M
+      regex: ^(info|debug|warn|error|trace)$
+  - metavariable-regex:
+      metavariable: $V
+      regex: (?i)^(authorization|authHeader|authorizationHeader|bearer|bearerToken|accessToken|access_token|idToken|refreshToken|apiKey|clientSecret|password|passwd)$
+- id: gcr-credential-in-log-python
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    A credential is written to the log.  Everyone who can read the logs can replay it until it
+    expires.  Log that it was present, or its last four characters, never the value.
+  metadata:
+    cwe: 'CWE-532: Insertion of Sensitive Information into Log File'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $LOG.$M(..., $V, ...)
+    - pattern: $LOG.$M(f"...{$V}...", ...)
+  - metavariable-regex:
+      metavariable: $LOG
+      regex: (?i)^(log|logger|logging|_log|_logger|LOG|LOGGER)$
+  - metavariable-regex:
+      metavariable: $M
+      regex: ^(info|debug|warning|warn|error|critical|exception)$
+  - metavariable-regex:
+      metavariable: $V
+      regex: (?i)^(authorization|auth_header|bearer|bearer_token|access_token|id_token|refresh_token|api_key|client_secret|password|passwd)$
+- id: gcr-aes-gcm-fixed-iv-js
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: >-
+    AES-GCM is used with a fixed IV.  Reusing a GCM nonce under one key gives away the keystream, so
+    whoever has one plaintext and its ciphertext can read and forge every other message, and the
+    authentication key leaks too.  Use crypto.randomBytes(12) for each message and send the IV with
+    the ciphertext.
+  metadata:
+    cwe: 'CWE-323: Reusing a Nonce, Key Pair in Encryption'
+    category: security
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - pattern: crypto.createCipheriv($ALG, $K, Buffer.from([...]))
+    - pattern: crypto.createCipheriv($ALG, $K, Buffer.from("...", ...))
+    - pattern: crypto.createCipheriv($ALG, $K, "...")
+    - pattern: crypto.createCipheriv($ALG, $K, Buffer.alloc($N))
+    - pattern: createCipheriv($ALG, $K, Buffer.from([...]))
+    - pattern: createCipheriv($ALG, $K, Buffer.alloc($N))
+    - patterns:
+      - pattern-inside: |
+          const $IV = Buffer.from([...]);
+          ...
+      - pattern: crypto.createCipheriv($ALG, $K, $IV)
+  - metavariable-regex:
+      metavariable: $ALG
+      regex: (?i)['"`]aes-\d+-gcm['"`]
+- id: gcr-aes-gcm-fixed-nonce-python
+  languages:
+  - python
+  severity: ERROR
+  message: >-
+    AES-GCM is used with a fixed nonce.  Reusing a GCM nonce under one key gives away the keystream
+    and the authentication key, so every message can be read and forged.  Use os.urandom(12) for
+    each message and store it with the ciphertext.
+  metadata:
+    cwe: 'CWE-323: Reusing a Nonce, Key Pair in Encryption'
+    category: security
+    confidence: HIGH
+  pattern-either:
+  - pattern: AESGCM($K).encrypt(b"...", ...)
+  - pattern: $A.encrypt(b"...", $D, ...)
+  - pattern: AES.new($K, AES.MODE_GCM, nonce=b"...")
+  - pattern: AES.new($K, AES.MODE_GCM, b"...")
+- id: gcr-gcm-decipher-without-final-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    AES-GCM is decrypted without decipher.final(), which is where the authentication tag is checked.
+    A tampered or forged ciphertext decrypts without an error, so the encryption no longer proves
+    the value came from this server.  Call final() and treat its error as a forgery.
+  metadata:
+    cwe: 'CWE-347: Improper Verification of Cryptographic Signature'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern: |
+      $D = crypto.createDecipheriv($ALG, ...);
+      ...
+      $D.update(...);
+  - metavariable-regex:
+      metavariable: $ALG
+      regex: (?i)['"`]aes-\d+-gcm['"`]
+  - pattern-not-inside: |
+      $D = crypto.createDecipheriv($ALG, ...);
+      ...
+      <... $D.final(...) ...>;
+  - pattern-not-inside: |
+      $D = crypto.createDecipheriv($ALG, ...);
+      ...
+      return <... $D.final(...) ...>;
+- id: gcr-credential-prefix-as-identity-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    The first characters of a token are used as the key that finds a user's session or cache entry.
+    A JWT starts with a fixed header and a payload anyone can write, so two callers share a key and
+    one gets the other's session.  Key on a hash of the whole token, or on the verified subject.
+  metadata:
+    cwe: 'CWE-287: Improper Authentication'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $T.substring(0, $N)
+    - pattern: $T.slice(0, $N)
+    - pattern: $T.substr(0, $N)
+  - metavariable-regex:
+      metavariable: $T
+      regex: (?i)^(\w+\.)*\w*(jwt|token|cookie|session|bearer)\w*$
+  - pattern-either:
+    - pattern-inside: |
+        return $E;
+    - pattern-inside: |
+        $M.get(...)
+    - pattern-inside: |
+        $M.set(...)
+    - pattern-inside: |
+        $M.has(...)
+    - pattern-inside: |
+        $K = $E;
+        ...
+        $M.get($K)
+  - pattern-not-inside: console.$F(...)
+  - pattern-not-inside: logger.$F(...)
+  - pattern-not-inside: log.$F(...)
+- id: gcr-graphql-query-from-template-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    A GraphQL query is built by putting values into the text.  A value with a quote in it closes the
+    string and adds fields, aliases or a whole mutation, run with this service's own credentials.
+    Pass values as GraphQL variables.
+  metadata:
+    cwe: 'CWE-943: Improper Neutralization of Special Elements in Data Query Logic'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern: '`...${$X}...`'
+  - pattern-regex: (?s)(query|mutation)\s*(\w+\s*)?[{(][^`]*:\s*\\?"\$\{
+  - metavariable-pattern:
+      metavariable: $X
+      patterns:
+      - pattern-not: '"..."'
+      - pattern-not: 'JSON.stringify(...)'
+- id: gcr-security-control-skipped-by-header-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    A request header the caller sets decides whether a security check runs.  Sending that header
+    with the right value switches the check off (a captcha, a signature, a verification step).
+    Decide from a verified client credential, never from a header.
+  metadata:
+    cwe: 'CWE-807: Reliance on Untrusted Inputs in a Security Decision'
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        $V = <... $R.headers.$H ...>;
+        ...
+    - pattern-inside: |
+        $V = <... $R.headers[$HS] ...>;
+        ...
+    - pattern-inside: |
+        $V = <... $R.__ow_headers.$H ...>;
+        ...
+  - metavariable-regex:
+      metavariable: $H
+      regex: (?i)^(is_?mobile|mobile|native|is_?native|internal|is_?internal|debug|bypass|skip\w*|trusted|is_?admin|test)$
+  - pattern-either:
+    - pattern: |
+        if (<... $V ...>) { ... }
+  - pattern-regex: (?i)captcha|recaptcha|verify\w*\(|signature|otp|mfa
+- id: gcr-mule-sql-built-by-concatenation
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.xml'
+    - '*.dwl'
+  severity: ERROR
+  message: >-
+    A database query is built by joining a value from the request into the SQL text in DataWeave.
+    A value with a quote in it changes the query, and any caller of the API reads or changes other
+    rows.  Use db:input-parameters with :name binds, and allow list any column name that has to be
+    part of the text (ORDER BY).
+  metadata:
+    cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+    category: security
+    confidence: MEDIUM
+  pattern-regex: (?i)\b(select|insert\s+into|update|delete\s+from|where|order\s+by|values|call|exec)\b[^\n]{0,300}["']\s*\+\+\s*\(?\s*(?>(attributes\.(queryParams|uriParams|headers)|payload)\.[\w.'"\[\]]+)(?!\s*(as\s+Number|as\s+Boolean))
+- id: gcr-mule-sql-built-from-flow-variable
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.xml'
+    - '*.dwl'
+  severity: WARNING
+  message: >-
+    A database query is built by joining a flow variable into the SQL text in DataWeave.  Flow
+    variables are usually set from the request (a query parameter, a path segment, the body); where
+    this one is, a value with a quote in it changes the query.  Worth tracing where it was set.  Use db:input-parameters with :name binds, and allow list any column name that has to be
+    part of the text (ORDER BY).
+  metadata:
+    cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+    category: security
+    confidence: LOW
+  pattern-regex: (?i)\b(select|insert\s+into|update|delete\s+from|where|order\s+by|values|call|exec)\b[^\n]{0,300}["']\s*\+\+\s*\(?\s*(?>vars\.[\w.'"\[\]]+)(?!\s*(as\s+Number|as\s+Boolean))
+- id: gcr-mule-wrapwith-quote-not-escaped
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.xml'
+    - '*.dwl'
+  severity: ERROR
+  message: >-
+    A value is put in single quotes for a SQL text with wrapWith and nothing escapes a quote inside
+    it.  A value with a quote closes the string and adds SQL.  Bind the value as a parameter, or at
+    least double every quote in it before wrapping.
+  metadata:
+    cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+    category: security
+    confidence: HIGH
+  pattern-regex: wrapWith\((?![^)]*(escapeQuotes|replace\s*\(|replace\s+"'"))[^)]*,\s*"'"\s*\)
+- id: gcr-mule-tls-trust-store-insecure
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.xml'
+  severity: WARNING
+  message: >-
+    A connector's TLS trust store is set to insecure, so it accepts any certificate.  Anybody on the
+    network path can pose as the service and read or change what is sent.  Remove insecure="true"
+    and trust the service's CA.
+  metadata:
+    cwe: "CWE-295: Improper Certificate Validation"
+    category: security
+    confidence: HIGH
+  pattern-regex: <tls:trust-store[^>]*\binsecure\s*=\s*"true"
+- id: gcr-mule-error-description-to-caller
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.xml'
+  severity: INFO
+  message: >-
+    An error handler puts the error's own description in the response.  It carries what the failing
+    connector said: SQL and schema text, host names, a back end's error.  Log it with a correlation
+    id and return a fixed message with that id.
+  metadata:
+    cwe: "CWE-209: Generation of Error Message Containing Sensitive Information"
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-regex: (?s)<on-error-propagate[^>]*>.{0,2500}?set-payload.{0,1200}?error\.(description|detailedDescription|errorMessage)
+  - pattern-not-regex: </on-error-propagate>
+- id: gcr-mule-request-uri-proxied
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.xml'
+  severity: WARNING
+  message: >-
+    An outgoing request takes its path from the incoming request's address and its method from the
+    caller.  The flow becomes a proxy that reaches any path on the back end with this application's
+    own client id, secret or key attached.  Map each allowed path explicitly.
+  metadata:
+    cwe: "CWE-441: Unintended Proxy or Intermediary"
+    category: security
+    confidence: MEDIUM
+  pattern-regex: <http:request[^>]*method\s*=\s*"#\[[^"]*attributes\.method[^"]*\]"[^>]*(path|url)\s*=\s*"#\[[^"]*(attributes\.(requestUri|requestPath|relativePath|maskedRequestPath))|<http:request[^>]*(path|url)\s*=\s*"#\[[^"]*(attributes\.(requestUri|requestPath|relativePath|maskedRequestPath))[^>]*method\s*=\s*"#\[[^"]*attributes\.method
+- id: gcr-java-xmlinputfactory-dtd-on
+  languages:
+  - java
+  severity: WARNING
+  message: >-
+    An XMLInputFactory reads XML with DTDs and external entities on, which is its default.  A
+    request body with a DOCTYPE reads local files or calls internal addresses (XXE).  Set
+    SUPPORT_DTD and IS_SUPPORTING_EXTERNAL_ENTITIES to false before creating the reader.
+  metadata:
+    cwe: "CWE-611: Improper Restriction of XML External Entity Reference"
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: |
+        $F = XMLInputFactory.newInstance();
+        ...
+        $F.$CREATE(...);
+    - pattern: |
+        $F = XMLInputFactory.newFactory();
+        ...
+        $F.$CREATE(...);
+  - metavariable-regex:
+      metavariable: $CREATE
+      regex: ^create(XMLStreamReader|XMLEventReader|FilteredReader)$
+  - pattern-not: |
+      $F = XMLInputFactory.$NEW();
+      ...
+      $F.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+      ...
+  - pattern-not: |
+      $F = XMLInputFactory.$NEW();
+      ...
+      $F.setProperty($P, false);
+      ...
+- id: gcr-java-xstream-no-allow-list
+  languages:
+  - java
+  severity: ERROR
+  message: >-
+    XStream reads XML into objects with no list of the types it may create.  A crafted document
+    builds a gadget chain and runs code on the server.  Call XStream.setupDefaultSecurity and
+    allowTypes (or addPermission with a narrow type list) before fromXML.
+  metadata:
+    cwe: "CWE-502: Deserialization of Untrusted Data"
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: |
+        $X = new XStream(...);
+        ...
+        $X.fromXML(...);
+    - pattern: |
+        $X = new XStream(...);
+        ...
+        return $X.fromXML(...);
+    - pattern: |
+        $X = new XStream(...);
+        ...
+        $V = $X.fromXML(...);
+    - pattern: new XStream(...).fromXML(...)
+    - pattern: |
+        $XT $X = new XStream(...);
+        ...
+        return $X.fromXML(...);
+    - pattern: |
+        $XT $X = new XStream(...);
+        ...
+        $X.fromXML(...);
+  - pattern-not-inside: |
+      $XT $X = new XStream(...);
+      ...
+      $X.allowTypes(...);
+      ...
+  - pattern-not-inside: |
+      $XT $X = new XStream(...);
+      ...
+      $X.allowTypesByWildcard(...);
+      ...
+  - pattern-not-inside: |
+      $XT $X = new XStream(...);
+      ...
+      $X.allowTypesByRegExp(...);
+      ...
+  - pattern-not-inside: |
+      $XT $X = new XStream(...);
+      ...
+      $X.addPermission(...);
+      ...
+  - pattern-not-inside: |
+      $XT $X = new XStream(...);
+      ...
+      $X.setupDefaultSecurity(...);
+      ...
+- id: gcr-java-zip-entry-path-not-checked
+  languages:
+  - java
+  severity: WARNING
+  message: >-
+    A file is created from a zip entry's own name without checking where it lands.  An entry named
+    ../../somewhere writes outside the target folder (Zip Slip), over code or configuration.
+    Resolve the path, normalize it and check it still starts with the target folder.
+  metadata:
+    cwe: "CWE-22: Improper Limitation of a Pathname to a Restricted Directory"
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: new File($D, $E.getName())
+    - pattern: $D.resolve($E.getName())
+    - pattern: Paths.get($D, $E.getName())
+  - pattern-not-inside: |
+      $T $F = new File($D, $E.getName());
+      ...
+      if (<... $F.getCanonicalPath().startsWith(...) ...>) $S;
+  - pattern-not-inside: |
+      $T $F = new File($D, $E.getName());
+      ...
+      if (<... $F.getCanonicalPath().startsWith(...) ...>) { ... }
+- id: gcr-reset-link-from-host-header-java
+  languages:
+  - java
+  severity: WARNING
+  message: >-
+    A link that goes out by email is built from the Host header of the request.  An attacker asks
+    for a reset for the victim with their own Host, and the victim's email carries a link to the
+    attacker's site with the victim's token in it.  Build links from a configured base URL.
+  metadata:
+    cwe: "CWE-640: Weak Password Recovery Mechanism for Forgotten Password"
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: '"..." + $R.getHeader("Host") + $X'
+    - pattern: '"..." + $R.getHeader(HttpHeaders.HOST) + $X'
+    - pattern: '"..." + $R.getHeader(HOST) + $X'
+    - pattern: '"..." + $H + $X'
+  - pattern-either:
+    - pattern-inside: |
+        $H = $R.getHeader(...);
+        ...
+    - pattern: '"..." + $R.getHeader($K) + $X'
+  - pattern-inside: |
+      $RET $M(...) { ... }
+  - pattern-regex: (?i)(reset|forgot|password|verify|confirm|invite|activate|token)
+- id: gcr-reset-link-from-host-python
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    A link that goes out by email is built from the host the request named.  An attacker asks for a
+    reset for the victim with their own Host header, and the victim's email carries a link to the
+    attacker's site with the victim's token in it.  Build links from a configured base URL.
+  metadata:
+    cwe: "CWE-640: Weak Password Recovery Mechanism for Forgotten Password"
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-inside: |
+      def $F(...):
+        ...
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i).*(reset|forgot|password|invite|activat|magic_?link|recover).*
+  - pattern-either:
+    - pattern: request.host_url
+    - pattern: request.url_root
+    - pattern: request.host
+    - pattern: request.headers["Host"]
+    - pattern: request.headers.get("Host")
+    - pattern: request.get_host()
+    - pattern: request.build_absolute_uri(...)
+    - pattern: request.base_url
+- id: gcr-spring-csrf-off-with-form-login
+  languages:
+  - java
+  severity: WARNING
+  message: >-
+    CSRF protection is switched off in a configuration that signs people in with a form and a
+    session cookie.  Any site a signed in user visits can post to this application as that user.
+    Leave CSRF on for browser sessions; turn it off only for a stateless API that takes bearer
+    tokens.
+  metadata:
+    cwe: "CWE-352: Cross-Site Request Forgery (CSRF)"
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $H.csrf().disable()
+    - pattern: $H.csrf($C -> $C.disable())
+    - pattern: $H.csrf(AbstractHttpConfigurer::disable)
+  - pattern-inside: |
+      $RET $M(...) {
+        ...
+        <... $Y.formLogin(...) ...>;
+        ...
+      }
+  - pattern-not-inside: |
+      $RET $M(...) {
+        ...
+        <... SessionCreationPolicy.STATELESS ...>;
+        ...
+      }
+- id: gcr-identity-from-request-header-python
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    Who the caller is (an email, a user, a branch, a role) is taken from a request header and handed
+    back as the signed in principal.  Anyone who can send a request sets that header to anyone they
+    like.  Take identity from the verified token's claims, or look the user up from them.
+  metadata:
+    cwe: "CWE-290: Authentication Bypass by Spoofing"
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        def $F(...):
+          ...
+    - pattern-inside: |
+        async def $F(...):
+          ...
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i).*(user|principal|identity|auth|caller|current|actor|system).*
+  - pattern-either:
+    - pattern: $R.headers.get("$H", ...)
+    - pattern: $R.headers["$H"]
+  - metavariable-regex:
+      metavariable: $H
+      regex: (?i)^x-(updated-by|user|user-email|user-id|email|acting-as|on-behalf-of|impersonat\w*|branch(-number)?|tenant(-id)?|roles?|groups?|remote-user)$
+  - pattern-not-inside: logger.$M(...)
+  - pattern-not-inside: log.$M(...)
+  - pattern-not-inside: logging.$M(...)
+- id: gcr-okta-audience-is-org
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    Tokens are accepted with the Okta org itself as the audience.  Every application in the tenant
+    gets tokens with that audience, so a token issued to any other app (or stolen from one) is
+    accepted here.  Use a custom authorization server with an audience of this API, and allow list
+    client ids.
+  metadata:
+    cwe: "CWE-1390: Weak Authentication"
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: AccessTokenVerifier(..., audience="$A", ...)
+    - pattern: JWTVerifier(..., audience="$A", ...)
+    - pattern: jwt.decode(..., audience="$A", ...)
+  - metavariable-regex:
+      metavariable: $A
+      regex: ^https://[^/]+\.okta(preview)?\.com/?$
+- id: gcr-rundeck-option-in-script
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.yaml'
+    - '*.yml'
+    - '*.xml'
+  severity: WARNING
+  message: >-
+    A Rundeck job option is pasted into the text of an inline script.  Rundeck replaces the token
+    before the script runs, so a value with a quote in it becomes code, run on the node with every
+    secret the job can read.  Read options from their RD_OPTION_ environment variables, and give
+    every free text option a strict regex or an enforced list.
+  metadata:
+    cwe: "CWE-94: Improper Control of Generation of Code"
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-inside: |
+      script: ...
+  - pattern-regex: (["'])[^"'\n]*@option\.(?!\w*(?i:password|secret|token|key)\b)\w+@[^"'\n]*\1
+- id: gcr-workflow-artifact-holds-state-or-dump
+  languages:
+  - yaml
+  severity: WARNING
+  message: >-
+    A workflow uploads Terraform state, a plan, or a data dump as a build artifact.  State and plans
+    hold secrets in plain text, and a dump holds production data, and artifacts can be downloaded by
+    everyone who can read the repository.  Keep these in an encrypted bucket with its own access
+    rules.
+  metadata:
+    cwe: "CWE-538: Insertion of Sensitive Information into Externally-Accessible File or Directory"
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-inside: |
+      uses: $ACTION
+      ...
+  - metavariable-regex:
+      metavariable: $ACTION
+      regex: ^actions/upload-artifact@
+  - pattern: 'path: $P'
+  - metavariable-regex:
+      metavariable: $P
+      regex: (?i).*(\.tfstate|tfplan|\bplan\.out|\.tfplan|dump|backup_|\.sql(\.gz)?\b|redis|secrets?\b|credentials?|\.pem|\.key\b).*
+- id: gcr-sql-dynamic-exec-concatenation
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.sql'
+    - '*.bteq'
+    - '*.pls'
+    - '*.pkb'
+    - '*.prc'
+  severity: WARNING
+  message: >-
+    A stored procedure runs SQL it builds by joining in one of its own parameters.  A caller who can
+    run the procedure, but not write that SQL, passes a value with a quote in it and runs any
+    statement with the procedure owner's rights.  Bind the value (USING), or check it against a
+    strict pattern first.
+  metadata:
+    cwe: "CWE-89: Improper Neutralization of Special Elements used in an SQL Command"
+    category: security
+    confidence: MEDIUM
+  pattern-regex: (?i)(EXECUTE\s+IMMEDIATE|SYSEXECSQL|DBMS_SQL\.PARSE|sp_executesql|EXEC\s*\()[^;]{0,400}\|\|\s*(p_|in_|i_|pi_|v_in_)\w+
+- id: gcr-elasticache-no-auth
+  languages:
+  - yaml
+  severity: WARNING
+  message: >-
+    A Redis cache is created with no user group or auth token, so anything that can reach the port
+    reads and writes every key: sessions, cached records, queued work.  Attach an RBAC user group
+    (or an auth token with transit encryption) and narrow the security group.
+  metadata:
+    cwe: "CWE-306: Missing Authentication for Critical Function"
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern: |
+      Type: $T
+      Properties:
+        ...
+  - metavariable-regex:
+      metavariable: $T
+      regex: ^AWS::ElastiCache::(ServerlessCache|ReplicationGroup)$
+  - pattern-not: |
+      Type: $T
+      Properties:
+        ...
+        UserGroupId: $U
+        ...
+  - pattern-not: |
+      Type: $T
+      Properties:
+        ...
+        AuthToken: $U
+        ...
+  - pattern-not: |
+      Type: $T
+      Properties:
+        ...
+        UserGroupIds: $U
+        ...
 - id: gcr-pipe-splitter-single-quote
   languages:
   - python
