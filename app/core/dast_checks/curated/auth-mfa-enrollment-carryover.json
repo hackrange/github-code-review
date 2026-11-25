@@ -1,0 +1,32 @@
+{
+  "id": "auth-mfa-enrollment-carryover",
+  "class": "authentication",
+  "safety": "neutral",
+  "neutral_justification": "Signs in the site's two configured test accounts through the login form, one after the other in the same browser, and sends one deliberately wrong one time code for the second. A wrong code enrolls nobody, signs nobody in and changes no account. The only effect is one failed code attempt recorded on the second test account.",
+  "severity_floor": "high",
+  "title": "Second factor bypass: a setup secret from one sign in is trusted for another account",
+  "summary": "The sign in keeps an authenticator setup secret in the session for an account that has no second factor yet, and does not clear it when another account signs in in the same browser. The code step then treats the second account as a new enrollment against that secret. Anyone with the password of any account that has not enrolled, plus a victim's password, signs in as the victim without the victim's authenticator, and the victim's authenticator is replaced with theirs.",
+  "needs": ["two_logins"],
+  "probe": [
+    {
+      "mfa_carryover": {
+        "codes": 1
+      }
+    }
+  ],
+  "confirm": {
+    "control": "The second account signs in alone in a new browser and must not see the first account's setup secret, which rules out a site that prints a fixed or shared key.",
+    "differential": "status_in(200, 400, 401, 403)",
+    "retest": 1
+  },
+  "reproduce": "In one browser, sign in as an account that has no authenticator and note the setup secret shown. Without signing out, sign in as an account that has an authenticator and enter a wrong code. The setup page comes back showing the first account's secret for the second account. A code generated from that secret now completes the second account's sign in.",
+  "remediate": "Clear every pre sign in session key (pending user, enrollment secret, verified flags) at the start of each password step, or store the enrollment secret together with the user id it was issued for and refuse it for any other user. Never take the enrollment branch for an account that already has an authenticator.",
+  "references": [],
+  "mappings": {
+    "cwe": "CWE-287",
+    "owasp": "A07:2021"
+  },
+  "rulesets": [
+    "auth"
+  ]
+}

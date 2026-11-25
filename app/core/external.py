@@ -2780,7 +2780,7 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
         from app.core.dast_checks import api_spec as api_spec_mod
 
         api_record = api_spec_mod.load(asset_id) if asset else None
-        if asset and (api_record or any("two_accounts" in (s.get("needs") or [])
+        if asset and (api_record or any({"two_accounts", "two_logins"} & set(s.get("needs") or [])
                                          for s in specs)):
             auth_b = external_auth.load_b(asset) or None
 
@@ -2826,7 +2826,12 @@ def _run_curated_rules(scan_id, asset_id, url, wb, session, opts, rulesets) -> t
            # Tokens for the API checks, where an API takes them instead of the
            # browser sign in.  Never sent by any other check.
            "api_headers": external_auth.api_headers(auth_a or {}),
-           "api_second_headers": external_auth.api_headers(auth_b or {})}
+           "api_second_headers": external_auth.api_headers(auth_b or {}),
+           # The two accounts' form sign ins themselves, for the one check that
+           # has to sign both in through the same browser.  Only form sign ins;
+           # never sent anywhere but the site's own login page.
+           "form_auth_a": auth_a if (auth_a or {}).get("kind") == "form" else None,
+           "form_auth_b": auth_b if (auth_b or {}).get("kind") == "form" else None}
     from collections import Counter
 
     started = time.monotonic()

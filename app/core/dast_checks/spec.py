@@ -73,7 +73,7 @@ _DESTRUCTIVE = [re.compile(p, re.I) for p in DESTRUCTIVE]
 MAX_DELAY_SECONDS = 5
 
 _ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-_NEEDS = {"session", "two_accounts", "code_routes", "openapi", "oob", "headless"}
+_NEEDS = {"session", "two_accounts", "two_logins", "code_routes", "openapi", "oob", "headless"}
 
 
 class SpecError(ValueError):

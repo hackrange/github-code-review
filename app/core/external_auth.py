@@ -363,90 +363,105 @@ def login(data: dict, allow_private: bool = False) -> dict:
     from app.core import external_probe
 
     out = {"ok": False, "cookie": "", "detail": ""}
-    url = data.get("login_url", "")
-    headers = {"User-Agent": external_probe.user_agent(),
-               "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
     try:
         proxy = external_probe.current_proxy()
-        checked = {(urlparse(url).hostname or "")}
         # Certificates are not checked by the client: a site's own self signed
         # one is common.  tls_trust has checked or pinned each host instead,
         # in session_for for the first and in go() for any other.
         with httpx.Client(verify=False, timeout=20, follow_redirects=False,  # noqa: S501
                           proxy=proxy or None, trust_env=not proxy) as client:
-            def go(method, target, **kw):
-                for _hop in range(6):
-                    host = urlparse(target).hostname or ""
-                    if not allow_private and not external_probe._host_is_public(host):
-                        raise ValueError(f"{host} is a private address")
-                    # A redirect to another host is checked as the first one was.
-                    if host not in checked:
-                        from app.core import tls_trust
-                        gate = tls_trust.allow(data.get("_asset_id"), target, allow_private)
-                        if not gate["ok"]:
-                            raise ValueError(gate["detail"])
-                        checked.add(host)
-                    resp = client.request(method, target, headers=headers, **kw)
-                    location = resp.headers.get("location")
-                    if 300 <= resp.status_code < 400 and location:
-                        target, method, kw = urljoin(target, location), "GET", {}
-                        continue
-                    return resp, target
-                raise ValueError("too many redirects")
-
-            page, page_url = go("GET", url)
-            form = _login_form(page.text)
-            if form is None:
-                out["detail"] = "the login page has no form with a password field"
-                return out
-            fields = {i["name"]: i["value"] for i in form["inputs"]
-                      if i["type"] not in ("submit", "button", "image", "checkbox", "radio")}
-            user_field = data.get("username_field") or next(
-                (i["name"] for i in form["inputs"]
-                 if i["type"] in ("text", "email") and re.search(r"user|mail|login|name|id", i["name"], re.I)),
-                next((i["name"] for i in form["inputs"] if i["type"] in ("text", "email")), ""))
-            pass_field = data.get("password_field") or next(
-                i["name"] for i in form["inputs"] if i["type"] == "password")
-            if not user_field:
-                out["detail"] = "the login form has no user name field; name it in the sign in settings"
-                return out
-            fields[user_field] = data.get("username", "")
-            fields[pass_field] = data.get("password", "")
-            action = urljoin(page_url, form["action"] or page_url)
-            from app.core.diagram import registrable
-
-            if registrable(urlparse(action).hostname or "") != registrable(urlparse(url).hostname or ""):
-                out["detail"] = "the login form posts to another domain, so the password was not sent"
-                return out
-            # A form that submits by GET, or names no method, would put the
-            # password in the address, where access logs, proxies and history
-            # keep it.  The password is not sent that way.
-            if form["method"] != "post":
-                out["detail"] = ("the login form submits by GET, which would put the "
-                                 "password in the address and in every log that keeps "
-                                 "one, so the password was not sent")
-                return out
-            before = {(c.name, c.value) for c in client.cookies.jar}
-            result, _final = go("POST", action, data=fields)
-            after = {(c.name, c.value) for c in client.cookies.jar}
-            jar = "; ".join(f"{c.name}={c.value}" for c in client.cookies.jar)
-            # A login that works sets a new session cookie, or changes the one
-            # it had.  A wrong password sets nothing new and shows the form
-            # again.  Some sites show a login box on every page, so the form
-            # coming back alone does not mean it failed.
-            fresh = after - before
-            if result.status_code >= 400:
-                out["detail"] = f"the login was refused with HTTP {result.status_code}"
-            elif not fresh and _login_form(result.text) is not None:
-                out["detail"] = "the login form came back, so the user name or password is likely wrong"
-            elif not jar:
-                out["detail"] = "the site set no session cookie"
-            elif not fresh:
-                out["detail"] = "the site set no new cookie after the login, so it is not clear it worked"
-            else:
-                out.update(ok=True, cookie=jar, detail="signed in")
+            out.update(form_login(client, data, allow_private))
     except Exception as exc:  # noqa: BLE001 - a failed login is a result
         out["detail"] = f"the login failed: {type(exc).__name__}: {str(exc)[:120]}"
+    out.pop("page", None)
+    out.pop("go", None)
+    return out
+
+
+def form_login(client, data: dict, allow_private: bool = False) -> dict:
+    """Sign in through the login form with a client the caller holds, so its
+    cookie jar can carry on to the next step.  -> {ok, cookie, detail, page,
+    go}: page is the answer to the login post, go fetches through the same
+    host checks.  Raises on a network or host check failure."""
+    from app.core import external_probe
+
+    out = {"ok": False, "cookie": "", "detail": "", "page": "", "go": None}
+    url = data.get("login_url", "")
+    headers = {"User-Agent": external_probe.user_agent(),
+               "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
+    checked = {(urlparse(url).hostname or "")}
+    def go(method, target, **kw):
+        for _hop in range(6):
+            host = urlparse(target).hostname or ""
+            if not allow_private and not external_probe._host_is_public(host):
+                raise ValueError(f"{host} is a private address")
+            # A redirect to another host is checked as the first one was.
+            if host not in checked:
+                from app.core import tls_trust
+                gate = tls_trust.allow(data.get("_asset_id"), target, allow_private)
+                if not gate["ok"]:
+                    raise ValueError(gate["detail"])
+                checked.add(host)
+            resp = client.request(method, target, headers=headers, **kw)
+            location = resp.headers.get("location")
+            if 300 <= resp.status_code < 400 and location:
+                target, method, kw = urljoin(target, location), "GET", {}
+                continue
+            return resp, target
+        raise ValueError("too many redirects")
+
+    page, page_url = go("GET", url)
+    form = _login_form(page.text)
+    if form is None:
+        out["detail"] = "the login page has no form with a password field"
+        return out
+    fields = {i["name"]: i["value"] for i in form["inputs"]
+              if i["type"] not in ("submit", "button", "image", "checkbox", "radio")}
+    user_field = data.get("username_field") or next(
+        (i["name"] for i in form["inputs"]
+         if i["type"] in ("text", "email") and re.search(r"user|mail|login|name|id", i["name"], re.I)),
+        next((i["name"] for i in form["inputs"] if i["type"] in ("text", "email")), ""))
+    pass_field = data.get("password_field") or next(
+        i["name"] for i in form["inputs"] if i["type"] == "password")
+    if not user_field:
+        out["detail"] = "the login form has no user name field; name it in the sign in settings"
+        return out
+    fields[user_field] = data.get("username", "")
+    fields[pass_field] = data.get("password", "")
+    action = urljoin(page_url, form["action"] or page_url)
+    from app.core.diagram import registrable
+
+    if registrable(urlparse(action).hostname or "") != registrable(urlparse(url).hostname or ""):
+        out["detail"] = "the login form posts to another domain, so the password was not sent"
+        return out
+    # A form that submits by GET, or names no method, would put the
+    # password in the address, where access logs, proxies and history
+    # keep it.  The password is not sent that way.
+    if form["method"] != "post":
+        out["detail"] = ("the login form submits by GET, which would put the "
+                         "password in the address and in every log that keeps "
+                         "one, so the password was not sent")
+        return out
+    before = {(c.name, c.value) for c in client.cookies.jar}
+    result, _final = go("POST", action, data=fields)
+    after = {(c.name, c.value) for c in client.cookies.jar}
+    jar = "; ".join(f"{c.name}={c.value}" for c in client.cookies.jar)
+    # A login that works sets a new session cookie, or changes the one
+    # it had.  A wrong password sets nothing new and shows the form
+    # again.  Some sites show a login box on every page, so the form
+    # coming back alone does not mean it failed.
+    fresh = after - before
+    if result.status_code >= 400:
+        out["detail"] = f"the login was refused with HTTP {result.status_code}"
+    elif not fresh and _login_form(result.text) is not None:
+        out["detail"] = "the login form came back, so the user name or password is likely wrong"
+    elif not jar:
+        out["detail"] = "the site set no session cookie"
+    elif not fresh:
+        out["detail"] = "the site set no new cookie after the login, so it is not clear it worked"
+    else:
+        out.update(ok=True, cookie=jar, detail="signed in")
+    out["page"], out["go"] = result.text, go
     return out
 
 

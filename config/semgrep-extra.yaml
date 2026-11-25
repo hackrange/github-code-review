@@ -1627,6 +1627,7 @@ rules:
   - pattern-regex: trusted_hosts\s*=\s*["']\*["']
   - pattern-regex: \.set\(\s*["']trust proxy["']\s*,\s*true\s*\)
   - pattern-regex: (?m)^\s*set_real_ip_from\s+(0\.0\.0\.0/0|::/0)\s*;
+  - pattern-regex: (?m)(echo|printf)\s+["']set_real_ip_from\s+(0\.0\.0\.0/0|::/0)\s*;
   - pattern-regex: (?m)^\s*RemoteIP(Internal|Trusted)Proxy\s+.*\b(0\.0\.0\.0/0|::/0)\b
 
 # --- 2026-11-15: coverage for classes an outside review found and the packs
@@ -2602,3 +2603,1311 @@ rules:
   - pattern-not: |
       @PermitAll(...)
       $T $M(...) { ... }
+
+# --- 2026-11-25: classes an outside review of a Python service found and no
+# rule here matched.  Each is written for the pattern, not the repository that
+# showed it: escaping skipped for values that look like markup, certificate
+# checks off by default, an address blocklist that forgets the unspecified
+# address, a revocation or rate check that lets requests through when its
+# store errors, a symlink test followed by a chown or chmod that follows one,
+# and a pipe splitter that treats the single quote as a string quote.
+- id: gcr-escape-skipped-by-prefix
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: A value is escaped unless it starts with markup, and then it goes in as HTML. Anyone who can
+    put that prefix at the start of the value (a profile field, a directory attribute, a record from
+    another system) writes HTML into the page, and the script in it runs. Keep the trusted markup apart
+    from the data, for example build the chip separately, and escape every data value.
+  metadata:
+    cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: '$X.startsWith($P) ? $X : $E($X)'
+    - pattern: '$X.startsWith($P) ? $X : $O.$E($X)'
+    - pattern: '$X.indexOf($P) === 0 ? $X : $E($X)'
+    - pattern: '$X[0] === "<" ? $X : $E($X)'
+  - metavariable-regex:
+      metavariable: $P
+      regex: ^['"`]\s*<
+- id: gcr-escape-skipped-by-prefix-python
+  languages:
+  - python
+  severity: WARNING
+  message: A value is escaped unless it starts with markup, and then it goes in as HTML. Anyone who can
+    put that prefix at the start of the value writes HTML into the page. Keep the trusted markup apart
+    from the data and escape every data value.
+  metadata:
+    cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: '$X if $X.startswith($P) else $E($X)'
+    - pattern: '$X if $X.startswith($P) else $O.$E($X)'
+  - metavariable-regex:
+      metavariable: $P
+      regex: ^['"]\s*<
+- id: gcr-tls-verify-off-by-default
+  languages:
+  - python
+  severity: WARNING
+  message: When nothing is configured, the connection falls back to a mode that does not check the
+    server's certificate. Every install that never set the option sends its credentials to whoever
+    answers on the network path. Default to checking the certificate, and let an administrator turn it
+    off by name, or trust a named CA file instead.
+  metadata:
+    cwe: 'CWE-295: Improper Certificate Validation'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: return "$V"
+    - pattern: $D.get($K, "$V")
+    - pattern: $A or "$V"
+  - metavariable-regex:
+      metavariable: $V
+      regex: (?i)^[\w.-]*(no[_-]?verify|skip[_-]?verify|verify[_-]?(none|off|false)|insecure[_-]?skip[_-]?verify|(tls|ssl)[_-]?insecure|insecure[_-]?(tls|ssl))[\w.-]*$
+- id: gcr-tls-verify-off-by-default-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: When nothing is configured, the connection falls back to a mode that does not check the
+    server's certificate. Every install that never set the option sends its credentials to whoever
+    answers on the network path. Default to checking the certificate, and let an administrator turn it
+    off by name, or trust a named CA file instead.
+  metadata:
+    cwe: 'CWE-295: Improper Certificate Validation'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: return "$V"
+    - pattern: '$A ?? "$V"'
+    - pattern: '$A || "$V"'
+  - metavariable-regex:
+      metavariable: $V
+      regex: (?i)^[\w.-]*(no[_-]?verify|skip[_-]?verify|verify[_-]?(none|off|false)|insecure[_-]?skip[_-]?verify|(tls|ssl)[_-]?insecure|insecure[_-]?(tls|ssl))[\w.-]*$
+- id: gcr-ip-blocklist-misses-unspecified
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    This address blocklist has IPv6 loopback (::1) but not the unspecified address (::). On Linux
+    a connection to :: lands on this host, so a URL or a redirect to http://[::]:port/ reaches local
+    services the list was meant to keep out. Refuse by property rather than by list, for example
+    "not ip.is_global or ip.is_unspecified or ip.is_reserved", and unwrap IPv4 mapped, 6to4 and NAT64
+    forms first.
+  metadata:
+    cwe: 'CWE-918: Server-Side Request Forgery (SSRF)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: '[..., ipaddress.ip_network("::1/128"), ...]'
+    - pattern: '[..., ip_network("::1/128"), ...]'
+    - pattern: '[..., ipaddress.ip_network("::1"), ...]'
+    - pattern: '[..., ip_network("::1"), ...]'
+    - pattern: '(..., ipaddress.ip_network("::1/128"), ...)'
+    - pattern: '(..., ip_network("::1/128"), ...)'
+  - pattern-not: '[..., ipaddress.ip_network("::/128"), ...]'
+  - pattern-not: '[..., ip_network("::/128"), ...]'
+  - pattern-not: '[..., ipaddress.ip_network("::/0"), ...]'
+  - pattern-not: '(..., ipaddress.ip_network("::/128"), ...)'
+  - pattern-not: '(..., ip_network("::/128"), ...)'
+- id: gcr-security-check-fails-open-python
+  languages:
+  - python
+  severity: INFO
+  message: A sign out, revocation, lockout or rate check reads its store inside a try whose except lets
+    the request carry on. While the store is down or refuses, the check is off, and nothing tells the
+    caller. If staying up matters more, keep a small in-process fallback (a local counter, a short local
+    deny list), or refuse with 503 on the routes the check protects.
+  metadata:
+    cwe: 'CWE-636: Not Failing Securely (Failing Open)'
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        def $F(...):
+          ...
+    - pattern-inside: |
+        async def $F(...):
+          ...
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i)^_*(check\w*|dispatch|\w*throttl\w*|\w*rate_?limit\w*|\w*revok\w*|\w*(deny|block)_?list\w*|\w*locked\w*|\w*lockout\w*|is_ended|\w*signed_out\w*)$
+  - pattern-either:
+    - pattern-inside: |
+        try:
+          ...
+        except Exception:
+          ...
+    - pattern-inside: |
+        try:
+          ...
+        except Exception as $EX:
+          ...
+    - pattern-inside: |
+        try:
+          ...
+        except:
+          ...
+  - pattern-not-inside: |
+      try:
+        ...
+      except Exception:
+        ...
+        raise ...
+  - pattern-not-inside: |
+      try:
+        ...
+      except Exception as $EX:
+        ...
+        raise ...
+  - pattern-not-inside: |
+      try:
+        ...
+      except Exception:
+        ...
+        raise
+  - pattern-not-inside: |
+      try:
+        ...
+      except Exception as $EX:
+        ...
+        raise
+  - pattern: $R.$M(...)
+  - metavariable-regex:
+      metavariable: $R
+      regex: (?i).*(redis|memcache|valkey|\bcache\b)
+  - metavariable-regex:
+      metavariable: $M
+      regex: ^(incr|incrby|exists|sismember|zcount|zcard|get|mget|hget|ttl)$
+- id: gcr-symlink-check-then-follow-python
+  languages:
+  - python
+  severity: WARNING
+  message: The path is tested for a symlink and then changed by name with a call that follows symlinks.
+    Whoever can write the parent directory can swap the entry for a link in between, and the owner or
+    mode change lands on the link's target, anywhere a privileged process can reach. Open the directory
+    once with O_NOFOLLOW, check it with fstat, and use fchown and fchmod on that descriptor, or pass
+    follow_symlinks=False.
+  metadata:
+    cwe: 'CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: |
+        if os.path.islink($P):
+          ...
+        ...
+        os.$CALL($P, ...)
+    - pattern: |
+        if not os.path.islink($P):
+          ...
+          os.$CALL($P, ...)
+  - metavariable-regex:
+      metavariable: $CALL
+      regex: ^(chown|chmod|lchmod|rename|replace|remove|unlink|rmdir)$
+  - pattern-not: |
+      if os.path.islink($P):
+        ...
+      ...
+      os.$CALL($P, ..., follow_symlinks=False)
+- id: gcr-upload-space-check-trusts-length
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    Free disk space is checked against the Content-Length the client declared, and only when it
+    declared one, but the body is then read as a stream that never looks at the disk again.  A
+    chunked upload (no Content-Length) or several uploads at once skip the check and can fill the
+    disk the server needs.  Check the space, or a quota for the folder, inside the loop against
+    the bytes actually written, and cap how many uploads run at once.
+  metadata:
+    cwe: 'CWE-400: Uncontrolled Resource Consumption'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        if $S and <... shutil.disk_usage(...) ...>:
+          ...
+        ...
+    - pattern-inside: |
+        if $S and <... $X.statvfs(...) ...>:
+          ...
+        ...
+  - pattern: |
+      async for $CH in $REQ.stream():
+        ...
+  - pattern-not: |
+      async for $CH in $REQ.stream():
+        ...
+        <... shutil.disk_usage(...) ...>
+        ...
+  - pattern-not: |
+      async for $CH in $REQ.stream():
+        ...
+        if <... shutil.disk_usage(...) ...>:
+          ...
+        ...
+- id: gcr-presignin-session-key-left-behind
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    A sign in step puts a pending user in the session and, only on some paths, another key beside
+    it, and never clears that other key when a new attempt starts.  A second sign in in the same
+    browser keeps the first attempt's key, so the next step can trust it for a different user (for
+    example an enrollment secret that lets a password alone finish an account that already has a
+    second factor).  Pop every pre sign in key at the start of the step, or keep them as one value
+    bound to the user it was issued for.
+  metadata:
+    cwe: 'CWE-287: Improper Authentication'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        async def $F(...):
+          ...
+    - pattern-inside: |
+        def $F(...):
+          ...
+  - pattern: |
+      $R.session[$A] = $X
+      ...
+      $R.session[$B] = $Y
+  - metavariable-regex:
+      metavariable: $A
+      regex: (?i)['"]\w*(pending|pre_?auth|half|partial|mfa|2fa|otp|stage|step)\w*['"]
+  - metavariable-regex:
+      metavariable: $B
+      regex: (?i)['"]\w*(enrol|secret|verified|ok|passed|setup|totp|otp|mfa|2fa)\w*['"]
+  - pattern-not-inside: |
+      $R.session.pop($B, ...)
+      ...
+  - pattern-not-inside: |
+      $R.session.clear()
+      ...
+  - pattern-not-inside: |
+      del $R.session[$B]
+      ...
+  # One finding per key left behind, on the line that sets it.
+  - focus-metavariable: $B
+- id: gcr-limit-unreadable-means-unlimited
+  languages:
+  - python
+  severity: INFO
+  message: >-
+    A stored limit that does not parse is read as no limit at all.  A cap saved in a form the reader
+    does not accept (more digits, a thousands separator, a unit) is then silently not enforced, and
+    nothing tells the person who set it.  Validate the setting with the same parser that reads it,
+    and treat an unreadable limit as the strictest value with a warning, not as unlimited.
+  metadata:
+    cwe: 'CWE-636: Not Failing Securely (Failing Open)'
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern: |
+        def $F(...):
+          try:
+            return $X
+          except ValueError:
+            return None
+    - pattern: |
+        def $F(...):
+          try:
+            return $X
+          except (..., ValueError, ...):
+            return None
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i)^_*\w*(limit|cap|quota|budget|ceiling|allowance|max_\w+)\w*$
+- id: gcr-model-made-rule-stored-live
+  languages:
+  - python
+  severity: INFO
+  message: >-
+    A rule, filter or policy a language model wrote is saved without being switched off for review,
+    so it starts deciding what is detected, allowed or suppressed as soon as it is stored.  Text an
+    outsider can write (logs, alerts, documents) reaches the prompt that produced it.  Save it with
+    enabled=False, or a draft status that the code that runs rules leaves out, until a person
+    approves it.
+  metadata:
+    cwe: 'CWE-1426: Improper Validation of Generative AI Output'
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern: $C(..., created_by="$V", ...)
+    - pattern: $C(..., source="$V", ...)
+    - pattern: $C(..., origin="$V", ...)
+    - pattern: $C(..., author="$V", ...)
+  - metavariable-regex:
+      metavariable: $V
+      regex: (?i)^(ai|llm|model|gpt|assistant|copilot|auto_?ai|ai_?draft)$
+  - metavariable-regex:
+      metavariable: $C
+      regex: (?i)^\w*(rule|detection|policy|signature|filter|allow\w*|block\w*|suppress\w*|exclusion|waiver|exception)$
+  - pattern-not: $C(..., enabled=False, ...)
+  - pattern-not: $C(..., active=False, ...)
+  - pattern-not: $C(..., status="draft", ...)
+  - pattern-not: $C(..., status="pending", ...)
+  - pattern-not: $C(..., status="proposed", ...)
+  - pattern-not: $C(..., status="suggested", ...)
+  - pattern-not: $C(..., status="review", ...)
+  - pattern-not: $C(..., status="pending_review", ...)
+  - pattern-not: $C(..., status="disabled", ...)
+  - pattern-not: $C(..., status="inactive", ...)
+- id: gcr-restore-installs-archive-key
+  languages:
+  - generic
+  paths:
+    include:
+    - '*restore*'
+    - '*backup*'
+    - '*import*'
+  severity: INFO
+  message: >-
+    A restore puts a private key or certificate from the archive in place.  Whoever made the archive
+    then chooses the identity this server presents, and keeps its private key.  When a restore is
+    started from the web or from an archive not made on this server, keep the server's own key and
+    certificate, as is done for the other host files.
+  metadata:
+    cwe: 'CWE-15: External Control of System or Configuration Setting'
+    category: security
+    confidence: LOW
+  pattern-regex: (?m)^[ \t]*(install|cp|mv)\b[^\n]*\s"?\$\{?\w+\}?/[^\s"]*\.(key|pem|p12|pfx)"?\s+"?\S
+- id: gcr-exception-message-in-response-java
+  languages:
+  - java
+  severity: WARNING
+  message: >-
+    An exception's own message goes back to the caller in the response body.  It carries whatever
+    the failing layer put in it: SQL and schema text, file paths, host names, a partner API's
+    error.  Log it with a request id and return a fixed message with that id.
+  metadata:
+    cwe: 'CWE-209: Generation of Error Message Containing Sensitive Information'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: ResponseEntity.$S(...).body($E.getMessage())
+  - pattern: ResponseEntity.$S(...).body("..." + $E.getMessage())
+  - pattern: ResponseEntity.$S(...).body($E.getMessage() + "...")
+  - pattern: new ResponseEntity<$T>($E.getMessage(), ...)
+  - pattern: new ResponseEntity<>($E.getMessage(), ...)
+  - pattern: new ResponseEntity<$T>("..." + $E.getMessage(), ...)
+  - pattern: new ResponseEntity<>("..." + $E.getMessage(), ...)
+- id: gcr-waitress-expose-tracebacks
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    The server sends the full Python traceback to whoever made the request that failed: code paths,
+    queries and values in scope.  Leave expose_tracebacks off outside a developer's own machine.
+  metadata:
+    cwe: 'CWE-209: Generation of Error Message Containing Sensitive Information'
+    category: security
+    confidence: HIGH
+  pattern-either:
+  - pattern: waitress.serve(..., expose_tracebacks=True, ...)
+  - pattern: serve(..., expose_tracebacks=True, ...)
+- id: gcr-auth-skipped-for-localhost-host-header
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    Sign in is skipped when the request's Host says localhost.  The Host header (and X-Forwarded-Host
+    behind a proxy fix) is whatever the client sends, so anyone who can reach a server with this
+    switch on writes Host: localhost and is let in.  Decide on the socket's own peer address, or
+    better, keep the bypass out of code that ships.
+  metadata:
+    cwe: 'CWE-290: Authentication Bypass by Spoofing'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        @$APP.before_request
+        def $F(...):
+          ...
+    - pattern-inside: |
+        def $F(...):
+          ...
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i).*(auth|login|token|verify|check|before_request|require|guard|protect).*
+  - pattern-either:
+    - pattern: |
+        if <... request.host.startswith($L) ...>:
+          ...
+          return
+    - pattern: |
+        if <... request.host.startswith($L) ...>:
+          ...
+          return $X
+    - pattern: |
+        if <... request.host == $L ...>:
+          ...
+          return $X
+    - pattern: |
+        if <... request.headers.get("Host", ...).startswith($L) ...>:
+          ...
+          return $X
+    - pattern: |
+        $H = <... request.host ...>
+        ...
+        $B = <... $H.startswith($L) ...>
+        ...
+        if <... $B ...>:
+          ...
+          return
+  - metavariable-regex:
+      metavariable: $L
+      regex: (?i)['"](localhost|127\.0\.0\.1)[^'"]*['"]
+- id: gcr-access-token-in-localstorage
+  languages:
+  - javascript
+  - typescript
+  severity: INFO
+  message: >-
+    A sign in token is kept in localStorage, where every script on the page can read it.  One
+    cross site scripting bug anywhere in the app hands the token to an attacker, who then calls
+    the API as the user from anywhere until it expires.  Keep it in memory, or in an HttpOnly
+    cookie the browser sends on its own.
+  metadata:
+    cwe: 'CWE-922: Insecure Storage of Sensitive Information'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - patterns:
+    - pattern-either:
+      - pattern: localStorage.setItem($K, $V)
+      - pattern: window.localStorage.setItem($K, $V)
+      - pattern: sessionStorage.setItem($K, $V)
+      - pattern: window.sessionStorage.setItem($K, $V)
+    - metavariable-regex:
+        metavariable: $K
+        regex: (?i)['"`]([\w.-]*(access[_-]?token|id[_-]?token|refresh[_-]?token|auth[_-]?token|jwt|bearer|session[_-]?token)[\w.-]*|token)['"`]
+  - patterns:
+    - pattern-either:
+      - pattern: localStorage.setItem($K, $V)
+      - pattern: localStorage.setItem($K, JSON.stringify($V))
+      - pattern: sessionStorage.setItem($K, $V)
+      - pattern: sessionStorage.setItem($K, JSON.stringify($V))
+    - metavariable-regex:
+        metavariable: $V
+        regex: (?i)^(\w+\.)*(access_?token|id_?token|refresh_?token|jwt)$
+  - pattern: localStorage.setItem($K, $X.getAccessToken(...))
+  - pattern: localStorage.setItem($K, $X.getIdToken(...))
+  - pattern: localStorage.setItem($K, $X.accessToken)
+  - pattern: localStorage.setItem($K, $X.access_token)
+  - pattern: localStorage.setItem($K, $X.id_token)
+  - pattern: localStorage.setItem($K, $X.accessToken.accessToken)
+- id: gcr-auth-header-by-url-substring
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    The sign in token is added to any request whose URL merely contains a word.  The whole URL is
+    tested, query string included, so a request to another host with that word anywhere in it (a
+    shared cloud host name, a redirect parameter) carries the user's token there.  Compare the
+    request's origin with an exact list of the API origins.
+  metadata:
+    cwe: 'CWE-201: Insertion of Sensitive Information Into Sent Data'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        if (<... $REQ.$U.indexOf($W) ...>) { ... }
+    - pattern-inside: |
+        if (<... $REQ.$U.includes($W) ...>) { ... }
+  - metavariable-regex:
+      metavariable: $U
+      regex: ^(url|urlWithParams|href)$
+  - metavariable-regex:
+      metavariable: $W
+      regex: ^['"`](?!https?://)[^'"`]*['"`]$
+  - pattern-either:
+    - pattern: '$R.clone({..., setHeaders: {..., Authorization: $T, ...}, ...})'
+    - pattern: $H.set("Authorization", $T)
+    - pattern: $X.headers.Authorization = $T
+    - pattern: $X.headers["Authorization"] = $T
+- id: gcr-cryptojs-literal-key
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    Data is encrypted in the browser with a key written into the code.  Everyone who loads the page
+    has the key, so this hides nothing and proves nothing: anyone can decrypt the value or make a
+    new one the server will accept.  If the server needs to trust the value, take it from the
+    signed in session on the server instead.
+  metadata:
+    cwe: 'CWE-321: Use of Hard-coded Cryptographic Key'
+    category: security
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: CryptoJS.AES.encrypt($X, "...", ...)
+  - pattern: CryptoJS.AES.decrypt($X, "...", ...)
+  - pattern: CryptoJS.AES.encrypt($X, CryptoJS.enc.Utf8.parse("..."), ...)
+  - pattern: CryptoJS.AES.decrypt($X, CryptoJS.enc.Utf8.parse("..."), ...)
+  - patterns:
+    - pattern-either:
+      - pattern-inside: |
+          class $C { ... $F = "..."; ... }
+      - pattern-inside: |
+          class $C { ... $F = CryptoJS.enc.Utf8.parse("..."); ... }
+      - pattern-inside: |
+          class $C { ... private $F = CryptoJS.enc.Utf8.parse("..."); ... }
+      - pattern-inside: |
+          class $C { ... private $F = "..."; ... }
+    - pattern-either:
+      - pattern: CryptoJS.AES.encrypt($X, CryptoJS.enc.Utf8.parse(this.$F), ...)
+      - pattern: CryptoJS.AES.decrypt($X, CryptoJS.enc.Utf8.parse(this.$F), ...)
+      - pattern: CryptoJS.AES.encrypt($X, this.$F, ...)
+      - pattern: CryptoJS.AES.decrypt($X, this.$F, ...)
+- id: gcr-html-email-from-request-python
+  languages:
+  - python
+  severity: WARNING
+  mode: taint
+  message: >-
+    A value from the request goes into an HTML email unescaped.  Whoever sends the request writes
+    HTML and links into a message that arrives from the company's own mail server, which is a
+    phishing message nobody can tell from a real one.  Escape every value put into the HTML
+    (html.escape), and take names and addresses from the signed in user, not the request.
+  metadata:
+    cwe: 'CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page'
+    category: security
+    confidence: MEDIUM
+  pattern-sources:
+  - pattern: request.json
+  - pattern: request.get_json(...)
+  - pattern: request.form
+  - pattern: request.args
+  - pattern: $P.parse_args()
+  pattern-sanitizers:
+  - pattern: html.escape(...)
+  - pattern: escape(...)
+  - pattern: markupsafe.escape(...)
+  - pattern: bleach.clean(...)
+  - pattern: int(...)
+  pattern-sinks:
+  - patterns:
+    - pattern: $SEND(..., $BODY, ...)
+    - metavariable-regex:
+        metavariable: $SEND
+        regex: (?i)^(\w+\.)*_*send_?(e?mail|html_?mail|message|notification)\w*$
+    - focus-metavariable: $BODY
+  - patterns:
+    - pattern-either:
+      - pattern: MIMEText($BODY, "html", ...)
+      - pattern: MIMEText($BODY, 'html', ...)
+      - pattern: MIMEText($BODY, _subtype="html", ...)
+    - focus-metavariable: $BODY
+- id: gcr-lockout-keyed-by-claimed-id
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    The lockout is looked up by the id the caller claims and checked before the secret is.  Anyone
+    who knows an app or user id sends a few wrong secrets and locks the real owner out, and keeps
+    them out by repeating it.  Count failures by source address and id together, and let a correct
+    secret through even while failures are being slowed.
+  metadata:
+    cwe: 'CWE-645: Overly Restrictive Account Lockout Mechanism'
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern: |
+        if $LOCKED($ID, ...):
+          ...
+        ...
+        $V = $CHECK(..., $SECRET, ...)
+    - pattern: |
+        if $LOCKED($ID):
+          ...
+        ...
+        $V = $CHECK(..., $SECRET, ...)
+    - pattern: |
+        if $LOCKED($ID):
+          ...
+        ...
+        if not $CHECK(..., $SECRET, ...):
+          ...
+    - pattern: |
+        if $LOCKED($ID):
+          ...
+        ...
+        $A, $B = $CHECK(..., $SECRET, ...)
+  - metavariable-regex:
+      metavariable: $LOCKED
+      regex: (?i).*(locked_?out|is_locked|lockout|too_many|blocked|throttled).*
+  - metavariable-regex:
+      metavariable: $ID
+      regex: (?i).*(app_?id|client_?id|username|user_?name|account|login|email).*
+  - metavariable-regex:
+      metavariable: $CHECK
+      regex: (?i).*(verify|validate|check|authenticate|compare).*
+- id: gcr-checked-url-fetch-follows-redirects-python
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    The address is checked against internal ranges and then fetched with redirects followed.  The
+    server at a public address answers with a redirect to 169.254.169.254, localhost or a private
+    host, and the client goes there without the check running again.  Fetch with
+    allow_redirects=False and check each hop, and connect to the address that was checked.
+  metadata:
+    cwe: 'CWE-918: Server-Side Request Forgery (SSRF)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: |
+        $CHECK($U, ...)
+        ...
+        requests.$M($U, ...)
+    - pattern: |
+        if not $CHECK($U, ...):
+          ...
+        ...
+        requests.$M($U, ...)
+    - pattern: |
+        $CHECK($U, ...)
+        ...
+        $S.$M($U, ...)
+  - metavariable-regex:
+      metavariable: $CHECK
+      regex: (?i).*(ssrf|validate_url|is_safe_url|safe_url|is_public|is_allowed_url|check_url|url_allowed).*
+  - metavariable-regex:
+      metavariable: $M
+      regex: ^(get|post|head|request)$
+  - pattern-not: |
+      $CHECK($U, ...)
+      ...
+      $X.$M($U, ..., allow_redirects=False, ...)
+  - pattern-not: |
+      if not $CHECK($U, ...):
+        ...
+      ...
+      $X.$M($U, ..., allow_redirects=False, ...)
+- id: gcr-signature-check-never-verifies-python
+  languages:
+  - python
+  severity: WARNING
+  message: >-
+    A function named for checking a signature never computes or compares one.  It reads the
+    header, perhaps parses it, and answers yes, so any request that carries the header in the
+    right shape is accepted as signed.  Compute the expected signature and compare it with
+    hmac.compare_digest, or use the provider's own verifier.
+  metadata:
+    cwe: 'CWE-347: Improper Verification of Cryptographic Signature'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: |
+        def $F(...):
+          ...
+    - pattern: |
+        async def $F(...):
+          ...
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i)^_*(verify|validate|check)_?(sig|signature|sigv4|hmac|webhook)\w*$
+  - pattern-not-regex: \bhmac\.|compare_digest|hashlib\.|\.verify\w*\(|[=(]\s*verify_\w+\(|jwt\.decode|botocore|SigV4Auth|\bnacl\b|cryptography|\brsa\.|ecdsa|\.sign\(|==\s*\w*sig|sig\w*\s*==|NotImplementedError
+  - pattern-not: |
+      def $F(...):
+        return True
+# --- the same classes in the other languages and frameworks the estate uses.
+- id: gcr-escape-skipped-by-prefix-php
+  languages:
+  - php
+  severity: WARNING
+  message: >-
+    A value is escaped unless it starts with markup, and then it goes in as HTML.  Anyone who can
+    put that prefix at the start of the value writes HTML into the page.  Keep the trusted markup
+    apart from the data and escape every data value.
+  metadata:
+    cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: 'str_starts_with($X, $P) ? $X : $E($X)'
+    - pattern: 'strpos($X, $P) === 0 ? $X : $E($X)'
+    - pattern: 'substr($X, 0, 1) === "<" ? $X : $E($X)'
+  - metavariable-regex:
+      metavariable: $P
+      regex: ^['"]\s*<
+- id: gcr-security-check-fails-open-js
+  languages:
+  - javascript
+  - typescript
+  severity: INFO
+  message: >-
+    A sign out, revocation, lockout or rate check reads its store inside a try whose catch passes
+    the request on.  While the store is down or refuses, the check is off.  Keep a small in-process
+    fallback, or refuse with 503 on the routes the check protects.
+  metadata:
+    cwe: 'CWE-636: Not Failing Securely (Failing Open)'
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        try { ... } catch ($E) { ... return next(); }
+    - pattern-inside: |
+        try { ... } catch ($E) { ... next(); }
+    - pattern-inside: |
+        try { ... } catch { ... next(); }
+    - pattern-inside: |
+        try { ... } catch ($E) { ... return true; }
+  - pattern-not-inside: |
+      catch ($E) { ... }
+  - pattern: $R.$M(...)
+  - metavariable-regex:
+      metavariable: $R
+      regex: (?i).*(redis|memcache|valkey|cache|store).*
+  - metavariable-regex:
+      metavariable: $M
+      regex: ^(incr|incrBy|exists|sIsMember|sismember|get|hGet|hget|ttl|consume)$
+- id: gcr-presignin-session-key-left-behind-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    A sign in step puts a pending user in the session and, only on some paths, another key beside
+    it, and never clears that key when a new attempt starts.  A second sign in in the same browser
+    keeps the first attempt's key, and the next step can trust it for a different user.  Delete
+    every pre sign in key at the start of the step, or keep them as one value bound to the user.
+  metadata:
+    cwe: 'CWE-287: Improper Authentication'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern: |
+      $R.session.$A = $X;
+      ...
+      $R.session.$B = $Y;
+  - metavariable-regex:
+      metavariable: $A
+      regex: (?i)^\w*(pending|preAuth|pre_auth|partial|mfa|twoFactor|otp|stage|step)\w*$
+  - metavariable-regex:
+      metavariable: $B
+      regex: (?i)^\w*(enrol|secret|verified|passed|setup|totp|otp|mfa|twoFactor)\w*$
+  - pattern-not-inside: |
+      delete $R.session.$B;
+      ...
+  - pattern-not-inside: |
+      $R.session.regenerate(...);
+      ...
+  - focus-metavariable: $B
+- id: gcr-presignin-session-key-left-behind-php
+  languages:
+  - php
+  severity: WARNING
+  message: >-
+    A sign in step puts a pending user in the session and, only on some paths, another key beside
+    it, and never clears that key when a new attempt starts.  A second sign in in the same browser
+    keeps the first attempt's key, and the next step can trust it for a different user.  Unset
+    every pre sign in key at the start of the step, or keep them as one value bound to the user.
+  metadata:
+    cwe: 'CWE-287: Improper Authentication'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern: |
+      $_SESSION[$A] = $X;
+      ...
+      $_SESSION[$B] = $Y;
+  - metavariable-regex:
+      metavariable: $A
+      regex: (?i)['"]\w*(pending|pre_?auth|partial|mfa|2fa|otp|stage|step)\w*['"]
+  - metavariable-regex:
+      metavariable: $B
+      regex: (?i)['"]\w*(enrol|secret|verified|passed|setup|totp|otp|mfa|2fa)\w*['"]
+  - pattern-not-inside: |
+      unset($_SESSION[$B]);
+      ...
+  - pattern-not-inside: |
+      session_regenerate_id(...);
+      ...
+  - focus-metavariable: $B
+- id: gcr-ip-blocklist-misses-unspecified-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    This address blocklist has IPv6 loopback (::1) but not the unspecified address (::), which a
+    connection on Linux lands on this host through.  A URL or redirect to http://[::]:port/ then
+    reaches local services.  Refuse by range class rather than a list (for example ipaddr.js
+    range() other than "unicast"), and unwrap IPv4 mapped forms first.
+  metadata:
+    cwe: 'CWE-918: Server-Side Request Forgery (SSRF)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: '[..., "::1/128", ...]'
+    - pattern: '[..., "::1", ...]'
+  - pattern-not: '[..., "::/128", ...]'
+  - pattern-not: '[..., "::", ...]'
+  - pattern-not: '[..., "::/0", ...]'
+- id: gcr-ip-blocklist-misses-unspecified-go
+  languages:
+  - go
+  severity: WARNING
+  message: >-
+    This address blocklist has IPv6 loopback (::1) but not the unspecified address (::), which a
+    connection on Linux lands on this host through.  Check ip.IsUnspecified(), ip.IsLoopback(),
+    ip.IsPrivate() and ip.IsLinkLocalUnicast() instead of a list.
+  metadata:
+    cwe: 'CWE-918: Server-Side Request Forgery (SSRF)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: '[]string{..., "::1/128", ...}'
+    - pattern: '[]string{..., "::1", ...}'
+  - pattern-not: '[]string{..., "::/128", ...}'
+  - pattern-not: '[]string{..., "::", ...}'
+- id: gcr-checked-url-fetch-follows-redirects-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    The address is checked against internal ranges and then fetched with redirects followed, which
+    axios and fetch do by default.  A public server answers with a redirect to 169.254.169.254,
+    localhost or a private host, and the client goes there without the check running again.  Set
+    maxRedirects: 0 (axios) or redirect: "manual" (fetch), check each hop, and connect to the
+    address that was checked.
+  metadata:
+    cwe: 'CWE-918: Server-Side Request Forgery (SSRF)'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: |
+        $CHECK($U, ...);
+        ...
+        $F($U, ...);
+    - pattern: |
+        await $CHECK($U, ...);
+        ...
+        $F($U, ...);
+    - pattern: |
+        if (!$CHECK($U, ...)) { ... }
+        ...
+        $F($U, ...);
+    - pattern: |
+        if (!(await $CHECK($U, ...))) { ... }
+        ...
+        $F($U, ...);
+  - metavariable-regex:
+      metavariable: $CHECK
+      regex: (?i).*(ssrf|validateurl|validate_url|issafeurl|safeurl|ispublic|isallowedurl|checkurl|urlallowed|assertpublic).*
+  - metavariable-pattern:
+      metavariable: $F
+      pattern-either:
+      - pattern: axios.get
+      - pattern: axios.post
+      - pattern: axios
+      - pattern: fetch
+      - pattern: got
+      - pattern: got.get
+  - pattern-not: |
+      $CHECK($U, ...);
+      ...
+      $F($U, {..., maxRedirects: 0, ...});
+  - pattern-not: |
+      await $CHECK($U, ...);
+      ...
+      $F($U, {..., maxRedirects: 0, ...});
+  - pattern-not: |
+      await $CHECK($U, ...);
+      ...
+      $F($U, {..., redirect: "manual", ...});
+  - pattern-not: |
+      $CHECK($U, ...);
+      ...
+      $F($U, {..., redirect: "manual", ...});
+  - pattern-not: |
+      await $CHECK($U, ...);
+      ...
+      $F($U, {..., redirect: "error", ...});
+  - pattern-not: |
+      $CHECK($U, ...);
+      ...
+      $F($U, {..., redirect: "error", ...});
+- id: gcr-symlink-check-then-follow-go
+  languages:
+  - go
+  severity: WARNING
+  message: >-
+    The path is checked with Lstat and then changed by name with a call that follows symlinks.
+    Whoever can write the parent directory can swap the entry for a link in between, and the change
+    lands on the link's target.  Open the directory once (O_NOFOLLOW) and use Fchown and Fchmod on
+    that file, or use Lchown.
+  metadata:
+    cwe: 'CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: |
+        $FI, $ERR := os.Lstat($P)
+        ...
+        os.$CALL($P, ...)
+    - pattern: |
+        $FI, $ERR = os.Lstat($P)
+        ...
+        os.$CALL($P, ...)
+  - metavariable-regex:
+      metavariable: $CALL
+      regex: ^(Chown|Chmod|Rename|Remove|RemoveAll)$
+- id: gcr-symlink-check-then-follow-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    The path is checked with lstat and then changed by name with a call that follows symlinks.
+    Whoever can write the parent directory can swap the entry for a link in between.  Open it once
+    and use fchown and fchmod on the descriptor, or lchown.
+  metadata:
+    cwe: 'CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: |
+        $S = fs.lstatSync($P);
+        ...
+        fs.$CALL($P, ...);
+    - pattern: |
+        $S = await fs.promises.lstat($P);
+        ...
+        await fs.promises.$CALL($P, ...);
+    - pattern: |
+        $S = await $FS.lstat($P);
+        ...
+        await $FS.$CALL($P, ...);
+  - metavariable-regex:
+      metavariable: $CALL
+      regex: ^(chownSync|chmodSync|chown|chmod|renameSync|rename|rmSync|rm|unlinkSync|unlink)$
+- id: gcr-tls-verify-off-by-default-java
+  languages:
+  - java
+  severity: WARNING
+  message: >-
+    When nothing is configured, the connection falls back to a mode that does not check the
+    server's certificate.  Every install that never set the option sends its credentials to whoever
+    answers on the network path.  Default to checking the certificate.
+  metadata:
+    cwe: 'CWE-295: Improper Certificate Validation'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: $M.getOrDefault($K, "$V")
+    - pattern: $M.getProperty($K, "$V")
+    - pattern: '@Value("${$K:$V}") $T $F;'
+    - pattern: return "$V";
+  - metavariable-regex:
+      metavariable: $V
+      regex: (?i)^[\w.${}:-]*(no[_-]?verify|skip[_-]?verify|verify[_-]?(none|off|false)|insecure[_-]?skip[_-]?verify|trust[_-]?all)[\w.-]*$
+- id: gcr-limit-unreadable-means-unlimited-js
+  languages:
+  - javascript
+  - typescript
+  severity: INFO
+  message: >-
+    A stored limit that does not parse is read as no limit at all, so a cap saved in a form the
+    reader does not accept is silently not enforced.  Validate the setting with the same parser that
+    reads it, and treat an unreadable limit as the strictest value with a warning.
+  metadata:
+    cwe: 'CWE-636: Not Failing Securely (Failing Open)'
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern: |
+        function $F(...) { try { return $X; } catch ($E) { return null; } }
+    - pattern: |
+        function $F(...) { try { return $X; } catch ($E) { return undefined; } }
+    - pattern: |
+        function $F(...) { try { return $X; } catch { return null; } }
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i)^_*\w*(limit|cap|quota|budget|ceiling|allowance|max[A-Z_]\w*)\w*$
+- id: gcr-lockout-keyed-by-claimed-id-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    The lockout is looked up by the id the caller claims and checked before the secret is.  Anyone
+    who knows an app or user id sends a few wrong secrets and locks the real owner out.  Count
+    failures by source address and id together, and let a correct secret through while failures
+    are slowed.
+  metadata:
+    cwe: 'CWE-645: Overly Restrictive Account Lockout Mechanism'
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern: |
+        if (<... $LOCKED($ID) ...>) { ... }
+        ...
+        $V = $CHECK(..., $SECRET, ...);
+    - pattern: |
+        if (<... await $LOCKED($ID) ...>) { ... }
+        ...
+        $V = await $CHECK(..., $SECRET, ...);
+    - pattern: |
+        if (<... await $LOCKED($ID) ...>) { ... }
+        ...
+        const $V = await $CHECK(..., $SECRET, ...);
+    - pattern: |
+        if (<... $LOCKED($ID) ...>) { ... }
+        ...
+        const $V = $CHECK(..., $SECRET, ...);
+  - metavariable-regex:
+      metavariable: $LOCKED
+      regex: (?i).*(lockedout|locked_out|islocked|lockout|toomany|blocked|throttled).*
+  - metavariable-regex:
+      metavariable: $ID
+      regex: (?i).*(app_?id|appId|client_?id|clientId|username|userName|account|login|email).*
+  - metavariable-regex:
+      metavariable: $CHECK
+      regex: (?i).*(verify|validate|check|authenticate|compare).*
+- id: gcr-signature-check-never-verifies-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    A function named for checking a signature never computes or compares one, so any request that
+    carries the header in the right shape is accepted as signed.  Compute the expected signature and
+    compare it with crypto.timingSafeEqual, or use the provider's own verifier.
+  metadata:
+    cwe: 'CWE-347: Improper Verification of Cryptographic Signature'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: |
+        function $F(...) { ... }
+    - pattern: |
+        async function $F(...) { ... }
+    - pattern: |
+        const $F = (...) => { ... }
+    - pattern: |
+        const $F = async (...) => { ... }
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i)^_*(verify|validate|check)_?(sig|signature|sigv4|hmac|webhook)\w*$
+  - pattern-not-regex: createHmac|timingSafeEqual|\.verify\w*\(|[=(]\s*(await\s+)?verify\w*\(|jwt\.|jose\.|crypto\.subtle|createVerify|\.sign\(|===\s*\w*[sS]ig|[sS]ig\w*\s*===|throw new Error\(\s*['"`]not implemented
+  - pattern-not: |
+      function $F(...) { return true; }
+- id: gcr-auth-skipped-for-localhost-host-header-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: >-
+    Sign in is skipped when the request's Host says localhost.  The Host header, and the hostname
+    Express derives from X-Forwarded-Host when trust proxy is on, is whatever the client sends, so
+    anyone who can reach the server writes Host: localhost and is let in.  Decide on the socket's
+    own address, or keep the bypass out of code that ships.
+  metadata:
+    cwe: 'CWE-290: Authentication Bypass by Spoofing'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: |
+        if (<... $REQ.hostname === $L ...>) { ... return next(); }
+    - pattern: |
+        if (<... $REQ.hostname === $L ...>) { ... next(); ... }
+    - pattern: |
+        if (<... $REQ.headers.host.startsWith($L) ...>) { ... return next(); }
+    - pattern: |
+        if (<... $REQ.headers.host === $L ...>) { ... return next(); }
+    - pattern: |
+        if (<... $REQ.get("host").startsWith($L) ...>) { ... return next(); }
+  - metavariable-regex:
+      metavariable: $L
+      regex: (?i)['"`](localhost|127\.0\.0\.1)[^'"`]*['"`]
+- id: gcr-exception-message-in-response-js
+  languages:
+  - javascript
+  - typescript
+  severity: INFO
+  message: >-
+    An error's own message goes back to the caller in the response.  It carries whatever the failing
+    layer put in it: SQL and schema text, file paths, host names, a partner API's error.  Log it
+    with a request id and return a fixed message with that id.
+  metadata:
+    cwe: 'CWE-209: Generation of Error Message Containing Sensitive Information'
+    category: security
+    confidence: MEDIUM
+  patterns:
+  - pattern-inside: |
+      try { ... } catch ($E) { ... }
+  - pattern-either:
+    - pattern: $RES.status($C).send($E.message)
+    - pattern: '$RES.status($C).json({..., $K: $E.message, ...})'
+    - pattern: $RES.status($C).send($E.stack)
+    - pattern: '$RES.status($C).json({..., $K: $E.stack, ...})'
+    - pattern: $RES.send($E.stack)
+    - pattern: '$RES.json({..., $K: $E.stack, ...})'
+- id: gcr-html-email-from-request-js
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  mode: taint
+  message: >-
+    A value from the request goes into an HTML email unescaped.  Whoever sends the request writes
+    HTML and links into a message that arrives from the company's own mail server.  Escape every
+    value put into the HTML and take names and addresses from the signed in user.
+  metadata:
+    cwe: 'CWE-80: Improper Neutralization of Script-Related HTML Tags in a Web Page'
+    category: security
+    confidence: MEDIUM
+  pattern-sources:
+  - pattern: $REQ.body
+  - pattern: $REQ.query
+  - pattern: $REQ.params
+  pattern-sanitizers:
+  - pattern: escapeHtml(...)
+  - pattern: escape(...)
+  - pattern: he.encode(...)
+  - pattern: sanitizeHtml(...)
+  - pattern: DOMPurify.sanitize(...)
+  - pattern: validator.escape(...)
+  pattern-sinks:
+  - patterns:
+    - pattern-inside: '$T.sendMail({..., html: $H, ...}, ...)'
+    - focus-metavariable: $H
+  - patterns:
+    - pattern-inside: '$T.send({..., html: $H, ...}, ...)'
+    - focus-metavariable: $H
+- id: gcr-model-made-rule-stored-live-js
+  languages:
+  - javascript
+  - typescript
+  severity: INFO
+  message: >-
+    A rule, filter or policy a language model wrote is saved without being switched off for review,
+    so it starts deciding what is detected, allowed or suppressed as soon as it is stored.  Save it
+    disabled, or as a draft the code that runs rules leaves out, until a person approves it.
+  metadata:
+    cwe: 'CWE-1426: Improper Validation of Generative AI Output'
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern: '$M.create({..., createdBy: "$V", ...})'
+    - pattern: '$M.create({..., source: "$V", ...})'
+    - pattern: '$M.insert({..., createdBy: "$V", ...})'
+    - pattern: '$M.insertOne({..., createdBy: "$V", ...})'
+    - pattern: '$M.insertOne({..., source: "$V", ...})'
+  - metavariable-regex:
+      metavariable: $V
+      regex: (?i)^(ai|llm|model|gpt|assistant|copilot|aiDraft|ai_draft)$
+  - metavariable-regex:
+      metavariable: $M
+      regex: (?i).*(rule|detection|polic|signature|filter|allow|block|suppress|exclusion|waiver|exception).*
+  - pattern-not: '$M.$C({..., enabled: false, ...})'
+  - pattern-not: '$M.$C({..., active: false, ...})'
+  - pattern-not: '$M.$C({..., status: "draft", ...})'
+  - pattern-not: '$M.$C({..., status: "pending", ...})'
+- id: gcr-pipe-splitter-single-quote-js
+  languages:
+  - javascript
+  - typescript
+  severity: INFO
+  message: >-
+    This splitter treats the single quote as a string quote while it looks for pipes.  In a
+    language where a single quote is an ordinary character (Splunk SPL's base search, KQL's pipe
+    stage), a pipe between two single quotes starts a new command for the engine but is a string to
+    this guard.  Follow the target language's own quoting exactly.
+  metadata:
+    cwe: 'CWE-436: Interpretation Conflict'
+    category: security
+    confidence: LOW
+  patterns:
+  - pattern-inside: |
+      for (const $CH of $S) { ... }
+  - pattern-inside: |
+      for (const $CH of $S) { ... if ($CH === "|") { ... } ... }
+  - pattern-either:
+    - pattern: |
+        if ($CH === '"' || $CH === "'") { ... }
+    - pattern: |
+        if ($CH === "'" || $CH === '"') { ... }
+    - pattern: |
+        if (`"'`.includes($CH)) { ... }
+    - pattern: |
+        if ("\"'".includes($CH)) { ... }
+- id: gcr-pipe-splitter-single-quote
+  languages:
+  - python
+  severity: INFO
+  message: This splitter treats the single quote as a string quote while it looks for pipes. In a
+    language where a single quote is an ordinary character (Splunk SPL's base search, KQL's pipe
+    stage, a shell's escape rules), a pipe between two single quotes starts a new command for the
+    engine but is a string to this guard, so a command the guard refuses gets through. Follow the
+    target language's own quoting exactly, and test the guard with a pipe inside each quote style.
+  metadata:
+    cwe: 'CWE-436: Interpretation Conflict'
+    category: security
+    confidence: LOW
+  pattern-either:
+  - patterns:
+    - pattern-inside: |
+        def $F(...):
+          ...
+    - pattern-inside: |
+        for $CH in $S:
+          ...
+    - pattern-either:
+      - pattern: |
+          if $CH in "\"'":
+            ...
+      - pattern: |
+          if $CH in "'\"":
+            ...
+      - pattern: |
+          if $CH in ("'", '"'):
+            ...
+      - pattern: |
+          if $CH in ('"', "'"):
+            ...
+    - pattern-inside: |
+        def $F(...):
+          ...
+          if $CH == "|":
+            ...
+          ...

@@ -3265,6 +3265,11 @@ FRAMEWORK_MARKERS = {
     "symfony": (("composer.json", "composer.lock"), r"(?i)symfony/"),
     "spring":  (("pom.xml", "build.gradle", "build.gradle.kts"),
                 r"(?i)springframework|spring-boot"),
+    # Raw query rules written for SQLAlchemy say nothing about a driver's own
+    # cursor (teradatasql, pyodbc, psycopg) with bound parameters.
+    "sqlalchemy": (("requirements.txt", "requirements-dev.txt", "pyproject.toml",
+                    "Pipfile", "setup.py", "setup.cfg", "constraints.txt"),
+                   r"(?im)^[^#\n]*\b(sqlalchemy|sqlmodel|flask[-_]sqlalchemy)\b"),
 }
 
 # A source import is proof the framework is used even when no manifest names
@@ -3281,6 +3286,7 @@ FRAMEWORK_IMPORTS = {
     "laravel": r"(?m)^\s*use\s+Illuminate\\\\",
     "symfony": r"(?m)^\s*use\s+Symfony\\\\",
     "spring":  r"(?m)^\s*import\s+org\.springframework\b",
+    "sqlalchemy": r"(?m)^\s*(from|import)\s+(sqlalchemy|sqlmodel|flask_sqlalchemy)\b",
 }
 
 FRAMEWORK_MANIFEST_LIMIT = 400 * 1024
@@ -3541,7 +3547,7 @@ _AUTH_WORD = re.compile(
     r"principal|identity|api_?key|credential|bearer", re.I)
 # Paths that are public by design: signing in, health, descriptions.
 _PUBLIC_ROUTE = re.compile(
-    r"(^|/)(log[\-_]?in|log[\-_]?out|sign[\-_]?(in|up|out)|register|auth|oauth2?|token|me|whoami|"
+    r"(^|/)(log[\-_]?in(?:[\-_]check)?|log[\-_]?out|enroll(?:[\-_]\w+)?|sign[\-_]?(in|up|out)|register|auth|oauth2?|token|me|whoami|"
     r"refresh|sso|saml|callback|webhooks?|health\w*|ping|status|version|metrics|"
     r"swagger[\w\-.]*|openapi[\w\-.]*|docs|redoc|public|forgot[\w\-]*|reset[\w\-]*|"
     r"verify[\w\-]*|confirm[\w\-]*|\.well-known|favicon\.ico|robots\.txt|"
@@ -3623,17 +3629,146 @@ def _py_block(source: str, line: int) -> str:
     return "\n".join(out)
 
 
-def _py_guard(block: str) -> str:
+# A dependency that hands the handler a database session or connection.  Its
+# name has "session" in it, which is not a sign in.
+_PY_DB_DEP = re.compile(
+    r"(?i)^(?:[\w.]*\.)?_*(get_?)?(async_?)?(db|database|sql|orm|engine|conn(ection)?|"
+    r"session|db_?session|session_?local|sessionmaker|redis|cache)(_?session|_?conn|_?dep)?$")
+# A refusal: what a dependency or the top of a handler does when the caller
+# may not in.
+_PY_REFUSES = re.compile(r"HTTPException\(\s*(?:status_code\s*=\s*)?(?:40[134]|status\.HTTP_40[134])|"
+                         r"\babort\(\s*40[134]|raise\s+\w*(Unauthori[sz]ed|Forbidden|PermissionDenied|"
+                         r"NotAuthenticated|AuthenticationFailed)\w*")
+# Called near the top of the body with the request: the handler checks the
+# caller itself (a collector token, a signed webhook, an API key).
+_PY_BODY_AUTH = re.compile(
+    r"^\s*(?:\w+\s*(?::[^=]+)?=\s*)?(?:await\s+)?([\w.]*(?:authenticat|authori[sz]|verify_?(?:token|sig|signature|"
+    r"hmac|key|request)|check_?(?:token|auth|key|signature)|require_?\w+|ensure_?\w*(?:auth|user|admin|perm))\w*)"
+    r"\s*\(\s*(?:request|req)\b", re.I | re.M)
+
+
+def _py_import_module(name: str, source: str) -> str:
+    """The module a name is imported from in this file, or ""."""
+    short = name.split(".")[-1]
+    for m in re.finditer(r"^[ \t]*from\s+([\w.]+)\s+import\s+(?:\(([^)]*)\)|([^\n]*))", source, re.M):
+        listed = (m.group(2) if m.group(2) is not None else m.group(3)).split("#")[0]
+        names = [n.strip().split(" as ")[-1].strip() for n in listed.replace("\n", ",").split(",")]
+        if short in names:
+            return m.group(1)
+    return ""
+
+
+def _py_imported_source(name: str, source: str, repo_root: str) -> str:
+    """The file a name was imported from, when that file is in this repository."""
+    if not repo_root:
+        return ""
+    short = name.split(".")[-1]
+    for m in re.finditer(r"^[ \t]*from\s+([\w.]+)\s+import\s+(?:\(([^)]*)\)|([^\n]*))", source, re.M):
+        listed = (m.group(2) if m.group(2) is not None else m.group(3)).split("#")[0]
+        names = [n.strip().split(" as ")[0].strip() for n in listed.replace("\n", ",").split(",")]
+        if short not in names:
+            continue
+        rel = m.group(1).replace(".", os.sep)
+        for cand in (rel + ".py", os.path.join(rel, "__init__.py")):
+            full = os.path.join(repo_root, cand)
+            if os.path.isfile(full):
+                return _read(full)
+    return ""
+
+
+def _py_dep_guard(name: str, source: str, depth: int = 0, repo_root: str = "") -> str:
+    """What a dependency asks for, or "" if it asks for nothing anybody would
+    call a sign in.  It may be defined in this file or imported from another
+    file in the repository."""
+    if depth > 3:
+        return ""
+    short = name.split(".")[-1]
+    if not re.search(r"^[ \t]*(?:async\s+)?def\s+%s\s*\(" % re.escape(short), source, re.M):
+        # request_info_dep = RequestInfo(): an instance whose class does the check.
+        inst = re.search(r"^%s\s*(?::[^=\n]+)?=\s*([\w.]+)\s*\(" % re.escape(short), source, re.M)
+        if inst:
+            cls = inst.group(1)
+            if _AUTH_WORD.search(cls):
+                return cls
+            origin = _py_import_module(cls, source)
+            if origin and _AUTH_WORD.search(origin):
+                return "%s from %s" % (cls, origin)
+        # Imported from a module named for sign in that is not in this
+        # checkout (a submodule, a shared package): the module says what it is.
+        origin = _py_import_module(short, source)
+        imported = _py_imported_source(name, source, repo_root)
+        if not imported:
+            if origin and re.search(r"(?i)(^|\.)(auth\w*|security|identity|permissions?|guards?)(\.|$)",
+                                    origin):
+                return "%s from %s" % (short, origin)
+            return ""
+        source = imported
+    m = re.search(r"^[ \t]*(?:async\s+)?def\s+%s\s*\((?P<sig>(?:[^()]|\([^()]*\))*)\)[^:]*:(?P<body>(?:\n(?:[ \t]+.*|[ \t]*))"
+                  r"{1,30})" % re.escape(short), source, re.M)
+    if not m:
+        return ""
+    for dep in re.finditer(r"(?:Depends|Security)\(\s*([\w.]+)", m.group("sig")):
+        inner = dep.group(1)
+        if _PY_DB_DEP.match(inner):
+            continue
+        if _AUTH_WORD.search(inner):
+            return inner
+        deeper = _py_dep_guard(inner, source, depth + 1, repo_root)
+        if deeper:
+            return deeper
+    if _PY_REFUSES.search(m.group("body")) and re.search(r"\b(user|role|perm|token|scope|principal|"
+                                                         r"caller|member|admin)", m.group("body"), re.I):
+        return "its own refusal"
+    return ""
+
+
+def _py_guard(block: str, source: str = "", repo_root: str = "") -> str:
     for m in _PY_GUARD.finditer(block):
         name = m.group(1) or m.group(3) or ""
         if m.group(2):
             return "@" + m.group(2)
-        if name and _AUTH_WORD.search(name):
+        if not name or _PY_DB_DEP.match(name):
+            continue
+        if _AUTH_WORD.search(name):
             return "Depends(%s)" % name
+        inner = _py_dep_guard(name, source, 0, repo_root) if source else ""
+        if inner:
+            return "Depends(%s), which asks for %s" % (name, inner)
     return ""
 
 
-def _py_routes(source: str) -> list:
+def _py_body_guard(source: str, start: int) -> str:
+    """A check of the caller made in the first lines of the handler's body."""
+    lines = source.splitlines()
+    head = "\n".join(lines[start - 1:start + 30])
+    m = re.search(r"\bdef\s+\w+\s*\((?:[^()]|\([^()]*\))*\)\s*(->[^:]+)?:", head, re.S)
+    if not m:
+        return ""
+    body = head[m.end():].split("\n")
+    # The docstring and blank lines do not count against the window.
+    kept = [b for b in body if b.strip() and not b.strip().startswith(("#", '"""', "'''", '"', "'"))][:6]
+    found = _PY_BODY_AUTH.search("\n".join(kept))
+    return "%s(request) at the top of the handler" % found.group(1) if found else ""
+
+
+_PY_SAYS_PUBLIC = re.compile(
+    r"(?i)\b(public|no (?:sign[- ]?in|auth\w*|login) (?:needed|required)|unauthenticated|"
+    r"anonymous|before (?:sign|log)[- ]?in)\b")
+
+
+def _py_says_public(source: str, start: int) -> bool:
+    """The handler's docstring, or a comment just above it, says it is open on
+    purpose.  That is the rule's own advice for a route that should be."""
+    lines = source.splitlines()
+    above = [l.split("#", 1)[1] for l in lines[max(start - 3, 0):start - 1] if "#" in l]
+    head = "\n".join(lines[start - 1:start + 30])
+    m = re.search(r"\bdef\s+\w+\s*\((?:[^()]|\([^()]*\))*\)\s*(?:->[^:]+)?:\s*\n\s*[rRuU]?"
+                  r"(\"\"\"|'''|\"|')(.{0,300}?)\1", head, re.S)
+    said = (m.group(2) if m else "") + " " + " ".join(above)
+    return bool(_PY_SAYS_PUBLIC.search(said))
+
+
+def _py_routes(source: str, repo_root: str = "") -> list:
     out = []
     for m in _PY_ROUTE.finditer(source):
         at = source.count("\n", 0, m.start()) + 1
@@ -3642,7 +3777,10 @@ def _py_routes(source: str) -> list:
         lines = source.splitlines()
         while start > 1 and lines[start - 2].lstrip().startswith("@"):
             start -= 1
-        out.append((at, m.group(2), _py_guard(_py_block(source, start))))
+        guard = _py_guard(_py_block(source, start), source, repo_root) or _py_body_guard(source, start)
+        if not guard and _py_says_public(source, start):
+            guard = "public, as its own docstring says"
+        out.append((at, m.group(2), guard))
     return out
 
 
@@ -3700,6 +3838,38 @@ def _spring_default(repo_root: str, cache: dict) -> str:
     return cache["spring"]
 
 
+def _spring_unprotected(repo_root: str, cache: dict) -> str:
+    """A sentence when the whole application has nothing that asks for a sign
+    in: no Spring Security (or OAuth2 resource server) in any build file, and
+    no request filter or interceptor of its own.  "" otherwise."""
+    if "spring_bare" in cache:
+        return cache["spring_bare"]
+    cache["spring_bare"] = ""
+    builds, guarded = [], False
+    for root, dirs, names in os.walk(repo_root):
+        dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "target", "build", ".gradle")]
+        for name in names:
+            full = os.path.join(root, name)
+            if name in ("pom.xml", "build.gradle", "build.gradle.kts"):
+                builds.append(_read(full))
+            elif name.endswith((".java", ".kt")) and not guarded:
+                text = _read(full)
+                if re.search(r"\b(extends\s+OncePerRequestFilter|extends\s+GenericFilterBean|implements\s+"
+                             r"(?:[\w.]+\s*,\s*)*(?:jakarta\.servlet\.|javax\.servlet\.)?Filter\b|"
+                             r"implements\s+(?:[\w.]+\s*,\s*)*HandlerInterceptor|WebFilter\b|"
+                             r"@PreAuthorize|@Secured|@RolesAllowed|SecurityFilterChain)", text):
+                    guarded = True
+    if builds and not guarded and not any(
+            re.search(r"(?i)spring-security|spring-boot-starter-security|oauth2-resource-server|"
+                      r"spring-boot-starter-oauth2|keycloak|okta-spring", b) for b in builds):
+        cache["spring_bare"] = (
+            "nothing in this application asks for a sign in: no build file brings in Spring "
+            "Security or an OAuth2 resource server, and no request filter, interceptor or "
+            "method security annotation exists, so every route is open to anyone who can "
+            "reach the service.  Worth confirming whether a gateway in front of it does this")
+    return cache["spring_bare"]
+
+
 def _spring_handlers(source: str) -> list:
     """[(line, guard)] for each handler method in a file: its own annotations
     stacked above it."""
@@ -3723,6 +3893,16 @@ def _route_guard_judgement(kind: str, repo_root: str, relative: str, source: str
                            line: int, cache: dict):
     """-> (verdict, reason, decided_by) for an unguarded route handler."""
     if kind == "express":
+        # api.get('/orders') in a module that builds requests with axios or
+        # fetch is a client calling a server, not a server route.
+        if (not re.search(r"""require\(\s*['"]express['"]|from\s+['"]express['"]|\bexpress\(\)|"""
+                          r"""\bRouter\(\)|\bexpress\.Router\b|\bfastify\b|\bkoa\b|\bhono\b""", source)
+                and re.search(r"""\baxios\b|\bfetch\(|\$http\b|HttpClient|\.create\(\s*\{\s*baseURL|"""
+                              r"""import\s+\w+\s+from\s+['"][./@~]+[\w/.-]*(client|http|api|request|axios)['"]|"""
+                              r"""\.then\(\s*\(?\s*\w+\s*\)?\s*=>\s*\w+\.data\b""", source)):
+            return (NOT_APPLICABLE, "this file makes requests to a server (axios, fetch or an HTTP "
+                    "client) and builds no server, so these are calls, not routes",
+                    "route-is-client-call")
         routes = _express_routes(source)
         mine = next((r for r in routes if r[0] == line), None)
         if mine and _PUBLIC_ROUTE.search(mine[1]):
@@ -3734,19 +3914,25 @@ def _route_guard_judgement(kind: str, repo_root: str, relative: str, source: str
             return (NOT_APPLICABLE, "every route after %s is behind it" % wide, "router-guard")
         guarded = [(l, g) for l, _p, g in routes if g and l != line]
     elif kind == "python":
-        routes = _py_routes(source)
+        routes = _py_routes(source, repo_root)
         mine = next((r for r in routes if r[0] == line), None)
         if mine is None:
             mine = next((r for r in routes if r[0] >= line and r[0] - line < 8), None)
         if mine and _PUBLIC_ROUTE.search(mine[1]):
             return (NOT_APPLICABLE, "%s is public by design" % mine[1], "route-public-by-design")
+        if mine and mine[2].startswith("public, as"):
+            return (NOT_APPLICABLE, "%s is %s" % (mine[1], mine[2]), "route-public-by-design")
         if mine and mine[2]:
             return (NOT_APPLICABLE, "the route has its own guard (%s)" % mine[2], "route-own-guard")
         wide = _py_router_guard(repo_root, relative, source)
         if wide:
             return (NOT_APPLICABLE, "every route in this file is behind %s" % wide, "router-guard")
-        guarded = [(l, g) for l, _p, g in routes if g and (mine is None or l != mine[0])]
+        guarded = [(l, g) for l, _p, g in routes
+                   if g and not g.startswith("public, as") and (mine is None or l != mine[0])]
     else:
+        bare = _spring_unprotected(repo_root, cache)
+        if bare:
+            return (REVIEW, bare, "spring-no-security")
         default = _spring_default(repo_root, cache)
         if default:
             return (NOT_APPLICABLE,

@@ -315,6 +315,8 @@ def needs_met(spec: dict, ctx: dict) -> str:
             return "the site has no sign in configured"
         if need == "two_accounts" and not ctx.get("second_headers"):
             return "a second account is not configured"
+        if need == "two_logins" and not (ctx.get("form_auth_a") and ctx.get("form_auth_b")):
+            return "two accounts that sign in through the login form are not configured"
         if need == "oob" and not ctx.get("oob"):
             return "no out of band callback is configured"
         if need == "headless" and not ctx.get("headless"):
@@ -349,6 +351,18 @@ def run_rule(spec: dict, ctx: dict) -> dict:
         return out
 
     budget = Budget(int(ctx.get("budget") or DEFAULT_BUDGET))
+
+    # A rule that signs two accounts in one after the other in the same
+    # browser checks that nothing the first attempt left in the session is
+    # trusted for the second.  Its own path: two logins and one wrong code.
+    if any(isinstance(s, dict) and s.get("mfa_carryover") for s in spec.get("probe") or []):
+        try:
+            out["findings"] = _run_mfa_carryover(spec, ctx, domains, budget)
+        except Refused as exc:
+            out["status"], out["detail"] = "refused", str(exc)
+        except Exception as exc:  # noqa: BLE001
+            out["status"], out["detail"] = "error", f"{type(exc).__name__}: {exc}"[:200]
+        return out
 
     # A rule that compares two accounts runs its own path: it reads an object
     # that belongs to the second account and checks the first can read it too.
@@ -590,6 +604,155 @@ def _run_jwt(spec: dict, ctx: dict, domains, budget: Budget) -> list:
                         "signed out visitor is turned away.")[:800]
                     return [f]
     return []
+
+
+# An authenticator setup secret as a page shows it: in an otpauth:// address,
+# or as base32 text near the words a setup page uses.
+_OTPAUTH = re.compile(r"otpauth://totp/[^\s\"'<>]*?[?&]secret=([A-Z2-7]{16,128})", re.I)
+_SETUP_WORDS = re.compile(r"(?i)authenticator|two.?factor|2fa|mfa|scan (this|the) (qr|code)|"
+                          r"setup key|secret key|enter this key|manual(ly)? entry")
+_BASE32 = re.compile(r"(?<![A-Za-z0-9])([A-Z2-7]{16,64})(?![A-Za-z0-9])")
+_CODE_FIELD = re.compile(r"(?i)^(totp|otp|mfa|2fa|code|token|verification|auth_?code|"
+                         r"\w*_code|one_?time\w*)$")
+
+
+def _setup_secret(page: str) -> str:
+    """The authenticator setup secret a page shows, or ""."""
+    m = _OTPAUTH.search(page or "")
+    if m:
+        return m.group(1).upper()
+    if not _SETUP_WORDS.search(page or ""):
+        return ""
+    # Plain text: the base32 run a person would type into the app.  Spaced
+    # groups (ABCD EFGH ...) are joined first.
+    flat = re.sub(r"(?<=[A-Z2-7]{4}) (?=[A-Z2-7]{4})", "", re.sub(r"<[^>]+>", " ", page))
+    m = _BASE32.search(flat)
+    return m.group(1) if m else ""
+
+
+def _code_form(page: str):
+    """The one time code form on a page: (action, method, fields, code field)."""
+    from app.core.external_auth import _Forms
+
+    parser = _Forms()
+    try:
+        parser.feed(page or "")
+    except Exception:  # noqa: BLE001 - broken markup is common
+        pass
+    for form in parser.forms:
+        if any(i["type"] == "password" for i in form["inputs"]):
+            continue
+        code = next((i["name"] for i in form["inputs"]
+                     if i["type"] in ("text", "number", "tel", "")
+                     and _CODE_FIELD.match(i["name"] or "")), "")
+        if code:
+            fields = {i["name"]: i["value"] for i in form["inputs"]
+                      if i["name"] and i["type"] not in ("submit", "button", "image")}
+            return form["action"], form["method"], fields, code
+    return None
+
+
+def _wrong_code(*secrets_: str) -> str:
+    """Six digits that no given secret accepts now or one step either side."""
+    import pyotp
+
+    taken = set()
+    for sec in secrets_:
+        if not sec:
+            continue
+        try:
+            t = pyotp.TOTP(sec)
+            taken |= {t.at(time.time() + d) for d in (-60, -30, 0, 30, 60)}
+        except Exception:  # noqa: BLE001 - not a valid secret: nothing to avoid
+            pass
+    for n in range(1000):
+        code = f"{(int(secrets.token_hex(3), 16) + n) % 1_000_000:06d}"
+        if code not in taken:
+            return code
+    return "000000"
+
+
+def _run_mfa_carryover(spec: dict, ctx: dict, domains, budget: Budget) -> list:
+    """Sign in A (no authenticator yet) then B (has one) in the same browser,
+    and send one wrong code.  -> findings.
+
+    A site that keeps A's setup secret in the session and trusts it for B
+    answers B's wrong code with A's setup page, now for B.  That shows a
+    password alone finishes B's sign in, and that the right code would replace
+    B's authenticator.  Nothing is changed: the code is wrong, so no account is
+    enrolled, signed in, or altered.  B records one failed code.
+    """
+    import httpx
+
+    from app.core import external_auth, external_probe
+
+    a, b = dict(ctx.get("form_auth_a") or {}), dict(ctx.get("form_auth_b") or {})
+    # A is the account with no second factor saved, B the one with it.
+    if a.get("totp_secret") and not b.get("totp_secret"):
+        a, b = b, a
+    if a.get("totp_secret") or not b.get("totp_secret"):
+        return []
+    for data in (a, b):
+        host = urlparse(data.get("login_url") or "").hostname or ""
+        if not scope.allowed(host, domains):
+            raise Refused(scope.refuse_reason(host, domains))
+    allow_private = bool(ctx.get("allow_private"))
+    proxy = external_probe.current_proxy()
+    # Four requests at most per login, the code post, and B's control login.
+    for _request in range(12):
+        budget.spend()
+    with httpx.Client(verify=False, timeout=20, follow_redirects=False,  # noqa: S501
+                      proxy=proxy or None, trust_env=not proxy) as client:
+        first = external_auth.form_login(client, a, allow_private)
+        secret = _setup_secret(first.get("page") or "")
+        if not secret:
+            # A was not offered a setup: the site does not enroll at sign in,
+            # or A already has a second factor.  Nothing to test.
+            return []
+        second = external_auth.form_login(client, b, allow_private)
+        page = second.get("page") or ""
+        form = _code_form(page)
+        if not form or secret in page:
+            return []
+        action, method, fields, code_name = form
+        fields[code_name] = _wrong_code(secret, b.get("totp_secret", ""))
+        target = urljoin(b.get("login_url") or "", action or "")
+        if method != "post" or second.get("go") is None:
+            return []
+        answer, final = second["go"]("POST", target, data=fields)
+        text = answer.text or ""
+    if secret not in text and secret not in re.sub(r"\s+", "", text):
+        return []
+    # The control: B alone in a new browser never sees A's secret.  Only one
+    # extra login, and it is what rules out a site that prints a fixed key.
+    with httpx.Client(verify=False, timeout=20, follow_redirects=False,  # noqa: S501
+                      proxy=proxy or None, trust_env=not proxy) as fresh:
+        alone = external_auth.form_login(fresh, b, allow_private)
+        if secret in (alone.get("page") or ""):
+            return []
+    shown = secret[:4] + "..." + secret[-2:]
+    evidence = (
+        "Signed in as account A, which has no authenticator yet, and the site showed a setup "
+        f"secret ({shown}).  In the same browser, signed in as account B, which already has an "
+        "authenticator, and sent one wrong code.  The site answered with the setup page again, "
+        "showing A's secret for B.  So it treats B's sign in as a new enrollment using the "
+        "secret left in the session by A: a password alone, plus a code from that secret, "
+        "finishes B's sign in and replaces B's authenticator.  Control: B signing in alone in "
+        "a new browser never sees that secret.  No account was enrolled or changed; the only "
+        "effect is one failed code on B.")
+    from app.core import dast_engines
+
+    f = dast_engines._finding(
+        tool=f"rule:{spec['id']}", title=spec.get("title", spec["id"]),
+        severity=spec.get("severity_floor", "high"), url=str(final or target),
+        evidence=evidence[:1200], fix=spec.get("remediate", ""),
+        cwe=(spec.get("mappings") or {}).get("cwe", ""),
+        ref=(spec.get("references") or [""])[0])
+    f["rule_id"] = spec["id"]
+    f["rule_class"] = spec["class"]
+    f["reproduce"] = spec.get("reproduce", "")
+    f["route"] = urlparse(target).path
+    return [f]
 
 
 def _run_two_account(spec: dict, ctx: dict, domains, budget: Budget) -> list:

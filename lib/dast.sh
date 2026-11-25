@@ -42,10 +42,25 @@ DAST_COMPOSE_NAMES=(
 # Only the root.  A compose file three directories down is usually a fixture
 # for one component rather than the way the application starts, and guessing
 # wrong here means standing up the wrong thing.
+# Where a repository keeps its container files when they are not at the top.
+# The top comes first, then these, one level down only.
+DAST_CONTAINER_DIRS=("" docker deploy .docker infra container containers ops)
+
 dast_compose_file() {
-  local dir="$1" name
-  for name in "${DAST_COMPOSE_NAMES[@]}"; do
-    [[ -f "$dir/$name" ]] && { printf '%s' "$dir/$name"; return 0; }
+  local dir="$1" name sub
+  for sub in "${DAST_CONTAINER_DIRS[@]}"; do
+    for name in "${DAST_COMPOSE_NAMES[@]}"; do
+      [[ -f "$dir${sub:+/$sub}/$name" ]] && { printf '%s' "$dir${sub:+/$sub}/$name"; return 0; }
+    done
+  done
+  return 1
+}
+
+# dast_dockerfile <dir> -> path of the first Dockerfile, top first.
+dast_dockerfile() {
+  local dir="$1" sub
+  for sub in "${DAST_CONTAINER_DIRS[@]}"; do
+    [[ -f "$dir${sub:+/$sub}/Dockerfile" ]] && { printf '%s' "$dir${sub:+/$sub}/Dockerfile"; return 0; }
   done
   return 1
 }
@@ -157,16 +172,17 @@ dast_compose_verdict() {
 # whose state lives somewhere it can be told about and fails for one that needs
 # a database nobody started.  That failure is a declined at run time, not here.
 dast_dockerfile_verdict() {
-  local dir="$1"
-  [[ -f "$dir/Dockerfile" ]] || {
+  local dir="$1" file where
+  file=$(dast_dockerfile "$dir") || {
     printf '%s|none|no compose file and no Dockerfile, so there is nothing to stand up' "$DECLINED"
     return 0; }
+  where="${file#"$dir"/}"
 
   local exposed
-  exposed=$(grep -iE '^[[:space:]]*EXPOSE[[:space:]]+' "$dir/Dockerfile" 2>/dev/null \
+  exposed=$(grep -iE '^[[:space:]]*EXPOSE[[:space:]]+' "$file" 2>/dev/null \
             | head -1 | awk '{print $2}')
   if [[ -n "$exposed" ]]; then
-    printf '%s|dockerfile|the Dockerfile exposes %s' "$QUALIFIED" "$exposed"
+    printf '%s|dockerfile|%s exposes %s' "$QUALIFIED" "$where" "$exposed"
     return 0
   fi
   printf '%s|dockerfile|a Dockerfile is here but it exposes no port, so nothing would answer a request' \
