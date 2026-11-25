@@ -276,25 +276,40 @@ def _replaces_payload(step) -> bool:
     return False
 
 
-def early_steps(flow, by_name: dict, depth: int = 3) -> set:
-    """Ids of the steps that run before anything replaces payload: while the
-    body the caller sent is still what payload holds.  Follows flow-ref."""
-    out, stop = set(), [False]
+def early_steps(flow, by_name: dict, depth: int = 3, tainted: set = frozenset()) -> set:
+    """Ids of the steps that run while payload holds what the caller sent.
+
+    payload starts as the request body.  A connector replaces it with its own
+    result; a transform or set-payload that builds it from the body, the
+    request's attributes or a variable set from them makes it the caller's
+    again, which is how a flow carries request values into a payload and then
+    into SQL.  Follows flow-ref."""
+    out, state = set(), [True]
+
+    def caller_built(node) -> bool:
+        text = " ".join(text_of(c) for c in node.walk() if c.name == "set-payload") or text_of(node)
+        return bool(REQUEST.search(text) or any(v in tainted for v in VAR.findall(text))
+                    or (state[0] and PAYLOAD.search(text)))
 
     def visit(node, level):
         for child in node.children:
-            if stop[0]:
-                return
             if child.name == "flow-ref" and level < depth:
                 target = by_name.get(child.attrs.get("name", ""))
                 if target is not None:
                     visit(target, level + 1)
                 continue
-            for d in child.walk():
-                out.add(id(d))
-            if _replaces_payload(child):
-                stop[0] = True
-                return
+            if state[0]:
+                for d in child.walk():
+                    out.add(id(d))
+            sets_payload = child.name == "set-payload" or (
+                child.name == "transform" and any(c.name == "set-payload" for c in child.walk()))
+            if sets_payload:
+                state[0] = caller_built(child)
+                if state[0]:
+                    for d in child.walk():
+                        out.add(id(d))
+            elif _replaces_payload(child):
+                state[0] = False
 
     visit(flow, 0)
     return out
@@ -391,7 +406,11 @@ def check(root_dir: str) -> list:
                                  "header or the body, or in secure properties.")))
                     break
 
+        # Two rounds: a variable set from payload can make payload the
+        # caller's again further down, and that widens what counts as early.
         early = early_steps(flow, by_name)
+        tainted = tainted_vars(flows, early)
+        early = early_steps(flow, by_name, tainted=tainted)
         tainted = tainted_vars(flows, early)
 
         def from_caller(step):
@@ -409,6 +428,7 @@ def check(root_dir: str) -> list:
             sql = " ".join(c.text for c in sql_nodes) or step.attrs.get("sql", "")
             joined = bool(SQL_JOIN.search(sql))
             via = [v for v in VAR.findall(sql) if v in tainted]
+            built_at = next((c for c in sql_nodes if SQL_JOIN.search(c.text or "")), step)
             if not joined and re.fullmatch(r"\s*#\[\s*payload\s*\]\s*", sql or ""):
                 # #[payload]: the statement was put in payload by a transform
                 # before this step, out of what the caller sent.
@@ -418,27 +438,34 @@ def check(root_dir: str) -> list:
                          and (REQUEST.search(text_of(n))
                               or any(v in tainted for v in VAR.findall(text_of(n))))]
                 if built:
-                    joined, via = True, ["payload"]
+                    joined, via, built_at = True, ["payload"], built[0]
             if not joined and via:
                 # #[vars.query]: the SQL was put together where the variable was set.
                 built = [n for f in flows for n in f.walk()
                          if n.name == "set-variable" and n.attrs.get("variableName") in via]
-                joined = any(SQL_WORDS.search(text_of(n)) and "++" in text_of(n) for n in built)
-            if not joined or ("sql", id(step)) in reported:
+                built = [n for n in built if SQL_WORDS.search(text_of(n)) and "++" in text_of(n)]
+                joined = bool(built)
+                if built:
+                    built_at = built[0]
+            if not joined or ("sql", id(step)) in reported \
+                    or ("sql-at", id(built_at)) in reported:
                 continue
             caller = (REQUEST.search(sql) or via
                       or (id(step) in early and PAYLOAD.search(sql)))
             if not caller:
                 continue
             reported.add(("sql", id(step)))
+            reported.add(("sql-at", id(built_at)))
+            run_at = f"{flow_file.get(id(_owner(step, flows)), rel)} line {step.line}"
             hits.append(dict(
                 rule="sql-built-from-request",
-                file=flow_file.get(id(_owner(step, flows)), rel), line=step.line,
+                file=flow_file.get(id(_owner(built_at, flows)), rel), line=_join_line(built_at),
                 severity="high", cwe="89",
                 title=f"{where} builds SQL from caller input",
                 message=(f"The flow {fname} runs SQL put together by joining in values the "
                          "caller sent (the query string, URI parameters, headers or the "
-                         "body, directly or through a variable).  A value with a quote in it "
+                         "body, directly or through a variable), and runs it at " + run_at + ".  "
+                         "A value with a quote in it "
                          "changes the statement, and anyone who can call the API, signed in "
                          "or not, reads or changes other rows.  Use db:input-parameters with "
                          ":name binds, and allow list any column name that must be in the "
@@ -523,6 +550,20 @@ def check(root_dir: str) -> list:
         line = text[hit["line"] - 1].strip()[:300] if 0 < hit["line"] <= len(text) else ""
         hit["matched"] = LITERAL_SECRET.sub(r"\1****\2", line)
     return hits
+
+
+def _join_line(node) -> int:
+    """The line inside a node's text where SQL is first joined to a value,
+    which is where a pattern engine reports the same thing and where the fix
+    goes.  The node's own line when the text gives no better answer."""
+    text = node.text or ""
+    at = text.find("++")
+    if at < 0:
+        at = text.find("$(")
+    if at < 0:
+        return node.line
+    # The element's text starts on its own line, after the tag and CDATA.
+    return node.line + text[:at].count("\n")
 
 
 def _owner(step, flows):

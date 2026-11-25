@@ -162,7 +162,7 @@ run_semgrep() {
   # on a good run to compare a bad one against: without it, a scan that used
   # eight rulesets of twenty one looks exactly like a scan that used all of
   # them, and the only clue is a finding count nobody was watching.
-  local wanted; wanted=$(cfg_arr '.scan.code_analysis.rulesets' | grep -c . || echo 0)
+  local wanted; wanted=$(cfg_arr '.scan.code_analysis.rulesets' | grep -c . || true)
   if (( loaded < wanted )); then
     log_warn "$full_name: semgrep is using $loaded of $wanted rulesets, so this pass is thinner than it should be"
   fi
